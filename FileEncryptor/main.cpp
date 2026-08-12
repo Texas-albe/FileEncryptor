@@ -7,12 +7,19 @@
 #include <iostream>
 #include <algorithm>
 #include <cctype>
+#include <fstream>
 #include <sodium.h>
 
 #ifdef _WIN32
+#include <windows.h>
 #include <conio.h>
-static std::string get_password_win() {
-    std::string pwd;
+#else
+#include <termios.h>
+#include <unistd.h>
+#endif
+
+static std::vector<char> get_password_win() {
+    std::vector<char> pwd;
     char ch;
     while((ch=_getch())!='\r'&&ch!='\n') {
         if(ch==0||ch==0xE0) { _getch(); continue; }
@@ -26,24 +33,26 @@ static std::string get_password_win() {
     std::cout<<std::endl;
     return pwd;
 }
-#else
-#include <termios.h>
-#include <unistd.h>
-static std::string get_password_posix() {
-    std::string pwd;
+
+#ifndef _WIN32
+static std::vector<char> get_password_posix() {
+    std::vector<char> pwd;
     struct termios oldt,newt;
     tcgetattr(STDIN_FILENO,&oldt);
     newt=oldt;
     newt.c_lflag&=~ECHO;
     tcsetattr(STDIN_FILENO,TCSANOW,&newt);
-    std::getline(std::cin,pwd);
+    std::string line;
+    std::getline(std::cin,line);
     tcsetattr(STDIN_FILENO,TCSANOW,&oldt);
     std::cout<<std::endl;
+    pwd.assign(line.begin(),line.end());
+    sodium_memzero((void*)line.data(),line.size());
     return pwd;
 }
 #endif
 
-static std::string get_password() {
+static std::vector<char> get_password() {
 #ifdef _WIN32
     return get_password_win();
 #else
@@ -51,9 +60,9 @@ static std::string get_password() {
 #endif
 }
 
-static void print_usage(const char* prog) {
-    std::cout<<"FileEncryptor v1.0.0\n\n"
-        <<"Modes\n"
+static void print_usage() {
+    std::cout<<"FileEncryptor v1.1.1\n\n"
+        <<"Modes:\n"
         <<"  -e           Encrypt single file\n"
         <<"  -d           Decrypt single file\n"
         <<"  -be          Batch encrypt directories/files\n"
@@ -62,18 +71,53 @@ static void print_usage(const char* prog) {
         <<"  -o <dir>     Output directory (optional, default: source file's directory)\n"
         <<"  -de          Delete source file after successful encryption (encryption only)\n"
         <<"  -m <mode>    Encryption mode: aes (default) or xchacha20\n"
+        <<"  -y, --force  Overwrite existing output files without asking\n"
+        <<"  -j <num>     Number of parallel threads (default: CPU cores)\n"
         <<"Input:\n"
         <<"  For single mode: provide the file path as positional argument\n"
         <<"  For batch mode:  provide directory paths via -i (multiple allowed)\n"
-        <<"                    All files under directories will be processed recursively.\n";
+        <<"                   All files under directories will be processed recursively.\n"
+        <<"Usage:\n"
+        <<"  FileEncryptor.exe -e/-d <FileName> [-o <Path>] [-de] [-m aes|xchacha20] [-y] [-j Num]\n"
+        <<"  FileEncryptor.exe -be/-bd <Path> [-o <Path>] [-de] [-m aes|xchacha20] [-y] [-j Num]\n";
 }
 
+#ifdef _WIN32
+int wmain(int argc,wchar_t* argv_w[],wchar_t* envp[]) {
+    std::vector<std::string> argv_utf8;
+    for(int i=0; i<argc; ++i) {
+        int len=WideCharToMultiByte(CP_UTF8,0,argv_w[i],-1,NULL,0,NULL,NULL);
+        std::string arg(len-1,0);
+        WideCharToMultiByte(CP_UTF8,0,argv_w[i],-1,&arg[0],len,NULL,NULL);
+        argv_utf8.push_back(arg);
+    }
+    std::vector<char*> argv_ptr;
+    for(auto& s:argv_utf8) argv_ptr.push_back(const_cast<char*>(s.c_str()));
+    argv_ptr.push_back(nullptr);
+    int argc_utf8=argc;
+    char** argv=argv_ptr.data();
+#else
 int main(int argc,char* argv[]) {
+#endif
+
     anti_debug_check();
 
     if(sodium_init()<0) {
         std::cerr<<"Libsodium initialization failed.\n";
         return 1;
+    }
+
+    if(argc==1) {
+        print_usage();
+        return 0;
+    }
+
+    for(int i=1; i<argc; ++i) {
+        std::string arg=argv[i];
+        if(arg=="-h"||arg=="-?"||arg=="--help") {
+            print_usage();
+            return 0;
+        }
     }
 
     enum {
@@ -85,6 +129,8 @@ int main(int argc,char* argv[]) {
     std::string output_dir;
     CryptoMode mode=CryptoMode::AES_GCM;
     bool delete_source=false;
+    bool force_overwrite=false;
+    int num_threads=0;
 
     for(int i=1; i<argc; ++i) {
         std::string arg=argv[i];
@@ -119,12 +165,19 @@ int main(int argc,char* argv[]) {
         else if(arg=="-i"&&i+1<argc) {
             input_paths.push_back(argv[++i]);
         }
+        else if(arg=="-y"||arg=="--force") {
+            force_overwrite=true;
+        }
+        else if(arg=="-j"&&i+1<argc) {
+            num_threads=std::stoi(argv[++i]);
+            if(num_threads<1) num_threads=1;
+        }
         else if(arg[0]!='-') {
             input_paths.push_back(arg);
         }
         else {
             std::cerr<<"Unknown option: "<<arg<<"\n";
-            print_usage(argv[0]);
+            print_usage();
             return 1;
         }
     }
@@ -133,14 +186,13 @@ int main(int argc,char* argv[]) {
     bool is_encrypt=(action==ACTION_ENCRYPT||action==ACTION_BATCH_ENCRYPT);
 
     if(action==ACTION_NONE) {
-        std::cerr<<"No mode specified.\n";
-        print_usage(argv[0]);
-        return 1;
+        print_usage();
+        return 0;
     }
 
     if(input_paths.empty()) {
         std::cerr<<"No input paths specified.\n";
-        print_usage(argv[0]);
+        print_usage();
         return 1;
     }
 
@@ -154,20 +206,32 @@ int main(int argc,char* argv[]) {
         return 1;
     }
 
+    // 单文件加密 AES 回退交互
+    if(is_encrypt&&!is_batch&&mode==CryptoMode::AES_GCM&&!crypto_aead_aes256gcm_is_available()) {
+        std::cout<<"[!]AES-GCM is not hardware accelerated on this CPU.\n"
+            <<"Do you want to switch to XChaCha20 (faster, secure)? (y/N): ";
+        char ch;
+        std::cin>>ch;
+        if(ch=='y'||ch=='Y') {
+            mode=CryptoMode::XCHACHA20;
+            fprintf(stderr,"Switched to XChaCha20 mode.\n");
+        }
+        else {
+            fprintf(stderr,"Continuing with AES-GCM (software fallback, may be slow).\n");
+        }
+    }
+
     // ---------- 密码输入 ----------
-    std::string password;
+    std::vector<char> password;
     if(is_encrypt) {
-        // 加密：输入两次
         std::cout<<"Enter password (min 6 characters, strong recommended): ";
-        std::string pw1=get_password();
+        auto pw1=get_password();
         if(pw1.size()<6) {
             std::cerr<<"Password too short.\n";
-            volatile char* p=&pw1[0];
-            for(size_t i=0; i<pw1.size(); ++i) p[i]=0;
+            sodium_memzero(pw1.data(),pw1.size());
             return 1;
         }
 
-        // 复杂度检查并输出警告
         bool has_upper=false,has_lower=false,has_digit=false,has_special=false;
         for(char c : pw1) {
             if(isupper((unsigned char)c)) has_upper=true;
@@ -176,45 +240,49 @@ int main(int argc,char* argv[]) {
             else if(ispunct((unsigned char)c)) has_special=true;
         }
         if(!(has_upper&&has_lower&&has_digit&&has_special)) {
-            std::cerr<<"Warning: Password lacks some character classes (upper/lower/digit/symbol).\n"
+            std::cerr<<"[!]Password lacks some character classes (upper/lower/digit/symbol).\n"
                 <<"Consider using a stronger password.\n";
         }
 
         std::cout<<"Re-enter password: ";
-        std::string pw2=get_password();
+        auto pw2=get_password();
         if(pw1!=pw2) {
             std::cerr<<"Passwords do not match.\n";
-            volatile char* p1=&pw1[0];
-            volatile char* p2=&pw2[0];
-            for(size_t i=0; i<pw1.size(); ++i) p1[i]=0;
-            for(size_t i=0; i<pw2.size(); ++i) p2[i]=0;
+            sodium_memzero(pw1.data(),pw1.size());
+            sodium_memzero(pw2.data(),pw2.size());
             return 1;
         }
-        password=pw1;
-        volatile char* p2_clear=&pw2[0];
-        for(size_t i=0; i<pw2.size(); ++i) p2_clear[i]=0;
+        password=std::move(pw1);
+        sodium_memzero(pw2.data(),pw2.size());
     }
     else {
-        // 解密：只输入一次
         std::cout<<"Enter password (min 6 characters): ";
         password=get_password();
         if(password.size()<6) {
-            std::cerr<<"Password is too short.\n";
-            volatile char* p=&password[0];
-            for(size_t i=0; i<password.size(); ++i) p[i]=0;
+            std::cerr<<"Password too short.\n";
+            sodium_memzero(password.data(),password.size());
             return 1;
         }
+    }
+
+    if(sodium_mlock(password.data(),password.size())!=0) {
+        std::cerr<<"[!]Could not lock password memory (maybe insufficient privileges).\n";
     }
 
     bool all_ok=true;
 
     if(is_batch) {
-        all_ok=process_files(input_paths,output_dir,password,mode,is_encrypt,delete_source);
+        all_ok=process_files(input_paths,output_dir,password,mode,is_encrypt,delete_source,force_overwrite,num_threads);
     }
     else {
         const std::string& in_path=input_paths[0];
         std::string out_path;
         if(!output_dir.empty()) {
+            if(!create_directory_recursive(output_dir)) {
+                std::cerr<<"Cannot create output directory: "<<output_dir<<"\n";
+                all_ok=false;
+                goto cleanup_password;
+            }
             std::string base=in_path;
             size_t pos=base.find_last_of("/\\");
             std::string fname=(pos!=std::string::npos) ? base.substr(pos+1) : base;
@@ -227,29 +295,61 @@ int main(int argc,char* argv[]) {
             out_path=in_path;
         }
 
-        bool ok=false;
+        if(action==ACTION_DECRYPT) {
+            std::string lower=in_path;
+            std::transform(lower.begin(),lower.end(),lower.begin(),::tolower);
+            if(lower.size()<4||lower.substr(lower.size()-4)!=".ptd") {
+                std::cerr<<"Error: Decryption input must have .ptd extension.\n";
+                all_ok=false;
+                goto cleanup_password;
+            }
+        }
+
+        if(!force_overwrite) {
+            std::ifstream test;
+            if(open_stream(test,out_path,std::ios::in)&&test.good()) {
+                test.close();
+                std::cout<<"Output file exists: "<<out_path<<"\nOverwrite? (y/N): ";
+                char ch;
+                std::cin>>ch;
+                if(ch!='y'&&ch!='Y') {
+                    std::cerr<<"Aborted.\n";
+                    all_ok=false;
+                    goto cleanup_password;
+                }
+            }
+        }
+
         if(is_encrypt) {
             out_path+=".ptd";
             printf("Encrypting: %s -> %s\n",in_path.c_str(),out_path.c_str());
-            ok=encrypt_file(in_path,out_path,password,mode,nullptr);
-            if(ok&&delete_source) {
+            all_ok=encrypt_file(in_path,out_path,password,mode,nullptr,false);
+            if(all_ok&&delete_source) {
                 if(std::remove(in_path.c_str())!=0) {
-                    std::cerr<<"Warning: could not delete "<<in_path<<"\n";
+                    std::cerr<<"Error: could not delete source file: "<<in_path<<"\n";
+                    all_ok=false;
                 }
             }
         }
         else {
-            if(out_path.size()>=4&&out_path.substr(out_path.size()-4)==".ptd") {
+            if(out_path.size()>=4&&
+                (out_path.substr(out_path.size()-4)==".ptd"||
+                    out_path.substr(out_path.size()-4)==".PTD")) {
                 out_path=out_path.substr(0,out_path.size()-4);
             }
+            if(out_path==in_path) {
+                std::cerr<<"Error: Output path would overwrite input file.\n";
+                all_ok=false;
+                goto cleanup_password;
+            }
             printf("Decrypting: %s -> %s\n",in_path.c_str(),out_path.c_str());
-            ok=decrypt_file(in_path,out_path,password,nullptr);
+            all_ok=decrypt_file(in_path,out_path,password,nullptr,false,false);
         }
-        all_ok=ok;
     }
 
-    volatile char* p=&password[0];
-    for(size_t i=0; i<password.size(); ++i) p[i]=0;
+cleanup_password:
+    sodium_munlock(password.data(),password.size());
+    sodium_memzero(password.data(),password.size());
 
     return all_ok ? 0 : 1;
 }
