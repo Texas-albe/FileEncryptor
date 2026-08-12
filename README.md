@@ -13,54 +13,54 @@
 - 🗑️ **源文件删除**：可选 `-de` 参数，加密成功后自动删除原始文件。
 - 🚫 **反调试保护**：内置简单反调试检测，增加逆向难度（可绕过，仅用于防范普通攻击者）。
 - 📂 **灵活输出**：指定输出目录（自动创建），默认与源文件同目录。
-- ✨ **零配置**：首次运行自动生成并存储 Pepper（用户配置目录），确保跨设备一致性。
+- 🧹 **中断自愈**：意外中断后残留半成品文件与进度标记，下次运行会自动检测并重新处理。
 
-## 依赖
+## 安装与编译
 
-- [libsodium](https://download.libsodium.org/doc/)（1.0.18+）
-- C++17 编译器（MSVC 2019+ / GCC 7+ / Clang 6+）
-
-## 编译
-### Windows (Visual Studio)
-1. 下载并安装 libsodium 开发包。
-2. 将 libsodium 的 `include` 和 `lib` 路径添加到项目属性。
-3. 链接静态库 `libsodium.lib`，并定义预处理器宏 `SODIUM_STATIC`（若使用静态库）。
-4. 编译为 Release x64。
-### Linux / macOS
-
-### 安装 libsodium（以 Ubuntu 为例）
+### 方式一：直接使用（Windows）
 
 ```bash
-sudo apt install libsodium-dev
+# 将 FileEncryptor.exe 放入任意目录（建议加入 PATH）
+FileEncryptor.exe -e secret.txt
 ```
 
-### 编译
+### 方式二：从源码编译（Windows Visual Studio）
+
+1. 安装 libsodium 开发包（含 `include` 与 `lib`）。
+2. 打开 `FileEncryptor.vcxproj`，确认项目属性中的 libsodium 路径正确。
+3. 静态链接 `libsodium.lib`，并定义预处理器宏 `SODIUM_STATIC`。
+4. 以 **Release x64** 配置编译。
+
+### 方式三：从源码编译（Linux / macOS）
 
 ```bash
+# 安装依赖（以 Ubuntu 为例）
+sudo apt install libsodium-dev
+
+# 编译
 g++ -std=c++17 -O2 -s -static -I/usr/include -L/usr/lib -lsodium main.cpp FileEncryptor.cpp -o fileencryptor
 ```
 
 ## 使用方法
 
+### 示例
+
 ```text
-FileEncryptor v1.0.0
-
-Modes
-  -e           Encrypt single file
-  -d           Decrypt single file
-  -be          Batch encrypt directories/files
-  -bd          Batch decrypt directories/files
-
-Options:
-  -o <dir>     Output directory (optional, default: source file's directory)
-  -de          Delete source file after successful encryption (encryption only)
-  -m <mode>    Encryption mode: aes (default) or xchacha20
-
-Input:
-  For single mode: provide the file path as positional argument
-  For batch mode:  provide directory paths via -i (multiple allowed)
-                    All files under directories will be processed recursively.
+FileEncryptor.exe -e/-d <FileName> [-o <Path>] [-de] [-m aes|xchacha20] [-y] [-j Num]
+FileEncryptor.exe -be/-bd <Path> [-o <Path>] [-de] [-m aes|xchacha20] [-y] [-j Num]
 ```
+
+### 参数说明
+
+| 参数 | 作用 | 备注 |
+|---|---|---|
+| `-e` / `-d` | 单文件加密 / 解密 | 仅接受一个输入路径 |
+| `-be` / `-bd` | 批量加密 / 解密 | 通过 `-i` 指定输入，可多次使用 |
+| `-o <dir>` | 输出目录 | 默认输出到源文件所在目录；**单模式要求目录已存在**，批量模式自动创建 |
+| `-de` | 加密成功后删除源文件 | 仅加密模式有效 |
+| `-m <mode>` | 加密算法 | `aes`（默认）或 `xchacha20`；解密时自动从文件头读取，忽略此参数 |
+| `-i <path>` | 批量输入路径 | 在批量模式（-be 或 -bd）下，您可以通过 -i 指定一个或多个输入目录或文件，也可以省略 -i，直接将路径作为位置参数传递（两者等价）。对于单文件模式（-e 或 -d），不推荐使用 -i，而是直接将文件路径作为位置参数传入 |
+| `-j <num>` | 指定并行处理的线程数 | 如果未指定或设置为 0，程序会自动使用 CPU 核心数（std::thread::hardware_concurrency()）。该参数在批量模式（-be/-bd）下有效，单文件模式会忽略此选项 |
 
 ## 示例
 
@@ -121,6 +121,13 @@ fileencryptor -e file.dat -m xchacha20
 - 递归遍历输入目录，收集所有文件，计算总大小，显示综合进度条。解密时收集错误文件列表，最后一次性输出。
 
 ## 注意事项
+
+### 退出码
+
+| 退出码 | 含义 |
+|---|---|
+| 0 | 全部成功 |
+| 1 | 参数错误 / 密码不符 / 加解密失败 / 批量处理存在失败项 |
 
 ### 密码强度：
 
