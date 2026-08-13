@@ -5,10 +5,16 @@
 #include <fstream>
 #include <atomic>
 #include <mutex>
+#include <cstdio>
 
 #ifdef _WIN32
 #include <windows.h>
 #endif
+
+#define FE_VERSION_MAJOR 1
+#define FE_VERSION_MINOR 2
+#define FE_VERSION_PATCH 0
+#define FE_VERSION_STRING "1.2.0"
 
 enum class CryptoMode: unsigned char {
     AES_GCM=0,
@@ -55,16 +61,32 @@ static inline std::wstring utf8_to_wstring(const std::string& str) {
     MultiByteToWideChar(CP_UTF8,0,str.c_str(),(int)str.size(),&wstr[0],len);
     return wstr;
 }
+static inline std::string wstring_to_utf8(const std::wstring& wstr) {
+    if(wstr.empty()) return std::string();
+    int len=WideCharToMultiByte(CP_UTF8,0,wstr.c_str(),(int)wstr.size(),NULL,0,NULL,NULL);
+    std::string str(len,0);
+    WideCharToMultiByte(CP_UTF8,0,wstr.c_str(),(int)wstr.size(),&str[0],len,NULL,NULL);
+    return str;
+}
 #endif
 
 template<typename T>
 static inline bool open_stream(T& stream,const std::string& path,std::ios::openmode mode) {
 #ifdef _WIN32
     std::wstring wpath=utf8_to_wstring(path);
-    stream.open(wpath,mode);
+    stream.open(wpath.c_str(),mode);
     return stream.is_open();
 #else
     stream.open(path,mode);
     return stream.is_open();
+#endif
+}
+
+// UTF-8 安全的文件删除（Windows 下走宽字符 API，避免 ANSI 路径失败）
+static inline bool remove_file_utf8(const std::string& path) {
+#ifdef _WIN32
+    return _wremove(utf8_to_wstring(path).c_str())==0;
+#else
+    return std::remove(path.c_str())==0;
 #endif
 }

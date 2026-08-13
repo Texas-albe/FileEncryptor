@@ -9,6 +9,7 @@
 #include <cctype>
 #include <fstream>
 #include <sodium.h>
+#include <stdexcept>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -48,6 +49,7 @@ static std::vector<char> get_password_posix() {
     std::cout<<std::endl;
     pwd.assign(line.begin(),line.end());
     sodium_memzero((void*)line.data(),line.size());
+    line.clear();
     return pwd;
 }
 #endif
@@ -61,22 +63,23 @@ static std::vector<char> get_password() {
 }
 
 static void print_usage() {
-    std::cout<<"FileEncryptor v1.1.1\n\n"
+    std::cout<<"FileEncryptor v"<<FE_VERSION_STRING<<"\n\n"
         <<"Modes:\n"
-        <<"  -e           Encrypt single file\n"
-        <<"  -d           Decrypt single file\n"
-        <<"  -be          Batch encrypt directories/files\n"
-        <<"  -bd          Batch decrypt directories/files\n"
+        <<"  -e                Encrypt single file\n"
+        <<"  -d                Decrypt single file\n"
+        <<"  -be               Batch encrypt directories/files\n"
+        <<"  -bd               Batch decrypt directories/files\n"
+        <<"  -h, --help, -?    Show this help\n\n"
         <<"Options:\n"
-        <<"  -o <dir>     Output directory (optional, default: source file's directory)\n"
-        <<"  -de          Delete source file after successful encryption (encryption only)\n"
-        <<"  -m <mode>    Encryption mode: aes (default) or xchacha20\n"
-        <<"  -y, --force  Overwrite existing output files without asking\n"
-        <<"  -j <num>     Number of parallel threads (default: CPU cores)\n"
+        <<"  -o <dir>          Output directory (optional, default: source file's directory)\n"
+        <<"  -de               Delete source file after successful encryption (encryption only)\n"
+        <<"  -m <mode>         Encryption mode: aes (default) or xchacha20\n"
+        <<"  -y, --force       Overwrite existing output files without asking\n"
+        <<"  -j <num>          Number of parallel threads (default: CPU cores)\n\n"
         <<"Input:\n"
         <<"  For single mode: provide the file path as positional argument\n"
         <<"  For batch mode:  provide directory paths via -i (multiple allowed)\n"
-        <<"                   All files under directories will be processed recursively.\n"
+        <<"                   All files under directories will be processed recursively.\n\n"
         <<"Usage:\n"
         <<"  FileEncryptor.exe -e/-d <FileName> [-o <Path>] [-de] [-m aes|xchacha20] [-y] [-j Num]\n"
         <<"  FileEncryptor.exe -be/-bd <Path> [-o <Path>] [-de] [-m aes|xchacha20] [-y] [-j Num]\n";
@@ -103,7 +106,7 @@ int main(int argc,char* argv[]) {
     anti_debug_check();
 
     if(sodium_init()<0) {
-        std::cerr<<"Libsodium initialization failed.\n";
+        std::cerr<<"libsodium initialization failed.\n";
         return 1;
     }
 
@@ -169,8 +172,14 @@ int main(int argc,char* argv[]) {
             force_overwrite=true;
         }
         else if(arg=="-j"&&i+1<argc) {
-            num_threads=std::stoi(argv[++i]);
-            if(num_threads<1) num_threads=1;
+            try {
+                int t=std::stoi(argv[++i]);
+                num_threads=(t<1) ? 1 : t;
+            }
+            catch(const std::exception&) {
+                std::cerr<<"Error: invalid value for -j (expected an integer >= 1). Ignoring -j, using default thread count.\n";
+                num_threads=0;
+            }
         }
         else if(arg[0]!='-') {
             input_paths.push_back(arg);
@@ -208,7 +217,7 @@ int main(int argc,char* argv[]) {
 
     // 单文件加密 AES 回退交互
     if(is_encrypt&&!is_batch&&mode==CryptoMode::AES_GCM&&!crypto_aead_aes256gcm_is_available()) {
-        std::cout<<"[!]AES-GCM is not hardware accelerated on this CPU.\n"
+        std::cout<<"Warning: AES-GCM is not hardware accelerated on this CPU.\n"
             <<"Do you want to switch to XChaCha20 (faster, secure)? (y/N): ";
         char ch;
         std::cin>>ch;
@@ -240,7 +249,7 @@ int main(int argc,char* argv[]) {
             else if(ispunct((unsigned char)c)) has_special=true;
         }
         if(!(has_upper&&has_lower&&has_digit&&has_special)) {
-            std::cerr<<"[!]Password lacks some character classes (upper/lower/digit/symbol).\n"
+            std::cerr<<"Warning: Password lacks some character classes (upper/lower/digit/symbol).\n"
                 <<"Consider using a stronger password.\n";
         }
 
@@ -266,7 +275,7 @@ int main(int argc,char* argv[]) {
     }
 
     if(sodium_mlock(password.data(),password.size())!=0) {
-        std::cerr<<"[!]Could not lock password memory (maybe insufficient privileges).\n";
+        std::cerr<<"Warning: could not lock password memory (maybe insufficient privileges).\n";
     }
 
     bool all_ok=true;
@@ -303,8 +312,23 @@ int main(int argc,char* argv[]) {
                 all_ok=false;
                 goto cleanup_password;
             }
+            // 先剥离 .ptd 得到明文输出路径
+            if(out_path.size()>=4&&
+                (out_path.substr(out_path.size()-4)==".ptd"||
+                    out_path.substr(out_path.size()-4)==".PTD")) {
+                out_path=out_path.substr(0,out_path.size()-4);
+            }
+            if(out_path==in_path) {
+                std::cerr<<"Error: Output path would overwrite input file.\n";
+                all_ok=false;
+                goto cleanup_password;
+            }
+        }
+        else {
+            out_path+=".ptd";
         }
 
+        // 覆盖提示：基于最终输出路径（加密问 .ptd、解密问明文文件）
         if(!force_overwrite) {
             std::ifstream test;
             if(open_stream(test,out_path,std::ios::in)&&test.good()) {
@@ -321,27 +345,16 @@ int main(int argc,char* argv[]) {
         }
 
         if(is_encrypt) {
-            out_path+=".ptd";
             printf("Encrypting: %s -> %s\n",in_path.c_str(),out_path.c_str());
             all_ok=encrypt_file(in_path,out_path,password,mode,nullptr,false);
             if(all_ok&&delete_source) {
-                if(std::remove(in_path.c_str())!=0) {
+                if(!remove_file_utf8(in_path)) {
                     std::cerr<<"Error: could not delete source file: "<<in_path<<"\n";
                     all_ok=false;
                 }
             }
         }
         else {
-            if(out_path.size()>=4&&
-                (out_path.substr(out_path.size()-4)==".ptd"||
-                    out_path.substr(out_path.size()-4)==".PTD")) {
-                out_path=out_path.substr(0,out_path.size()-4);
-            }
-            if(out_path==in_path) {
-                std::cerr<<"Error: Output path would overwrite input file.\n";
-                all_ok=false;
-                goto cleanup_password;
-            }
             printf("Decrypting: %s -> %s\n",in_path.c_str(),out_path.c_str());
             all_ok=decrypt_file(in_path,out_path,password,nullptr,false,false);
         }
