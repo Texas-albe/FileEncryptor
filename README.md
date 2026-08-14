@@ -1,6 +1,6 @@
 # FileEncryptor
 
-一个基于 [libsodium](https://libsodium.gitbook.io/) 的命令行文件加密 / 解密工具，支持分块加密、断点续传、批量并行处理与跨平台 UTF-8 路径。当前版本 **v1.2.0**（磁盘文件格式版本 **v2**，向后兼容 v1）。
+一个基于 [libsodium](https://libsodium.gitbook.io/) 的命令行文件加密 / 解密工具，支持分块加密、断点续传、批量并行处理与跨平台 UTF-8 路径。当前版本 **v1.2.1**（磁盘文件格式版本 **v2**，向后兼容 v1）。
 
 ---
 
@@ -143,7 +143,7 @@ g++ -std=c++20 -O2 main.cpp FileEncryptor.cpp -lsodium -o FileEncryptor
 
 # FileEncryptor
 
-A command-line file encryption / decryption tool built on [libsodium](https://libsodium.gitbook.io/). It features chunked encryption, resumable transfers, batch parallel processing, and cross-platform UTF-8 paths. Current version **v1.2.0** (on-disk file format version **v2**, backward compatible with v1).
+A command-line file encryption / decryption tool built on [libsodium](https://libsodium.gitbook.io/). It features chunked encryption, resumable transfers, batch parallel processing, and cross-platform UTF-8 paths. Current version **v1.2.1** (on-disk file format version **v2**, backward compatible with v1).
 
 ---
 
