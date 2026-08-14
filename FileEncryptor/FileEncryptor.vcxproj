@@ -154,7 +154,6 @@
   <ItemGroup>
     <ClCompile Include="FileEncryptor.cpp" />
     <ClCompile Include="main.cpp" />
-    <ClCompile Include="verify.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="FileEncryptor.hpp" />

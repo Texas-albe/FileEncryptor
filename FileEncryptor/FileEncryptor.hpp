@@ -13,8 +13,8 @@
 
 #define FE_VERSION_MAJOR 1
 #define FE_VERSION_MINOR 2
-#define FE_VERSION_PATCH 0
-#define FE_VERSION_STRING "1.2.0"
+#define FE_VERSION_PATCH 1
+#define FE_VERSION_STRING "1.2.1"
 
 enum class CryptoMode: unsigned char {
     AES_GCM=0,
@@ -82,7 +82,7 @@ static inline bool open_stream(T& stream,const std::string& path,std::ios::openm
 #endif
 }
 
-// UTF-8 安全的文件删除（Windows 下走宽字符 API，避免 ANSI 路径失败）
+// UTF-8 安全的文件删除
 static inline bool remove_file_utf8(const std::string& path) {
 #ifdef _WIN32
     return _wremove(utf8_to_wstring(path).c_str())==0;

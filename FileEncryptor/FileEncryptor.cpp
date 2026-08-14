@@ -40,7 +40,6 @@ static constexpr size_t ARGON2_SALT_LEN=crypto_pwhash_SALTBYTES;
 static constexpr size_t ARGON2_OUTPUT_LEN=32;
 
 // Argon2id 参数：旧格式（v1）写死为交互档，新格式（v2）把参数存入文件头以便未来增强且兼容旧文件。
-// 新文件默认提升到 moderate 档（4 次迭代 / 128MiB），比交互档更适合静态/长期加密。
 static constexpr unsigned int ARGON2_OPS_LEGACY=3;
 static constexpr unsigned int ARGON2_MEM_LEGACY_KB=(unsigned int)(crypto_pwhash_MEMLIMIT_INTERACTIVE/1024);
 static constexpr unsigned int ARGON2_OPS_DEFAULT=4;
@@ -273,9 +272,7 @@ void anti_debug_check() {
         exit(1);
     }
 #else
-    // 注意：在缺少 ptrace 权限的环境（容器/沙箱）下 ptrace 会失败，
-    // 但这并不等于“被调试”。仅当“已被其它 tracer 占用”(EBUSY) 时才视为被调试，
-    // 避免在普通受限环境中误退出（此前会因权限不足直接 exit(1)）。
+    // 在缺少 ptrace 权限的环境（容器/沙箱）下 ptrace 会失败，但这并不等于“被调试”。仅当“已被其它 tracer 占用”(EBUSY) 时才视为被调试，避免在普通受限环境中误退出（此前会因权限不足直接 exit(1)）。
     if(ptrace(PTRACE_TRACEME,0,0,0)==-1) {
         if(errno==EBUSY) {
             fprintf(stderr,"Debugger detected, exiting.\n");
@@ -377,6 +374,40 @@ static bool is_file_valid(const std::string& path) {
     return (memcmp(h.magic,MAGIC,4)==0&&(h.version==VERSION||h.version==1));
 }
 
+// 判断已存在的输出是否“完整且有效”，可安全跳过
+static bool is_complete_output(const std::string& out_path, bool encrypt, const std::string& in_path) {
+    int64_t cur=get_file_size_utf8(out_path);
+    if(cur<0) return false;
+    if(encrypt) {
+        int64_t in_sz=get_file_size_utf8(in_path);
+        if(in_sz<0) return false;
+        uint64_t cs=CHUNK_SIZE;
+        uint64_t expected;
+        if(in_sz==0) {
+            expected=(uint64_t)HEADER_SIZE+4+4+8;
+        }
+        else {
+            uint64_t tc=((uint64_t)in_sz+cs-1)/cs;
+            uint64_t last=(uint64_t)in_sz-(tc-1)*cs;
+            expected=(uint64_t)HEADER_SIZE+4+4+8+(tc-1)*(cs+TAG_SIZE)+(last+TAG_SIZE);
+        }
+        return (uint64_t)cur==expected;
+    }
+    else {
+        // 解密产物：从源 .ptd 头读取 orig_size 与当前输出尺寸比较
+        std::ifstream f;
+        if(!open_stream(f,in_path,std::ios::binary)) return false;
+        unsigned char verbuf[5];
+        if(!f.read(reinterpret_cast<char*>(verbuf),5)) return false;
+        unsigned char ver=verbuf[4];
+        uint64_t hdr_size=(ver==1) ? (uint64_t)HEADER_SIZE_V1 : (uint64_t)HEADER_SIZE;
+        uint64_t orig=0;
+        f.seekg((std::streamoff)(hdr_size+4+4),std::ios::beg);
+        if(!f.read(reinterpret_cast<char*>(&orig),8)) return false;
+        return (uint64_t)cur==orig;
+    }
+}
+
 // ---------- 进度 ----------
 static bool load_progress(const std::string& out_path,ProgressInfo& info) {
     std::string prog_path=out_path+".progress";
@@ -393,7 +424,9 @@ static bool load_progress(const std::string& out_path,ProgressInfo& info) {
 static bool save_progress(const std::string& out_path,const ProgressInfo& info) {
     std::string prog_path=out_path+".progress";
     std::string temp_prog=prog_path+".tmp";
-    std::remove(temp_prog.c_str()); // 清除可能残留的临时进度文件
+    // 清除可能残留的临时进度文件
+    std::remove(temp_prog.c_str());
+
     std::ofstream f;
     if(!open_stream(f,temp_prog,std::ios::binary|std::ios::trunc)) return false;
     f.write(reinterpret_cast<const char*>(&info),sizeof(info));
@@ -510,7 +543,7 @@ bool encrypt_file(const std::string& in_path,
 
     uint64_t trunc_pos=(uint64_t)HEADER_SIZE+4+4+8+(uint64_t)start_chunk*(chunk_size+TAG_SIZE);
 
-    // 跨进程锁：在打开/截断输出之前获取，防止两个进程同时写同一输出导致损坏（N-2）
+    // 跨进程锁：在打开/截断输出之前获取，防止两个进程同时写同一输出导致损坏
     std::string lock_path;
     if(!acquire_output_lock(out_path,lock_path)) {
         fprintf(stderr,"Output file is locked by another process: %s\n",out_path.c_str());
@@ -682,7 +715,8 @@ bool encrypt_file(const std::string& in_path,
         }
 
         processed_bytes+=chunk_len;
-        fout.flush();   // 先落盘再记账进度，确保磁盘内容永远不落后于 .progress
+        // 先落盘再记账进度，确保磁盘内容永远不落后于 .progress
+        fout.flush();
         ProgressInfo new_info={PROGRESS_MAGIC, PROGRESS_VERSION, i+1, processed_bytes};
         save_progress(out_path,new_info);
 
@@ -1113,7 +1147,7 @@ static void collect_files_from_dir(const std::string& dir,std::vector<std::strin
 // ---------- 批量处理 ----------
 static std::string build_batch_out_path(const std::string& in_path,
     const std::string& out_dir_clean,
-    const std::vector<std::string>& input_paths) {
+    const std::vector<std::string>& input_paths, bool include_root_name) {
     std::string out_path=out_dir_clean+"/";
     std::string best_root;
     for(const auto& root:input_paths) {
@@ -1122,11 +1156,14 @@ static std::string build_batch_out_path(const std::string& in_path,
         }
     }
     if(!best_root.empty()) {
-        size_t root_pos=best_root.find_last_of("/\\");
-        std::string root_name=(root_pos!=std::string::npos) ? best_root.substr(root_pos+1) : best_root;
-        if(!root_name.empty()) out_path+=root_name+"/";
         std::string suffix=in_path.substr(best_root.length());
         if(!suffix.empty()&&(suffix[0]=='/'||suffix[0]=='\\')) suffix.erase(0,1);
+        // 加密：保留输入根目录名作为顶层目录（避免多 -i 同名冲突，且还原后保持源目录名）；解密：不附加输入根目录名，使还原结构为 <输出目录>/<源目录>/...（与 v1.1.1 一致），否则会多嵌套一层“加密容器目录名”。
+        if(include_root_name) {
+            size_t root_pos=best_root.find_last_of("/\\");
+            std::string root_name=(root_pos!=std::string::npos) ? best_root.substr(root_pos+1) : best_root;
+            if(!root_name.empty()) out_path+=root_name+"/";
+        }
         out_path+=suffix;
     }
     else {
@@ -1215,7 +1252,7 @@ bool process_files(const std::vector<std::string>& input_paths,
     for(const auto& in_path:all_files) {
         std::string out_path;
         if(!out_dir_clean.empty()) {
-            out_path=build_batch_out_path(in_path,out_dir_clean,input_paths);
+            out_path=build_batch_out_path(in_path,out_dir_clean,input_paths,encrypt);
             if(out_path.empty()) {
                 fprintf(stderr,"Skipping %s: output path escapes output directory.\n",in_path.c_str());
                 continue;
@@ -1261,8 +1298,14 @@ bool process_files(const std::vector<std::string>& input_paths,
                 else if(file_exists(out_path+".progress")) {
                     fprintf(stderr,"Existing file %s has unfinished progress, will resume.\n",out_path.c_str());
                 }
-                else {
+                else if(is_complete_output(out_path,encrypt,in_path)) {
+                    // 头部有效、无 .progress、且尺寸完整，确属已完成成品，安全跳过
                     skip=true;
+                }
+                else {
+                    // 头部有效但尺寸不完整且无 .progress：多半是上一轮在首个 save_progress 前被强杀，
+                    // 残留下“仅头部”的半截 .ptd。当作未完成重新加密，避免解密字节不一致。
+                    fprintf(stderr,"Existing file %s is incomplete (no progress), will re-encrypt.\n",out_path.c_str());
                 }
             }
         }
@@ -1294,7 +1337,7 @@ bool process_files(const std::vector<std::string>& input_paths,
 
             std::string out_path;
             if(!out_dir_clean.empty()) {
-                out_path=build_batch_out_path(in_path,out_dir_clean,input_paths);
+                out_path=build_batch_out_path(in_path,out_dir_clean,input_paths,encrypt);
                 if(out_path.empty()) {
                     // 输出路径逃出目标目录（路径穿越）：跳过该文件，绝不回退到源路径，
                     std::lock_guard<std::mutex> lock(error_mutex);
