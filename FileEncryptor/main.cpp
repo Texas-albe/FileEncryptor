@@ -73,7 +73,7 @@ static void print_usage() {
         <<"Options:\n"
         <<"  -o <dir>          Output directory (optional, default: source file's directory)\n"
         <<"  -de               Delete source file after successful encryption (encryption only)\n"
-        <<"  -m <mode>         Encryption mode: aes (default) or xchacha20\n"
+        <<"  -m <mode>         Encryption mode: xchacha20 (default) or aegis256\n"
         <<"  -y, --force       Overwrite existing output files without asking\n"
         <<"  -j <num>          Number of parallel threads (default: CPU cores)\n\n"
         <<"Input:\n"
@@ -81,8 +81,8 @@ static void print_usage() {
         <<"  For batch mode:  provide directory paths via -i (multiple allowed)\n"
         <<"                   All files under directories will be processed recursively.\n\n"
         <<"Usage:\n"
-        <<"  FileEncryptor.exe -e/-d <FileName> [-o <Path>] [-de] [-m aes|xchacha20] [-y] [-j Num]\n"
-        <<"  FileEncryptor.exe -be/-bd <Path> [-o <Path>] [-de] [-m aes|xchacha20] [-y] [-j Num]\n";
+        <<"  FileEncryptor.exe -e/-d <FileName> [-o <Path>] [-de] [-m xchacha20|aegis256] [-y] [-j Num]\n"
+        <<"  FileEncryptor.exe -be/-bd <Path> [-o <Path>] [-de] [-m xchacha20|aegis256] [-y] [-j Num]\n";
 }
 
 #ifdef _WIN32
@@ -130,7 +130,7 @@ int main(int argc,char* argv[]) {
 
     std::vector<std::string> input_paths;
     std::string output_dir;
-    CryptoMode mode=CryptoMode::AES_GCM;
+    CryptoMode mode=CryptoMode::XCHACHA20;
     bool delete_source=false;
     bool force_overwrite=false;
     int num_threads=0;
@@ -161,8 +161,8 @@ int main(int argc,char* argv[]) {
         }
         else if(arg=="-m"&&i+1<argc) {
             std::string m=argv[++i];
-            if(m=="aes") mode=CryptoMode::AES_GCM;
-            else if(m=="xchacha20") mode=CryptoMode::XCHACHA20;
+            if(m=="xchacha20") mode=CryptoMode::XCHACHA20;
+            else if(m=="aegis256") mode=CryptoMode::AEGIS256;
             else { std::cerr<<"Unknown mode: "<<m<<"\n"; return 1; }
         }
         else if(arg=="-i"&&i+1<argc) {
@@ -215,10 +215,10 @@ int main(int argc,char* argv[]) {
         return 1;
     }
 
-    // 单文件加密 AES 回退交互
-    if(is_encrypt&&!is_batch&&mode==CryptoMode::AES_GCM&&!crypto_aead_aes256gcm_is_available()) {
-        std::cout<<"Warning: AES-GCM is not hardware accelerated on this CPU.\n"
-            <<"Do you want to switch to XChaCha20 (faster, secure)? (y/N): ";
+    // 单文件加密 AEGIS-256 可用性回退：缺 AES-NI 时自动切换到 XChaCha20
+    if(is_encrypt&&!is_batch&&mode==CryptoMode::AEGIS256&&!aegis256_supported()) {
+        std::cout<<"Warning: AEGIS-256 is not available on this CPU (AES-NI required).\n"
+            <<"Do you want to switch to XChaCha20 (secure)? (y/N): ";
         char ch;
         std::cin>>ch;
         if(ch=='y'||ch=='Y') {
@@ -226,7 +226,7 @@ int main(int argc,char* argv[]) {
             fprintf(stderr,"Switched to XChaCha20 mode.\n");
         }
         else {
-            fprintf(stderr,"Continuing with AES-GCM (software fallback, may be slow).\n");
+            fprintf(stderr,"Continuing with AEGIS-256 (may fail on this CPU).\n");
         }
     }
 

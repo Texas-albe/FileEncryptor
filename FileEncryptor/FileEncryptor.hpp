@@ -12,13 +12,14 @@
 #endif
 
 #define FE_VERSION_MAJOR 1
-#define FE_VERSION_MINOR 2
-#define FE_VERSION_PATCH 1
-#define FE_VERSION_STRING "1.2.1"
+#define FE_VERSION_MINOR 3
+#define FE_VERSION_PATCH 0
+#define FE_VERSION_STRING "1.3.0"
 
 enum class CryptoMode: unsigned char {
-    AES_GCM=0,
-    XCHACHA20=1
+    AES_GCM=0,   // 仅用于解密旧格式（v1/v2）文件；新加密不再使用
+    XCHACHA20=1, // 默认模式
+    AEGIS256=2   // 取代 AES-GCM 的新选项（AEAD，32 字节 nonce / 32 字节 tag）
 };
 
 // 递归创建目录
@@ -51,6 +52,9 @@ bool process_files(const std::vector<std::string>& input_paths,
     int num_threads=0);
 
 void anti_debug_check();
+
+// 运行时探测 AEGIS-256 是否可用（缺 AES-NI 的 CPU 上不可用）
+bool aegis256_supported();
 
 // ---------- 跨平台路径打开辅助 ----------
 #ifdef _WIN32
