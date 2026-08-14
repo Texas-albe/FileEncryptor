@@ -6,6 +6,31 @@
 
 ---
 
+## [1.3.0] - 2026-08-14（安全加固：进度 HMAC、AEGIS-256、nonce 自增、Blake2b、加密自检）
+
+> 磁盘文件格式版本 **v2 → v3**（向后兼容 v1 / v2，旧文件仍可直接解密，无需重加密）。
+
+### Added
+
+- **进度文件 HMAC 认证（防续传劫持）**：`.progress` 现在携带 **HMAC-SHA512/256**（32 字节派生 key + 32 字节 tag），覆盖 `magic + version + 已处理块数 + 已处理字节数`。伪造 / 损坏的进度无法通过认证，必然触发安全从头重写——无法跳过 MAC、无法注入块、无法劫持续传。
+- **AEGIS-256 加密模式**：新增 `CryptoMode::AEGIS256`（32 字节密钥 / 32 字节 nonce / 32 字节 tag 的 AEAD），作为 AES-GCM 的替代；引入运行时探测 `aegis256_supported()`（缺 AES-NI 的 CPU 上返回 false）。
+- **块 nonce 改用 `sodium_increment`**：每块 `nonce = sodium_increment(iv)` 在文件级随机 `iv` 上逐块自增，彻底消除旧 `iv XOR 块索引` 方案的理论碰撞风险（v1/v2 解密仍用旧 nonce 派生）。
+- **明文 Blake2b 完整性校验**：加密前对明文计算 **Blake2b** 哈希写入 v3 头 `plaintext_hash[32]`；解密后重新计算并比对，端到端验证整个明文完整性与来源真实性。
+- **加密后自检**：`encrypt_file` 成功后立即用同一口令解密验证（尺寸 + Blake2b），自检失败则删除产物并报错，保证落地产物一定可解密恢复。
+
+### Changed
+
+- **默认算法改为 XChaCha20-Poly1305**：`CryptoMode` 默认值由 `AES_GCM` 改为 `XCHACHA20`；CLI `-m` 取值变为 `xchacha20`（默认）/ `aegis256`，移除 `aes`。
+- **移除新加密中的 AES-GCM**：`AES-256-GCM`（`crypto_aead_aes256gcm`）仅保留用于**解密旧版 v1/v2 文件**；新文件使用 XChaCha20 或 AEGIS-256。
+- **文件格式升级 v3**：v3 在 v2 基础上将 `iv` 缓冲扩到 32 字节（容纳 AEGIS-256 的 32 字节 nonce）并新增 32 字节 `plaintext_hash`，固定头区共 **109 字节**（93 字节 `FileHeaderV3` 结构 + 16 字节分块元数据：chunk_size / total_chunks / orig_size）；`decrypt_file` 改为版本感知解析（v1 / v2 / v3）。
+- **批量续传回退判定**：批量模式在 AEGIS-256 不可用时改为基于 `aegis256_supported()` 的探测回退（原为 AES 探测）。
+
+### Security
+
+- 续传防劫持（HMAC）、nonce 防碰撞（`sodium_increment`）、文件级 Blake2b 完整性、加密自检四者共同构成「可恢复且防篡改」的静态存储保护；`mode` / `version` 仍纳入 AAD 抗降级。
+
+---
+
 ## [1.2.1] - 2026-08-14（批量续传与解密路径回归修复）
 
 > 本轮聚焦批量模式的两条回归，并补全回归测试。磁盘文件格式版本仍为 **v2**（与 v1.2.0 完全兼容，无需重加密旧产物）。
@@ -14,6 +39,10 @@
 
 - **批量解密输出路径多嵌套一层（F10 / P04 / S01）**：`build_batch_out_path` 增加 `encrypt` 方向判断，解密时**不再**附加输入根目录名，还原结构恢复为 `<解密目录>/<源目录>/...`，与 v1.1.1 一致；加密时仍附加以保留源目录名。
 - **批量续传恢复字节不一致（S08）**：修复 prescan 把"仅有头部、无 `.progress` 的半截 `.ptd`"（强杀于首个 `save_progress` 前）误判为已完成而跳过的问题。新增 `is_complete_output()` 按预期尺寸比对，仅当"头部有效 + 无 `.progress` + 尺寸完整"才跳过，否则重新加密，确保重跑后解密字节一致。
+
+### Added
+
+- 回归测试 `_verify/verify.cpp` 扩充至 **39/39 PASS**：新增 S08 批量续传字节一致性、S08-b（仅头部无 `.progress` 重加密）、V1 兼容实测（合成 v1 样本解密）、>4TiB 伪造头部拒绝、>4GiB 稀疏往返、`-j 64` 并行压力、符号链接穿透拒绝等。
 
 ---
 
@@ -79,6 +108,7 @@
 - **解密成品权限（POSIX）**：新建 `.part` 后 `chmod 0600`，防止半截明文被其他用户读取。
 - **密钥内存**：派生后用 `sodium_mlock` 锁定，失败仅告警。
 - **跨进程锁竞争**：锁按每个输出文件独立（`<out>.lock`），批量并行各线程处理不同文件，设计上无进程内争用；仅跨进程存在「非原子失效锁回收」的 TOCTOU（安全假阴性，不损坏数据，低危）。
+- **回归套件**：`_verify/verify.cpp` 提供 32/32 字节级测试（含 S1 畸形头、S2 真实重解析点、S4 穿越、V1 兼容）。该套件**保留在仓库作为固定验收**，但**不编入发布版 `FileEncryptor.exe`**（与 `main.cpp` 的 `wmain` 冲突、依赖 `<windows.h>`），仅作独立测试目标 `_verify/verify.exe`。
 
 ---
 
