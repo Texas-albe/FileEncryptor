@@ -6,6 +6,35 @@
 
 ---
 
+## [1.4.0] - 2026-08-15（跨平台构建修复：libsodium 版本校验与查找顺序、打包文档）
+
+> 磁盘文件格式版本仍为 **v3**（与 v1.2.0+ 完全兼容，无需重加密旧产物）。程序版本号 1.3.0 → 1.4.0。
+
+### Fixed
+
+- **链接期 `undefined reference to crypto_aead_aegis256_*`**：根因是系统同时存在多个 libsodium 时，CMake 经 **pkg-config 优先**选中了较旧版本（如 apt 的 `libsodium-dev` 1.0.18），其不提供 AEGIS-256 符号。现改为**手动查找（`/usr/local` 优先）> pkg-config 回退**，自动选中较新的 `libsodium`（如 `/usr/local` 1.0.22）。
+- **静态库查找遗漏 `/usr/local` + 构建目录缓存污染**：静态链接分支的 `find_library` 原先未在 `HINTS` 中纳入 `/usr/local`，且构建目录缓存了在 `/usr/local` 安装 libsodium **之前**探测得到的 `NOTFOUND`/apt 旧值，导致即便源码已安装到 `/usr/local`，仍链接到 apt 的 `libsodium.a`（无 AEGIS-256）。现已在 `HINTS` 显式优先搜索 `/usr/local`，并在配置期 `unset(... CACHE)` 强制重新探测；同时新增 **`nm` 符号级校验**：用 `nm` 直接确认选中的库包含 `crypto_aead_aegis256_encrypt`，否则在配置期即 FATAL_ERROR，避免再次出现“头文件来自 `/usr/local`、链接库却来自 apt 旧版”的头库不一致问题。
+- **版本能力校验**：配置阶段新增 AEGIS-256 版本能力检查（需 libsodium **>= 1.0.19**），版本过低时在配置期即给出清晰报错与解决办法，而非链接期诡异的 undefined reference。
+
+### Added
+
+- **README.md**：新增跨平台构建 / 打包 / 用法文档（含 Linux 自包含 DEB/RPM、Windows vcpkg、手动指定 `SODIUM_ROOT` 等场景）。
+- 多 libsodium 共存时的规避指引：`cmake -DSODIUM_ROOT=/usr/local ...` 或 `sudo apt remove libsodium-dev`。
+
+### Changed
+
+- 程序版本号升至 **1.4.0**（`FileEncryptor.hpp` 中 `FE_VERSION_*` 与 `CMakeLists.txt` 的 `project(... VERSION 1.4.0)` 同步；DEB/RPM 包名与版本随之更新）。
+
+### Fixed（持续修复）
+
+- **Windows 静态链接 libsodium**：此前 Windows 默认走动态链接（导入库 + DLL）。现 `SODIUM_STATIC`（默认 ON）在 Windows 上也优先选用预编译包里的静态库（如 `C:\Program Files\libsodium\x64\Release\v143\static\libsodium.lib`），并自动：
+  - 定义 `SODIUM_STATIC` 编译宏，避免 `sodium.h` 把符号声明为 `__declspec(dllimport)` 而引发 `LNK2019`（__imp_ 符号找不到）；
+  - 将运行时库切换为静态 CRT `/MT`（`MSVC_RUNTIME_LIBRARY = MultiThreaded`），与 libsodium 静态库的 `LIBCMT` 保持一致，避免 `LNK2038`（CRT 不匹配）。
+  - 最终 `FileEncryptor.exe` **单文件自包含、无 `libsodium.dll` 依赖**。
+- 重建缺失的 **CMakePresets.json**（含 `linux-release` / `windows-release` 等预设），恢复 `cmake --preset` 跨平台构建流程。
+
+---
+
 ## [1.3.0] - 2026-08-14（安全加固：进度 HMAC、AEGIS-256、nonce 自增、Blake2b、加密自检）
 
 > 磁盘文件格式版本 **v2 → v3**（向后兼容 v1 / v2，旧文件仍可直接解密，无需重加密）。
@@ -17,6 +46,7 @@
 - **块 nonce 改用 `sodium_increment`**：每块 `nonce = sodium_increment(iv)` 在文件级随机 `iv` 上逐块自增，彻底消除旧 `iv XOR 块索引` 方案的理论碰撞风险（v1/v2 解密仍用旧 nonce 派生）。
 - **明文 Blake2b 完整性校验**：加密前对明文计算 **Blake2b** 哈希写入 v3 头 `plaintext_hash[32]`；解密后重新计算并比对，端到端验证整个明文完整性与来源真实性。
 - **加密后自检**：`encrypt_file` 成功后立即用同一口令解密验证（尺寸 + Blake2b），自检失败则删除产物并报错，保证落地产物一定可解密恢复。
+- 回归测试 `Temp/rt_test.cpp` 扩充至 **24/24 PASS**：覆盖 XChaCha20 / AEGIS-256 的小 / 大（>5 MiB 多块）/ 空文件字节级往返（含加密自检）、错误口令拒绝、密文篡改拒绝、篡改 `.progress` 安全重启。
 
 ### Changed
 
