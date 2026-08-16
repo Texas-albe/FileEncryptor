@@ -3,7 +3,7 @@
 跨平台（Windows / Linux / macOS）文件加密工具，基于 [libsodium](https://doc.libsodium.org/) 实现高强度、抗篡改、可续传的分块加密。
 
 - 磁盘文件格式版本 **v3**（向后兼容 v1 / v2，旧文件可直接解密，无需重加密）。
-- 程序版本 **1.4.0**。
+- 程序版本 **1.4.1**。
 
 ---
 
@@ -18,7 +18,8 @@
   - 每文件 `salt` + `iv` 随机生成；每块 `nonce = sodium_increment(iv)` 逐块自增，杜绝 nonce 复用。
   - 明文 **Blake2b** 哈希写入文件头，解密后重新计算并比对，端到端验证完整性。
   - 进度文件 `.progress` 带 **HMAC-SHA512/256** 认证，防止续传劫持。
-- **可续传加密 / 解密**：中断后重跑可从中断点继续（含一致性校验，断点损坏则安全从头重写）。
+- **可续传加密 / 解密**：中断后重跑可从中断点继续（含算法模式一致性校验，断点损坏或模式不匹配则安全从头重写）。
+  - *v1.4.1 修复*：此前 Windows 下进度文件（`.progress`）因 `std::rename` 在目标已存在时失败，导致仅第 1 块能记录进度、续传退化为从头重做；现改用 `MoveFileExW(MOVEFILE_REPLACE_EXISTING)` 覆盖写，每个数据块都能正确更新进度。Linux 不受影响。
 - **批量处理**：支持目录递归、多线程并行（`-j`）、源文件删除（`-de`）、强制覆盖（`-f`）。
 - **安全细节**：解密原子落盘（先写 `.part` 再重命名）、输出锁防并发写、路径穿越防御、符号链接 / 重解析点拒绝、密钥 `sodium_mlock` 锁定、POSIX 下半成品 `chmod 0600`。
 
@@ -53,7 +54,7 @@ cmake --build --preset linux-release
 
 # 3) 打包（同时产出 .deb 和 .rpm）
 cd out/build/linux-release && cpack
-# 产物：file-encryptor_1.4.0-1_amd64.deb 与 file-encryptor-1.4.0-1.x86_64.rpm
+# 产物：file-encryptor_1.4.1-1_amd64.deb 与 file-encryptor-1.4.1-1.x86_64.rpm
 ```
 
 > 若系统中同时存在多个 libsodium（如 apt 旧版 + `/usr/local` 新版），可显式指定：
@@ -61,9 +62,9 @@ cd out/build/linux-release && cpack
 
 最终用户安装：
 ```bash
-sudo dpkg -i file-encryptor_1.4.0-1_amd64.deb
+sudo dpkg -i file-encryptor_1.4.1-1_amd64.deb
 # 或
-sudo rpm -ivh file-encryptor-1.4.0-1.x86_64.rpm
+sudo rpm -ivh file-encryptor-1.4.1-1.x86_64.rpm
 ```
 
 ### Windows（预编译 libsodium + MSVC）
@@ -147,4 +148,4 @@ FileEncryptor data.bin -p "my passphrase" -o ./out
 
 ## 许可证
 
-见 [CHANGELOG.md](CHANGELOG.md) 与仓库 LICENSE 文件。
+本项目以 **GPLv3** 许可证发布，详见仓库 `LICENSE` 文件。

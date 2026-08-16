@@ -6,6 +6,24 @@
 
 ---
 
+## [1.4.1] - 2026-08-16（断点续传进度写入修复 + 多项健壮性修复）
+
+> 程序版本号 1.4.0 → 1.4.1。磁盘文件格式版本仍为 **v3**（完全兼容，无需重加密旧产物）。
+
+### Fixed
+
+- **[主缺陷] Windows 下断点续传进度文件写入失败（`save_progress`）**：`save_progress()` 之前直接调用 `std::rename` 落盘进度文件，而 **MSVC 的 `std::rename` 在目标 `.progress` 已存在时返回 `EEXIST` 失败**（POSIX 语义是原子覆盖，故 Linux 不受影响）。结果仅第 1 个块能写入进度，从第 2 块起全部 `Failed to save progress`，中断后重跑永远从第 1 块开始、断点续传退化为从头重做。现改用已有的 `replace_file_utf8()`（Windows 走 `MoveFileExW(MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)`、Linux 走 `std::remove`+`std::rename`），保证每次块处理后都能覆盖更新进度文件；`save_progress()`/`remove_progress()` 内清理临时/旧文件也统一改用 `remove_file_utf8()`（规避 Windows ANSI 路径对非 ASCII 字符的处理问题）。
+- **[P2] 续传不校验加密算法模式一致性**：`encrypt_file()` 续传分支此前只校验 `chunk_size`/`total_chunks`/`orig_size`，不校验已存在输出的 `mode` 与本次 `-m` 是否一致。若上次用 `-m aegis256` 中途中断、重跑时漏加 `-m`（默认 xchacha20），会复用旧 v3 头部却用不同算法续写，最终自解密失败并删除产物。现续传前显式比较 `existing_v3.mode` 与本次模式，不一致则清晰报错（"Output file was created with a different encryption mode … cannot resume"）并中止，而非静默混写。
+- **[P3] 续传截断失败被忽略**：加密续传 `truncate_file(out_path, …)` 与解密续传 `truncate_file(part_path, …)` 的返回值此前被忽略；磁盘异常/文件占用导致截断失败时，残留超长密文会在后续尺寸校验失败并触发产物整体删除。现检查两个 `truncate_file` 调用点返回值，失败时立即中止并报错。
+- **[P4] 输出锁错误信息误导**：`acquire_output_lock()` 此前对所有失败原因统一返回 `false`，调用点一律报 "Output file is locked by another process"。现改为返回原因码 `LockResult{OK, LOCKED, CANNOT_CREATE}`，调用方区分"真被其它进程锁定"（锁文件存在且持有进程存活）与"无法创建锁文件"（权限/路径过长或非法，Windows 未用 `\\?\` 长路径前缀）并给出不同提示，便于排障。
+- **[P6] Linux 密码输入未检查 `tcgetattr` 返回值**：`get_password_posix()` 此前直接调用 `tcgetattr(STDIN_FILENO, &oldt)` 未检查返回值；当 stdin 非 TTY（管道喂密码、CI 环境）时 `oldt` 为未初始化内存，随后 `tcsetattr` 写入未定义状态。现先检查 `tcgetattr` 返回值，失败（非 TTY）时跳过终端回显设置、仅正常读取密码行。
+
+### Added
+
+- **[P5] 批量加密失败文件汇总**：`process_files()` 此前仅在批量**解密**失败时打印失败清单，批量**加密**失败时只散落各线程 stderr 无汇总。现与解密分支对称，批量加密结束也打印 `--- Encryption errors (N files) ---` 清单及失败总数。
+
+
+
 ## [1.4.0] - 2026-08-15（跨平台构建修复：libsodium 版本校验与查找顺序、打包文档）
 
 > 磁盘文件格式版本仍为 **v3**（与 v1.2.0+ 完全兼容，无需重加密旧产物）。程序版本号 1.3.0 → 1.4.0。
@@ -20,6 +38,8 @@
 
 - **README.md**：新增跨平台构建 / 打包 / 用法文档（含 Linux 自包含 DEB/RPM、Windows vcpkg、手动指定 `SODIUM_ROOT` 等场景）。
 - 多 libsodium 共存时的规避指引：`cmake -DSODIUM_ROOT=/usr/local ...` 或 `sudo apt remove libsodium-dev`。
+- **DEB/RPM 打包脚本 `package-linux.sh`**：在 Linux 上一键 `configure → build → cpack`（生成器自动选 Ninja / Unix Makefiles），产出自包含包；缺少 `rpmbuild` 时自动退化为仅打 DEB 并提示 `sudo apt install rpm`。CPack 另新增 `CPACK_STRIP_FILES ON`（打包时剥离调试符号）与 `CPACK_PACKAGE_RELEASE "1"`（RPM 发布号）。
+- **零声明依赖 + 静态链接硬校验**：CPack 显式 `CPACK_DEBIAN_PACKAGE_DEPENDS ""`（DEB 的 Depends 留空）+ `CPACK_RPM_PACKAGE_AUTOREQPROV OFF`（连同自动 Provides 一起关闭），确保 DEB/RPM 元数据不含任何 `libsodium` 依赖。新增 `cmake/CheckStaticSodium.cmake`（构建期 `POST_BUILD` 调用）：用 `objdump -p` 检查可执行文件的 `NEEDED` 段，若仍动态依赖 `libsodium.so` 则**构建直接失败**，从根上杜绝“看起来自包含、实际却动态链接”的包。
 
 ### Changed
 

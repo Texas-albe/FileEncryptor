@@ -13,8 +13,8 @@
 
 #define FE_VERSION_MAJOR 1
 #define FE_VERSION_MINOR 4
-#define FE_VERSION_PATCH 0
-#define FE_VERSION_STRING "1.4.0"
+#define FE_VERSION_PATCH 1
+#define FE_VERSION_STRING "1.4.1"
 
 enum class CryptoMode: unsigned char {
     AES_GCM=0,   // 仅用于解密旧格式（v1/v2）文件；新加密不再使用

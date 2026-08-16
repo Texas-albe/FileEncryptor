@@ -1,5 +1,5 @@
 ﻿cmake_minimum_required(VERSION 3.15)
-project(FileEncryptor VERSION 1.4.0 LANGUAGES CXX)
+project(FileEncryptor VERSION 1.4.1 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -281,6 +281,20 @@ if(SODIUM_DLL)
             "$<TARGET_FILE_DIR:FileEncryptor>/")
 endif()
 
+# 构建期静态链接校验（Linux/macOS）：确认 libsodium 已静态打进可执行文件，
+# 而非动态依赖 libsodium.so。若仍为动态链接则构建失败，避免产出“假自包含”的包。
+if(UNIX AND NOT APPLE AND SODIUM_IS_STATIC)
+  find_program(OBJDUMP_EXECUTABLE NAMES objdump)
+  if(OBJDUMP_EXECUTABLE)
+    add_custom_command(TARGET FileEncryptor POST_BUILD
+      COMMENT "校验 libsodium 已静态链接（无动态 NEEDED）"
+      COMMAND ${CMAKE_COMMAND} -P
+              "${CMAKE_CURRENT_SOURCE_DIR}/cmake/CheckStaticSodium.cmake"
+              "$<TARGET_FILE:FileEncryptor>" "${OBJDUMP_EXECUTABLE}"
+      VERBATIM)
+  endif()
+endif()
+
 # 可执行文件统一输出到 build/bin，避免目标名与构建目录中已存在的同名目录冲突
 # （例如构建目录里恰好有一个名为 FileEncryptor 的子目录时，链接器无法在目录上创建同名可执行文件）
 set_target_properties(FileEncryptor PROPERTIES
@@ -299,7 +313,7 @@ set(CPACK_PACKAGE_DESCRIPTION
     "FileEncryptor encrypts and decrypts files using libsodium (XChaCha20-Poly1305 / AEGIS-256). \
 The binary is statically linked against libsodium, so the installed package requires no external \
 libsodium or other third-party libraries at runtime.")
-set(CPACK_PACKAGE_LICENSE "MIT")
+set(CPACK_PACKAGE_LICENSE "GPLv3")
 if(EXISTS "${CMAKE_SOURCE_DIR}/LICENSE")
   set(CPACK_RESOURCE_FILE_LICENSE "${CMAKE_SOURCE_DIR}/LICENSE")
 endif()
@@ -313,11 +327,20 @@ set(CPACK_DEBIAN_PACKAGE_SECTION "utils")
 set(CPACK_DEBIAN_PACKAGE_PRIORITY "optional")
 # 静态链接后无外部 .so 依赖，关闭自动依赖探测，避免把 libsodium 写进 Depends
 set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS OFF)
+# 显式清空依赖声明，确保 DEB 的 Depends 字段为空（零声明依赖、完全自包含）
+set(CPACK_DEBIAN_PACKAGE_DEPENDS "")
 
 # —— RPM ——
-set(CPACK_RPM_PACKAGE_LICENSE "MIT")
+set(CPACK_RPM_PACKAGE_LICENSE "GPLv3")
 set(CPACK_RPM_PACKAGE_GROUP "Applications/System")
 # 关闭自动依赖探测，避免 rpm 把 libsodium 列为必需（静态链接后无需）
 set(CPACK_RPM_PACKAGE_AUTOREQ OFF)
+# 同时关闭自动 Provides/Requires，确保 RPM 不声明任何依赖
+set(CPACK_RPM_PACKAGE_AUTOREQPROV OFF)
+
+# 打包阶段剥离调试符号，减小包体积（仅作用于打包副本，不影响构建树中的二进制）
+set(CPACK_STRIP_FILES ON)
+# RPM 发布号（包文件名中的 -1）
+set(CPACK_PACKAGE_RELEASE "1")
 
 include(CPack)

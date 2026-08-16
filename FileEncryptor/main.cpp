@@ -42,13 +42,19 @@ static std::vector<char> get_password_win() {
 static std::vector<char> get_password_posix() {
     std::vector<char> pwd;
     struct termios oldt,newt;
-    tcgetattr(STDIN_FILENO,&oldt);
-    newt=oldt;
-    newt.c_lflag&=~ECHO;
-    tcsetattr(STDIN_FILENO,TCSANOW,&newt);
+    // 仅当 stdin 是 TTY 时才关闭回显；管道/CI 等非 TTY 场景下 tcgetattr 会失败，
+    // 此时若仍调用 tcsetattr 会把未初始化的 oldt 写回，行为不可预期。故先检查返回值。
+    bool term_ok=(tcgetattr(STDIN_FILENO,&oldt)==0);
+    if(term_ok) {
+        newt=oldt;
+        newt.c_lflag&=~ECHO;
+        tcsetattr(STDIN_FILENO,TCSANOW,&newt);
+    }
     std::string line;
     std::getline(std::cin,line);
-    tcsetattr(STDIN_FILENO,TCSANOW,&oldt);
+    if(term_ok) {
+        tcsetattr(STDIN_FILENO,TCSANOW,&oldt);
+    }
     std::cout<<std::endl;
     pwd.assign(line.begin(),line.end());
     sodium_memzero((void*)line.data(),line.size());

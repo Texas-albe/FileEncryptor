@@ -290,7 +290,13 @@ static bool process_alive_pid(int pid) {
 #endif
 }
 
-static bool acquire_output_lock(const std::string& out_path,std::string& lock_path) {
+enum class LockResult { OK, LOCKED, CANNOT_CREATE };
+
+// 返回获取锁的结果：
+//   OK            成功获得锁
+//   LOCKED        锁文件存在且持有进程仍存活（真被其它进程占用）
+//   CANNOT_CREATE 无法创建锁文件（权限不足 / 路径过长或非法等）
+static LockResult acquire_output_lock(const std::string& out_path,std::string& lock_path) {
     lock_path=out_path+".lock";
 #ifdef _WIN32
     std::wstring w=utf8_to_wstring(lock_path);
@@ -299,33 +305,39 @@ static bool acquire_output_lock(const std::string& out_path,std::string& lock_pa
         DWORD pid=GetCurrentProcessId(),wr;
         WriteFile(h,&pid,sizeof(pid),&wr,NULL);
         CloseHandle(h);
-        return true;
+        return LockResult::OK;
     }
-    // 已存在：若持有者进程已退出则回收失效锁
+    // CREATE_NEW 失败：要么“真被占用”，要么“无法创建（权限/路径）”，需要区分
     h=CreateFileW(w.c_str(),GENERIC_READ,FILE_SHARE_READ|FILE_SHARE_WRITE,NULL,OPEN_EXISTING,0,NULL);
     if(h!=INVALID_HANDLE_VALUE) {
         DWORD pid=0,rd=0;
         ReadFile(h,&pid,sizeof(pid),&rd,NULL);
         CloseHandle(h);
         if(rd==sizeof(pid)&&!process_alive_pid((int)pid)) {
+            // 失效锁（持有进程已退出）：回收后重试
             DeleteFileW(w.c_str());
             h=CreateFileW(w.c_str(),GENERIC_WRITE,0,NULL,CREATE_NEW,FILE_ATTRIBUTE_NORMAL,NULL);
             if(h!=INVALID_HANDLE_VALUE) {
                 DWORD p2=GetCurrentProcessId(),wr;
                 WriteFile(h,&p2,sizeof(p2),&wr,NULL);
                 CloseHandle(h);
-                return true;
+                return LockResult::OK;
             }
+            // 回收后仍无法创建：权限 / 路径问题
+            return LockResult::CANNOT_CREATE;
         }
+        // 锁仍被存活进程持有
+        return LockResult::LOCKED;
     }
-    return false;
+    // 连读取现有锁文件都失败：权限 / 路径问题
+    return LockResult::CANNOT_CREATE;
 #else
     int fd=open(lock_path.c_str(),O_WRONLY|O_CREAT|O_EXCL,0600);
     if(fd>=0) {
         int pid=getpid();
         if(write(fd,&pid,sizeof(pid))<0) { /* best-effort lock write */ }
         close(fd);
-        return true;
+        return LockResult::OK;
     }
     fd=open(lock_path.c_str(),O_RDONLY,0);
     if(fd>=0) {
@@ -344,9 +356,12 @@ static bool acquire_output_lock(const std::string& out_path,std::string& lock_pa
         else {
             close(fd);
         }
-        if(stolen) return true;
+        if(stolen) return LockResult::OK;
+        // 锁被存活进程持有
+        return LockResult::LOCKED;
     }
-    return false;
+    // 连读取都失败：权限 / 路径问题
+    return LockResult::CANNOT_CREATE;
 #endif
 }
 
@@ -563,20 +578,24 @@ static bool save_progress(const std::string& out_path,
 
     std::string prog_path=out_path+".progress";
     std::string temp_prog=prog_path+".tmp";
-    // 清除可能残留的临时进度文件
-    std::remove(temp_prog.c_str());
+    // 清除可能残留的临时进度文件（UTF-8 安全）
+    remove_file_utf8(temp_prog);
 
     std::ofstream f;
     if(!open_stream(f,temp_prog,std::ios::binary|std::ios::trunc)) return false;
     f.write(reinterpret_cast<const char*>(&info),sizeof(info));
     if(!f.good()) {
         f.close();
-        std::remove(temp_prog.c_str());
+        remove_file_utf8(temp_prog);
         return false;
     }
     f.close();
-    if(std::rename(temp_prog.c_str(),prog_path.c_str())!=0) {
-        std::remove(temp_prog.c_str());
+    // 关键修复：Windows 下 std::rename 在目标已存在时会失败（EEXIST，与 POSIX 语义不同），
+    // 导致从第 2 个块起进度文件永远写不进去、断点续传退化为从头重做。
+    // 改用 replace_file_utf8()（Windows 用 MoveFileExW(MOVEFILE_REPLACE_EXISTING)、
+    // Linux 用 std::remove+std::rename 等价实现），保证每次块处理后都能覆盖更新进度文件。
+    if(!replace_file_utf8(temp_prog,prog_path)) {
+        remove_file_utf8(temp_prog);
         return false;
     }
     return true;
@@ -584,7 +603,7 @@ static bool save_progress(const std::string& out_path,
 
 static void remove_progress(const std::string& out_path) {
     std::string prog_path=out_path+".progress";
-    std::remove(prog_path.c_str());
+    remove_file_utf8(prog_path);
 }
 
 static void print_progress(size_t processed,size_t total,
@@ -723,8 +742,12 @@ bool encrypt_file(const std::string& in_path,
 
     // 跨进程锁：在打开/截断输出之前获取，防止两个进程同时写同一输出导致损坏
     std::string lock_path;
-    if(!acquire_output_lock(out_path,lock_path)) {
-        fprintf(stderr,"Output file is locked by another process: %s\n",out_path.c_str());
+    LockResult lr=acquire_output_lock(out_path,lock_path);
+    if(lr!=LockResult::OK) {
+        if(lr==LockResult::LOCKED)
+            fprintf(stderr,"Output file is locked by another process: %s\n",out_path.c_str());
+        else
+            fprintf(stderr,"Cannot create output lock file (permission or path issue): %s\n",lock_path.c_str());
         return false;
     }
     OutputLockGuard lock_guard{lock_path,true};
@@ -738,7 +761,10 @@ bool encrypt_file(const std::string& in_path,
     std::fstream fout;
     if(has_progress&&start_chunk>0) {
         // 续传：先丢弃中断瞬间落盘但未记账的密文残片，再从断点继续写入
-        truncate_file(out_path,trunc_pos);
+        if(!truncate_file(out_path,trunc_pos)) {
+            fprintf(stderr,"Failed to truncate output for resume: %s\n",out_path.c_str());
+            return false;
+        }
         if(!open_stream(fout,out_path,std::ios::in|std::ios::out|std::ios::binary)) {
             fprintf(stderr,"Cannot open output file for resume: %s\n",out_path.c_str());
             return false;
@@ -797,6 +823,15 @@ bool encrypt_file(const std::string& in_path,
     }
     else {
         header=existing_v3;
+        // 校验加密算法模式一致性：续传必须与已存在输出的模式相同，
+        // 否则会静默混写不同算法、随后自解密失败并删除产物。
+        if(existing_v3.mode!=static_cast<unsigned char>(mode)) {
+            fprintf(stderr,"Output file was created with a different encryption mode "
+                "(existing=%d, requested=%d); cannot resume. Use the same -m mode, "
+                "or delete the output file first.\n",
+                (int)existing_v3.mode,(int)mode);
+            ok=false; goto cleanup;
+        }
         // 校验元数据一致性（块大小 / 总块数 / 原文大小）
         uint32_t st_chunk=0,st_total=0; uint64_t st_orig=0;
         {
@@ -1111,8 +1146,14 @@ bool decrypt_file(const std::string& in_path,
         return false;
     }
     std::string lock_path;
-    if(!acquire_output_lock(out_path,lock_path)) {
-        if(!silent) fprintf(stderr,"Output file is locked by another process: %s\n",out_path.c_str());
+    LockResult lr=acquire_output_lock(out_path,lock_path);
+    if(lr!=LockResult::OK) {
+        if(!silent) {
+            if(lr==LockResult::LOCKED)
+                fprintf(stderr,"Output file is locked by another process: %s\n",out_path.c_str());
+            else
+                fprintf(stderr,"Cannot create output lock file (permission or path issue): %s\n",lock_path.c_str());
+        }
         return false;
     }
     OutputLockGuard lock_guard{lock_path,true};
@@ -1188,7 +1229,10 @@ bool decrypt_file(const std::string& in_path,
     // 解密续传：明文半成品（.part）可能残留未完成块的残片，截断到已确认写入的明文长度
     std::fstream fout;
     if(has_progress&&start_chunk>0) {
-        truncate_file(part_path,start_bytes);
+        if(!truncate_file(part_path,start_bytes)) {
+            if(!silent) fprintf(stderr,"Failed to truncate partial output for resume: %s\n",part_path.c_str());
+            return false;
+        }
         if(!open_stream(fout,part_path,std::ios::in|std::ios::out|std::ios::binary)) {
             if(!silent) fprintf(stderr,"Cannot open output file for resume: %s\n",out_path.c_str());
             return false;
@@ -1724,6 +1768,13 @@ bool process_files(const std::vector<std::string>& input_paths,
 
     if(!encrypt&&!error_files.empty()) {
         fprintf(stderr,"\n--- Decryption errors (%zu files) ---\n",error_files.size());
+        for(const auto& f:error_files) {
+            fprintf(stderr,"  %s\n",f.c_str());
+        }
+        fprintf(stderr,"Total %zu files failed.\n",error_files.size());
+    }
+    if(encrypt&&!error_files.empty()) {
+        fprintf(stderr,"\n--- Encryption errors (%zu files) ---\n",error_files.size());
         for(const auto& f:error_files) {
             fprintf(stderr,"  %s\n",f.c_str());
         }
