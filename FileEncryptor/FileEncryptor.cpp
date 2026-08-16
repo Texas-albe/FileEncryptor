@@ -758,6 +758,36 @@ bool encrypt_file(const std::string& in_path,
         return false;
     }
 
+    // 续传前先做一致性校验，且必须在 truncate_file 之前完成。
+    // 否则校验失败时输出已被截断，随后的 cleanup 会删除 .ptd 与 .progress，
+    // 导致断点全损（Issue N-B）。这里直接返回并保留已存在的输出，
+    // 用户可用正确的 -m 重新运行，断点不丢失。
+    if(has_progress&&start_chunk>0) {
+        if(existing_v3.mode!=static_cast<unsigned char>(mode)) {
+            fprintf(stderr,"Output file was created with a different encryption mode "
+                "(existing=%d, requested=%d); cannot resume. Use the same -m mode, "
+                "or delete the output file first.\n",
+                (int)existing_v3.mode,(int)mode);
+            return false;
+        }
+        uint32_t st_chunk=0,st_total=0; uint64_t st_orig=0;
+        {
+            std::ifstream fhex;
+            if(!open_stream(fhex,out_path,std::ios::binary)
+                || !fhex.seekg(HEADER_SIZE_V3,std::ios::beg)
+                || !fhex.read(reinterpret_cast<char*>(&st_chunk),4)
+                || !fhex.read(reinterpret_cast<char*>(&st_total),4)
+                || !fhex.read(reinterpret_cast<char*>(&st_orig),8)) {
+                fprintf(stderr,"Cannot read metadata from existing file\n");
+                return false;
+            }
+        }
+        if(st_chunk!=CHUNK_SIZE||st_total!=total_chunks||st_orig!=orig_size) {
+            fprintf(stderr,"Metadata mismatch: file may be corrupted\n");
+            return false;
+        }
+    }
+
     std::fstream fout;
     if(has_progress&&start_chunk>0) {
         // 续传：先丢弃中断瞬间落盘但未记账的密文残片，再从断点继续写入
@@ -823,32 +853,6 @@ bool encrypt_file(const std::string& in_path,
     }
     else {
         header=existing_v3;
-        // 校验加密算法模式一致性：续传必须与已存在输出的模式相同，
-        // 否则会静默混写不同算法、随后自解密失败并删除产物。
-        if(existing_v3.mode!=static_cast<unsigned char>(mode)) {
-            fprintf(stderr,"Output file was created with a different encryption mode "
-                "(existing=%d, requested=%d); cannot resume. Use the same -m mode, "
-                "or delete the output file first.\n",
-                (int)existing_v3.mode,(int)mode);
-            ok=false; goto cleanup;
-        }
-        // 校验元数据一致性（块大小 / 总块数 / 原文大小）
-        uint32_t st_chunk=0,st_total=0; uint64_t st_orig=0;
-        {
-            std::ifstream fhex;
-            if(!open_stream(fhex,out_path,std::ios::binary)
-                || !fhex.seekg(HEADER_SIZE_V3,std::ios::beg)
-                || !fhex.read(reinterpret_cast<char*>(&st_chunk),4)
-                || !fhex.read(reinterpret_cast<char*>(&st_total),4)
-                || !fhex.read(reinterpret_cast<char*>(&st_orig),8)) {
-                fprintf(stderr,"Cannot read metadata from existing file\n");
-                ok=false; goto cleanup;
-            }
-        }
-        if(st_chunk!=CHUNK_SIZE||st_total!=total_chunks||st_orig!=orig_size) {
-            fprintf(stderr,"Metadata mismatch: file may be corrupted\n");
-            ok=false; goto cleanup;
-        }
         if(!derive_key(password,header.salt,key,header.opslimit,(size_t)header.memlimit_kb*1024)) {
             ok=false; goto cleanup;
         }
@@ -1492,7 +1496,13 @@ static std::string build_batch_out_path(const std::string& in_path,
     std::string out_path=out_dir_clean+"/";
     std::string best_root;
     for(const auto& root:input_paths) {
-        if(is_directory(root)&&in_path.find(root)==0) {
+        // 前缀匹配需带边界检查：root 必须是 in_path 的目录前缀，
+        // 即 root 之后紧跟路径分隔符，或与 in_path 完全相同，
+        // 否则 "D:\data" 会误匹配 "D:\database\x"（Issue N-C）。
+        if(is_directory(root)&&in_path.length()>=root.length()&&
+           in_path.compare(0,root.length(),root)==0&&
+           (in_path.length()==root.length()||
+            in_path[root.length()]=='/'||in_path[root.length()]=='\\')) {
             if(root.length()>best_root.length()) best_root=root;
         }
     }
@@ -1716,7 +1726,7 @@ bool process_files(const std::vector<std::string>& input_paths,
                         print_progress(global_processed.load(),total_bytes,start_time,false);
                     },true);
                 if(ok&&delete_source) {
-                    if(std::remove(in_path.c_str())!=0) {
+                    if(!remove_file_utf8(in_path)) {
                         std::lock_guard<std::mutex> lock(error_mutex);
                         std::cerr<<"Error: could not delete source file: "<<in_path<<"\n";
                         ok=false;

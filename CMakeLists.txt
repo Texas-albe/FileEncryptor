@@ -1,5 +1,5 @@
 ﻿cmake_minimum_required(VERSION 3.15)
-project(FileEncryptor VERSION 1.4.1 LANGUAGES CXX)
+project(FileEncryptor VERSION 1.4.2 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -90,10 +90,10 @@ if(NOT SODIUM_FOUND AND NOT SODIUM_TARGET)
   find_path(SODIUM_INCLUDE_DIRS
     NAMES sodium.h
     PATH_SUFFIXES include include/sodium
-    HINTS $ENV{SODIUM_ROOT} $ENV{LIBSODIUM_ROOT} "$ENV{ProgramFiles}/libsodium" /usr/local /usr ${_sodium_win_hints})
+    HINTS ${SODIUM_ROOT} ${LIBSODIUM_ROOT} $ENV{SODIUM_ROOT} $ENV{LIBSODIUM_ROOT} "$ENV{ProgramFiles}/libsodium" /usr/local /usr ${_sodium_win_hints})
   find_library(SODIUM_LIBRARIES
     NAMES sodium libsodium
-    HINTS $ENV{SODIUM_ROOT} $ENV{LIBSODIUM_ROOT} "$ENV{ProgramFiles}/libsodium" /usr/local /usr ${_sodium_win_hints}
+    HINTS ${SODIUM_ROOT} ${LIBSODIUM_ROOT} $ENV{SODIUM_ROOT} $ENV{LIBSODIUM_ROOT} "$ENV{ProgramFiles}/libsodium" /usr/local /usr ${_sodium_win_hints}
     PATH_SUFFIXES lib lib64 bin)
   if(SODIUM_INCLUDE_DIRS AND SODIUM_LIBRARIES)
     set(SODIUM_FOUND TRUE)
@@ -154,7 +154,7 @@ if(SODIUM_STATIC AND SODIUM_FOUND AND NOT SODIUM_TARGET)
     unset(SODIUM_STATIC_LIBRARY CACHE)
     find_library(SODIUM_STATIC_LIBRARY
       NAMES sodium libsodium
-      HINTS $ENV{SODIUM_ROOT} $ENV{LIBSODIUM_ROOT} /usr/local /usr
+      HINTS ${SODIUM_ROOT} ${LIBSODIUM_ROOT} $ENV{SODIUM_ROOT} $ENV{LIBSODIUM_ROOT} /usr/local /usr
       PATH_SUFFIXES lib lib64)
     set(CMAKE_FIND_LIBRARY_SUFFIXES ${_sfx})
     if(SODIUM_STATIC_LIBRARY AND SODIUM_INCLUDE_DIRS)

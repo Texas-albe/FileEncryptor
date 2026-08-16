@@ -6,6 +6,19 @@
 
 ---
 
+## [1.4.2] - 2026-08-16（批量/续传健壮性修复：中文路径删除、续传校验顺序、路径前缀边界、CMake -D）
+
+> 程序版本号 1.4.1 → 1.4.2。磁盘文件格式版本仍为 **v3**（完全兼容，无需重加密旧产物）。
+
+### Fixed
+
+- **[N-A] 批量 `-de` 中文路径删除源文件失败**：批量加密 `-de` 删除源文件此前用 `std::remove`（ANSI API），非 ASCII 路径（中文文件名/目录名）删除失败，且 `ok=false` 会把它计入“Encryption errors”清单，让用户误以为加密失败。现改用与单文件模式一致的 `remove_file_utf8()`（Windows 走 `_wremove` UTF-16），中文路径删除正常，加密成功时不再误报失败。
+- **[N-B] 续传 mode 校验顺序错误导致断点全损**：`encrypt_file()` 的 mode / 元数据一致性校验原先位于 `truncate_file` **之后**，校验失败走 `cleanup` 会删除已存在的 `.ptd` 与 `.progress`，用户损失全部进度。现将校验**前移**到 `truncate_file` 之前；校验失败直接 `return false` 并保留已存在的输出，用户用正确的 `-m` 重跑即可续传、断点不丢。
+- **[N-C] 批量输出路径前缀匹配无边界**：`build_batch_out_path` 的 `in_path.find(root)==0` 会把 `D:\database\x` 误判为 `D:\data` 的子项，导致多 `-i` 时输出目录归类错误。现匹配后额外校验 `in_path[root.size()]` 为路径分隔符或与 `root` 完全相同，消除前缀重叠误判。
+- **[N-D] CMake `SODIUM_ROOT` 只认环境变量**：查找 libsodium 的 `HINTS` 此前仅含 `$ENV{SODIUM_ROOT}`，`cmake -DSODIUM_ROOT=...` 不生效（与 README 教学矛盾）。现 `HINTS` 同时加入 `${SODIUM_ROOT}` / `${LIBSODIUM_ROOT}`（CMake 变量），`-D` 传参与环境变量两种写法均可定位 libsodium。
+
+---
+
 ## [1.4.1] - 2026-08-16（断点续传进度写入修复 + 多项健壮性修复）
 
 > 程序版本号 1.4.0 → 1.4.1。磁盘文件格式版本仍为 **v3**（完全兼容，无需重加密旧产物）。
