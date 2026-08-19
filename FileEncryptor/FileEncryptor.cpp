@@ -469,22 +469,6 @@ static bool derive_key(const std::vector<char>& password,
     return true;
 }
 
-// ---------- AAD 构建（包含元数据） ----------
-static std::vector<unsigned char> build_aad_with_metadata(
-    const FileHeader& h,
-    uint32_t chunk_size,
-    uint32_t total_chunks,
-    uint64_t orig_size) {
-    std::vector<unsigned char> aad;
-    const unsigned char* ptr=reinterpret_cast<const unsigned char*>(&h);
-    aad.insert(aad.end(),ptr,ptr+HEADER_SIZE);
-
-    for(int i=0; i<4; ++i) aad.push_back((chunk_size>>(i*8))&0xFF);
-    for(int i=0; i<4; ++i) aad.push_back((total_chunks>>(i*8))&0xFF);
-    for(int i=0; i<8; ++i) aad.push_back((orig_size>>(i*8))&0xFF);
-    return aad;
-}
-
 // ---------- 文件有效性检查 ----------
 static bool is_file_valid(const std::string& path) {
     std::ifstream f;
@@ -949,8 +933,6 @@ bool encrypt_file(const std::string& in_path,
 
 cleanup:
     if(key_locked) sodium_munlock(key,sizeof(key));
-    sodium_memzero(key,sizeof(key));
-    sodium_memzero(auth_key,sizeof(auth_key));
     secure_clear(plaintext_chunk);
     secure_clear(ciphertext_chunk);
 
@@ -961,11 +943,11 @@ cleanup:
         remove_progress(out_path);
         if(!progress_callback) print_progress(total_size,total_size,start_time,true);
 
-        // 自解密验证：用相同密码解密到临时文件，比对大小与 Blake2b，确保输出可恢复
+        // 自解密验证：复用本次已派生的密钥（ext_key），避免每文件重复执行一次昂贵的 Argon2 KDF
         std::string verify_path=out_path+".verify.tmp";
         remove_file_utf8(verify_path);
         bool verify_ok=decrypt_file(out_path,verify_path,password,
-            [](size_t,size_t){}, true, false);
+            [](size_t,size_t){}, true, false, key);
         if(verify_ok) {
             int64_t vsz=get_file_size_utf8(verify_path);
             if(vsz!=(int64_t)total_size) verify_ok=false;
@@ -989,6 +971,10 @@ cleanup:
         remove_progress(out_path);
         fprintf(stderr,"Encryption failed, output removed.\n");
     }
+
+    // 自校验结束后再清零密钥：避免对同一个密码重复执行 Argon2 KDF（大批量加密时显著提速）
+    sodium_memzero(key,sizeof(key));
+    sodium_memzero(auth_key,sizeof(auth_key));
     return ok;
 }
 
@@ -998,7 +984,8 @@ bool decrypt_file(const std::string& in_path,
     const std::vector<char>& password,
     std::function<void(size_t,size_t)> progress_callback,
     bool silent,
-    bool resume) {
+    bool resume,
+    const unsigned char* ext_key) {
     disable_core_dump();
 
     // 防路径穿越：输出路径若含未解析的 ".." 分量则拒绝
@@ -1252,7 +1239,11 @@ bool decrypt_file(const std::string& in_path,
         remove_progress(out_path);
     }
 
-    if(!derive_key(password,salt_ptr,key,kdf_ops,kdf_mem)) {
+    if(ext_key) {
+        // 复用外部已派生密钥：跳过昂贵的 Argon2 KDF（用于加密后自校验）
+        memcpy(key,ext_key,ARGON2_OUTPUT_LEN);
+    }
+    else if(!derive_key(password,salt_ptr,key,kdf_ops,kdf_mem)) {
         if(!silent) fprintf(stderr,"Key derivation failed\n");
         return false;
     }
@@ -1509,8 +1500,13 @@ static std::string build_batch_out_path(const std::string& in_path,
     if(!best_root.empty()) {
         std::string suffix=in_path.substr(best_root.length());
         if(!suffix.empty()&&(suffix[0]=='/'||suffix[0]=='\\')) suffix.erase(0,1);
-        // 加密：保留输入根目录名作为顶层目录（避免多 -i 同名冲突，且还原后保持源目录名）；解密：不附加输入根目录名，使还原结构为 <输出目录>/<源目录>/...（与 v1.1.1 一致），否则会多嵌套一层“加密容器目录名”。
-        if(include_root_name) {
+        // 加密：保留输入根目录名作为顶层目录（避免多 -i 同名冲突，且还原后保持源目录名）；
+        // 解密：默认不附加输入根目录名，使还原结构为 <输出目录>/<源目录>/...（与 v1.1.1 一致）。
+        // 但当存在多个输入根目录时（input_paths.size()>1），即使是解密也附加根目录名前缀，
+        // 否则 dirA/x 与 dirB/x 会映射到同一输出路径，多线程并行时第二个线程被跨进程锁判为
+        // “locked”，既混乱又误导（Issue: 批量解密多 -i 输出碰撞）。
+        bool need_root_name=include_root_name||input_paths.size()>1;
+        if(need_root_name) {
             size_t root_pos=best_root.find_last_of("/\\");
             std::string root_name=(root_pos!=std::string::npos) ? best_root.substr(root_pos+1) : best_root;
             if(!root_name.empty()) out_path+=root_name+"/";
@@ -1577,6 +1573,28 @@ bool process_files(const std::vector<std::string>& input_paths,
         }
         else {
             all_files.push_back(path);
+        }
+    }
+
+    if(!encrypt) {
+        // 批量解密只处理 .ptd 文件，与单文件 -d 强制 .ptd 保持一致：
+        // 否则目录里的 readme.txt / data.txt 等非密文文件会被逐个尝试解密，
+        // magic 校验失败后再安全返回，但它们全部计入 “Decryption errors” 误导用户；
+        // 极端情况下，任何恰好以 FENC 开头且结构巧合的文件会被误当密文处理。
+        std::vector<std::string> filtered;
+        size_t skipped=0;
+        for(const auto& f:all_files) {
+            std::string lower=f;
+            std::transform(lower.begin(),lower.end(),lower.begin(),::tolower);
+            if(lower.size()>=4&&lower.compare(lower.size()-4,4,".ptd")==0) {
+                filtered.push_back(f);
+            } else {
+                ++skipped;
+            }
+        }
+        all_files=std::move(filtered);
+        if(skipped>0) {
+            fprintf(stderr,"Skipped %zu non-.ptd file(s) in batch decrypt.\n",skipped);
         }
     }
 
@@ -1745,17 +1763,18 @@ bool process_files(const std::vector<std::string>& input_paths,
                     },true,true);
             }
 
-            int64_t fsize=get_file_size_utf8(in_path);
-            if(fsize>=0) {
-                size_t file_size=(size_t)fsize;
-                if(last_file_processed<file_size) {
-                    size_t remaining=file_size-last_file_processed;
-                    global_processed+=remaining;
-                    last_file_processed=file_size;
+            if(ok) {
+                // 仅在成功处理的文件上补齐进度，避免失败文件把进度条拉满到 100%
+                int64_t fsize=get_file_size_utf8(in_path);
+                if(fsize>=0) {
+                    size_t file_size=(size_t)fsize;
+                    if(last_file_processed<file_size) {
+                        global_processed+=(file_size-last_file_processed);
+                        last_file_processed=file_size;
+                    }
                 }
             }
-
-            if(!ok) {
+            else {
                 all_ok=false;
                 std::lock_guard<std::mutex> lock(error_mutex);
                 error_files.push_back(in_path);

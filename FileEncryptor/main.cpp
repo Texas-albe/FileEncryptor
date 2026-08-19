@@ -21,17 +21,51 @@
 #endif
 
 #ifdef _WIN32
+// 交互控制台：逐键读取密码并回显 '*'，退格按 UTF-8 码点删除（而非按字节，
+// 否则中文等非 ASCII 多字节密码按退格会破坏 UTF-8 序列）。
+// 当 stdin 被重定向（管道 / 文件 / winpty PTY）时，_getch() 会读控制台输入
+// 缓冲区而挂起，故先检测 stdin 是否为控制台：不是则退化为从 std::cin 读一行
+// （UTF-8 字节），与 POSIX 路径的回退行为一致（Issue: Windows 密码非交互不可用）。
 static std::vector<char> get_password_win() {
+    bool is_console=false;
+    HANDLE hIn=GetStdHandle(STD_INPUT_HANDLE);
+    DWORD mode=0;
+    if(hIn!=INVALID_HANDLE_VALUE && GetConsoleMode(hIn,&mode)) {
+        is_console=true;
+    }
+
+    if(!is_console) {
+        // 非交互（管道 / 重定向 / PTY）：直接读取一行密码（原始 UTF-8 字节）
+        std::string line;
+        std::vector<char> pwd;
+        if(std::getline(std::cin,line)) {
+            if(!line.empty()&&line.back()=='\r') line.pop_back();
+            pwd.assign(line.begin(),line.end());
+        }
+        sodium_memzero((void*)line.data(),line.size());
+        line.clear();
+        return pwd;
+    }
+
     std::vector<char> pwd;
-    char ch;
+    auto pop_utf8=[&pwd]() {
+        if(pwd.empty()) return;
+        size_t i=pwd.size();
+        while(i>0 && (unsigned char)pwd[i-1]>=0x80 && (unsigned char)pwd[i-1]<=0xBF) --i;
+        pwd.resize(i);
+    };
+    int ch;
     while((ch=_getch())!='\r'&&ch!='\n') {
-        if(ch==0||ch==0xE0) { _getch(); continue; }
+        if(ch==0||ch==0xE0) { _getch(); continue; } // 扩展键（方向键等）
         if(ch=='\b') {
-            if(!pwd.empty()) { pwd.pop_back(); std::cout<<"\b \b"; }
+            pop_utf8();
+            std::cout<<"\b \b";
             continue;
         }
-        pwd.push_back(ch);
-        std::cout<<'*';
+        if(ch>=0) {
+            pwd.push_back((char)(unsigned char)ch);
+            std::cout<<'*';
+        }
     }
     std::cout<<std::endl;
     return pwd;

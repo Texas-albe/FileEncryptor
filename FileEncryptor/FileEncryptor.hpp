@@ -13,8 +13,8 @@
 
 #define FE_VERSION_MAJOR 1
 #define FE_VERSION_MINOR 4
-#define FE_VERSION_PATCH 2
-#define FE_VERSION_STRING "1.4.2"
+#define FE_VERSION_PATCH 3
+#define FE_VERSION_STRING "1.4.3"
 
 enum class CryptoMode: unsigned char {
     AES_GCM=0,   // 仅用于解密旧格式（v1/v2）文件；新加密不再使用
@@ -34,12 +34,15 @@ bool encrypt_file(const std::string& in_path,
     bool resume=false);
 
 // 解密文件（支持续传）
+// ext_key: 可选，外部已派生的 32 字节密钥。非 nullptr 时跳过内部 crypto_pwhash，
+//          直接复用（用于加密后的自校验，避免每文件重复昂贵的 Argon2 KDF）。
 bool decrypt_file(const std::string& in_path,
     const std::string& out_path,
     const std::vector<char>& password,
     std::function<void(size_t,size_t)> progress_callback=nullptr,
     bool silent=false,
-    bool resume=false);
+    bool resume=false,
+    const unsigned char* ext_key=nullptr);
 
 // 批量处理（支持并行）
 bool process_files(const std::vector<std::string>& input_paths,
