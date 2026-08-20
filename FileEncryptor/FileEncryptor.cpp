@@ -744,7 +744,6 @@ bool encrypt_file(const std::string& in_path,
 
     // 续传前先做一致性校验，且必须在 truncate_file 之前完成。
     // 否则校验失败时输出已被截断，随后的 cleanup 会删除 .ptd 与 .progress，
-    // 导致断点全损（Issue N-B）。这里直接返回并保留已存在的输出，
     // 用户可用正确的 -m 重新运行，断点不丢失。
     if(has_progress&&start_chunk>0) {
         if(existing_v3.mode!=static_cast<unsigned char>(mode)) {
@@ -1502,9 +1501,7 @@ static std::string build_batch_out_path(const std::string& in_path,
         if(!suffix.empty()&&(suffix[0]=='/'||suffix[0]=='\\')) suffix.erase(0,1);
         // 加密：保留输入根目录名作为顶层目录（避免多 -i 同名冲突，且还原后保持源目录名）；
         // 解密：默认不附加输入根目录名，使还原结构为 <输出目录>/<源目录>/...（与 v1.1.1 一致）。
-        // 但当存在多个输入根目录时（input_paths.size()>1），即使是解密也附加根目录名前缀，
-        // 否则 dirA/x 与 dirB/x 会映射到同一输出路径，多线程并行时第二个线程被跨进程锁判为
-        // “locked”，既混乱又误导（Issue: 批量解密多 -i 输出碰撞）。
+        // 但当存在多个输入根目录时（input_paths.size()>1），即使是解密也附加根目录名前缀
         bool need_root_name=include_root_name||input_paths.size()>1;
         if(need_root_name) {
             size_t root_pos=best_root.find_last_of("/\\");
@@ -1577,10 +1574,7 @@ bool process_files(const std::vector<std::string>& input_paths,
     }
 
     if(!encrypt) {
-        // 批量解密只处理 .ptd 文件，与单文件 -d 强制 .ptd 保持一致：
-        // 否则目录里的 readme.txt / data.txt 等非密文文件会被逐个尝试解密，
-        // magic 校验失败后再安全返回，但它们全部计入 “Decryption errors” 误导用户；
-        // 极端情况下，任何恰好以 FENC 开头且结构巧合的文件会被误当密文处理。
+        // 批量解密只处理 .ptd 文件，与单文件 -d 强制 .ptd 保持一致
         std::vector<std::string> filtered;
         size_t skipped=0;
         for(const auto& f:all_files) {

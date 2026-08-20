@@ -21,11 +21,9 @@
 #endif
 
 #ifdef _WIN32
-// 交互控制台：逐键读取密码并回显 '*'，退格按 UTF-8 码点删除（而非按字节，
-// 否则中文等非 ASCII 多字节密码按退格会破坏 UTF-8 序列）。
+// 交互控制台：逐键读取密码并回显 '*'，退格按 UTF-8 码点删除，而非按字节
 // 当 stdin 被重定向（管道 / 文件 / winpty PTY）时，_getch() 会读控制台输入
 // 缓冲区而挂起，故先检测 stdin 是否为控制台：不是则退化为从 std::cin 读一行
-// （UTF-8 字节），与 POSIX 路径的回退行为一致（Issue: Windows 密码非交互不可用）。
 static std::vector<char> get_password_win() {
     bool is_console=false;
     HANDLE hIn=GetStdHandle(STD_INPUT_HANDLE);
@@ -50,8 +48,8 @@ static std::vector<char> get_password_win() {
     std::vector<char> pwd;
     auto pop_utf8=[&pwd]() {
         if(pwd.empty()) return;
-        size_t i=pwd.size();
-        while(i>0 && (unsigned char)pwd[i-1]>=0x80 && (unsigned char)pwd[i-1]<=0xBF) --i;
+        size_t i=pwd.size()-1;
+        while(i>0 && (unsigned char)pwd[i]>=0x80 && (unsigned char)pwd[i]<=0xBF) --i;
         pwd.resize(i);
     };
     int ch;
