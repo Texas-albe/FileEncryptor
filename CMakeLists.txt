@@ -1,9 +1,16 @@
 ﻿cmake_minimum_required(VERSION 3.15)
-project(FileEncryptor VERSION 1.4.4 LANGUAGES CXX)
+project(FileEncryptor VERSION 1.5.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
+
+# 源码含 UTF-8 中文注释（无 BOM）。MSVC 默认按系统代码页（如 936/GBK）解析，
+# 会触发 C4819，并可能把注释内误解析出的反斜杠当成行拼接、把 struct Config 吞进注释，
+# 导致 “Config 未声明” 等离奇编译错误。强制以 UTF-8 读取源文件（与 verify_build.bat 一致）。
+if(MSVC)
+  add_compile_options(/utf-8)
+endif()
 
 # 让 MSVC_RUNTIME_LIBRARY 目标属性生效（用于 Windows 静态链接时切换 /MT）
 if(POLICY CMP0091)
@@ -239,6 +246,7 @@ endif()
 # ---------- 源文件 ----------
 set(SOURCES
   FileEncryptor/FileEncryptor.cpp
+  FileEncryptor/config.cpp
   FileEncryptor/main.cpp)
 
 add_executable(FileEncryptor ${SOURCES})
@@ -258,8 +266,9 @@ else()
     find_package(Threads REQUIRED)
     target_link_libraries(FileEncryptor PRIVATE Threads::Threads)
     if(WIN32)
-      # Windows 下静态链接 libsodium 需要这些系统库
-      target_link_libraries(FileEncryptor PRIVATE ws2_32 advapi32 bcrypt crypt32)
+      # Windows 下静态链接 libsodium 需要这些系统库；
+      # shell32.lib 提供 CommandLineToArgvW（main.cpp 用于 UTF-8 参数解析）
+      target_link_libraries(FileEncryptor PRIVATE ws2_32 advapi32 bcrypt crypt32 shell32)
     endif()
     # 链接静态 libsodium 时必须定义 SODIUM_STATIC，否则 sodium.h 会把所有函数声明为
     # __declspec(dllimport)（产生 __imp_ 前缀符号），只有动态导入库才能满足，静态库会报

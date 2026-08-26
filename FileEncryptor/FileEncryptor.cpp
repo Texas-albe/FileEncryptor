@@ -14,6 +14,7 @@
 #include <cctype>
 #include <sys/stat.h>
 #include <sodium.h>
+#include "config.hpp"
 #include <atomic>
 #include <thread>
 #include <mutex>
@@ -268,6 +269,38 @@ static bool path_has_traversal(const std::string& p) {
     return false;
 }
 
+// 依据全局 YAML 配置校验输入输出路径（长度上限 / 白名单根目录）。
+// 返回 true 表示允许；false 表示被策略拒绝（并打印原因）。
+static bool validate_io_paths(const std::string& in_path,const std::string& out_path,bool silent) {
+    const Config& cfg=global_config();
+    if(cfg.max_path_length>0) {
+        if(in_path.size()>cfg.max_path_length) {
+            if(!silent) fprintf(stderr,"Input path too long (%zu > %zu bytes).\n",in_path.size(),cfg.max_path_length);
+            return false;
+        }
+        if(out_path.size()>cfg.max_path_length) {
+            if(!silent) fprintf(stderr,"Output path too long (%zu > %zu bytes).\n",out_path.size(),cfg.max_path_length);
+            return false;
+        }
+    }
+    if(cfg.path_whitelist_enabled && !cfg.path_whitelist.empty()) {
+        auto under=[&](const std::string& p,const std::string& root) {
+            if(p.length()<root.length()) return false;
+            if(p.compare(0,root.length(),root)!=0) return false;
+            return (p.length()==root.length()) ||
+                   (p[root.length()]=='/'||p[root.length()]=='\\');
+        };
+        bool in_ok=false,out_ok=false;
+        for(const auto& r:cfg.path_whitelist) {
+            if(!in_ok&&under(in_path,r))  in_ok=true;
+            if(!out_ok&&under(out_path,r)) out_ok=true;
+        }
+        if(!in_ok)  { if(!silent) fprintf(stderr,"Input path not in whitelist: %s\n",in_path.c_str());  return false; }
+        if(!out_ok) { if(!silent) fprintf(stderr,"Output path not in whitelist: %s\n",out_path.c_str()); return false; }
+    }
+    return true;
+}
+
 // 收紧新建输出文件的权限（避免半截明文被其他用户读取）；
 static void restrict_permissions(const std::string& path) {
 #ifndef _WIN32
@@ -382,6 +415,24 @@ static bool replace_file_utf8(const std::string& from,const std::string& to) {
 #else
     std::remove(to.c_str());
     return std::rename(from.c_str(),to.c_str())==0;
+#endif
+}
+
+// UTF-8 安全的文件复制（用于进度文件轮转备份 .progress → .progress.bak）
+static bool copy_file_utf8(const std::string& from,const std::string& to) {
+#ifdef _WIN32
+    std::wstring wf=utf8_to_wstring(from);
+    std::wstring wt=utf8_to_wstring(to);
+    return CopyFileW(wf.c_str(),wt.c_str(),FALSE)!=0;
+#else
+    std::ifstream src;
+    if(!open_stream(src,from,std::ios::binary)) return false;
+    std::ofstream dst;
+    if(!open_stream(dst,to,std::ios::binary|std::ios::trunc)) { src.close(); return false; }
+    dst<<src.rdbuf();
+    bool ok=dst.good();
+    src.close(); dst.close();
+    return ok;
 #endif
 }
 
@@ -576,6 +627,12 @@ static bool save_progress(const std::string& out_path,
     f.close();
     // 关键修复：Windows 下 std::rename 在目标已存在时会失败（EEXIST，与 POSIX 语义不同），
     // 导致从第 2 个块起进度文件永远写不进去、断点续传退化为从头重做。
+    // 进度文件轮转：覆盖前先将现有 .progress 备份为 .progress.bak（best-effort）。
+    // 若本次写入后校验/续传异常，旧进度仍可用于恢复，避免“写坏即丢失断点”。
+    if(global_config().progress_rotation && file_exists(prog_path)) {
+        copy_file_utf8(prog_path,prog_path+".bak");
+    }
+
     // 改用 replace_file_utf8()（Windows 用 MoveFileExW(MOVEFILE_REPLACE_EXISTING)、
     // Linux 用 std::remove+std::rename 等价实现），保证每次块处理后都能覆盖更新进度文件。
     if(!replace_file_utf8(temp_prog,prog_path)) {
@@ -639,6 +696,12 @@ bool encrypt_file(const std::string& in_path,
     bool resume) {
 
     disable_core_dump();
+
+    // 依据 YAML 配置校验输入/输出路径（长度上限 / 白名单）
+    if(!validate_io_paths(in_path,out_path,false)) {
+        fprintf(stderr,"Path validation failed (config policy)\n");
+        return false;
+    }
 
     // 防路径穿越：输出路径若含未解析的 ".." 分量则拒绝
     if(path_has_traversal(out_path)) {
@@ -711,6 +774,7 @@ bool encrypt_file(const std::string& in_path,
                     has_progress=true;
                 } else {
                     fprintf(stderr,"Progress authentication failed / corrupt, restarting from beginning.\n");
+                    log_event(LOG_WARN,"progress_auth_failed",{{"path",out_path}});
                 }
             }
         } else {
@@ -931,7 +995,6 @@ bool encrypt_file(const std::string& in_path,
     }
 
 cleanup:
-    if(key_locked) sodium_munlock(key,sizeof(key));
     secure_clear(plaintext_chunk);
     secure_clear(ciphertext_chunk);
 
@@ -953,7 +1016,7 @@ cleanup:
             if(verify_ok) {
                 unsigned char vhash[HASH_SIZE];
                 if(file_blake2b(verify_path,vhash))
-                    verify_ok=(memcmp(vhash,header.plaintext_hash,HASH_SIZE)==0);
+                    verify_ok=(sodium_memcmp(vhash,header.plaintext_hash,HASH_SIZE)==0);
                 else verify_ok=false;
             }
         }
@@ -971,7 +1034,9 @@ cleanup:
         fprintf(stderr,"Encryption failed, output removed.\n");
     }
 
-    // 自校验结束后再清零密钥：避免对同一个密码重复执行 Argon2 KDF（大批量加密时显著提速）
+    // 自校验已结束（期间复用了派生密钥 key），此刻再释放内存锁并清零密钥，
+    // 既保证密钥不被提前清零导致自校验失败，也避免同一密码在自校验后再重复 Argon2。
+    if(key_locked) sodium_munlock(key,sizeof(key));
     sodium_memzero(key,sizeof(key));
     sodium_memzero(auth_key,sizeof(auth_key));
     return ok;
@@ -986,6 +1051,12 @@ bool decrypt_file(const std::string& in_path,
     bool resume,
     const unsigned char* ext_key) {
     disable_core_dump();
+
+    // 依据 YAML 配置校验输入/输出路径（长度上限 / 白名单）
+    if(!validate_io_paths(in_path,out_path,silent)) {
+        if(!silent) fprintf(stderr,"Path validation failed (config policy)\n");
+        return false;
+    }
 
     // 防路径穿越：输出路径若含未解析的 ".." 分量则拒绝
     if(path_has_traversal(out_path)) {
@@ -1374,7 +1445,7 @@ bool decrypt_file(const std::string& in_path,
     if(have_hash) {
         unsigned char final_hash[HASH_SIZE];
         crypto_generichash_final(&hstate,final_hash,HASH_SIZE);
-        if(ok && memcmp(final_hash,stored_hash,HASH_SIZE)!=0) {
+        if(ok && sodium_memcmp(final_hash,stored_hash,HASH_SIZE)!=0) {
             if(!silent) fprintf(stderr,"Plaintext integrity check failed: recovered data does not match original.\n");
             ok=false;
         }
@@ -1589,6 +1660,7 @@ bool process_files(const std::vector<std::string>& input_paths,
         all_files=std::move(filtered);
         if(skipped>0) {
             fprintf(stderr,"Skipped %zu non-.ptd file(s) in batch decrypt.\n",skipped);
+            log_event(LOG_WARN,"batch_skipped_non_ptd",{{"count",std::to_string(skipped)}});
         }
     }
 
@@ -1605,11 +1677,19 @@ bool process_files(const std::vector<std::string>& input_paths,
 
     printf("Total files: %zu, Total size: %.2f MiB\n",all_files.size(),total_bytes/1048576.0);
 
+    // 并发线程数优先取自 YAML 配置（worker_threads），否则回退到 CLI/自动
+    int cfg_threads=global_config().worker_threads;
+    if(cfg_threads>0) num_threads=cfg_threads;
     if(num_threads<=0) {
         num_threads=std::thread::hardware_concurrency();
         if(num_threads<=0) num_threads=4;
     }
     printf("Using %d thread(s)\n",num_threads);
+    log_event(LOG_INFO,"batch_start",
+        {{"mode",encrypt?"encrypt":"decrypt"},
+         {"files",std::to_string(all_files.size())},
+         {"threads",std::to_string(num_threads)},
+         {"total_bytes",std::to_string(total_bytes)}});
 
     std::vector<std::string> files_to_process;
     for(const auto& in_path:all_files) {
@@ -1767,11 +1847,13 @@ bool process_files(const std::vector<std::string>& input_paths,
                         last_file_processed=file_size;
                     }
                 }
+                log_event(LOG_DEBUG,"file_done",{{"path",in_path}});
             }
             else {
                 all_ok=false;
                 std::lock_guard<std::mutex> lock(error_mutex);
                 error_files.push_back(in_path);
+                log_event(LOG_ERROR,"file_failed",{{"path",in_path}});
             }
         }
         };
@@ -1784,10 +1866,17 @@ bool process_files(const std::vector<std::string>& input_paths,
         t.join();
     }
 
-    if(global_processed<total_bytes) {
+    if(error_files.empty()) {
+        // 全部成功：安全地拉满到 100%（任务中途失败文件已不会拉满）
         global_processed=total_bytes;
     }
+    // 有失败文件：按真实已处理字节收尾，不掩盖失败/跳过情况
     print_progress(global_processed.load(),total_bytes,start_time,true);
+    if(!error_files.empty()) {
+        fprintf(stderr,
+            "\nWarning: %zu file(s) failed; the final progress reflects processed bytes only.\n",
+            error_files.size());
+    }
 
     if(!encrypt&&!error_files.empty()) {
         fprintf(stderr,"\n--- Decryption errors (%zu files) ---\n",error_files.size());

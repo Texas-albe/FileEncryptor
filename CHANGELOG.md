@@ -6,6 +6,58 @@
 
 ---
 
+## [1.5.0] - 2026-08-24（单文件模式断点续传）
+
+> 程序版本号 1.4.6 → 1.5.0。磁盘文件格式版本仍为 **v3**（完全兼容，无需重加密旧产物）。
+
+### Added
+- **单文件模式断点续传**：`-e` / `-d` 单文件加密 / 解密现与批量模式（`-be` / `-bd`）一致，默认自动续传。中断后重跑同一命令，若存在同名 `.progress`（解密还需 `.part`）即从中断点继续，无需额外开关——大文件（>25 MB）中断重跑不再从头开始。
+  - **续传无缝衔接**：检测到续传元数据（加密看 `.progress`；解密需 `.progress` + `.part`）时跳过交互式「覆盖确认」提示，避免大文件重跑被「覆盖？」打断。
+  - **复用既有健壮性**：续传前执行加密模式 / 元数据一致性校验；进程被强杀遗留的 `.lock` 由 `acquire_output_lock` 的失效锁回收机制自动解除，不会阻塞续传。
+- 实现位置：`main.cpp` 单文件分支的 `encrypt_file` / `decrypt_file` 调用 `resume` 由 `false` 改为 `true`，并在覆盖提示前依据 `has_resume_meta` 跳过确认。
+
+### Fixed
+- **MSVC 构建报 “Config 未声明” 编译错误（Windows / 代码页 936）**：源码含 UTF-8 中文注释（无 BOM），CMake 旧构建未加 `/utf-8`，MSVC 默认按系统代码页（GBK）解析，触发 C4819 并把注释内误解析出的反斜杠当成行拼接，将 `config.hpp` 中的 `struct Config` 吞进注释，导致 `FileEncryptor.cpp` 报 `C4430 / C2143 / C2065`（`cfg` 未声明）。修复：在 `CMakeLists.txt` 为 MSVC 统一加 `add_compile_options(/utf-8)`，与 `verify_build.bat` 一致。
+
+### Changed
+- **删除自定义签名（因为构建者的电脑完全重装了）
+
+---
+
+## [1.4.6] - 2026-08-24（Issue.md 运维/安全建议落地：YAML 配置、密钥文件输入、JSON 日志、路径策略、发布脚本）
+
+> 程序版本号 1.4.5 → 1.4.6。磁盘文件格式版本仍为 **v3**（完全兼容，无需重加密旧产物）。
+
+### Added
+- **一.1 密钥文件 / 环境变量输入（非交互）**：新增 `-k <keyfile>` 从文件读取密钥材料，或用环境变量 `ENCRYPTOR_KEY` 传入。密钥来源优先级 `-k` > `ENCRYPTOR_KEY` > 交互式输入（无人值守 / CI 场景）。密钥入内存后 `sodium_mlock`，使用完毕 `sodium_memzero` 清零。
+- **一.2 结构化 JSON 日志**：新增 `init_logger` / `log_event`，输出 `{"ts","level","msg",["fields"]}` 行日志；日志路径与级别由 YAML `log_file` / `log_level` 控制，控制台进度条不受影响。
+- **一.4（部分）YAML 资源配置**：`worker_threads`（并发线程数，0=自动）、`max_memory_bytes`（预留上限，暂未强制）、`io_buffer_size`（内部流式缓冲）。
+- **二.3（部分）进度文件轮转**：`progress_rotation`（默认开）——覆盖 `.progress` 前先备份为 `.progress.bak`，降低写坏丢失断点的风险。
+- **二.4 路径长度 / 白名单**：`validate_io_paths()` 依据 YAML `max_path_length`（UTF-8 字节上限）与 `path_whitelist_enabled` + `path_whitelist`（启用后输入/输出须位于白名单根目录之下）校验，失败时拒绝处理。
+- **二.5 供应链签名（发布脚本）**：`scripts/sign-release.sh` 对发布产物生成 `SHA256SUMS` 并支持 GPG 签名；日志默认命名 `{YY-MM-DD_HHMMSS}.log`。
+- **一.5 容器化与静态发布（发布脚本）**：`Dockerfile`（Debian 多阶段镜像）+ `scripts/build-release.sh`（各平台静态二进制 + 零依赖 DEB/RPM）。
+- **YAML 配置加载**：`find_config_file` / `load_config` 按 `FILEENCRYPTOR_CONFIG` → 可执行文件目录 → 用户配置目录（Win `%APPDATA%\FileEncryptor`；Linux `$XDG_CONFIG_HOME/fileencryptor` 或 `~/.config/fileencryptor`）定位；缺失回退默认，解析错误不致命。**所有运维参数仅由 YAML 提供，CLI 不可覆盖**（混合架构：CLI 保留动作与输入接口）。
+
+### Changed
+- **`-j <线程数>` 废弃**：被忽略并打印警告，并发数改由 YAML `worker_threads` 配置。
+- **强制覆盖标志 `-f` → `-y` / `--force`**（与常见 CLI 约定一致）。
+
+### Fixed
+- **[中] Windows 链接缺失 `shell32.lib`（既有真实 bug）**：`main.cpp` 用 `CommandLineToArgvW` 做 UTF-8 参数向量，但 CMake 仅链接 `ws2_32/advapi32/bcrypt/crypt32`，导致 `LNK2019 __imp_CommandLineToArgvW` 解析失败。现 CMake 与 `verify_build.bat` 均补链 `shell32`（及 `user32/kernel32`）。
+- **[严重,运行时] 加密自校验因密钥被提前清零而失败**：`encrypt_file` 的 `cleanup:` 标签在**正常成功路径**上提前 `sodium_munlock(key)` 清零密钥，随后自解密校验用空密钥必然失败并删除产物——加密看似成功实则落盘即删。现把 `munlock`/`memzero` 移到了自校验**之后**。此 bug 此前仅编译验证、从未真正跑过二进制而漏网。
+- **[中] YAML 配置 UTF-8 BOM 使首个键解析为空**：PowerShell `Set-Content` 写入的 YAML 带 BOM，导致第一行键变成 `\uFEFFlog_file` 匹配失败、日志配置失效。现 `load_config` 在解析前剥离 UTF-8 BOM。
+- **[低] `get_user_config_dir` 引用不可用 API**：原先使用 `shlobj.h` 的 `CSIDL_APPDATA` / `SHGetFolderPathW`（缺头文件，编译报错 C2065/C3861），改为直接读 `APPDATA` 环境变量，避免引入额外 Windows SDK 依赖。
+
+---
+
+## [1.4.5] - 2026-08-23（批量收尾进度条修正 + 完整性校验恒定时间比较）
+
+### Fixed
+- **批量收尾进度条强制 100% 掩盖失败/跳过（N-2，v1.4.3 遗留）**：`process_files()` 收尾无条件把 `global_processed` 提升到 `total_bytes` 再打印完成态，导致只要有任一文件失败/跳过，stdout 进度条仍显示 100%，误导用户以为全部成功。现改为仅当 `error_files` 为空时才拉满到 100%；有失败时按真实已处理字节收尾，并在 stderr 提示失败数量（如 `Warning: N file(s) failed; the final progress reflects processed bytes only.`）。中途进度本就不拉满，现在任务结束也不再掩盖。
+- **明文完整性校验改为恒定时间比较（侧信道加固，Issue.md 二.2 高优先级）**：加密自校验（`encrypt_file` 验证明文哈希）与解密完整性校验（比较 `final_hash` 与 `stored_hash`）原先使用 `memcmp`，现统一改为 `sodium_memcmp`，抵御基于比较耗时的时序侧信道推断哈希差异。注意：非密的 magic 头校验、空文件哈希等值比对等不涉及密钥/明文保密的比较保持 `memcmp` 不变。
+
+---
+
 ## [1.4.4] - 2026-08-20（修复 pop_utf8 退格回归）
 
 ### Fixed
