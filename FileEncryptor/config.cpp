@@ -14,6 +14,7 @@
 
 #ifdef _WIN32
 #include <windows.h>
+#include <io.h>
 #else
 #include <unistd.h>
 #include <sys/stat.h>
@@ -37,7 +38,7 @@ static std::string trim(const std::string& s) {
     return s.substr(a, b - a);
 }
 
-// 去掉行内注释（# 前为空白或行首；忽略引号内 #）
+// 去掉行内注释（# 在行首、空白、':' 或 '=' 后开始；忽略引号内 #）
 static std::string strip_comment(const std::string& line) {
     bool in_sq = false, in_dq = false;
     for (size_t i = 0; i < line.size(); ++i) {
@@ -45,8 +46,13 @@ static std::string strip_comment(const std::string& line) {
         if (c == '\'' && !in_dq) in_sq = !in_sq;
         else if (c == '"' && !in_sq) in_dq = !in_dq;
         else if (c == '#' && !in_sq && !in_dq) {
-            bool preceded_by_space = (i == 0) || std::isspace((unsigned char)line[i - 1]);
-            if (preceded_by_space) return line.substr(0, i);
+            // YAML 注释通常以空白或行首开始；但 key:#comment / key=#comment（分隔符紧跟 #）
+            // 同样合法，也应剥离。故 # 前为行首 / 空白 / ':' / '=' 均视为注释起点。
+            bool comment_start = (i == 0)
+                              || std::isspace((unsigned char)line[i - 1])
+                              || line[i - 1] == ':'
+                              || line[i - 1] == '=';
+            if (comment_start) return line.substr(0, i);
         }
     }
     return line;
@@ -101,12 +107,16 @@ bool parse_yaml_config(const std::string& text, Config& cfg, std::string& err) {
             try { cfg.max_memory_bytes = (uint64_t)std::stoull(v); } catch (...) {}
         } else if (key == "io_buffer_size") {
             try { cfg.io_buffer_size = (size_t)std::stoull(v); } catch (...) {}
+        } else if (key == "max_open_files") {
+            try { cfg.max_open_files = (size_t)std::stoull(v); } catch (...) {}
         } else if (key == "max_path_length") {
             try { cfg.max_path_length = (size_t)std::stoull(v); } catch (...) {}
         } else if (key == "path_whitelist_enabled") {
             bool b = false; if (parse_bool(v, b)) cfg.path_whitelist_enabled = b;
         } else if (key == "progress_rotation") {
             bool b = false; if (parse_bool(v, b)) cfg.progress_rotation = b;
+        } else if (key == "obfuscate_names") {
+            bool b = true; if (parse_bool(v, b)) cfg.obfuscate_names = b;
         }
         // 未知键：静默忽略（前向兼容）
     };
@@ -124,7 +134,12 @@ bool parse_yaml_config(const std::string& text, Config& cfg, std::string& err) {
             }
             std::string item = trim(line.substr(1));
             item = unquote(item);
-            if (!item.empty()) cfg.path_whitelist.push_back(item);
+            // 仅当显式列出至少一项时才启用白名单；空列表视为未启用，
+            // 避免“启用但零根=全部拒绝”的误伤。
+            if (!item.empty()) {
+                cfg.path_whitelist.push_back(item);
+                cfg.path_whitelist_enabled = true;
+            }
             continue;
         }
 
@@ -141,8 +156,9 @@ bool parse_yaml_config(const std::string& text, Config& cfg, std::string& err) {
         if (val.empty()) {
             // 可能是序列头（后续 - 行）或空标量
             if (key == "path_whitelist") {
+                // 序列头仅登记当前键；是否“启用”推迟到真正出现 - 项时再置位，
+                // 避免 path_whitelist: 后无项却误启用（启用且空列表会拒绝所有路径）。
                 cur_seq_key = key;
-                cfg.path_whitelist_enabled = true; // 显式列出即视为启用
             } else {
                 cur_seq_key.clear();
                 set_scalar(key, "");
@@ -156,6 +172,73 @@ bool parse_yaml_config(const std::string& text, Config& cfg, std::string& err) {
 }
 
 // ---------- 文件读取（UTF-8 安全） ----------
+static bool file_exists_utf8(const std::string& path) {
+#ifdef _WIN32
+    int wn = MultiByteToWideChar(CP_UTF8, 0, path.c_str(), (int)path.size(), NULL, 0);
+    if (wn <= 0) return false;
+    std::wstring wp(wn, 0);
+    MultiByteToWideChar(CP_UTF8, 0, path.c_str(), (int)path.size(), &wp[0], wn);
+    return _waccess(wp.c_str(), 0) == 0;
+#else
+    return access(path.c_str(), F_OK) == 0;
+#endif
+}
+
+static std::string get_cwd() {
+#ifdef _WIN32
+    DWORD n = GetCurrentDirectoryW(0, NULL);
+    if (n == 0) return "";
+    std::wstring w(n, L'\0');
+    GetCurrentDirectoryW(n, w.data());
+    if (!w.empty()) w.pop_back(); // 去掉末尾 '\0'
+    std::string dir;
+    int len = WideCharToMultiByte(CP_UTF8, 0, w.c_str(), (int)w.size(), NULL, 0, NULL, NULL);
+    if (len <= 0) return "";
+    dir.resize(len);
+    WideCharToMultiByte(CP_UTF8, 0, w.c_str(), (int)w.size(), &dir[0], len, NULL, NULL);
+    return dir;
+#else
+    char buf[4096] = { 0 };
+    if (getcwd(buf, sizeof(buf))) return std::string(buf);
+    return "";
+#endif
+}
+
+static bool write_file_utf8(const std::string& path, const std::string& content) {
+#ifdef _WIN32
+    int wn = MultiByteToWideChar(CP_UTF8, 0, path.c_str(), (int)path.size(), NULL, 0);
+    if (wn <= 0) return false;
+    std::wstring wp(wn, 0);
+    MultiByteToWideChar(CP_UTF8, 0, path.c_str(), (int)path.size(), &wp[0], wn);
+    FILE* f = _wfopen(wp.c_str(), L"wb");
+    if (!f) return false;
+    size_t written = fwrite(content.data(), 1, content.size(), f);
+    fclose(f);
+    return written == content.size();
+#else
+    std::ofstream f(path, std::ios::binary);
+    if (!f) return false;
+    f.write(content.data(), (std::streamsize)content.size());
+    return (bool)f;
+#endif
+}
+
+// 默认配置模板：CWD 下无 fileencryptor.yaml 时自动生成。与 Config 默认值一致。
+static const char* DEFAULT_CONFIG_YAML =
+"# 运维参数仅由此文件提供，CLI 不可覆盖；删除即恢复默认。\n"
+"log_file: \"\"              # 留空 = 仅控制台进度\n"
+"log_level: INFO           # ERROR / WARN / INFO / DEBUG\n"
+"worker_threads: 0         # 0 = 自动（CPU 核数）\n"
+"max_open_files: 256       # 并发线程上限 = 此值 / 3（防句柄耗尽）\n"
+"max_memory_bytes: 0       # 0 = 不限\n"
+"io_buffer_size: 1048576\n"
+"max_path_length: 0        # 0 = 不限\n"
+"path_whitelist_enabled: false\n"
+"# path_whitelist:\n"
+"#   - C:/Data/In\n"
+"progress_rotation: true   # 覆盖 .progress 前先备份 .progress.bak\n"
+"obfuscate_names: true     # 混淆输出文件名（<名>.<伪扩展名>.ptd）\n";
+
 static bool read_file_utf8(const std::string& path, std::string& out) {
     out.clear();
 #ifdef _WIN32
@@ -230,19 +313,25 @@ std::string find_config_file() {
     // 1) 环境变量（显式，最高优先）
     const char* env = std::getenv("FILEENCRYPTOR_CONFIG");
     if (env && *env) {
-        if (std::ifstream(env)) return env;
+        if (file_exists_utf8(env)) return env;
     }
-    // 2) 可执行文件目录
+    // 2) 运行目录（CWD）：用户在哪个目录启动程序，配置就在哪里
+    std::string cwd = get_cwd();
+    if (!cwd.empty()) {
+        std::string p = cwd + "/fileencryptor.yaml";
+        if (file_exists_utf8(p)) return p;
+    }
+    // 3) 可执行文件目录
     std::string exe_dir = get_exe_dir();
     if (!exe_dir.empty()) {
         std::string p = exe_dir + "/fileencryptor.yaml";
-        if (std::ifstream(p)) return p;
+        if (file_exists_utf8(p)) return p;
     }
-    // 3) 用户配置目录
+    // 4) 用户配置目录
     std::string ucd = get_user_config_dir();
     if (!ucd.empty()) {
         std::string p = ucd + "/fileencryptor.yaml";
-        if (std::ifstream(p)) return p;
+        if (file_exists_utf8(p)) return p;
     }
     return "";
 }
@@ -250,7 +339,17 @@ std::string find_config_file() {
 Config load_config() {
     Config cfg;
     std::string path = find_config_file();
-    if (path.empty()) return cfg; // 默认配置
+    if (path.empty()) {
+        // 运行目录（CWD）下生成默认配置文件，便于用户查看/修改（best-effort，失败则静默回退默认）
+        std::string cwd = get_cwd();
+        if (!cwd.empty()) {
+            std::string def = cwd + "/fileencryptor.yaml";
+            if (!file_exists_utf8(def)) {
+                write_file_utf8(def, DEFAULT_CONFIG_YAML);
+            }
+        }
+        return cfg; // 默认配置（与生成的模板一致）
+    }
     std::string text;
     if (!read_file_utf8(path, text)) {
         std::cerr << "Warning: cannot read config file: " << path << "\n";
@@ -334,10 +433,11 @@ static void write_log(int level, const std::string& msg,
     auto now = std::chrono::system_clock::now();
     std::time_t t = std::chrono::system_clock::to_time_t(now);
     std::tm tm_buf;
+    // 使用 UTC（gmtime）以匹配时间戳末尾的 'Z'，避免把本地时间误标为 UTC 误导日志分析
 #ifdef _WIN32
-    localtime_s(&tm_buf, &t);
+    gmtime_s(&tm_buf, &t);
 #else
-    localtime_r(&t, &tm_buf);
+    gmtime_r(&t, &tm_buf);
 #endif
     char ts[32];
     std::strftime(ts, sizeof(ts), "%Y-%m-%dT%H:%M:%SZ", &tm_buf);
@@ -360,6 +460,21 @@ static void write_log(int level, const std::string& msg,
     if (g_log_stream.is_open()) {
         g_log_stream << line.str();
         g_log_stream.flush();
+        // 防御：磁盘满 / 权限变化 / 文件被删会让流进入 badbit/failbit，
+        // 若不处理后续所有日志都会静默丢失，运维排障时极具误导性。
+        // 检测到异常时复位状态并尝试以 append 重新打开；仍失败则降级为 stderr 告警（仅提示一次，避免刷屏）。
+        if (!g_log_stream.good()) {
+            g_log_stream.clear();
+            g_log_stream.open(g_log_file, std::ios::out | std::ios::app);
+            if (!g_log_stream) {
+                static bool warned = false;
+                if (!warned) {
+                    std::cerr << "Warning: cannot write log file (disk full or permission change?): "
+                              << g_log_file << "\n";
+                    warned = true;
+                }
+            }
+        }
     }
 }
 

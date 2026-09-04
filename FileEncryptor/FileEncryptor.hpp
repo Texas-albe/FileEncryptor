@@ -6,15 +6,16 @@
 #include <atomic>
 #include <mutex>
 #include <cstdio>
+#include "secure_buffer.hpp"
 
 #ifdef _WIN32
 #include <windows.h>
 #endif
 
 #define FE_VERSION_MAJOR 1
-#define FE_VERSION_MINOR 4
-#define FE_VERSION_PATCH 7
-#define FE_VERSION_STRING "1.5.0"
+#define FE_VERSION_MINOR 7
+#define FE_VERSION_PATCH 1
+#define FE_VERSION_STRING "1.7.1"
 
 enum class CryptoMode: unsigned char {
     AES_GCM=0,   // 仅用于解密旧格式（v1/v2）文件；新加密不再使用
@@ -22,13 +23,28 @@ enum class CryptoMode: unsigned char {
     AEGIS256=2   // 取代 AES-GCM 的新选项（AEAD，32 字节 nonce / 32 字节 tag）
 };
 
+// ---------- 文件名 / 扩展名混淆（v1.7.0） ----------
+// 生成 "<16 位十六进制>.<混淆扩展名>" 基名（不含 .ptd），由口令与输入路径确定性派生：
+// 同一口令 + 同一输入路径得到同一名字，故续传仍能命中原输出文件。
+std::string make_obfuscated_basename(const std::string& in_path,const SecureBuffer& password);
+
+// 从密文末尾的加密信封恢复原始文件名（需口令派生密钥）；无尾部/密钥错返回 false。
+bool read_original_name(const std::string& ptd_path,std::string& out_name,const SecureBuffer& password);
+
+// 把路径的最后一段替换为 newbase（保留目录部分）
+std::string replace_basename(const std::string& path,const std::string& newbase);
+
 // 递归创建目录
 bool create_directory_recursive(const std::string& path);
+
+// 路径穿越检测：拒绝任何包含 ".." 组件（前缀或中间）的路径。
+// 1.5.2 起同时供 CLI 输出目录校验、目录创建与白名单校验复用。
+bool path_has_traversal(const std::string& p);
 
 // 加密文件（支持续传）
 bool encrypt_file(const std::string& in_path,
     const std::string& out_path,
-    const std::vector<char>& password,
+    const SecureBuffer& password,
     CryptoMode mode,
     std::function<void(size_t,size_t)> progress_callback=nullptr,
     bool resume=false);
@@ -38,7 +54,7 @@ bool encrypt_file(const std::string& in_path,
 //          直接复用（用于加密后的自校验，避免每文件重复昂贵的 Argon2 KDF）。
 bool decrypt_file(const std::string& in_path,
     const std::string& out_path,
-    const std::vector<char>& password,
+    const SecureBuffer& password,
     std::function<void(size_t,size_t)> progress_callback=nullptr,
     bool silent=false,
     bool resume=false,
@@ -47,12 +63,16 @@ bool decrypt_file(const std::string& in_path,
 // 批量处理（支持并行）
 bool process_files(const std::vector<std::string>& input_paths,
     const std::string& out_dir,
-    const std::vector<char>& password,
+    const SecureBuffer& password,
     CryptoMode mode,
     bool encrypt,
     bool delete_source=false,
     bool force_overwrite=false,
     int num_threads=0);
+
+// 认证失败详细输出开关（由 CLI -v/--verbose 设置）。
+// 关闭时所有认证失败只输出通用错误，避免向潜在攻击者泄露细节（最小信息泄露原则）。
+void set_verbose(bool v);
 
 void anti_debug_check();
 

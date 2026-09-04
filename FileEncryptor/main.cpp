@@ -127,8 +127,8 @@ static void print_usage() {
         <<"  For batch mode:  provide directory paths via -i (multiple allowed)\n"
         <<"                   All files under directories will be processed recursively.\n\n"
         <<"Usage:\n"
-        <<"  FileEncryptor.exe -e/-d <FileName> [-o <Path>] [-de] [-m xchacha20|aegis256] [-y] [-j Num]\n"
-        <<"  FileEncryptor.exe -be/-bd <Path> [-o <Path>] [-de] [-m xchacha20|aegis256] [-y] [-j Num]\n";
+        <<"  FileEncryptor -e/-d <FileName> [-o <Path>] [-de] [-m xchacha20|aegis256] [-y] [-j Num]\n"
+        <<"  FileEncryptor -be/-bd <Path> [-o <Path>] [-de] [-m xchacha20|aegis256] [-y] [-j Num]\n";
 }
 
 #ifdef _WIN32
@@ -225,6 +225,10 @@ int main(int argc,char* argv[]) {
         }
         else if(arg=="-o"&&i+1<argc) {
             output_dir=argv[++i];
+            if(path_has_traversal(output_dir)) {
+                std::cerr<<"Output directory contains directory traversal (..): "<<output_dir<<"\n";
+                return 1;
+            }
         }
         else if(arg=="-de") {
             delete_source=true;
@@ -240,6 +244,9 @@ int main(int argc,char* argv[]) {
         }
         else if(arg=="-y"||arg=="--force") {
             force_overwrite=true;
+        }
+        else if(arg=="-v"||arg=="--verbose") {
+            set_verbose(true);
         }
         else if(arg=="-k"&&i+1<argc) {
             keyfile_path=argv[++i];
@@ -286,7 +293,7 @@ int main(int argc,char* argv[]) {
     if(is_encrypt&&!is_batch&&mode==CryptoMode::AEGIS256&&!aegis256_supported()) {
         std::cout<<"Warning: AEGIS-256 is not available on this CPU (AES-NI required).\n"
             <<"Do you want to switch to XChaCha20 (secure)? (y/N): ";
-        char ch;
+        char ch='n';
         std::cin>>ch;
         if(ch=='y'||ch=='Y') {
             mode=CryptoMode::XCHACHA20;
@@ -297,9 +304,9 @@ int main(int argc,char* argv[]) {
         }
     }
 
-    // ---------- 密码输入（一.1：支持密钥文件 / 环境变量） ----------
+    // ---------- 密码输入（RAII SecureBuffer 持有，析构自动清零 + 解锁） ----------
     // 密钥来源优先级：-k <keyfile> > ENCRYPTOR_KEY 环境变量 > 交互式输入
-    std::vector<char> password;
+    SecureBuffer password;
     bool used_key_source=false; // 非交互密钥源（密钥文件或环境变量）
     if(!keyfile_path.empty()) {
         // 读取密钥文件原始字节作为密码材料（适合无人值守 / 自动化场景）
@@ -315,14 +322,15 @@ int main(int argc,char* argv[]) {
             std::cerr<<"Key file is empty: "<<keyfile_path<<"\n";
             return 1;
         }
-        password=std::move(kbuf);
+        password = SecureBuffer(kbuf.data(), kbuf.size());
+        sodium_memzero(kbuf.data(), kbuf.size()); kbuf.clear();
         used_key_source=true;
         log_event(LOG_INFO,"key_source",{{"type","keyfile"},{"path",keyfile_path}});
     }
     else {
         const char* ek=std::getenv("ENCRYPTOR_KEY");
         if(ek&&*ek) {
-            password.assign(ek,ek+std::strlen(ek));
+            password = SecureBuffer(ek, std::strlen(ek));
             used_key_source=true;
             log_event(LOG_INFO,"key_source",{{"type","env"}});
         }
@@ -333,57 +341,64 @@ int main(int argc,char* argv[]) {
             // 非交互密钥源：不二次确认、不做强度提示
             if(password.size()<6) {
                 std::cerr<<"Key too short (min 6 characters)\n";
-                sodium_memzero(password.data(),password.size());
                 return 1;
             }
         }
         else {
             std::cout<<"Enter password (min 6 characters, strong recommended): ";
-            auto pw1=get_password();
+            std::vector<char> pw1=get_password();
             if(pw1.size()<6) {
                 std::cerr<<"Password too short.\n";
-                sodium_memzero(pw1.data(),pw1.size());
+                sodium_memzero(pw1.data(),pw1.size()); pw1.clear();
                 return 1;
             }
 
             bool has_upper=false,has_lower=false,has_digit=false,has_special=false;
+            bool has_non_ascii=false;
             for(char c : pw1) {
-                if(isupper((unsigned char)c)) has_upper=true;
-                else if(islower((unsigned char)c)) has_lower=true;
-                else if(isdigit((unsigned char)c)) has_digit=true;
-                else if(ispunct((unsigned char)c)) has_special=true;
+                unsigned char u=(unsigned char)c;
+                if(u <= 127) {
+                    // 仅对 ASCII 字符做字符类检测；非 ASCII（如 UTF-8 中文）字节在 C locale
+                    // 下 is* 行为未定义/不可靠，且多字节字符本身熵很高，不应误判为弱口令。
+                    if(isupper(u)) has_upper=true;
+                    else if(islower(u)) has_lower=true;
+                    else if(isdigit(u)) has_digit=true;
+                    else if(ispunct(u)) has_special=true;
+                } else {
+                    has_non_ascii=true;
+                }
             }
-            if(!(has_upper&&has_lower&&has_digit&&has_special)) {
+            // 非 ASCII 口令（如纯中文长口令）熵足够，跳过字符类提醒，避免误判为弱密码；
+            // 仅对“纯 ASCII 且缺少某字符类”的口令给出弱密码建议。
+            if(!has_non_ascii && !(has_upper&&has_lower&&has_digit&&has_special)) {
                 std::cerr<<"Warning: Password lacks some character classes (upper/lower/digit/symbol).\n"
                     <<"Consider using a stronger password.\n";
             }
 
             std::cout<<"Re-enter password: ";
-            auto pw2=get_password();
+            std::vector<char> pw2=get_password();
             if(pw1!=pw2) {
                 std::cerr<<"Passwords do not match.\n";
-                sodium_memzero(pw1.data(),pw1.size());
-                sodium_memzero(pw2.data(),pw2.size());
+                sodium_memzero(pw1.data(),pw1.size()); pw1.clear();
+                sodium_memzero(pw2.data(),pw2.size()); pw2.clear();
                 return 1;
             }
-            password=std::move(pw1);
-            sodium_memzero(pw2.data(),pw2.size());
+            password = SecureBuffer(pw1.data(), pw1.size());
+            sodium_memzero(pw1.data(),pw1.size()); pw1.clear();
+            sodium_memzero(pw2.data(),pw2.size()); pw2.clear();
         }
     }
     else {
         if(!used_key_source) {
             std::cout<<"Enter password (min 6 characters): ";
-            password=get_password();
+            std::vector<char> ipw=get_password();
+            password = SecureBuffer(ipw.data(), ipw.size());
+            sodium_memzero(ipw.data(),ipw.size()); ipw.clear();
         }
         if(password.size()<6) {
             std::cerr<<"Password too short.\n";
-            sodium_memzero(password.data(),password.size());
             return 1;
         }
-    }
-
-    if(sodium_mlock(password.data(),password.size())!=0) {
-        std::cerr<<"Warning: could not lock password memory (maybe insufficient privileges).\n";
     }
 
     bool all_ok=true;
@@ -392,103 +407,112 @@ int main(int argc,char* argv[]) {
         all_ok=process_files(input_paths,output_dir,password,mode,is_encrypt,delete_source,force_overwrite,num_threads);
     }
     else {
-        const std::string& in_path=input_paths[0];
-        std::string out_path;
-        if(!output_dir.empty()) {
-            if(!create_directory_recursive(output_dir)) {
-                std::cerr<<"Cannot create output directory: "<<output_dir<<"\n";
-                all_ok=false;
-                goto cleanup_password;
+        // 单文件处理放入 lambda：用 early-return 替代 goto cleanup_password，
+        // 避免跨过带非平凡析构的 std::ifstream 声明（严格 C++ 下 ill-formed，MSVC -W4 报 C4533）。
+        all_ok = [&]() -> bool {
+            const std::string& in_path=input_paths[0];
+            std::string out_path;
+            if(!output_dir.empty()) {
+                if(!create_directory_recursive(output_dir)) {
+                    std::cerr<<"Cannot create output directory: "<<output_dir<<"\n";
+                    return false;
+                }
+                std::string base=in_path;
+                size_t pos=base.find_last_of("/\\");
+                std::string fname=(pos!=std::string::npos) ? base.substr(pos+1) : base;
+                out_path=output_dir;
+                if(!out_path.empty()&&out_path.back()!='/'&&out_path.back()!='\\')
+                    out_path+='/';
+                out_path+=fname;
             }
-            std::string base=in_path;
-            size_t pos=base.find_last_of("/\\");
-            std::string fname=(pos!=std::string::npos) ? base.substr(pos+1) : base;
-            out_path=output_dir;
-            if(!out_path.empty()&&out_path.back()!='/'&&out_path.back()!='\\')
-                out_path+='/';
-            out_path+=fname;
-        }
-        else {
-            out_path=in_path;
-        }
+            else {
+                out_path=in_path;
+            }
 
-        if(action==ACTION_DECRYPT) {
-            std::string lower=in_path;
-            std::transform(lower.begin(),lower.end(),lower.begin(),::tolower);
-            if(lower.size()<4||lower.substr(lower.size()-4)!=".ptd") {
-                std::cerr<<"Error: Decryption input must have .ptd extension.\n";
-                all_ok=false;
-                goto cleanup_password;
+            if(action==ACTION_DECRYPT) {
+                std::string lower=in_path;
+                std::transform(lower.begin(),lower.end(),lower.begin(),::tolower);
+                if(lower.size()<4||lower.substr(lower.size()-4)!=".ptd") {
+                    std::cerr<<"Error: Decryption input must have .ptd extension.\n";
+                    return false;
+                }
+                // 先剥离 .ptd 得到明文输出路径
+                if(out_path.size()>=4&&
+                    (out_path.substr(out_path.size()-4)==".ptd"||
+                        out_path.substr(out_path.size()-4)==".PTD")) {
+                    out_path=out_path.substr(0,out_path.size()-4);
+                }
+                // 混淆文件名的逆过程：密文末尾若存有原始文件名，则还原它（兼容多语言文件名）
+                {
+                    std::string orig_name;
+                    if(read_original_name(in_path,orig_name,password)&&!orig_name.empty()) {
+                        out_path=replace_basename(out_path,orig_name);
+                    }
+                }
+                if(out_path==in_path) {
+                    std::cerr<<"Error: Output path would overwrite input file.\n";
+                    return false;
+                }
             }
-            // 先剥离 .ptd 得到明文输出路径
-            if(out_path.size()>=4&&
-                (out_path.substr(out_path.size()-4)==".ptd"||
-                    out_path.substr(out_path.size()-4)==".PTD")) {
-                out_path=out_path.substr(0,out_path.size()-4);
+            else {
+                if(global_config().obfuscate_names) {
+                    out_path=replace_basename(out_path,
+                        make_obfuscated_basename(in_path,password));
+                }
+                out_path+=".ptd";
             }
-            if(out_path==in_path) {
-                std::cerr<<"Error: Output path would overwrite input file.\n";
-                all_ok=false;
-                goto cleanup_password;
-            }
-        }
-        else {
-            out_path+=".ptd";
-        }
 
-        // 续传无缝衔接：若检测到续传元数据（加密看 .progress；解密需 .progress + .part），
-        // 跳过覆盖确认，直接交给 encrypt/decrypt_file 续传，避免大文件中断后重跑被“覆盖？”打断。
-        bool has_resume_meta=false;
-        {
-            std::ifstream pf;
-            if(open_stream(pf,out_path+".progress",std::ios::in|std::ios::binary)&&pf.good()) {
-                pf.close();
-                if(is_encrypt) has_resume_meta=true;
-                else {
-                    std::ifstream part;
-                    if(open_stream(part,out_path+".part",std::ios::in|std::ios::binary)&&part.good()) {
-                        part.close();
-                        has_resume_meta=true;
+            // 续传无缝衔接：若检测到续传元数据（加密看 .progress；解密需 .progress + .part），
+            // 跳过覆盖确认，直接交给 encrypt/decrypt_file 续传，避免大文件中断后重跑被“覆盖？”打断。
+            bool has_resume_meta=false;
+            {
+                std::ifstream pf;
+                if(open_stream(pf,out_path+".progress",std::ios::in|std::ios::binary)&&pf.good()) {
+                    pf.close();
+                    if(is_encrypt) has_resume_meta=true;
+                    else {
+                        std::ifstream part;
+                        if(open_stream(part,out_path+".part",std::ios::in|std::ios::binary)&&part.good()) {
+                            part.close();
+                            has_resume_meta=true;
+                        }
                     }
                 }
             }
-        }
 
-        // 覆盖提示：基于最终输出路径（加密问 .ptd、解密问明文文件）
-        if(!force_overwrite && !has_resume_meta) {
-            std::ifstream test;
-            if(open_stream(test,out_path,std::ios::in)&&test.good()) {
-                test.close();
-                std::cout<<"Output file exists: "<<out_path<<"\nOverwrite? (y/N): ";
-                char ch;
-                std::cin>>ch;
-                if(ch!='y'&&ch!='Y') {
-                    std::cerr<<"Aborted.\n";
-                    all_ok=false;
-                    goto cleanup_password;
+            // 覆盖提示：基于最终输出路径（加密问 .ptd、解密问明文文件）
+            if(!force_overwrite && !has_resume_meta) {
+                std::ifstream test;
+                if(open_stream(test,out_path,std::ios::in)&&test.good()) {
+                    test.close();
+                    std::cout<<"Output file exists: "<<out_path<<"\nOverwrite? (y/N): ";
+                    char ch='n';
+                    std::cin>>ch;
+                    if(ch!='y'&&ch!='Y') {
+                        std::cerr<<"Aborted.\n";
+                        return false;
+                    }
                 }
             }
-        }
 
-        if(is_encrypt) {
-            printf("Encrypting: %s -> %s\n",in_path.c_str(),out_path.c_str());
-            all_ok=encrypt_file(in_path,out_path,password,mode,nullptr,true);
-            if(all_ok&&delete_source) {
-                if(!remove_file_utf8(in_path)) {
-                    std::cerr<<"Error: could not delete source file: "<<in_path<<"\n";
-                    all_ok=false;
+            bool ok;
+            if(is_encrypt) {
+                printf("Encrypting: %s -> %s\n",in_path.c_str(),out_path.c_str());
+                ok=encrypt_file(in_path,out_path,password,mode,nullptr,true);
+                if(ok&&delete_source) {
+                    if(!remove_file_utf8(in_path)) {
+                        std::cerr<<"Error: could not delete source file: "<<in_path<<"\n";
+                        ok=false;
+                    }
                 }
             }
-        }
-        else {
-            printf("Decrypting: %s -> %s\n",in_path.c_str(),out_path.c_str());
-            all_ok=decrypt_file(in_path,out_path,password,nullptr,false,true);
-        }
+            else {
+                printf("Decrypting: %s -> %s\n",in_path.c_str(),out_path.c_str());
+                ok=decrypt_file(in_path,out_path,password,nullptr,false,true);
+            }
+            return ok;
+        }();
     }
-
-cleanup_password:
-    sodium_munlock(password.data(),password.size());
-    sodium_memzero(password.data(),password.size());
 
     return all_ok ? 0 : 1;
 }

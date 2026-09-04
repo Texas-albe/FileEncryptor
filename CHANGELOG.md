@@ -6,6 +6,93 @@
 
 ---
 
+## [1.7.1] - 2026-09-04（文件名加密存储加固）
+
+> 程序版本号 1.7.0 → 1.7.1。磁盘文件格式版本保持 **v4**（向后兼容 v1 / v2 / v3 / 1.7.0，旧产物可直接解密，无需重加密）。
+
+### Security
+- **【高·隐私】原始文件名改为密文存储（修复 1.7.0 明文泄露）**：1.7.0 曾把混淆前的原始基名以**明文**追加到密文末尾（`FENM` 信封），导致源文件名可在 `.ptd` 中直接读出。现改用与主密文**相同加密配置**——XChaCha20-Poly1305、同一 Argon2 派生主密钥、nonce 由本文件 `salt` 派生并与 `salt` 绑定 AAD——加密后存入尾部（`FENX` 信封，含 16 字节 AEAD tag），解密须正确口令，源文件名不再以明文暴露。保留对 1.7.0 明文尾部（`FENM`）的兼容读取，但新写入一律加密。同时移除 YAML 配置中对“原始名存储位置”的注释，配置不再暴露存储细节。
+- **【低·健壮性】加密名尾部改为始终写入**：不再受 YAML `obfuscate_names` 开关控制，无论是否混淆可见文件名，尾部均携带加密后的原始名，解密命名更稳健且不依赖 YAML 暴露存储行为。
+
+## [1.7.0] - 2026-09-04（输出名 / 扩展名混淆）
+
+> 程序版本号 1.6.0 → 1.7.0。磁盘文件格式版本保持 **v4**（向后兼容 v1 / v2 / v3，旧产物可直接解密，无需重加密）。
+
+### Added
+- **【中·隐私/混淆】输出文件名与扩展名混淆（默认开启）**：加密产出形如 `<16位十六进制>.<伪扩展名>.ptd`（`.ptd` 始终在最后），隐藏原始文件名与扩展名。伪扩展名取自 40+ 种常见类型（png / jpg / mp4 / mp3 / pdf / doc / docx / xls / xlsx / css …），由输入路径 + 密钥确定性派生。YAML `obfuscate_names: false` 可关闭，退化为 `<原名>.ptd`。
+- **【中·隐私】原始名尾部安全还原**：混淆文件名不含原始信息，故把原始基名以明文（未认证）追加到密文**末尾**（8 字节头部 `FENM`(4) + 名称长度(4) + 名称）。解密据此还原原始输出名，多语言（UTF-8，含中文 / 西里尔 / 希腊等）文件名正确还原；尾部未做认证，还原前严格净化（拒绝 `..`、绝对路径、空名、超长）以防越权输出路径。
+
+### Changed
+- **【低·文档】精简 YAML 与部分代码注释**：去除配置模板与代码中的冗余注释，保留安全 / 设计意图相关的“为什么”注释；`fileencryptor.yaml`、`DEFAULT_CONFIG_YAML` 模板与 `build_test/fileencryptor.yaml` 三者现已一致（均含 `max_open_files` 与 `obfuscate_names`）。
+
+## [1.6.0] - 2026-08-27（配置 / 日志 / 路径与健壮性加固）
+
+> 程序版本号 1.5.2 → 1.6.0。磁盘文件格式版本保持 **v4**（向后兼容 v1 / v2 / v3，旧产物可直接解密，无需重加密）。
+
+### Fixed
+- **【中·正确性】配置行内注释剥离过严**：`strip_comment` 此前仅当 `#` 前为空白或行首才剥离注释，导致 `key:#comment`、`key = #comment` 等 YAML 合法写法（无前导空格）的注释被漏剥。现放宽至 `#` 前为 `:` / `=` / 空白 / 行首时均剥离；引号内 `#` 仍保留。
+- **【中·健壮性/DoS】批量递归目录无深度上限**：`collect_files_from_dir` 此前无递归深度保护，超深目录（>10000 层）可致栈溢出崩溃。现增加 `depth` 参数，超过 1024 层时告警并跳过，防止栈溢出拒绝服务。
+- **【低·健壮性】解密偏移潜在截断**：`decrypt_file` 对 `seekg` 偏移仅做 `(std::streamoff)` 强转，超大文件（理论 >9 EB）可能截断。现先校验偏移不超过 `std::numeric_limits<std::streamoff>::max()`，超出则安全返回失败。
+- **【低·正确性】口令强度提示对非 ASCII 误判**：字符类检测（`isupper/islower/isdigit/ispunct`）此前对 UTF-8 多字节字节在 C locale 下行为不确定，纯中文等长口令可能被误报为弱口令。现仅对 ASCII 字节做类检测，非 ASCII 字符视为高熵不再误判。
+
+### Changed
+- **【中·运维排障】日志流异常自恢复**：`write_log` 检测到 `g_log_stream` 进入 `badbit`（磁盘满 / 权限变化）时，尝试 `clear()` + 以 `std::ios::ate` 重新打开日志文件，并在 stderr 给出警告，避免日志静默丢失误导排障。
+- **【中·安全】Windows 长路径 / UNC 前缀归一化**：`normalize_path_lexical` 先做 `\\?\` 长路径前缀与 `\\?\UNC\` 归一化，剥离后再 `lexically_normal()`，防止攻击者用 `\\?\C:\..\` 绕过 `path_has_traversal` 与白名单校验。
+- **【低·安全】`SecureBuffer::wipe()` 强制释放**：用 `std::vector<unsigned char>().swap(data_)` 代替 `clear()+shrink_to_fit()`，确保清零并 `sodium_munlock` 后立即真正释放后备内存，不依赖实现定义的 `shrink_to_fit`。
+
+### Added
+- **【文档】`path_whitelist_enabled` 语义澄清**：仅当 `path_whitelist` 显式列出至少一项时才启用；空列表（仅写键名）不启用白名单。
+
+## [1.5.2] - 2026-08-29（路径穿越安全加固 / 缺陷修复）
+
+> 程序版本号 1.5.1 → 1.5.2。磁盘文件格式版本升至 **v4**（141 字节头，向后兼容 v1 / v2 / v3，旧产物可直接解密，无需重加密）。
+
+### Fixed
+- **【中】`-o` 含 `..` 越权创建目录**：`main.cpp` 在调用加/解密前先用 `create_directory_recursive(output_dir)` 建输出目录，而 `..` 未被归一化；`-o "a/out/../../ESCAPE_X"` 会在父级目录外建出 `ESCAPE_X`（文件写入虽被拦，目录已越权创建）。现 `create_directory_recursive` 与 `-o` 解析均先 `path_has_traversal()` 拒绝含 `..` 的路径（该接口同步暴露到 `FileEncryptor.hpp` 供复用）。
+- **【中·潜在】白名单 `under()` 前缀比较被 `..` 绕过**：`validate_io_paths` 此前仅对 `out_path` 做 `..` 检测、白名单用字符串前缀匹配且未归一化；输入 `C:/allowed/../../outside/x` 仍命中 `C:/allowed` 前缀被误放行。现任何 `..` 组件（输入/输出）一律拒绝后再做白名单比较。
+- **【低·健壮性/UB】非交互覆盖提示读取未初始化 `char ch`**：`main.cpp` 覆盖确认与 AEGIS 回退提示中 `char ch;` 在 stdin 为空/EOF 时提取失败保持未初始化，随后 `if(ch!='y'&&ch!='Y')` 读取属未定义行为（某些栈布局下可能误判为 'y' 触发非预期覆盖）。改为 `char ch='n';`（提取失败时保持 'n'，默认安全拒绝）；批量模式 AEGIS 回退提示一并修正。
+
+### Changed
+- 注：Issue_v144.md 所述「批量收尾进度条强制 100% 掩盖失败」在现行源码（收尾时仅当 `error_files` 为空才拉满到 100%，否则按真实已处理字节收尾并于 stderr 标注失败数）已不再复现，本次无需改动。
+
+### Added
+- **【高】防御文件头篡改（v4 头 HMAC 安全信封）**：新增磁盘格式版本 **v4**（141 字节固定头），在 v3 头（109 字节）末尾追加 32 字节 `header_hmac`，由“元数据认证密钥”（`derive_header_auth_key`，Blake2b 域分离、标签 `FE_header_auth_v4`）对文件头前 77 字节（magic / version / mode / Argon2 参数 / salt / iv）做独立 HMAC-SHA512/256 认证。解密端校验失败即拒绝（仅通用错误），替换 salt / iv / mode 的篡改无法被重放或降级；v4 向后兼容 v1 / v2 / v3，旧文件可直接解密。
+- **【高】密钥内存安全（RAII `SecureBuffer`）**：所有口令 / 密钥 / 派生中间密钥统一由 `SecureBuffer` 持有（构造 `sodium_mlock` 锁页，析构自动 `sodium_memzero` + `sodium_munlock`）；禁止拷贝、允许移动（所有权转移避免双清零），任何正常返回或异常展开路径都不遗留明文密钥在堆内存。
+- **【中】续传进度文件双重保护（防重放）**：`.progress` 的 HMAC（`verify_progress_hmac`）除 `magic + version + 已处理块数 + 已处理字节数` 外，额外绑定“源文件标识” `compute_progress_binding`（规范化路径 + 大小 + mtime）；旧的有效 `.progress` 无法被重放到不同文件（路径 / mtime / size 任一变化即 HMAC 失配），合法中断续传则可正常恢复（已用 500 MB 中断 / 续传 / 重放三项实测验证）。
+- **【中】`-v` / `--verbose` 详细错误**：新增 `-v`（或 `--verbose`）开关，开启后认证失败（密码错误 / 文件头被改 / 明文哈希不符 / 进度损坏）在 stderr 输出具体原因；默认（非 `-v` 且非 DEBUG 日志）仅返回通用错误 `Error: Decryption failed. (Invalid key or corrupted file)`，杜绝可用于枚举或侧信道的细粒度反馈。
+- **【中】路径规范化防别名绕过**：`validate_io_paths` 先 `path_has_traversal` 拒绝任何 `..` 组件，再 `normalize_path_lexical`（解析 `.` / `..`、统一分隔符）做白名单前缀与长度比较，堵住 `C:/allowed/./x` 等路径别名绕过。
+- **【中】资源耗尽防御（YAML `max_open_files`）**：新增 YAML `max_open_files`（默认 256），批量 / 高并发时并发线程数上限 = `max_open_files / 3`（每线程约持 2 个句柄），避免文件句柄耗尽（DoS）。
+
+### Security
+- 文件头“安全信封”（HMAC）+ 续传进度绑定（HMAC + 源文件标识）+ 通用错误（防信息泄露）+ 路径规范化 + 句柄上限，共同构成对静态存储密文的多层防护：防篡改、防重放、防信息泄露、防路径穿越、防资源耗尽。
+
+### Changed
+- **YAML 配置简化注释**：`DEFAULT_CONFIG_YAML` 与 `fileencryptor.yaml.example` 注释精简；新增 `max_open_files` 说明。
+- **`header_hmac` 覆盖区域调整**：v4 头 HMAC 覆盖文件头前 77 字节（magic..iv，含 salt / mode / Argon2 参数），**不覆盖** `plaintext_hash`（其须加密结束后才可知），与 AEAD 的 AAD 区域一致；并改为在写头瞬间即计算落盘，使被中断的半成品 `.ptd` 也携带合法 `header_hmac`、续传时“文件头篡改校验”可正常通过。
+
+### Fixed
+- **【严重·运行时】加密续传合法中断后无法恢复（误判为文件头篡改）**：v4 头 HMAC 原先覆盖 109 字节（含 `plaintext_hash`）且仅在全部块加密完成后才落盘，导致被中断的半成品 `.ptd` 头 HMAC 恒为 0，续传时“文件头篡改校验”必然失败而被拒。现覆盖区域收窄为前 77 字节并在写头瞬间计算，半成品 `.ptd` 携合法 `header_hmac`，续传恢复正常（实测 500 MB 中断后续传成功、解密一致）。
+- **【严重·运行时】加密续传 `Metadata mismatch` 误拒（v4 头偏移）**：续传一致性校验读取分块元数据用的是 `HEADER_SIZE_V3`(109) 偏移，而 v4 头部为 141 字节、元数据实际在偏移 141；读到的 `header_hmac` 字节被当作 `chunk_size / total_chunks / orig_size` 导致“Metadata mismatch”而拒绝续传。现改用实际头大小 `existing_hdr_size` 作为元数据偏移。
+- **【严重·崩溃】续传分支 `key.clear()` 导致空指针写入段错误**：续传探测块在派生密钥后误调用 `key.clear()`（`SecureBuffer` 清空并释放缓冲），随后续传分支再次 `derive_key(..., key.data(), ...)` 写入已释放（nullptr）缓冲触发 SIGSEGV。移除该 `key.clear()`（`key` 由 `SecureBuffer` 持有、析构已安全清零，无需提前清空）。
+---
+
+## [1.5.1] - 2026-08-27（缺陷修复：版本号同步、续传防数据破坏、UTF-8 配置探测、日志时区、goto 可移植性）
+
+> 程序版本号 1.5.0 → 1.5.1（注：头文件 `FE_VERSION_*` 三元组此前停在 1.4.7，本次一并同步为 1.5.1）。磁盘文件格式版本仍为 **v3**（完全兼容，无需重加密旧产物）。
+
+### Fixed
+- **版本号三元组与字符串 / CMake 不一致**：`FileEncryptor.hpp` 的 `FE_VERSION_MAJOR/MINOR/PATCH` 此前停在 1.4.7，而 `FE_VERSION_STRING` 与 `CMakeLists.txt` 已是 1.5.0，违反“版本两处同步”约定。本次统一为 1.5.1（三元组 + 字符串 + CMake 一致）。
+- **【数据破坏风险】加密续传密码错误时静默覆盖原密文**：`encrypt_file` 检测到残留 `.progress` 后用当前密码派生密钥校验 HMAC；若密码错误致 `verify_progress_hmac` 失败，原逻辑走“从头重写”(trunc) 静默覆盖原 `.ptd` 并删除 `.progress`，使正确密文永久丢失（批量 `-be` 无交互确认即触发）。现改为：原输出已存在且进度校验失败时**拒绝覆盖并报错退出**，仅当原输出不存在（孤立 `.progress`）时才安全从头重做。
+- **配置探测用窄 `std::ifstream` 致非 ASCII 路径漏找**：`find_config_file()` 改用 UTF-8 安全的存在性探测（`_waccess` / `access`），Windows 非 ANSI 路径也能正确找到 `fileencryptor.yaml`，避免静默回退默认配置。
+- **JSON 日志时区标错**：`write_log()` 用 `localtime` 取本地时间却写死 `...Z`（UTC 标记），误导日志分析；改为 `gmtime`（UTC）+ `Z`，时间标称与格式一致。
+- **`main.cpp` 的 `goto cleanup_password` 跨过带非平凡析构的 `std::ifstream`**：严格 C++ 下 ill-formed（MSVC -W4 报 C4533）。重构为 lambda + early-return，消除可移植雷。
+- **`save_progress` 轮转备份无反馈**：`copy_file_utf8` 备份 `.progress` → `.progress.bak` 失败时不检查返回值也不记录；现检查返回值并在失败时写 `LOG_WARN`，便于排查恢复余量降级。
+
+### Changed
+- **配置文件搜索 / 生成位置**：`fileencryptor.yaml` 搜索优先级新增“运行目录（CWD）”（置于可执行文件目录之前）；配置文件缺失时会在运行目录自动生成默认 `fileencryptor.yaml`。
+
+---
+
 ## [1.5.0] - 2026-08-24（单文件模式断点续传）
 
 > 程序版本号 1.4.6 → 1.5.0。磁盘文件格式版本仍为 **v3**（完全兼容，无需重加密旧产物）。

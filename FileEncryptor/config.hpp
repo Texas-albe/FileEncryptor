@@ -16,21 +16,28 @@ struct Config {
     int         worker_threads = 0;       // 0 = 自动（= 硬件并发数）
     uint64_t    max_memory_bytes = 0;     // 0 = 不限（仅作提示/未来限制用）
     size_t      io_buffer_size = 1u << 20; // 内部流式缓冲字节（不影响磁盘分块格式）
+    size_t      max_open_files = 256;     // 资源耗尽防御：限制并发线程数不超过 max_open_files/3（防句柄耗尽 DoS）
 
     // ---- 路径安全 ----
     size_t      max_path_length = 0;       // 0 = 不限（按 UTF-8 字节计）
-    bool        path_whitelist_enabled = false;
+    bool        path_whitelist_enabled = false; // 仅当 path_whitelist 显式列出至少一项时为 true；空列表（仅写键名）不启用，所有路径均放行
     std::vector<std::string> path_whitelist; // 允许的输入/输出根目录（非空且启用时强制校验）
 
     // ---- 进度文件 ----
     bool        progress_rotation = true;  // 覆盖 .progress 前先备份为 .progress.bak
 
-    // ---- 发布 / 供应链（仅发布脚本使用，运行时忽略） ----
+    // ---- 输出文件名混淆（v1.7.0 引入，v1.7.1 起语义收窄）----
+    // 仅控制"可见输出文件名"是否混淆为 "<16 位十六进制>.<混淆扩展名>.ptd"。
+    // 混淆前的原始名一律以加密信封存入密文尾部，与本项无关（不受配置开关影响）。
+    bool        obfuscate_names = true;
+
 };
 
-// 定位配置文件：env FILEENCRYPTOR_CONFIG → <可执行文件目录>/fileencryptor.yaml
-//             → 用户配置目录（Win %APPDATA%/FileEncryptor，Linux $XDG_CONFIG_HOME/fileencryptor 或 ~/.config/fileencryptor）
-// 返回首个存在的路径；都不存在则返回空串（调用方使用默认 Config）。
+// 定位配置文件（优先级从高到低）：
+//   <运行目录 CWD>/fileencryptor.yaml
+//   <可执行文件目录>/fileencryptor.yaml
+//   用户配置目录（Win %APPDATA%/FileEncryptor，Linux $XDG_CONFIG_HOME/fileencryptor 或 ~/.config/fileencryptor）
+// 都不存在则返回空串
 std::string find_config_file();
 
 // 解析极简 YAML（支持顶层标量键与单层序列 `- item`）到 Config。

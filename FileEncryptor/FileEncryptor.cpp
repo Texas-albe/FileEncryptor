@@ -18,6 +18,8 @@
 #include <atomic>
 #include <thread>
 #include <mutex>
+#include <condition_variable>
+#include <filesystem>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -37,6 +39,8 @@
 #include <cerrno>
 #include <signal.h>
 #endif
+
+namespace fs = std::filesystem;
 
 #ifdef __linux__
 #include <signal.h>
@@ -63,7 +67,10 @@ static constexpr size_t CHUNK_SIZE=1*1024*1024;
 static constexpr size_t PASSWORD_MIN_LEN=6;
 
 const unsigned char MAGIC[4]={'F','E','N','C'};
-const unsigned char VERSION=3;
+// 磁盘格式版本：v4 在 v3 基础上于文件头末尾追加 32 字节 header_hmac（独立于数据加密
+// 密钥的元数据认证密钥派生），使整个文件头成为可认证的“安全信封”，防文件头篡改。
+// v1/v2/v3 读取保持兼容。
+const unsigned char VERSION=4;
 
 // 续传回退选择：AEGIS-256 在缺少 AES-NI 的 CPU 上不可用，运行时探测失败后回退 XChaCha20
 static std::atomic<int> g_aegis_fallback_choice{0};
@@ -105,6 +112,33 @@ struct FileHeaderV3 {
 #pragma pack(pop)
 static constexpr size_t HEADER_SIZE_V3=sizeof(FileHeaderV3);
 
+// v4 头部：v3 前缀 + 末尾 32 字节 header_hmac（覆盖前 109 字节所有关键元数据，
+// 由“元数据认证密钥”派生自主密钥 + 固定标签计算）。
+static constexpr size_t HEADER_HMAC_SIZE=crypto_auth_BYTES; // 32
+#pragma pack(push, 1)
+struct FileHeaderV4 {
+    unsigned char magic[4];
+    unsigned char version;
+    unsigned char mode;
+    uint16_t opslimit;
+    uint32_t memlimit_kb;
+    unsigned char salt[ARGON2_SALT_LEN];
+    unsigned char iv_len;
+    unsigned char iv[32];
+    unsigned char plaintext_hash[HASH_SIZE];
+    unsigned char header_hmac[HEADER_HMAC_SIZE];
+};
+#pragma pack(pop)
+static constexpr size_t HEADER_SIZE_V4=sizeof(FileHeaderV4); // 141
+// 文件头 HMAC 覆盖区域：前 77 字节（magic..iv，含 salt/mode/Argon2 参数），
+// 不含 plaintext_hash(32B) 与 header_hmac(32B) 自身。
+// 设计上刻意排除 plaintext_hash——它要在加密结束、明文哈希算出后才可知；
+// 若把 header_hmac 覆盖到 plaintext_hash（109 字节），就只能在所有块加密完才落盘，
+// 导致被中断的半成品 .ptd 头 HMAC 恒为 0、续传时被“文件头篡改校验”拒之门外。
+// 覆盖 77 字节既能独立认证“决定密钥派生与安全的前缀”（防替换 salt/iv/mode 重放），
+// 又能在写头瞬间即算出合法 HMAC，使续传对中断文件可正常恢复。
+static constexpr size_t HEADER_HMAC_COVER=HEADER_SIZE_V4-HASH_SIZE-HEADER_HMAC_SIZE; // 77
+
 // 兼容旧版本（v1，47 字节）的文件头布局，仅用于解密时按版本解析
 #pragma pack(push, 1)
 struct FileHeaderV1 {
@@ -135,7 +169,8 @@ static constexpr size_t PROGRESS_SIZE=sizeof(ProgressInfo);
 static size_t header_size_for_version(unsigned char ver) {
     if(ver==1) return HEADER_SIZE_V1;
     if(ver==2) return HEADER_SIZE_V2;
-    return HEADER_SIZE_V3;
+    if(ver==3) return HEADER_SIZE_V3;
+    return HEADER_SIZE_V4;
 }
 
 static size_t tag_size_for_mode(CryptoMode m) {
@@ -151,6 +186,89 @@ static void derive_progress_auth_key(const unsigned char* master_key,
     std::vector<unsigned char> in(tag, tag+sizeof(tag)-1);
     in.insert(in.end(), master_key, master_key+ARGON2_OUTPUT_LEN);
     crypto_generichash(auth_key, crypto_auth_KEYBYTES, in.data(), in.size(), nullptr, 0);
+}
+
+// ---------- 文件头 HMAC 密钥派生 ----------
+// 由主密钥域分离派生一个与进度认证密钥、AEAD 加密密钥都不同的“元数据认证密钥”，
+// 用于对文件头（magic/version/mode/Argon2 参数/salt/iv/plaintext_hash）做独立认证。
+static void derive_header_auth_key(const unsigned char* master_key,
+    unsigned char auth_key[HEADER_HMAC_SIZE]) {
+    const char tag[]="FE_header_auth_v4";
+    std::vector<unsigned char> in(tag, tag+sizeof(tag)-1);
+    in.insert(in.end(), master_key, master_key+ARGON2_OUTPUT_LEN);
+    crypto_generichash(auth_key, HEADER_HMAC_SIZE, in.data(), in.size(), nullptr, 0);
+}
+
+// ---------- 认证失败信息泄露防护 ----------
+// 默认（非 -v 且 log_level < DEBUG）下，所有认证失败只输出通用错误，不暴露
+// “密码错误 / 文件头被改 / 哈希不符 / 进度损坏”等可用于枚举或侧信道探测的细节。
+static bool g_verbose=false;
+void set_verbose(bool v) { g_verbose=v; }
+
+static void report_auth_error(bool silent, const std::string& detail) {
+    if(silent) return;
+    const Config& cfg=global_config();
+    bool detailed = g_verbose || cfg.log_level>=LOG_DEBUG;
+    if(detailed) fprintf(stderr, "%s\n", detail.c_str());
+    else fprintf(stderr, "Error: Decryption failed. (Invalid key or corrupted file)\n");
+}
+
+// ---------- 路径规范化（防别名绕过） ----------
+// 用 lexically_normal 解析掉 . 与 ..（不做文件系统访问，故对尚不存在的输出路径也安全），
+// 再 make_preferred 统一分隔符。配合 path_has_traversal 与白名单，堵住基于路径别名的绕过。
+static std::string normalize_path_lexical(const std::string& p) {
+    std::string s = p;
+    bool had_long_prefix = false, had_unc_prefix = false;
+#ifdef _WIN32
+    // Windows 长路径 / 设备前缀：\\?\ 与 \\?\UNC\ 会改变 '..' 的解析语义，
+    // 攻击者可能借此绕过路径穿越 / 白名单检查。统一先剥离前缀再做逻辑规范化。
+    for(char& ch : s) if(ch=='/') ch='\\';
+    if(s.size()>=4 && s[0]=='\\' && s[1]=='\\' && s[2]=='?' && s[3]=='\\') {
+        had_long_prefix = true;
+        if(s.size()>=8 && s.compare(4,4,"UNC\\")==0) {
+            had_unc_prefix = true;
+            s = "\\" + s.substr(8);   // \\?\UNC\server\share\... -> \\server\share\...
+        } else {
+            s = s.substr(4);          // \\?\C:\... -> C:\...
+        }
+    }
+#endif
+    fs::path np = fs::path(s).lexically_normal();
+    if(np.empty()) np = fs::path(s);
+    std::string out = np.make_preferred().string();
+#ifdef _WIN32
+    // 还原长路径前缀（规范化后已无 '..'，可安全保留长路径支持）。
+    if(had_unc_prefix && out.size()>=2) out = "\\\\?\\UNC\\" + out.substr(2);
+    else if(had_long_prefix) out = "\\\\?\\" + out;
+#endif
+    return out;
+}
+
+// ---------- 续传进度文件绑定标识（防重放） ----------
+// 将"正在处理的源文件"的规范化路径 + 大小 + mtime 纳入 .progress 的 HMAC 输入，
+// 使旧的有效 .progress 无法被重放到不同的文件（路径/mtime/size 任一变化即 HMAC 失配）。
+// 前向声明：compute_progress_binding 依赖下方"文件系统辅助"中的 get_file_size_utf8。
+static int64_t get_file_size_utf8(const std::string& path);
+// 前向声明：is_complete_output / decrypt_file 需要提前获知尾部（加密名）长度做文件大小校验。
+static bool peek_name_footer_len(const std::string& ptd_path, uint64_t& footer_len);
+static std::string compute_progress_binding(const std::string& in_path) {
+    std::error_code ec;
+    fs::path np = fs::path(in_path).lexically_normal();
+    if(np.empty()) np = fs::path(in_path);
+    std::string norm = np.make_preferred().string();
+    int64_t sz = get_file_size_utf8(in_path);
+    int64_t mt = 0;
+#ifdef _WIN32
+    struct _stat64 st;
+    if(_wstat64(utf8_to_wstring(in_path).c_str(),&st)==0) mt=(int64_t)st.st_mtime;
+#else
+    struct stat st;
+    if(stat(in_path.c_str(),&st)==0) mt=(int64_t)st.st_mtime;
+#endif
+    char buf[256];
+    int n = snprintf(buf, sizeof(buf), "|%s|%lld|%lld",
+        norm.c_str(), (long long)sz, (long long)mt);
+    return std::string(buf, (size_t)(n>0?n:0));
 }
 
 // ---------- 明文 Blake2b 哈希（完整性校验） ----------
@@ -255,7 +373,7 @@ static bool path_is_symlink(const std::string& path) {
 }
 
 // 路径穿越检测
-static bool path_has_traversal(const std::string& p) {
+bool path_has_traversal(const std::string& p) {
     std::string n=p;
     for(char& c:n) if(c=='\\') c='/';
     size_t start=0;
@@ -273,13 +391,25 @@ static bool path_has_traversal(const std::string& p) {
 // 返回 true 表示允许；false 表示被策略拒绝（并打印原因）。
 static bool validate_io_paths(const std::string& in_path,const std::string& out_path,bool silent) {
     const Config& cfg=global_config();
+    // 1.5.2 安全加固：任何 ".." 组件一律拒绝，堵住白名单前缀比较被
+    // "C:/allowed/../../outside/x" 绕过。必须在规范化之前检查原始路径——
+    // lexically_normal 会把 ".." 折叠掉，若先规范化再做后续校验反而可能漏掉穿越。
+    if(path_has_traversal(in_path)||path_has_traversal(out_path)) {
+        if(!silent) fprintf(stderr,"Path contains directory traversal (..): in=%s out=%s\n",
+            in_path.c_str(),out_path.c_str());
+        return false;
+    }
+    // 规范化（解析 . 与 ..、统一分隔符）后的路径用于白名单前缀比较与长度上限，
+    // 堵住基于路径别名的绕过（如 "C:/allowed/./x"、"C:/allowed//x" 等）。
+    const std::string in_norm = normalize_path_lexical(in_path);
+    const std::string out_norm = normalize_path_lexical(out_path);
     if(cfg.max_path_length>0) {
-        if(in_path.size()>cfg.max_path_length) {
-            if(!silent) fprintf(stderr,"Input path too long (%zu > %zu bytes).\n",in_path.size(),cfg.max_path_length);
+        if(in_norm.size()>cfg.max_path_length) {
+            if(!silent) fprintf(stderr,"Input path too long (%zu > %zu bytes).\n",in_norm.size(),cfg.max_path_length);
             return false;
         }
-        if(out_path.size()>cfg.max_path_length) {
-            if(!silent) fprintf(stderr,"Output path too long (%zu > %zu bytes).\n",out_path.size(),cfg.max_path_length);
+        if(out_norm.size()>cfg.max_path_length) {
+            if(!silent) fprintf(stderr,"Output path too long (%zu > %zu bytes).\n",out_norm.size(),cfg.max_path_length);
             return false;
         }
     }
@@ -292,8 +422,9 @@ static bool validate_io_paths(const std::string& in_path,const std::string& out_
         };
         bool in_ok=false,out_ok=false;
         for(const auto& r:cfg.path_whitelist) {
-            if(!in_ok&&under(in_path,r))  in_ok=true;
-            if(!out_ok&&under(out_path,r)) out_ok=true;
+            const std::string rnorm = normalize_path_lexical(r);
+            if(!in_ok&&under(in_norm,rnorm))  in_ok=true;
+            if(!out_ok&&under(out_norm,rnorm)) out_ok=true;
         }
         if(!in_ok)  { if(!silent) fprintf(stderr,"Input path not in whitelist: %s\n",in_path.c_str());  return false; }
         if(!out_ok) { if(!silent) fprintf(stderr,"Output path not in whitelist: %s\n",out_path.c_str()); return false; }
@@ -477,6 +608,9 @@ static void secure_clear(T& v) {
 
 // ---------- 目录创建 ----------
 bool create_directory_recursive(const std::string& path) {
+    // 1.5.2 安全加固：拒绝包含 ".." 的输出目录，避免越权创建目录
+    //（如 -o "a/out/../../ESCAPE_X" 会在父级目录外建出 ESCAPE_X）。
+    if(path_has_traversal(path)) return false;
     if(path.empty()) return true;
 #ifdef _WIN32
     struct _stat64 st;
@@ -502,14 +636,14 @@ bool create_directory_recursive(const std::string& path) {
 }
 
 // ---------- 密钥派生 ----------
-static bool derive_key(const std::vector<char>& password,
+static bool derive_key(const unsigned char* password, size_t pwd_len,
     const unsigned char* salt,
     unsigned char* key,
     unsigned int opslimit,
     size_t memlimit,
     size_t key_len=ARGON2_OUTPUT_LEN) {
     if(crypto_pwhash(key,key_len,
-        password.data(),password.size(),
+        reinterpret_cast<const char*>(password),pwd_len,
         salt,
         opslimit,
         memlimit,
@@ -524,13 +658,13 @@ static bool derive_key(const std::vector<char>& password,
 static bool is_file_valid(const std::string& path) {
     std::ifstream f;
     if(!open_stream(f,path,std::ios::binary)) return false;
-    unsigned char hbuf[HEADER_SIZE_V3];
-    f.read(reinterpret_cast<char*>(hbuf),HEADER_SIZE_V3);
+    unsigned char hbuf[HEADER_SIZE_V4];
+    f.read(reinterpret_cast<char*>(hbuf),HEADER_SIZE_V4);
     if(f.gcount()<5) return false;
     unsigned char ver=hbuf[4];
-    uint64_t need=(ver==1)?HEADER_SIZE_V1:(ver==2)?HEADER_SIZE_V2:HEADER_SIZE_V3;
+    uint64_t need=header_size_for_version(ver);
     if((uint64_t)f.gcount()<need) return false;
-    return (memcmp(hbuf,MAGIC,4)==0&&(ver==1||ver==2||ver==VERSION));
+    return (memcmp(hbuf,MAGIC,4)==0&&(ver==1||ver==2||ver==3||ver==VERSION));
 }
 
 // 判断已存在的输出是否“完整且有效”，可安全跳过
@@ -562,6 +696,9 @@ static bool is_complete_output(const std::string& out_path, bool encrypt, const 
             uint64_t last=(uint64_t)in_sz-(tc-1)*cs;
             expected=hdr+4+4+8+(tc-1)*(cs+tag)+(last+tag);
         }
+        uint64_t fl=0;
+        peek_name_footer_len(out_path, fl);   // 新格式总带加密名尾部
+        expected += fl;
         return (uint64_t)cur==expected;
     }
     else {
@@ -593,23 +730,34 @@ static bool load_progress_raw(const std::string& out_path,ProgressInfo& info) {
     return true;
 }
 
-// 校验 .progress 的 HMAC（防续传劫持）：覆盖前 24 字节（magic+version+chunks+bytes）。
-static bool verify_progress_hmac(const ProgressInfo& info,const unsigned char* auth_key) {
-    return crypto_auth_verify(info.hmac,
-        reinterpret_cast<const unsigned char*>(&info),24,auth_key)==0;
+// 校验 .progress 的 HMAC（防续传劫持 + 防重放）：覆盖前 24 字节
+// （magic+version+chunks+bytes）外加源文件绑定标识（规范化路径 + 大小 + mtime）。
+static bool verify_progress_hmac(const ProgressInfo& info,const unsigned char* auth_key,
+    const std::string& binding) {
+    std::vector<unsigned char> msg;
+    msg.reserve(24+binding.size());
+    msg.insert(msg.end(), reinterpret_cast<const unsigned char*>(&info),
+        reinterpret_cast<const unsigned char*>(&info)+24);
+    msg.insert(msg.end(), binding.begin(), binding.end());
+    return crypto_auth_verify(info.hmac, msg.data(), msg.size(), auth_key)==0;
 }
 
 // 计算并写入带 HMAC 的进度（先落盘再返回；success 时调用方再记账 HMAC 之前已 flush 密文）。
+// HMAC 输入含源文件绑定标识，使该进度无法被重放到其它文件（防重放攻击）。
 static bool save_progress(const std::string& out_path,
     uint64_t processed_chunks,uint64_t processed_bytes,
-    const unsigned char* auth_key) {
+    const unsigned char* auth_key,const std::string& binding) {
     ProgressInfo info;
     info.magic=PROGRESS_MAGIC;
     info.version=PROGRESS_VERSION;
     info.processed_chunks=processed_chunks;
     info.processed_bytes=processed_bytes;
-    crypto_auth(info.hmac,
-        reinterpret_cast<const unsigned char*>(&info),24,auth_key);
+    std::vector<unsigned char> msg;
+    msg.reserve(24+binding.size());
+    msg.insert(msg.end(), reinterpret_cast<const unsigned char*>(&info),
+        reinterpret_cast<const unsigned char*>(&info)+24);
+    msg.insert(msg.end(), binding.begin(), binding.end());
+    crypto_auth(info.hmac, msg.data(), msg.size(), auth_key);
 
     std::string prog_path=out_path+".progress";
     std::string temp_prog=prog_path+".tmp";
@@ -630,7 +778,10 @@ static bool save_progress(const std::string& out_path,
     // 进度文件轮转：覆盖前先将现有 .progress 备份为 .progress.bak（best-effort）。
     // 若本次写入后校验/续传异常，旧进度仍可用于恢复，避免“写坏即丢失断点”。
     if(global_config().progress_rotation && file_exists(prog_path)) {
-        copy_file_utf8(prog_path,prog_path+".bak");
+        if(!copy_file_utf8(prog_path,prog_path+".bak")) {
+            // 备份失败（权限/空间）仅降低恢复余量，不影响本次写入；记录以便排查
+            log_event(LOG_WARN,"progress_rotation_backup_failed",{{"path",prog_path}});
+        }
     }
 
     // 改用 replace_file_utf8()（Windows 用 MoveFileExW(MOVEFILE_REPLACE_EXISTING)、
@@ -687,10 +838,224 @@ static void print_progress(size_t processed,size_t total,
     }
 }
 
+// ---------- 文件名 / 扩展名混淆（v1.7.0） ----------
+// 输出形如 "<16 位十六进制>.<混淆扩展名>.ptd"：.ptd 恒在末尾，批量解密仍可据此筛选。
+// 混淆名 = Blake2b(key=Blake2b(口令), msg=输入路径)，确定性（同口令 + 同输入 -> 同名字），
+// 因此中断后续传仍能命中同一输出文件与 .progress，同时不泄露原始文件名。
+static const char* const OBFUSCATED_EXTS[] = {
+    "png","jpg","jpeg","apng","mp4","mp3","aac","avi","bmp","txt","yaml",
+    "json","js","cpp","hpp","c","md","pdf","doc","docx","ppt","pptx","xls",
+    "xlsx","gif","zip","rar","iso","htm","html","css"
+};
+static constexpr size_t OBFUSCATED_EXT_COUNT=sizeof(OBFUSCATED_EXTS)/sizeof(OBFUSCATED_EXTS[0]);
+
+// ---------- 原始文件名（混淆前）加密存储（v1.7.1） ----------
+// 原始文件名以"加密信封"形式追加在密文末尾：与主密文使用相同配置
+// （XChaCha20-Poly1305，同一派生主密钥，nonce 由文件 salt 派生），故文件名
+// 不再以明文暴露；UTF-8 多字节文件名天然兼容。尾部布局（文件最末）：
+//   [加密名 n+16 字节][magic "FENX"][name_len 4 字节]
+// magic 与长度固定在文件最末 8 字节，读取时无需回扫即可定位；保留对早期
+// 明文尾部（magic "FENM"）的兼容读取，但新写入一律加密。
+static constexpr char NAME_FOOTER_MAGIC[4]     = {'F','E','N','M'}; // 旧版明文尾部（仅兼容读取）
+static constexpr char NAME_FOOTER_MAGIC_ENC[4] = {'F','E','N','X'}; // 新版加密尾部
+static constexpr size_t NAME_FOOTER_HDR = 8;                 // magic(4) + name_len(4)
+static constexpr uint32_t NAME_FOOTER_MAX_NAME = 1024;
+static constexpr size_t NAME_ENV_TAG = crypto_aead_xchacha20poly1305_ietf_ABYTES; // 16
+
+// 由主密钥派生"文件名加密"子密钥（与主密文密钥域分离，杜绝密钥复用）
+static void derive_name_key(const unsigned char* master_key,
+    unsigned char name_key[crypto_aead_xchacha20poly1305_ietf_KEYBYTES]) {
+    const char tag[]="FE_name_v4";
+    std::vector<unsigned char> in(tag, tag+sizeof(tag)-1);
+    in.insert(in.end(), master_key, master_key+ARGON2_OUTPUT_LEN);
+    crypto_generichash(name_key, crypto_aead_xchacha20poly1305_ietf_KEYBYTES,
+        in.data(), in.size(), nullptr, 0);
+}
+
+// 由文件 salt 派生"文件名加密"nonce（每文件唯一，杜绝 nonce 复用）
+static void derive_name_nonce(const unsigned char* salt, size_t salt_len,
+    unsigned char nonce[XCHACHA20_IV_LEN]) {
+    const char tag[]="FE_name_nonce_v4";
+    std::vector<unsigned char> in(tag, tag+sizeof(tag)-1);
+    in.insert(in.end(), salt, salt+salt_len);
+    crypto_generichash(nonce, XCHACHA20_IV_LEN, in.data(), in.size(), nullptr, 0);
+}
+
+static std::string path_basename_utf8(const std::string& p) {
+    size_t pos=p.find_last_of("/\\");
+    return (pos!=std::string::npos) ? p.substr(pos+1) : p;
+}
+
+std::string replace_basename(const std::string& p,const std::string& newbase) {
+    size_t pos=p.find_last_of("/\\");
+    if(pos==std::string::npos) return newbase;
+    return p.substr(0,pos+1)+newbase;
+}
+
+std::string make_obfuscated_basename(const std::string& in_path,const SecureBuffer& password) {
+    unsigned char key[32];
+    crypto_generichash(key,sizeof(key),password.data(),password.size(),nullptr,0);
+    unsigned char seed[32];
+    crypto_generichash(seed,sizeof(seed),
+        reinterpret_cast<const unsigned char*>(in_path.data()),in_path.size(),
+        key,sizeof(key));
+    static const char hexd[]="0123456789abcdef";
+    char name[17];
+    for(int i=0; i<8; ++i) {
+        name[i*2]=hexd[seed[i]>>4];
+        name[i*2+1]=hexd[seed[i]&0x0F];
+    }
+    name[16]='\0';
+    return std::string(name)+"."+OBFUSCATED_EXTS[seed[8]%OBFUSCATED_EXT_COUNT];
+}
+
+// 用与主密文相同的 XChaCha20-Poly1305 加密原始文件名，写入文件末尾加密信封。
+// master_key 为 Argon2 派生主密钥；salt 取自文件头，用于派生独立 nonce。
+static bool append_encrypted_name_footer(std::fstream& fout,
+    const std::string& in_path,
+    const unsigned char* master_key,
+    const unsigned char* salt) {
+    std::string base=path_basename_utf8(in_path);
+    if(base.empty()||base.size()>NAME_FOOTER_MAX_NAME) return true; // 跳过则解密走文件名回退
+    unsigned char name_key[crypto_aead_xchacha20poly1305_ietf_KEYBYTES];
+    unsigned char nonce[XCHACHA20_IV_LEN];
+    derive_name_key(master_key, name_key);
+    derive_name_nonce(salt, ARGON2_SALT_LEN, nonce);
+    std::vector<unsigned char> env(base.size()+NAME_ENV_TAG);
+    unsigned long long envlen=0;
+    // AAD 绑定本文件 salt，防止尾部被挪用到其他文件
+    int rc=crypto_aead_xchacha20poly1305_ietf_encrypt(
+        env.data(), &envlen,
+        reinterpret_cast<const unsigned char*>(base.data()), base.size(),
+        salt, ARGON2_SALT_LEN, nullptr, nonce, name_key);
+    if(rc!=0||envlen!=(unsigned long long)env.size()) return false;
+    unsigned char tail[NAME_FOOTER_HDR];
+    memcpy(tail,NAME_FOOTER_MAGIC_ENC,4);
+    uint32_t n=(uint32_t)base.size();
+    for(int i=0; i<4; ++i) tail[4+i]=(unsigned char)((n>>(i*8))&0xFF);
+    fout.seekp(0,std::ios::end);
+    fout.write(reinterpret_cast<const char*>(env.data()), (std::streamsize)envlen);
+    fout.write(reinterpret_cast<const char*>(tail),NAME_FOOTER_HDR);
+    fout.flush();
+    return fout.good();
+}
+
+// 尾部元数据未做认证，还原前必须严格净化，防止构造出 "../x" 之类的越权输出路径。
+static bool sanitize_restored_name(const std::string& n) {
+    if(n.empty()||n.size()>255) return false;
+    if(n[0]=='.') return false;
+    if(n.find("..")!=std::string::npos) return false;
+    for(unsigned char c : n) {
+        if(c<0x20||c==0x7F) return false;
+        if(c=='/'||c=='\\'||c==':') return false;
+    }
+    return true;
+}
+
+// 仅读取尾部结构长度（无需密钥），供解密时的文件大小校验使用；
+// 兼容加密尾部(FENX, 含 16 字节 tag)与旧版明文尾部(FENM)。
+static bool peek_name_footer_len(const std::string& ptd_path, uint64_t& footer_len) {
+    footer_len=0;
+    int64_t sz=get_file_size_utf8(ptd_path);
+    if(sz<(int64_t)(NAME_FOOTER_HDR+16)) return false;
+    std::ifstream f;
+    if(!open_stream(f,ptd_path,std::ios::binary)) return false;
+    f.seekg(-(std::streamoff)NAME_FOOTER_HDR, std::ios::end);
+    unsigned char tail[NAME_FOOTER_HDR];
+    if(!f.read(reinterpret_cast<char*>(tail), NAME_FOOTER_HDR)) return false;
+    bool enc = (memcmp(tail, NAME_FOOTER_MAGIC_ENC,4)==0);
+    bool plain = (memcmp(tail, NAME_FOOTER_MAGIC,4)==0);
+    if(!enc && !plain) return false;
+    uint32_t n=0;
+    for(int i=0;i<4;++i) n|=((uint32_t)tail[4+i])<<(i*8);
+    if(n==0||n>NAME_FOOTER_MAX_NAME) return false;
+    uint64_t env = enc ? (uint64_t)n + NAME_ENV_TAG : (uint64_t)n;
+    uint64_t total = env + NAME_FOOTER_HDR;
+    if((uint64_t)sz < total) return false;
+    footer_len=total;
+    return true;
+}
+
+// 解密尾部（需主密钥 + salt）。成功返回原始文件名；失败（密钥错/被篡改/无尾部）返回 false。
+static bool decrypt_name_footer(const std::string& ptd_path,
+    std::string& out_name,
+    const unsigned char* master_key,
+    const unsigned char* salt) {
+    out_name.clear();
+    int64_t sz=get_file_size_utf8(ptd_path);
+    if(sz<(int64_t)(NAME_FOOTER_HDR+16)) return false;
+    std::ifstream f;
+    if(!open_stream(f,ptd_path,std::ios::binary)) return false;
+    f.seekg(-(std::streamoff)NAME_FOOTER_HDR, std::ios::end);
+    unsigned char tail[NAME_FOOTER_HDR];
+    if(!f.read(reinterpret_cast<char*>(tail), NAME_FOOTER_HDR)) return false;
+    bool enc = (memcmp(tail, NAME_FOOTER_MAGIC_ENC,4)==0);
+    bool plain = (memcmp(tail, NAME_FOOTER_MAGIC,4)==0);
+    if(!enc && !plain) return false;
+    uint32_t n=0;
+    for(int i=0;i<4;++i) n|=((uint32_t)tail[4+i])<<(i*8);
+    if(n==0||n>NAME_FOOTER_MAX_NAME) return false;
+    uint64_t env_len = enc ? (uint64_t)n + NAME_ENV_TAG : (uint64_t)n;
+    uint64_t total = env_len + NAME_FOOTER_HDR;
+    if((uint64_t)sz < total) return false;
+    f.seekg(-(std::streamoff)total, std::ios::end);
+    if(plain) {
+        // 旧版明文尾部：直接读取（仍做净化防越权输出）
+        std::string raw((size_t)n,'\0');
+        if(!f.read(&raw[0],(std::streamsize)n)) return false;
+        if(!sanitize_restored_name(raw)) return false;
+        out_name=raw;
+        return true;
+    }
+    std::vector<unsigned char> env((size_t)env_len);
+    if(!f.read(reinterpret_cast<char*>(env.data()),(std::streamoff)env_len)) return false;
+    unsigned char name_key[crypto_aead_xchacha20poly1305_ietf_KEYBYTES];
+    unsigned char nonce[XCHACHA20_IV_LEN];
+    derive_name_key(master_key, name_key);
+    derive_name_nonce(salt, ARGON2_SALT_LEN, nonce);
+    std::vector<unsigned char> plain_out((size_t)n);
+    unsigned long long mlen=0;
+    int rc=crypto_aead_xchacha20poly1305_ietf_decrypt(
+        plain_out.data(), &mlen, nullptr,
+        env.data(), env_len, salt, ARGON2_SALT_LEN, nonce, name_key);
+    if(rc!=0) return false;            // 密钥错或被篡改
+    if(mlen!=(unsigned long long)n) return false;
+    std::string raw(reinterpret_cast<char*>(plain_out.data()), (size_t)mlen);
+    if(!sanitize_restored_name(raw)) return false;
+    out_name=raw;
+    return true;
+}
+
+// 公开接口：从密文末尾的加密信封恢复原始文件名。需口令以派生主密钥并解密尾部。
+// 解密失败（密钥错/无尾部）返回 false，调用方回退到基于 .ptd 文件名的命名。
+bool read_original_name(const std::string& ptd_path, std::string& out_name,
+    const SecureBuffer& password) {
+    out_name.clear();
+    std::ifstream f;
+    if(!open_stream(f,ptd_path,std::ios::binary)) return false;
+    unsigned char hdrbuf[160];
+    if(!f.read(reinterpret_cast<char*>(hdrbuf),5)) return false;
+    if(memcmp(hdrbuf,MAGIC,4)!=0) return false;
+    unsigned char ver=hdrbuf[4];
+    if(ver!=1&&ver!=2&&ver!=3&&ver!=VERSION) return false;
+    size_t hdr_size=header_size_for_version(ver);
+    if(!f.read(reinterpret_cast<char*>(hdrbuf+5),(std::streamoff)(hdr_size-5))) return false;
+    const unsigned char* salt_ptr=nullptr;
+    unsigned int kdf_ops=ARGON2_OPS_LEGACY;
+    size_t kdf_mem=(size_t)ARGON2_MEM_LEGACY_KB*1024;
+    if(ver==1)      { FileHeaderV1* h=reinterpret_cast<FileHeaderV1*>(hdrbuf); salt_ptr=h->salt; }
+    else if(ver==2) { FileHeader*  h=reinterpret_cast<FileHeader*>(hdrbuf);  salt_ptr=h->salt; kdf_ops=h->opslimit; kdf_mem=(size_t)h->memlimit_kb*1024; }
+    else if(ver==3) { FileHeaderV3* h=reinterpret_cast<FileHeaderV3*>(hdrbuf); salt_ptr=h->salt; kdf_ops=h->opslimit; kdf_mem=(size_t)h->memlimit_kb*1024; }
+    else            { FileHeaderV4* h=reinterpret_cast<FileHeaderV4*>(hdrbuf); salt_ptr=h->salt; kdf_ops=h->opslimit; kdf_mem=(size_t)h->memlimit_kb*1024; }
+    SecureBuffer key(ARGON2_OUTPUT_LEN);
+    if(!derive_key(password.data(),password.size(),salt_ptr,key.data(),kdf_ops,kdf_mem)) return false;
+    return decrypt_name_footer(ptd_path, out_name, key.data(), salt_ptr);
+}
+
 // ---------- 加密 ----------
 bool encrypt_file(const std::string& in_path,
     const std::string& out_path,
-    const std::vector<char>& password,
+    const SecureBuffer& password,
     CryptoMode mode,
     std::function<void(size_t,size_t)> progress_callback,
     bool resume) {
@@ -737,56 +1102,89 @@ bool encrypt_file(const std::string& in_path,
                  :(mode==CryptoMode::AEGIS256)?AEGIS256_IV_LEN:XCHACHA20_IV_LEN;
     size_t tag_size=tag_size_for_mode(mode);
 
-    // ---- 续传检测：先读已存在输出的 v3 头部获取 salt，派生密钥后才能验证 .progress 的 HMAC ----
+    // ---- 续传检测：先读已存在输出的头部获取 salt，派生密钥后才能验证 .progress 的 HMAC ----
     ProgressInfo prog_info{0,0,0,0,{0}};
     bool has_progress=false;
     bool out_exists=file_exists(out_path);
-    FileHeaderV3 existing_v3{};
-    bool existing_is_v3=false;
+    bool prog_present=file_exists(out_path+".progress");
+    FileHeaderV3 existing_v3{};   // 复用 v3 前缀结构读取前 109 字节（v3 / v4 通用）
+    bool existing_is_v3=false;   // 现有输出为 v3 或 v4
+    bool existing_is_v4=false;
+    unsigned char existing_hdr_hmac[HEADER_HMAC_SIZE]={0};
     if(out_exists) {
         std::ifstream fhex;
         if(open_stream(fhex,out_path,std::ios::binary)) {
-            unsigned char hbuf[HEADER_SIZE_V3];
-            if(fhex.read(reinterpret_cast<char*>(hbuf),HEADER_SIZE_V3)
-                && fhex.gcount()==HEADER_SIZE_V3
-                && memcmp(hbuf,MAGIC,4)==0 && hbuf[4]==VERSION) {
-                memcpy(&existing_v3,hbuf,HEADER_SIZE_V3);
+            unsigned char ehbuf[HEADER_SIZE_V4];
+            if(fhex.read(reinterpret_cast<char*>(ehbuf),HEADER_SIZE_V4)
+                && fhex.gcount()==HEADER_SIZE_V4
+                && memcmp(ehbuf,MAGIC,4)==0 && (ehbuf[4]==3||ehbuf[4]==VERSION)) {
+                memcpy(&existing_v3,ehbuf,HEADER_SIZE_V3);
+                if(ehbuf[4]==VERSION) {
+                    existing_is_v4=true;
+                    memcpy(existing_hdr_hmac,ehbuf+HEADER_SIZE_V3,HEADER_HMAC_SIZE);
+                }
                 existing_is_v3=true;
             }
             fhex.close();
         }
     }
 
-    unsigned char key[ARGON2_OUTPUT_LEN]={0};
-    bool key_locked=false;
-    unsigned char auth_key[crypto_auth_KEYBYTES]={0};
+    SecureBuffer key(ARGON2_OUTPUT_LEN);
+    SecureBuffer auth_key(crypto_auth_KEYBYTES);
+    std::string prog_binding = compute_progress_binding(in_path);
 
-    if(resume && load_progress_raw(out_path,prog_info)) {
+    if(resume && prog_present && load_progress_raw(out_path,prog_info)) {
         if(existing_is_v3) {
-            if(!derive_key(password,existing_v3.salt,key,existing_v3.opslimit,
-                    (size_t)existing_v3.memlimit_kb*1024)) {
+            if(!derive_key(password.data(),password.size(),existing_v3.salt,key.data(),
+                    existing_v3.opslimit,(size_t)existing_v3.memlimit_kb*1024)) {
                 fprintf(stderr,"Key derivation failed for resume\n");
             } else {
-                derive_progress_auth_key(key,auth_key);
-                if(verify_progress_hmac(prog_info,auth_key)
+                derive_progress_auth_key(key.data(),auth_key.data());
+                // v4 输出：先校验文件头 HMAC（防文件头被篡改后重放旧 .progress）
+                bool hdr_ok=true;
+                if(existing_is_v4) {
+                    unsigned char hdr_auth[HEADER_HMAC_SIZE];
+                    derive_header_auth_key(key.data(),hdr_auth);
+                    hdr_ok=(crypto_auth_verify(existing_hdr_hmac,
+                        reinterpret_cast<const unsigned char*>(&existing_v3),HEADER_HMAC_COVER,hdr_auth)==0);
+                }
+                if(hdr_ok && verify_progress_hmac(prog_info,auth_key.data(),prog_binding)
                     && prog_info.processed_chunks<=total_chunks
                     && prog_info.processed_bytes<=total_size) {
                     has_progress=true;
-                } else {
-                    fprintf(stderr,"Progress authentication failed / corrupt, restarting from beginning.\n");
-                    log_event(LOG_WARN,"progress_auth_failed",{{"path",out_path}});
                 }
             }
+        }
+        // 注意：此处不能 key.clear()。key 由 SecureBuffer 持有，函数返回时析构已安全清零+解锁；
+        // 若提前 clear，后续续传分支（!header_written 或 else）再次 derive_key(..., key.data(), ...)
+        // 会写入已释放（nullptr）的缓冲，触发段错误。保留 key 的有效 32 字节缓冲即可。
+    }
+
+    // 进度文件存在但无法认证（HMAC 失败 / 格式损坏 / 旧格式）：
+    // 原输出已存在时禁止从头重写覆盖——否则正确密码加密的密文会被错误密码的产物
+    // 静默抹掉，且 .progress 随后被删，造成数据永久丢失（批量 -be 无交互确认即触发）。
+    // 仅当原输出不存在（孤立 .progress）时才安全从头重做。
+    if(resume && prog_present && !has_progress) {
+        if(out_exists) {
+            fprintf(stderr,"Refusing to overwrite existing output '%s': progress authentication failed "
+                "(likely wrong password or corrupt .progress). Use a different output path, or delete "
+                "the file and its .progress first if you intend to restart.\n", out_path.c_str());
+            log_event(LOG_ERROR,"refuse_overwrite_existing",{{"path",out_path}});
+            return false;
+        }
+        if(existing_is_v3) {
+            fprintf(stderr,"Progress authentication failed / corrupt, restarting from beginning.\n");
         } else {
             fprintf(stderr,"Cannot authenticate legacy progress file, restarting from beginning.\n");
         }
-        sodium_memzero(key,sizeof(key));
-        if(!has_progress) prog_info={0,0,0,0,{0}};
+        log_event(LOG_WARN,"progress_auth_failed",{{"path",out_path}});
+        prog_info={0,0,0,0,{0}};
     }
 
     uint64_t start_chunk=has_progress?prog_info.processed_chunks:0;
     uint64_t start_bytes=has_progress?prog_info.processed_bytes:0;
-    uint64_t trunc_pos=(uint64_t)HEADER_SIZE_V3+4+4+8+(uint64_t)start_chunk*(chunk_size+tag_size);
+    size_t existing_hdr_size = existing_is_v4 ? HEADER_SIZE_V4 : HEADER_SIZE_V3;
+    uint64_t trunc_pos=(uint64_t)existing_hdr_size+4+4+8+(uint64_t)start_chunk*(chunk_size+tag_size);
 
     // 跨进程锁：在打开/截断输出之前获取，防止两个进程同时写同一输出导致损坏
     std::string lock_path;
@@ -821,7 +1219,7 @@ bool encrypt_file(const std::string& in_path,
         {
             std::ifstream fhex;
             if(!open_stream(fhex,out_path,std::ios::binary)
-                || !fhex.seekg(HEADER_SIZE_V3,std::ios::beg)
+                || !fhex.seekg(existing_hdr_size,std::ios::beg)
                 || !fhex.read(reinterpret_cast<char*>(&st_chunk),4)
                 || !fhex.read(reinterpret_cast<char*>(&st_total),4)
                 || !fhex.read(reinterpret_cast<char*>(&st_orig),8)) {
@@ -859,7 +1257,7 @@ bool encrypt_file(const std::string& in_path,
 
     bool header_written=has_progress&&start_chunk>0;
 
-    FileHeaderV3 header{};
+    FileHeaderV4 header{};
     bool ok=true;
     std::vector<unsigned char> aad;
     std::vector<unsigned char> plaintext_chunk(CHUNK_SIZE);
@@ -877,19 +1275,30 @@ bool encrypt_file(const std::string& in_path,
         randombytes_buf(header.salt,ARGON2_SALT_LEN);
         randombytes_buf(header.iv,iv_len);
         sodium_memzero(header.plaintext_hash,HASH_SIZE);
+        sodium_memzero(header.header_hmac,HEADER_HMAC_SIZE);
 
-        if(!derive_key(password,header.salt,key,header.opslimit,(size_t)header.memlimit_kb*1024)) {
+        if(!derive_key(password.data(),password.size(),header.salt,key.data(),
+                header.opslimit,(size_t)header.memlimit_kb*1024)) {
             ok=false; goto cleanup;
         }
-        if(sodium_mlock(key,sizeof(key))==0) key_locked=true;
-        else fprintf(stderr,"Warning: could not lock key memory (possible performance/security impact).\n");
-        derive_progress_auth_key(key,auth_key);
+        derive_progress_auth_key(key.data(),auth_key.data());
 
-        // AAD 不含末尾 32 字节 plaintext_hash（其为加密后写入，不在 AAD 内以保证一致性）
+        // AAD 覆盖文件头前 77 字节（magic..iv），不含 plaintext_hash 与 header_hmac
+        // （二者在加密后才确定，且 header_hmac 已对整段元数据独立认证，避免双重绑定导致自不一致）。
         aad=build_aad_with_metadata(reinterpret_cast<unsigned char*>(&header),
-            HEADER_SIZE_V3-HASH_SIZE, chunk_size,total_chunks,orig_size);
+            HEADER_HMAC_COVER, chunk_size,total_chunks,orig_size);
 
-        if(!fout.write(reinterpret_cast<const char*>(&header),HEADER_SIZE_V3)) {
+        // 文件头 HMAC 在写头瞬间即计算并随头落盘：覆盖前 77 字节（含 salt/mode/Argon2 参数/iv），
+        // 不含 plaintext_hash/header_hmac 自身。这样被中断的半成品 .ptd 也已携带合法 header_hmac，
+        // 续传时“文件头篡改校验”可正常通过；同时防攻击者替换 salt/iv/mode 后重放旧 .progress。
+        {
+            unsigned char hdr_auth[HEADER_HMAC_SIZE];
+            derive_header_auth_key(key.data(),hdr_auth);
+            crypto_auth(header.header_hmac,
+                reinterpret_cast<const unsigned char*>(&header),HEADER_HMAC_COVER,hdr_auth);
+        }
+
+        if(!fout.write(reinterpret_cast<const char*>(&header),HEADER_SIZE_V4)) {
             fprintf(stderr,"Write header failed\n"); ok=false; goto cleanup;
         }
         if(!fout.write(reinterpret_cast<const char*>(&chunk_size),4)||
@@ -899,14 +1308,15 @@ bool encrypt_file(const std::string& in_path,
         }
     }
     else {
-        header=existing_v3;
-        if(!derive_key(password,header.salt,key,header.opslimit,(size_t)header.memlimit_kb*1024)) {
+        memcpy(&header,&existing_v3,HEADER_SIZE_V3);
+        sodium_memzero(header.header_hmac,HEADER_HMAC_SIZE);
+        if(!derive_key(password.data(),password.size(),header.salt,key.data(),
+                header.opslimit,(size_t)header.memlimit_kb*1024)) {
             ok=false; goto cleanup;
         }
-        if(sodium_mlock(key,sizeof(key))==0) key_locked=true;
-        derive_progress_auth_key(key,auth_key);
+        derive_progress_auth_key(key.data(),auth_key.data());
         aad=build_aad_with_metadata(reinterpret_cast<unsigned char*>(&header),
-            HEADER_SIZE_V3-HASH_SIZE, chunk_size,total_chunks,orig_size);
+            HEADER_HMAC_COVER, chunk_size,total_chunks,orig_size);
     }
 
     // 明文 Blake2b 流式哈希；续传时先回放输入前缀 [0,start_bytes) 以补齐哈希状态
@@ -949,17 +1359,17 @@ bool encrypt_file(const std::string& in_path,
         int rc;
         if(mode==CryptoMode::AES_GCM) {
             rc=crypto_aead_aes256gcm_encrypt(ciphertext_chunk.data(),&ciphertext_len,
-                plaintext_chunk.data(),chunk_len,aad.data(),aad.size(),NULL,nonce,key);
+                plaintext_chunk.data(),chunk_len,aad.data(),aad.size(),NULL,nonce,key.data());
             if(rc!=0) fprintf(stderr,"AES-GCM encryption failed at chunk %u\n",i);
         }
         else if(mode==CryptoMode::AEGIS256) {
             rc=crypto_aead_aegis256_encrypt(ciphertext_chunk.data(),&ciphertext_len,
-                plaintext_chunk.data(),chunk_len,aad.data(),aad.size(),NULL,nonce,key);
+                plaintext_chunk.data(),chunk_len,aad.data(),aad.size(),NULL,nonce,key.data());
             if(rc!=0) fprintf(stderr,"AEGIS-256 encryption failed at chunk %u\n",i);
         }
         else {
             rc=crypto_aead_xchacha20poly1305_ietf_encrypt(ciphertext_chunk.data(),&ciphertext_len,
-                plaintext_chunk.data(),chunk_len,aad.data(),aad.size(),NULL,nonce,key);
+                plaintext_chunk.data(),chunk_len,aad.data(),aad.size(),NULL,nonce,key.data());
             if(rc!=0) fprintf(stderr,"XChaCha20 encryption failed at chunk %u\n",i);
         }
         if(rc!=0) { ok=false; break; }
@@ -972,7 +1382,7 @@ bool encrypt_file(const std::string& in_path,
         processed_bytes+=chunk_len;
         // 先落盘再记账进度（带 HMAC），确保磁盘内容永远不落后于 .progress
         fout.flush();
-        if(!save_progress(out_path,i+1,processed_bytes,auth_key)) {
+        if(!save_progress(out_path,i+1,processed_bytes,auth_key.data(),prog_binding)) {
             fprintf(stderr,"Failed to save progress at chunk %u\n",i);
         }
 
@@ -983,12 +1393,22 @@ bool encrypt_file(const std::string& in_path,
     }
 
     if(ok) {
-        // 结束哈希并回填到文件头（plaintext_hash 不纳入 AAD）
+        // 结束哈希并回填 plaintext_hash；文件头 HMAC 已在写头瞬间算好（覆盖前 77 字节），
+        // 此处仅重算一遍（前 77 字节未变，结果一致）后随 plaintext_hash 一并写回。
         crypto_generichash_final(&hstate,header.plaintext_hash,HASH_SIZE);
+        unsigned char hdr_auth[HEADER_HMAC_SIZE];
+        derive_header_auth_key(key.data(),hdr_auth);
+        crypto_auth(header.header_hmac,
+            reinterpret_cast<const unsigned char*>(&header),HEADER_HMAC_COVER,hdr_auth);
         fout.flush();
-        fout.seekp((std::streamoff)(HEADER_SIZE_V3-HASH_SIZE),std::ios::beg);
+        fout.seekp((std::streamoff)(HEADER_SIZE_V4-HASH_SIZE-HEADER_HMAC_SIZE),std::ios::beg);
         fout.write(reinterpret_cast<const char*>(header.plaintext_hash),HASH_SIZE);
+        fout.write(reinterpret_cast<const char*>(header.header_hmac),HEADER_HMAC_SIZE);
         fout.flush();
+        if(!append_encrypted_name_footer(fout,in_path,key.data(),header.salt)) {
+            fprintf(stderr,"Failed to append encrypted original-name footer.\n");
+            ok=false;
+        }
     }
     else {
         crypto_generichash_final(&hstate,header.plaintext_hash,HASH_SIZE);
@@ -1009,7 +1429,7 @@ cleanup:
         std::string verify_path=out_path+".verify.tmp";
         remove_file_utf8(verify_path);
         bool verify_ok=decrypt_file(out_path,verify_path,password,
-            [](size_t,size_t){}, true, false, key);
+            [](size_t,size_t){}, true, false, key.data());
         if(verify_ok) {
             int64_t vsz=get_file_size_utf8(verify_path);
             if(vsz!=(int64_t)total_size) verify_ok=false;
@@ -1034,18 +1454,15 @@ cleanup:
         fprintf(stderr,"Encryption failed, output removed.\n");
     }
 
-    // 自校验已结束（期间复用了派生密钥 key），此刻再释放内存锁并清零密钥，
-    // 既保证密钥不被提前清零导致自校验失败，也避免同一密码在自校验后再重复 Argon2。
-    if(key_locked) sodium_munlock(key,sizeof(key));
-    sodium_memzero(key,sizeof(key));
-    sodium_memzero(auth_key,sizeof(auth_key));
+    // 自校验已结束（期间复用了派生密钥 key）。密钥与认证密钥均由 SecureBuffer 持有，
+    // 函数返回时析构自动 sodium_memzero + sodium_munlock，无需手动清零。
     return ok;
 }
 
 // ---------- 解密 ----------
 bool decrypt_file(const std::string& in_path,
     const std::string& out_path,
-    const std::vector<char>& password,
+    const SecureBuffer& password,
     std::function<void(size_t,size_t)> progress_callback,
     bool silent,
     bool resume,
@@ -1078,7 +1495,7 @@ bool decrypt_file(const std::string& in_path,
     fin.seekg(0,std::ios::beg);
 
     // 版本感知的头部解析：先读 magic+version，再按版本读取剩余头部。
-    unsigned char hdrbuf[128];
+    unsigned char hdrbuf[160];
     size_t hdr_size=0;
     unsigned int kdf_ops=ARGON2_OPS_LEGACY;
     size_t kdf_mem=(size_t)ARGON2_MEM_LEGACY_KB*1024;
@@ -1088,11 +1505,12 @@ bool decrypt_file(const std::string& in_path,
     const unsigned char* iv_ptr=nullptr;
     unsigned char stored_hash[HASH_SIZE]={0};
     bool have_hash=false;
+    unsigned char hdr_hmac[HEADER_HMAC_SIZE]={0};
+    bool is_v4=false;
 
     // 密钥相关缓冲区提前声明，供异常跳转（dec_cleanup）安全清理
-    unsigned char key[ARGON2_OUTPUT_LEN]={0};
-    bool key_locked=false;
-    unsigned char auth_key[crypto_auth_KEYBYTES]={0};
+    SecureBuffer key(ARGON2_OUTPUT_LEN);
+    SecureBuffer auth_key(crypto_auth_KEYBYTES);
 
     if(!fin.read(reinterpret_cast<char*>(hdrbuf),5)) {
         if(!silent) fprintf(stderr,"Read header failed\n");
@@ -1139,7 +1557,7 @@ bool decrypt_file(const std::string& in_path,
         kdf_ops=h2->opslimit;
         kdf_mem=(size_t)h2->memlimit_kb*1024;
     }
-    else if(ver==VERSION) {
+    else if(ver==3) {
         hdr_size=HEADER_SIZE_V3;
         if(file_size<(std::streampos)(hdr_size+4+4+8)) {
             if(!silent) fprintf(stderr,"File too small (corrupted?)\n");
@@ -1158,6 +1576,29 @@ bool decrypt_file(const std::string& in_path,
         kdf_mem=(size_t)h3->memlimit_kb*1024;
         memcpy(stored_hash,h3->plaintext_hash,HASH_SIZE);
         have_hash=true;
+    }
+    else if(ver==VERSION) {
+        // v4：v3 前缀 + 32 字节 header_hmac（独立密钥认证文件头，防篡改）
+        hdr_size=HEADER_SIZE_V4;
+        if(file_size<(std::streampos)(hdr_size+4+4+8)) {
+            if(!silent) fprintf(stderr,"File too small (corrupted?)\n");
+            return false;
+        }
+        if(!fin.read(reinterpret_cast<char*>(hdrbuf+5),hdr_size-5)) {
+            if(!silent) fprintf(stderr,"Read header failed\n");
+            return false;
+        }
+        FileHeaderV4* h4=reinterpret_cast<FileHeaderV4*>(hdrbuf);
+        mode=static_cast<CryptoMode>(h4->mode);
+        iv_len=h4->iv_len;
+        salt_ptr=h4->salt;
+        iv_ptr=h4->iv;
+        kdf_ops=h4->opslimit;
+        kdf_mem=(size_t)h4->memlimit_kb*1024;
+        memcpy(stored_hash,h4->plaintext_hash,HASH_SIZE);
+        memcpy(hdr_hmac,h4->header_hmac,HEADER_HMAC_SIZE);
+        have_hash=true;
+        is_v4=true;
     }
     else {
         if(!silent) fprintf(stderr,"Unsupported file version: %u\n",ver);
@@ -1199,6 +1640,29 @@ bool decrypt_file(const std::string& in_path,
         return false;
     }
 
+    // 派生密钥（提前到空文件短路之前，以便 v4 文件头 HMAC 校验对空文件也生效）。
+    // 同时计算源文件绑定标识，供 .progress 防重放校验使用。
+    std::string prog_binding = compute_progress_binding(in_path);
+    if(ext_key) {
+        // 复用外部已派生密钥：跳过昂贵的 Argon2 KDF（用于加密后自校验）
+        memcpy(key.data(), ext_key, ARGON2_OUTPUT_LEN);
+    } else if(!derive_key(password.data(),password.size(),salt_ptr,key.data(),kdf_ops,kdf_mem)) {
+        if(!silent) fprintf(stderr,"Key derivation failed\n");
+        return false;
+    }
+    derive_progress_auth_key(key.data(), auth_key.data());
+
+    // v4 文件头 HMAC 校验：独立于 AEAD，防止文件头被篡改（如替换 salt/iv/mode 后重放）。
+    // 必须在任何明文输出之前完成，且校验失败只给通用错误（防侧信道）。
+    if(is_v4) {
+        unsigned char hdr_auth[HEADER_HMAC_SIZE];
+        derive_header_auth_key(key.data(), hdr_auth);
+        if(crypto_auth_verify(hdr_hmac, hdrbuf, HEADER_HMAC_COVER, hdr_auth)!=0) {
+            report_auth_error(silent, "Header authentication failed (file tampered or wrong key).");
+            return false;
+        }
+    }
+
     // 跨进程锁 + 临时文件：解密先将明文写入 <out>.part，全部校验通过后再原子重命名
     std::string part_path=out_path+".part";
     // 防符号链接劫持：若 .part 半成品已存在且为符号链接/重解析点，拒绝写入，避免清空被指向的敏感文件
@@ -1219,9 +1683,13 @@ bool decrypt_file(const std::string& in_path,
     }
     OutputLockGuard lock_guard{lock_path,true};
 
+    // 密文末尾可能附加加密的原始文件名信封，大小校验必须把它计入
+    uint64_t footer_len=0;
+    peek_name_footer_len(in_path, footer_len);
+
     uint64_t total_size=orig_size;
     if(total_chunks==0) {
-        if((size_t)file_size!=hdr_size+4+4+8) {
+        if((size_t)file_size!=hdr_size+4+4+8+footer_len) {
             if(!silent) fprintf(stderr,"File size mismatch for empty file.\n");
             return false;
         }
@@ -1244,7 +1712,7 @@ bool decrypt_file(const std::string& in_path,
             unsigned char empty_hash[HASH_SIZE];
             crypto_generichash(empty_hash,HASH_SIZE,nullptr,0,nullptr,0);
             if(memcmp(empty_hash,stored_hash,HASH_SIZE)!=0) {
-                if(!silent) fprintf(stderr,"Plaintext integrity check failed (empty file).\n");
+                report_auth_error(silent, "Plaintext integrity check failed (empty file).");
                 remove_file_utf8(out_path);
                 return false;
             }
@@ -1255,7 +1723,7 @@ bool decrypt_file(const std::string& in_path,
     uint64_t last_chunk_len=orig_size-(uint64_t)(total_chunks-1)*chunk_size;
     uint64_t expected_size=(uint64_t)hdr_size+4+4+8
         +(uint64_t)(total_chunks-1)*(uint64_t)(chunk_size+tag_size)
-        +(uint64_t)last_chunk_len+tag_size;
+        +(uint64_t)last_chunk_len+tag_size+footer_len;
     if((uint64_t)file_size!=expected_size) {
         if(!silent) {
             fprintf(stderr,"File size mismatch: expected %llu, got %llu. File corrupted.\n",
@@ -1268,20 +1736,14 @@ bool decrypt_file(const std::string& in_path,
     // 续传需要“进度文件”与“对应的 .part 半成品”同时齐备，否则视为全新开始
     bool has_progress=false;
     if(resume && load_progress_raw(out_path,prog_info) && file_exists(part_path)) {
-        // 派生密钥 → 派生 HMAC 密钥 → 验证 .progress 的 HMAC
-        unsigned char tkey[ARGON2_OUTPUT_LEN]={0};
-        unsigned char tauth[crypto_auth_KEYBYTES]={0};
-        if(derive_key(password,salt_ptr,tkey,kdf_ops,kdf_mem)) {
-            derive_progress_auth_key(tkey,tauth);
-            if(verify_progress_hmac(prog_info,tauth)
-                && prog_info.processed_chunks<=total_chunks
-                && prog_info.processed_bytes<=total_size) {
-                has_progress=true;
-            } else {
-                if(!silent) fprintf(stderr,"Corrupted progress file detected, restarting from beginning.\n");
-            }
-            sodium_memzero(tkey,sizeof(tkey));
-            sodium_memzero(tauth,sizeof(tauth));
+        // 密钥与进度 HMAC 密钥已在前面（空文件短路之前）派生到 key / auth_key，此处直接复用，
+        // 并把源文件绑定标识（规范化路径 + 大小 + mtime）纳入 HMAC 校验，防重放。
+        if(verify_progress_hmac(prog_info,auth_key.data(),prog_binding)
+            && prog_info.processed_chunks<=total_chunks
+            && prog_info.processed_bytes<=total_size) {
+            has_progress=true;
+        } else {
+            if(!silent) fprintf(stderr,"Corrupted progress file detected, restarting from beginning.\n");
         }
     }
     uint64_t start_chunk=has_progress ? prog_info.processed_chunks : 0;
@@ -1309,24 +1771,11 @@ bool decrypt_file(const std::string& in_path,
         remove_progress(out_path);
     }
 
-    if(ext_key) {
-        // 复用外部已派生密钥：跳过昂贵的 Argon2 KDF（用于加密后自校验）
-        memcpy(key,ext_key,ARGON2_OUTPUT_LEN);
-    }
-    else if(!derive_key(password,salt_ptr,key,kdf_ops,kdf_mem)) {
-        if(!silent) fprintf(stderr,"Key derivation failed\n");
-        return false;
-    }
-    if(sodium_mlock(key,sizeof(key))==0) {
-        key_locked=true;
-    }
-    else {
-        if(!silent) fprintf(stderr,"Warning: could not lock key memory (possible performance/security impact).\n");
-    }
-    derive_progress_auth_key(key,auth_key);
+    // 密钥已在前面（空文件短路之前）派生到 key / auth_key，此处无需重复派生。
 
-    // AAD 必须严格复刻加密时的构造：v3 不含末尾 32 字节明文哈希
-    size_t aad_hdr_len=hdr_size - (ver==VERSION?HASH_SIZE:0);
+    // AAD 必须严格复刻加密时的构造：v4 排除末尾 32 字节明文哈希 + 32 字节 header_hmac，
+    // v3 仅排除末尾 32 字节明文哈希；二者最终都覆盖头部前 77 字节（magic..iv）。
+    size_t aad_hdr_len=hdr_size - (ver==VERSION?(HASH_SIZE+HEADER_HMAC_SIZE):HASH_SIZE);
     std::vector<unsigned char> aad=build_aad_with_metadata(hdrbuf,aad_hdr_len,chunk_size,total_chunks,orig_size);
 
     auto start_time=std::chrono::steady_clock::now();
@@ -1339,6 +1788,24 @@ bool decrypt_file(const std::string& in_path,
     // 提前声明，避免 goto dec_cleanup 跨过带初始化的变量
     bool use_increment=(ver==VERSION);
     size_t input_offset=hdr_size+4+4+8+(size_t)start_chunk*(chunk_size+tag_size);
+
+    // 防整数溢出 / 越界：input_offset 来自文件头（v3 未被 HMAC 认证）或续传进度，
+    // 须边界校验后再 seekg。先以 uint64_t 做乘法溢出检查，再确认落在文件范围内。
+    {
+        const uint64_t base = (uint64_t)hdr_size + 4 + 4 + 8;
+        const uint64_t stride = (uint64_t)chunk_size + (uint64_t)tag_size;
+        uint64_t off = base;
+        if(stride != 0 && start_chunk > ((uint64_t)-1 - base) / stride) {
+            if(!silent) fprintf(stderr,"Seek offset overflow (corrupted header?)\n");
+            ok=false; goto dec_cleanup;
+        }
+        off += (uint64_t)start_chunk * stride;
+        if(off > (uint64_t)file_size) {
+            if(!silent) fprintf(stderr,"Seek offset out of range (corrupted header?)\n");
+            ok=false; goto dec_cleanup;
+        }
+        input_offset = (size_t)off;
+    }
 
     // 明文 Blake2b 流式哈希（续传时先回放 .part 前缀）
     crypto_generichash_state hstate;
@@ -1401,18 +1868,18 @@ bool decrypt_file(const std::string& in_path,
         int rc;
         if(mode==CryptoMode::AES_GCM) {
             rc=crypto_aead_aes256gcm_decrypt(plaintext_chunk.data(),&plaintext_len,NULL,
-                ciphertext_chunk.data(),expected_cipher_len,aad.data(),aad.size(),nonce,key);
-            if(rc!=0&&!silent) fprintf(stderr,"AES-GCM decryption failed at chunk %u (wrong password or corrupted)\n",i);
+                ciphertext_chunk.data(),expected_cipher_len,aad.data(),aad.size(),nonce,key.data());
+            if(rc!=0) report_auth_error(silent, "AES-GCM decryption failed at chunk " + std::to_string(i) + " (invalid key or corrupted data).");
         }
         else if(mode==CryptoMode::AEGIS256) {
             rc=crypto_aead_aegis256_decrypt(plaintext_chunk.data(),&plaintext_len,NULL,
-                ciphertext_chunk.data(),expected_cipher_len,aad.data(),aad.size(),nonce,key);
-            if(rc!=0&&!silent) fprintf(stderr,"AEGIS-256 decryption failed at chunk %u (wrong password or corrupted)\n",i);
+                ciphertext_chunk.data(),expected_cipher_len,aad.data(),aad.size(),nonce,key.data());
+            if(rc!=0) report_auth_error(silent, "AEGIS-256 decryption failed at chunk " + std::to_string(i) + " (invalid key or corrupted data).");
         }
         else {
             rc=crypto_aead_xchacha20poly1305_ietf_decrypt(plaintext_chunk.data(),&plaintext_len,NULL,
-                ciphertext_chunk.data(),expected_cipher_len,aad.data(),aad.size(),nonce,key);
-            if(rc!=0&&!silent) fprintf(stderr,"XChaCha20 decryption failed at chunk %u (wrong password or corrupted)\n",i);
+                ciphertext_chunk.data(),expected_cipher_len,aad.data(),aad.size(),nonce,key.data());
+            if(rc!=0) report_auth_error(silent, "XChaCha20 decryption failed at chunk " + std::to_string(i) + " (invalid key or corrupted data).");
         }
         if(rc!=0) { ok=false; break; }
 
@@ -1425,7 +1892,7 @@ bool decrypt_file(const std::string& in_path,
 
         processed_bytes+=plaintext_len;
         fout.flush();   // 先落盘再记账进度（带 HMAC），确保磁盘内容永远不落后于 .progress
-        if(!save_progress(out_path,i+1,processed_bytes,auth_key)) {
+        if(!save_progress(out_path,i+1,processed_bytes,auth_key.data(),prog_binding)) {
             if(!silent) fprintf(stderr,"Failed to save progress at chunk %u\n",i);
         }
 
@@ -1446,15 +1913,14 @@ bool decrypt_file(const std::string& in_path,
         unsigned char final_hash[HASH_SIZE];
         crypto_generichash_final(&hstate,final_hash,HASH_SIZE);
         if(ok && sodium_memcmp(final_hash,stored_hash,HASH_SIZE)!=0) {
-            if(!silent) fprintf(stderr,"Plaintext integrity check failed: recovered data does not match original.\n");
+            report_auth_error(silent, "Plaintext integrity check failed: recovered data does not match original.");
             ok=false;
         }
     }
 
 dec_cleanup:
-    if(key_locked) sodium_munlock(key,sizeof(key));
-    sodium_memzero(key,sizeof(key));
-    sodium_memzero(auth_key,sizeof(auth_key));
+    // key / auth_key 由 SecureBuffer 持有，函数返回时析构自动 sodium_memzero + sodium_munlock，
+    // 任何 return / goto 路径都已安全清理，无需在此手动清零。
     secure_clear(ciphertext_chunk);
     secure_clear(plaintext_chunk);
 
@@ -1507,7 +1973,13 @@ static bool is_directory(const std::string& path) {
 #endif
 }
 
-static void collect_files_from_dir(const std::string& dir,std::vector<std::string>& out_files) {
+static void collect_files_from_dir(const std::string& dir,std::vector<std::string>& out_files,int depth=0) {
+    // 防御：极端深的目录嵌套（>1024 层）会耗尽调用栈导致崩溃（DoS）。
+    // 超过深度上限时跳过该子树并发出告警，而非继续递归。
+    if(depth>1024) {
+        std::cerr<<"Warning: directory nesting too deep, skipping: "<<dir<<"\n";
+        return;
+    }
 #ifdef _WIN32
     std::wstring wpattern=utf8_to_wstring(dir+"\\*");
     struct _wfinddata_t fd;
@@ -1519,7 +1991,7 @@ static void collect_files_from_dir(const std::string& dir,std::vector<std::strin
         std::string full=dir+"\\"+name;
         // 跳过重解析点（junction/符号链接目录，属性位 0x0400），避免目录循环导致死递归
         if((fd.attrib&_A_SUBDIR)&&!(fd.attrib&0x0400)) {
-            collect_files_from_dir(full,out_files);
+            collect_files_from_dir(full,out_files,depth+1);
         }
         else {
             out_files.push_back(full);
@@ -1539,7 +2011,7 @@ static void collect_files_from_dir(const std::string& dir,std::vector<std::strin
                 continue; // 跳过符号链接，避免目录循环
             }
             if(S_ISDIR(st.st_mode)) {
-                collect_files_from_dir(full,out_files);
+                collect_files_from_dir(full,out_files,depth+1);
             }
             else {
                 out_files.push_back(full);
@@ -1593,7 +2065,7 @@ static std::string build_batch_out_path(const std::string& in_path,
 
 bool process_files(const std::vector<std::string>& input_paths,
     const std::string& out_dir,
-    const std::vector<char>& password,
+    const SecureBuffer& password,
     CryptoMode mode,
     bool encrypt,
     bool delete_source,
@@ -1604,7 +2076,7 @@ bool process_files(const std::vector<std::string>& input_paths,
         if(g_aegis_fallback_choice.load()==0) {
             std::cout<<"Warning: AEGIS-256 is not available on this CPU (AES-NI required).\n"
                 <<"Do you want to switch to XChaCha20 (secure) for all files? (y/N): ";
-            char ch;
+            char ch='n';
             std::cin>>ch;
             if(ch=='y'||ch=='Y') {
                 g_aegis_fallback_choice.store(1);
@@ -1684,6 +2156,13 @@ bool process_files(const std::vector<std::string>& input_paths,
         num_threads=std::thread::hardware_concurrency();
         if(num_threads<=0) num_threads=4;
     }
+    // 资源耗尽防御：限制同时打开的文件数。每个线程约持有 2 个句柄（输入 + 输出），
+    // 故并发线程数不超过 max_open_files/3，避免批量/高并发场景句柄耗尽导致 DoS。
+    if(global_config().max_open_files>0) {
+        int cap=(int)(global_config().max_open_files/3);
+        if(cap<1) cap=1;
+        if(num_threads>cap) num_threads=cap;
+    }
     printf("Using %d thread(s)\n",num_threads);
     log_event(LOG_INFO,"batch_start",
         {{"mode",encrypt?"encrypt":"decrypt"},
@@ -1706,6 +2185,10 @@ bool process_files(const std::vector<std::string>& input_paths,
         }
 
         if(encrypt) {
+            if(global_config().obfuscate_names) {
+                out_path=replace_basename(out_path,
+                    make_obfuscated_basename(in_path,password));
+            }
             out_path+=".ptd";
         }
         else {
@@ -1713,6 +2196,10 @@ bool process_files(const std::vector<std::string>& input_paths,
                 (out_path.substr(out_path.size()-4)==".ptd"||
                     out_path.substr(out_path.size()-4)==".PTD")) {
                 out_path=out_path.substr(0,out_path.size()-4);
+            }
+            std::string orig_name;
+            if(read_original_name(in_path,orig_name,password)&&!orig_name.empty()) {
+                out_path=replace_basename(out_path,orig_name);
             }
         }
 
@@ -1794,6 +2281,10 @@ bool process_files(const std::vector<std::string>& input_paths,
             }
 
             if(encrypt) {
+                if(global_config().obfuscate_names) {
+                    out_path=replace_basename(out_path,
+                        make_obfuscated_basename(in_path,password));
+                }
                 out_path+=".ptd";
             }
             else {
@@ -1801,6 +2292,10 @@ bool process_files(const std::vector<std::string>& input_paths,
                     (out_path.substr(out_path.size()-4)==".ptd"||
                         out_path.substr(out_path.size()-4)==".PTD")) {
                     out_path=out_path.substr(0,out_path.size()-4);
+                }
+                std::string orig_name;
+                if(read_original_name(in_path,orig_name,password)&&!orig_name.empty()) {
+                    out_path=replace_basename(out_path,orig_name);
                 }
             }
 
