@@ -120,15 +120,14 @@ static void print_usage() {
         <<"  -y, --force       Overwrite existing output files without asking\n"
         <<"  -k <keyfile>      Read key material from file (non-interactive; alt: ENCRYPTOR_KEY env)\n\n"
         <<"Config (YAML): log file/level, worker threads, path length/whitelist, progress\n"
-        <<"  rotation, etc. are configured in fileencryptor.yaml (see README). -j is deprecated;\n"
-        <<"  set worker_threads there instead.\n\n"
+        <<"  rotation, rate limit (max_speed), etc. are configured in fileencryptor.yaml (see README).\n\n"
         <<"Input:\n"
         <<"  For single mode: provide the file path as positional argument\n"
         <<"  For batch mode:  provide directory paths via -i (multiple allowed)\n"
         <<"                   All files under directories will be processed recursively.\n\n"
         <<"Usage:\n"
-        <<"  FileEncryptor -e/-d <FileName> [-o <Path>] [-de] [-m xchacha20|aegis256] [-y] [-j Num]\n"
-        <<"  FileEncryptor -be/-bd <Path> [-o <Path>] [-de] [-m xchacha20|aegis256] [-y] [-j Num]\n";
+        <<"  FileEncryptor -e/-d <FileName> [-o <Path>] [-de] [-m xchacha20|aegis256] [-y]\n"
+        <<"  FileEncryptor -be/-bd <Path> [-o <Path>] [-de] [-m xchacha20|aegis256] [-y]\n";
 }
 
 #ifdef _WIN32
@@ -178,6 +177,7 @@ int main(int argc,char* argv[]) {
     Config cfg=load_config();
     set_global_config(cfg);
     init_logger(cfg.log_file,cfg.log_level);
+    init_rate_limiter(cfg.max_speed); // 进程级限速（YAML max_speed；0 = 不限速）
 
     if(argc==1) {
         print_usage();
@@ -250,10 +250,6 @@ int main(int argc,char* argv[]) {
         }
         else if(arg=="-k"&&i+1<argc) {
             keyfile_path=argv[++i];
-        }
-        else if(arg=="-j"&&i+1<argc) {
-            ++i; // 跳过被废弃的线程数值（并发数现由 YAML 配置 worker_threads 决定）
-            std::cerr<<"Warning: -j is deprecated and ignored; set worker_threads in fileencryptor.yaml.\n";
         }
         else if(arg[0]!='-') {
             input_paths.push_back(arg);

@@ -1,5 +1,5 @@
 ﻿cmake_minimum_required(VERSION 3.15)
-project(FileEncryptor VERSION 1.7.1 LANGUAGES CXX)
+project(FileEncryptor VERSION 1.7.2 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -251,6 +251,47 @@ set(SOURCES
 
 add_executable(FileEncryptor ${SOURCES})
 
+# ---------- 查找 yaml-cpp（YAML 配置解析，v1.7.2 起依赖） ----------
+# 两端标准安装均提供 CMake 配置包，find_package 可直接命中：
+#   Windows: 安装到 "C:\Program Files\yaml-cpp"（include/ + lib/ + lib/cmake/）
+#   Linux:   sudo make install 到系统路径（/usr/local），或发行版包 libyaml-cpp-dev
+# 若无 CMake 配置（仅头文件 + 库的裸布局），按头文件与静态库手动查找
+# （YAMLCPP_ROOT 可显式指定根目录）。
+find_package(Threads REQUIRED)
+find_package(yaml-cpp QUIET)
+set(YAMLCPP_TARGET "")
+set(YAMLCPP_IS_STATIC ON)
+if(yaml-cpp_FOUND)
+  set(YAMLCPP_TARGET yaml-cpp::yaml-cpp)
+  if(YAML_CPP_SHARED_LIBS_BUILT)
+    set(YAMLCPP_IS_STATIC OFF)
+  endif()
+  message(STATUS "yaml-cpp: find_package 成功")
+else()
+  find_path(YAMLCPP_INCLUDE_DIR NAMES yaml-cpp/yaml.h
+    HINTS "$ENV{ProgramFiles}/yaml-cpp" ${YAMLCPP_ROOT} $ENV{YAMLCPP_ROOT}
+    PATH_SUFFIXES include)
+  find_library(YAMLCPP_LIBRARY NAMES yaml-cpp libyaml-cpp
+    HINTS "$ENV{ProgramFiles}/yaml-cpp" ${YAMLCPP_ROOT} $ENV{YAMLCPP_ROOT}
+    PATH_SUFFIXES lib lib64 build/Release build/Debug)
+  if(YAMLCPP_INCLUDE_DIR AND YAMLCPP_LIBRARY)
+    add_library(yaml-cpp-static STATIC IMPORTED)
+    set_target_properties(yaml-cpp-static PROPERTIES
+      IMPORTED_LOCATION ${YAMLCPP_LIBRARY}
+      INTERFACE_INCLUDE_DIRECTORIES ${YAMLCPP_INCLUDE_DIR})
+    set(YAMLCPP_TARGET yaml-cpp-static)
+    message(STATUS "yaml-cpp: 手动查找 (${YAMLCPP_LIBRARY})")
+  endif()
+endif()
+if(NOT YAMLCPP_TARGET)
+  message(FATAL_ERROR
+    "找不到 yaml-cpp。安装方式：\n"
+    "  Linux  (Debian/Ubuntu): sudo apt install libyaml-cpp-dev\n"
+    "  Linux  (Fedora):        sudo dnf install yaml-cpp-devel\n"
+    "  Windows:                把 yaml-cpp 安装/编译到 C:\\Program Files\\yaml-cpp，\n"
+    "                          或设置 YAMLCPP_ROOT 指向其根目录。")
+endif()
+
 # ---------- 链接 libsodium ----------
 if(SODIUM_TARGET)
   target_link_libraries(FileEncryptor PRIVATE ${SODIUM_TARGET})
@@ -282,6 +323,16 @@ else()
     endif()
   endif()
 endif()
+
+# ---------- 链接 yaml-cpp + Threads（YAML 配置解析所需） ----------
+# 静态链接 yaml-cpp 时必须定义 YAML_CPP_STATIC_DEFINE，否则头文件会把符号声明为
+# __declspec(dllimport)（产生 __imp_ 前缀），与静态库导出的普通 extern 符号不符，
+# 导致 LNK2019。定义后符号即为普通 extern，由静态库直接提供（与 libsodium 的 SODIUM_STATIC 同理）。
+# 动态构建（YAML_CPP_SHARED_LIBS_BUILT）时不能定义；Linux 下 dll.h 为空操作，定义与否无影响。
+if(YAMLCPP_IS_STATIC)
+  target_compile_definitions(FileEncryptor PRIVATE YAML_CPP_STATIC_DEFINE)
+endif()
+target_link_libraries(FileEncryptor PRIVATE ${YAMLCPP_TARGET} Threads::Threads)
 
 # Windows 动态链接时，把 libsodium.dll 复制到 exe 所在目录，保证直接运行
 if(SODIUM_DLL)

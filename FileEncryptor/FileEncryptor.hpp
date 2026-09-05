@@ -14,14 +14,19 @@
 
 #define FE_VERSION_MAJOR 1
 #define FE_VERSION_MINOR 7
-#define FE_VERSION_PATCH 1
-#define FE_VERSION_STRING "1.7.1"
+#define FE_VERSION_PATCH 2
+#define FE_VERSION_STRING "1.7.2"
 
 enum class CryptoMode: unsigned char {
     AES_GCM=0,   // 仅用于解密旧格式（v1/v2）文件；新加密不再使用
     XCHACHA20=1, // 默认模式
     AEGIS256=2   // 取代 AES-GCM 的新选项（AEAD，32 字节 nonce / 32 字节 tag）
 };
+
+// ---------- 进程级限速器（v1.7.2） ----------
+// 用 YAML 配置 max_speed（字节/秒，支持 KB/MB/GB 单位）初始化；0 = 不限速。
+// 加/解密主循环按处理字节数记账，超出速率则休眠。必须在启动期、加载配置后调用一次。
+void init_rate_limiter(uint64_t max_bytes_per_sec);
 
 // ---------- 文件名 / 扩展名混淆（v1.7.0） ----------
 // 生成 "<16 位十六进制>.<混淆扩展名>" 基名（不含 .ptd），由口令与输入路径确定性派生：

@@ -798,6 +798,44 @@ static void remove_progress(const std::string& out_path) {
     remove_file_utf8(prog_path);
 }
 
+// ---------- 进程级限速器（令牌桶，v1.7.2） ----------
+// 由 init_rate_limiter() 在加载配置后初始化一次；加/解密主循环按已处理字节数记账，
+// 超出 max_bytes_per_sec 则休眠，实现进程级总吞吐上限（覆盖批处理的全部并发线程）。
+static uint64_t g_rl_max_bps = 0;          // 0 = 不限速
+static std::mutex g_rl_mutex;
+static int64_t  g_rl_allowance = 0;        // 当前窗口允许的剩余字节
+static std::chrono::steady_clock::time_point g_rl_last;
+
+void init_rate_limiter(uint64_t max_bytes_per_sec) {
+    std::lock_guard<std::mutex> lock(g_rl_mutex);
+    g_rl_max_bps = max_bytes_per_sec;
+    g_rl_allowance = (int64_t)max_bytes_per_sec; // 起始满桶
+    g_rl_last = std::chrono::steady_clock::now();
+}
+
+static void throttle_consume(uint64_t n) {
+    if (g_rl_max_bps == 0) return;          // 不限速
+    std::lock_guard<std::mutex> lock(g_rl_mutex);
+    auto now = std::chrono::steady_clock::now();
+    double elapsed = std::chrono::duration<double>(now - g_rl_last).count();
+    if (elapsed > 0) {
+        int64_t refill = (int64_t)(elapsed * (double)g_rl_max_bps);
+        g_rl_allowance += refill;
+        if (g_rl_allowance > (int64_t)g_rl_max_bps) g_rl_allowance = (int64_t)g_rl_max_bps;
+        g_rl_last = now;
+    }
+    g_rl_allowance -= (int64_t)n;
+    if (g_rl_allowance < 0) {
+        // 透支：休眠补足（最小 1ms，避免忙等抖动）
+        double deficit = (double)(-g_rl_allowance) / (double)g_rl_max_bps;
+        if (deficit > 0) {
+            std::this_thread::sleep_for(std::chrono::duration<double>(deficit));
+            g_rl_last = std::chrono::steady_clock::now();
+            g_rl_allowance = 0;
+        }
+    }
+}
+
 static void print_progress(size_t processed,size_t total,
     std::chrono::steady_clock::time_point start,
     bool finish=false) {
@@ -813,7 +851,7 @@ static void print_progress(size_t processed,size_t total,
 
     auto now=std::chrono::steady_clock::now();
     double elapsed=std::chrono::duration<double>(now-start).count();
-    double speed=(elapsed>0) ? (processed/1048576.0)/elapsed : 0.0;
+    double speed=(elapsed>0) ? (processed/1048576.0)/elapsed : 0.0; // MB/s（1024 进制）
     int eta=(speed>0) ? static_cast<int>((total-processed)/1048576.0/speed) : 0;
 
     std::string bar;
@@ -827,8 +865,9 @@ static void print_progress(size_t processed,size_t total,
     bar+=']';
 
     char buf[128];
-    snprintf(buf,sizeof(buf),"\r%s %zu/%zu bytes | %.1f MiB/s | %d:%02d",
-        bar.c_str(),processed,total,speed,eta/60,eta%60);
+    snprintf(buf,sizeof(buf),"\r%s %s/%s | %.2f MB/s | %d:%02d",
+        bar.c_str(),format_size((uint64_t)processed).c_str(),format_size((uint64_t)total).c_str(),
+        speed,eta/60,eta%60);
 
     if(finish) {
         std::cout<<buf<<'\n';
@@ -1380,6 +1419,7 @@ bool encrypt_file(const std::string& in_path,
         }
 
         processed_bytes+=chunk_len;
+        throttle_consume(chunk_len);
         // 先落盘再记账进度（带 HMAC），确保磁盘内容永远不落后于 .progress
         fout.flush();
         if(!save_progress(out_path,i+1,processed_bytes,auth_key.data(),prog_binding)) {
@@ -1891,6 +1931,7 @@ bool decrypt_file(const std::string& in_path,
         if(have_hash) crypto_generichash_update(&hstate,plaintext_chunk.data(),plaintext_len);
 
         processed_bytes+=plaintext_len;
+        throttle_consume(plaintext_len);
         fout.flush();   // 先落盘再记账进度（带 HMAC），确保磁盘内容永远不落后于 .progress
         if(!save_progress(out_path,i+1,processed_bytes,auth_key.data(),prog_binding)) {
             if(!silent) fprintf(stderr,"Failed to save progress at chunk %u\n",i);
@@ -2147,7 +2188,7 @@ bool process_files(const std::vector<std::string>& input_paths,
         if(s>=0) total_bytes+=(size_t)s;
     }
 
-    printf("Total files: %zu, Total size: %.2f MiB\n",all_files.size(),total_bytes/1048576.0);
+    printf("Total files: %zu, Total size: %s\n",all_files.size(),format_size((uint64_t)total_bytes).c_str());
 
     // 并发线程数优先取自 YAML 配置（worker_threads），否则回退到 CLI/自动
     int cfg_threads=global_config().worker_threads;

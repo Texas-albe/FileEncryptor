@@ -12,6 +12,8 @@
 #include <chrono>
 #include <ctime>
 
+#include <yaml-cpp/yaml.h>
+
 #ifdef _WIN32
 #include <windows.h>
 #include <io.h>
@@ -21,14 +23,9 @@
 #endif
 
 // =====================================================================
-//  极简 YAML 读取（零依赖）
-//  仅支持本项目需要的语法：
-//    - 顶层标量键：   key: value
-//    - 单行注释：     # ...
-//    - 单层序列：     key:
-//                        - item1
-//                        - item2
-//  足够覆盖 fileencryptor.yaml 的全部可选配置项。
+//  YAML 配置解析（依赖 yaml-cpp）
+//  支持 fileencryptor.yaml 的全部顶层标量键与单层序列（path_whitelist）。
+//  未知键静默忽略；解析失败（含 YAML 语法错误）不致命，由调用方回退默认配置。
 // =====================================================================
 
 static std::string trim(const std::string& s) {
@@ -39,35 +36,6 @@ static std::string trim(const std::string& s) {
 }
 
 // 去掉行内注释（# 在行首、空白、':' 或 '=' 后开始；忽略引号内 #）
-static std::string strip_comment(const std::string& line) {
-    bool in_sq = false, in_dq = false;
-    for (size_t i = 0; i < line.size(); ++i) {
-        char c = line[i];
-        if (c == '\'' && !in_dq) in_sq = !in_sq;
-        else if (c == '"' && !in_sq) in_dq = !in_dq;
-        else if (c == '#' && !in_sq && !in_dq) {
-            // YAML 注释通常以空白或行首开始；但 key:#comment / key=#comment（分隔符紧跟 #）
-            // 同样合法，也应剥离。故 # 前为行首 / 空白 / ':' / '=' 均视为注释起点。
-            bool comment_start = (i == 0)
-                              || std::isspace((unsigned char)line[i - 1])
-                              || line[i - 1] == ':'
-                              || line[i - 1] == '=';
-            if (comment_start) return line.substr(0, i);
-        }
-    }
-    return line;
-}
-
-static std::string unquote(const std::string& v) {
-    std::string s = trim(v);
-    if (s.size() >= 2 &&
-        ((s.front() == '"' && s.back() == '"') ||
-         (s.front() == '\'' && s.back() == '\''))) {
-        return s.substr(1, s.size() - 2);
-    }
-    return s;
-}
-
 static bool parse_bool(const std::string& v, bool& out) {
     std::string s = trim(v);
     std::transform(s.begin(), s.end(), s.begin(), ::tolower);
@@ -88,87 +56,134 @@ static int level_from_string(const std::string& v) {
 
 bool parse_yaml_config(const std::string& text, Config& cfg, std::string& err) {
     err.clear();
-    std::istringstream in(text);
-    std::string raw;
-    std::string cur_seq_key; // 当前正在收集序列的键
-    int line_no = 0;
+    YAML::Node root;
+    try {
+        root = YAML::Load(text);
+    } catch (const YAML::Exception& e) {
+        err = std::string("YAML 解析错误: ") + e.what();
+        return false;
+    }
+    if (!root || root.IsNull()) return true; // 空文档 → 默认配置
+    if (!root.IsMap()) { err = "配置顶层必须是映射(map)"; return false; }
 
-    auto set_scalar = [&](const std::string& key, const std::string& val_raw) {
-        std::string v = unquote(val_raw);
-        if (key == "log_file") {
-            cfg.log_file = v;
-        } else if (key == "log_level") {
-            int lv = level_from_string(v);
-            if (lv >= 0) cfg.log_level = lv;
-            else { try { cfg.log_level = std::stoi(v); } catch (...) {} }
-        } else if (key == "worker_threads") {
-            try { cfg.worker_threads = std::stoi(v); } catch (...) {}
-        } else if (key == "max_memory_bytes") {
-            try { cfg.max_memory_bytes = (uint64_t)std::stoull(v); } catch (...) {}
-        } else if (key == "io_buffer_size") {
-            try { cfg.io_buffer_size = (size_t)std::stoull(v); } catch (...) {}
-        } else if (key == "max_open_files") {
-            try { cfg.max_open_files = (size_t)std::stoull(v); } catch (...) {}
-        } else if (key == "max_path_length") {
-            try { cfg.max_path_length = (size_t)std::stoull(v); } catch (...) {}
-        } else if (key == "path_whitelist_enabled") {
-            bool b = false; if (parse_bool(v, b)) cfg.path_whitelist_enabled = b;
-        } else if (key == "progress_rotation") {
-            bool b = false; if (parse_bool(v, b)) cfg.progress_rotation = b;
-        } else if (key == "obfuscate_names") {
-            bool b = true; if (parse_bool(v, b)) cfg.obfuscate_names = b;
-        }
-        // 未知键：静默忽略（前向兼容）
+    // 取标量字符串（仅当节点为标量）
+    auto opt_str = [&](const char* key, std::string& out) {
+        const YAML::Node& n = root[key];
+        if (n && n.IsScalar()) { out = n.as<std::string>(); return true; }
+        return false;
     };
 
-    while (std::getline(in, raw)) {
-        ++line_no;
-        std::string line = trim(strip_comment(raw));
-        if (line.empty()) { cur_seq_key.clear(); continue; }
+    opt_str("log_file", cfg.log_file);
 
-        // 列表项：属于上一个序列键
-        if (line[0] == '-') {
-            if (cur_seq_key.empty()) {
-                err = "第 " + std::to_string(line_no) + " 行：列表项出现在键之外";
-                return false;
-            }
-            std::string item = trim(line.substr(1));
-            item = unquote(item);
-            // 仅当显式列出至少一项时才启用白名单；空列表视为未启用，
-            // 避免“启用但零根=全部拒绝”的误伤。
-            if (!item.empty()) {
-                cfg.path_whitelist.push_back(item);
-                cfg.path_whitelist_enabled = true;
-            }
-            continue;
-        }
-
-        // 顶层键
-        size_t colon = line.find(':');
-        if (colon == std::string::npos) {
-            err = "第 " + std::to_string(line_no) + " 行：缺少 ':'";
-            return false;
-        }
-        std::string key = trim(line.substr(0, colon));
-        std::string val = line.substr(colon + 1);
-        if (key.empty()) { err = "第 " + std::to_string(line_no) + " 行：空键"; return false; }
-
-        if (val.empty()) {
-            // 可能是序列头（后续 - 行）或空标量
-            if (key == "path_whitelist") {
-                // 序列头仅登记当前键；是否“启用”推迟到真正出现 - 项时再置位，
-                // 避免 path_whitelist: 后无项却误启用（启用且空列表会拒绝所有路径）。
-                cur_seq_key = key;
-            } else {
-                cur_seq_key.clear();
-                set_scalar(key, "");
-            }
-        } else {
-            cur_seq_key.clear();
-            set_scalar(key, val);
+    // log_level：优先字符串（ERROR/WARN/INFO/DEBUG），否则按数字
+    {
+        const YAML::Node& n = root["log_level"];
+        if (n && n.IsScalar()) {
+            std::string s = n.as<std::string>();
+            int lv = level_from_string(s);
+            if (lv >= 0) cfg.log_level = lv;
+            else { try { cfg.log_level = std::stoi(s); } catch (...) {} }
         }
     }
+
+    auto opt_int = [&](const char* key, int& out) {
+        const YAML::Node& n = root[key];
+        if (n && n.IsScalar()) { try { out = n.as<int>(); } catch (...) {} }
+    };
+    opt_int("worker_threads", cfg.worker_threads);
+
+    auto opt_size = [&](const char* key, size_t& out) {
+        const YAML::Node& n = root[key];
+        if (n && n.IsScalar()) { try { out = n.as<size_t>(); } catch (...) {} }
+    };
+    opt_size("max_open_files", cfg.max_open_files);
+    opt_size("max_path_length", cfg.max_path_length);
+
+    // 带单位的大小字段（支持 KB/MB/GB，1024 进制）
+    auto opt_size_unit = [&](const char* key, uint64_t& out) {
+        const YAML::Node& n = root[key];
+        if (n && n.IsScalar()) {
+            std::string s;
+            try { s = n.as<std::string>(); } catch (...) { return; }
+            uint64_t v = 0;
+            if (parse_size(s, v)) out = v;
+        }
+    };
+    opt_size_unit("max_memory_bytes", cfg.max_memory_bytes);
+    opt_size_unit("io_buffer_size", cfg.io_buffer_size);
+    opt_size_unit("max_speed", cfg.max_speed);
+
+    // 布尔字段
+    auto opt_bool = [&](const char* key, bool& out) {
+        const YAML::Node& n = root[key];
+        if (n && n.IsScalar()) {
+            std::string s;
+            try { s = n.as<std::string>(); } catch (...) { return; }
+            bool b = out;
+            if (parse_bool(s, b)) out = b;
+        }
+    };
+    opt_bool("path_whitelist_enabled", cfg.path_whitelist_enabled);
+    opt_bool("progress_rotation", cfg.progress_rotation);
+    opt_bool("obfuscate_names", cfg.obfuscate_names);
+
+    // path_whitelist：序列；仅显式列出至少一项才启用，空列表不启用
+    {
+        const YAML::Node& n = root["path_whitelist"];
+        if (n && n.IsSequence()) {
+            for (const auto& item : n) {
+                if (item && item.IsScalar()) {
+                    std::string s = item.as<std::string>();
+                    if (!s.empty()) cfg.path_whitelist.push_back(s);
+                }
+            }
+            if (!cfg.path_whitelist.empty()) cfg.path_whitelist_enabled = true;
+        }
+    }
+
     return true;
+}
+
+// ---------- 单位解析 / 格式化（统一 1024 进制：KB/MB/GB） ----------
+bool parse_size(const std::string& s, uint64_t& out_bytes) {
+    out_bytes = 0;
+    std::string t = s;
+    // 去首尾空白
+    size_t a = 0, b = t.size();
+    while (a < b && std::isspace((unsigned char)t[a])) ++a;
+    while (b > a && std::isspace((unsigned char)t[b - 1])) --b;
+    t = t.substr(a, b - a);
+    if (t.empty()) return false;
+    // 速率写法可带 "/s" 后缀，忽略之
+    if (t.size() >= 2 && t.compare(t.size() - 2, 2, "/s") == 0) t = t.substr(0, t.size() - 2);
+    // 拆分数字部分与单位部分（单位可选）
+    size_t i = 0;
+    while (i < t.size() && (std::isdigit((unsigned char)t[i]) || t[i] == '.')) ++i;
+    std::string num = t.substr(0, i);
+    std::string unit = t.substr(i);
+    for (char& c : unit) c = (char)std::tolower((unsigned char)c);
+    double factor = 1.0;
+    if (unit == "kb" || unit == "k") factor = 1024.0;
+    else if (unit == "mb" || unit == "m") factor = 1024.0 * 1024.0;
+    else if (unit == "gb" || unit == "g") factor = 1024.0 * 1024.0 * 1024.0;
+    else if (unit == "b" || unit.empty()) factor = 1.0;
+    else return false; // 未知单位
+    if (num.empty()) return false;
+    double val = 0;
+    try { val = std::stod(num); } catch (...) { return false; }
+    if (val < 0) return false;
+    out_bytes = (uint64_t)(val * factor);
+    return true;
+}
+
+std::string format_size(uint64_t bytes) {
+    const uint64_t KB = 1024, MB = 1024 * 1024, GB = 1024ULL * 1024 * 1024;
+    char buf[64];
+    if (bytes >= GB) std::snprintf(buf, sizeof(buf), "%.2f GB", (double)bytes / GB);
+    else if (bytes >= MB) std::snprintf(buf, sizeof(buf), "%.2f MB", (double)bytes / MB);
+    else if (bytes >= KB) std::snprintf(buf, sizeof(buf), "%.2f KB", (double)bytes / KB);
+    else std::snprintf(buf, sizeof(buf), "%llu B", (unsigned long long)bytes);
+    return std::string(buf);
 }
 
 // ---------- 文件读取（UTF-8 安全） ----------
@@ -230,8 +245,9 @@ static const char* DEFAULT_CONFIG_YAML =
 "log_level: INFO           # ERROR / WARN / INFO / DEBUG\n"
 "worker_threads: 0         # 0 = 自动（CPU 核数）\n"
 "max_open_files: 256       # 并发线程上限 = 此值 / 3（防句柄耗尽）\n"
-"max_memory_bytes: 0       # 0 = 不限\n"
-"io_buffer_size: 1048576\n"
+"max_memory_bytes: 0       # 0 = 不限（可写 512MB / 1GB 等）\n"
+"io_buffer_size: 1MB       # 内部流式缓冲（可写 512KB / 2MB 等）\n"
+"max_speed: 0              # 0 = 不限速；可写 10MB/s、1.5GB/s、512KB/s（进程级总吞吐上限）\n"
 "max_path_length: 0        # 0 = 不限\n"
 "path_whitelist_enabled: false\n"
 "# path_whitelist:\n"

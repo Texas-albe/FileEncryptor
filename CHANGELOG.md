@@ -6,6 +6,21 @@
 
 ---
 
+## [1.7.2] - 2026-09-05（yaml-cpp 迁移 / 限速 / 删除 -j / 单位统一）
+
+> 程序版本号 1.7.1 → 1.7.2。磁盘文件格式版本保持 **v4**（向后兼容 v1 / v2 / v3，旧产物可直接解密，无需重加密）。
+
+### Added
+- **【中·运维】进程级限速（`max_speed`）**：YAML 新增 `max_speed` 配置项，限制加/解密总吞吐（进程级，覆盖批处理全部并发线程）。单位支持 `KB` / `MB` / `GB`（1024 进制），可带 `/s` 后缀（如 `10MB/s`、`1.5GB/s`、`512KB/s`）；`0` 或省略 = 不限速。实现为令牌桶限速器，在加/解密主循环按已处理字节数记账，超出速率则休眠。新增统一的 `parse_size()`（单位解析，支持小数与 `/s` 后缀）与 `format_size()`（字节量格式化为 KB/MB/GB）辅助函数。
+- **【中·依赖】配置解析迁移至 yaml-cpp**：YAML 配置解析由手写极简解析器改为 [yaml-cpp](https://github.com/jbeder/yaml-cpp) 库，支持标准 YAML 语法（注释、引号、序列等），解析失败给出明确错误（含 YAML 异常信息）并回退默认配置。CMake 自动查找（`find_package` 或手动定位 `C:/Program Files/yaml-cpp` / `YAMLCPP_ROOT`）；静态链接须以 `/MT` 构建并定义 `YAML_CPP_STATIC_DEFINE`（CMake 已自动处理）；Dockerfile 增加 `libyaml-cpp-dev`。
+
+### Changed
+- **【中·CLI】彻底删除 `-j` 参数**：此前已废弃（被忽略并警告）的 `-j <线程数>` 现完全移除，传入会报 `Unknown option: -j` 并退出（exit 1）。并发线程数只能由 YAML `worker_threads` 配置。
+- **【低·UX】计量单位统一（KB / MB / GB，1024 进制）**：进度条（已处理/总量、吞吐率 `MB/s`）与批量“Total size”等所有面向用户的字节量显示统一为 `KB`/`MB`/`GB`（1024 进制），不再使用 `MiB` 等混用表述；`io_buffer_size` 等 YAML 字段支持带单位写法（如 `1MB`、`512KB`）。
+
+### Fixed
+- **【低·兼容性】`DEFAULT_CONFIG_YAML` 模板更新**：默认配置模板（CWD 自动生成）新增 `max_speed` 项并把 `io_buffer_size` 改为带单位写法 `1MB`（默认值不变，仍为 1048576 字节）。
+
 ## [1.7.1] - 2026-09-04（文件名加密存储加固）
 
 > 程序版本号 1.7.0 → 1.7.1。磁盘文件格式版本保持 **v4**（向后兼容 v1 / v2 / v3 / 1.7.0，旧产物可直接解密，无需重加密）。

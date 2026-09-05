@@ -3,7 +3,7 @@
 跨平台（Windows / Linux / macOS）文件加密工具，基于 [libsodium](https://doc.libsodium.org/) 实现高强度、抗篡改、可续传的分块加密。
 
 - 磁盘文件格式版本 **v4**（向后兼容 v1 / v2 / v3，旧文件可直接解密，无需重加密）。
-- 程序版本 **1.7.1**。
+- 程序版本 **1.7.2**。
 
 ---
 
@@ -13,7 +13,7 @@
   - `XChaCha20-Poly1305`（默认，IETF 变体）—— 无需硬件加速，移动端 / 服务器通用。
   - `AEGIS-256` —— 在支持 **AES-NI** 的 CPU 上性能极高（32 字节 nonce / 32 字节 tag 的 AEAD）。
   - `AES-256-GCM` 仅用于**解密旧版 v1/v2 文件**，新加密不再使用。
-- **密钥派生**：Argon2id（默认 `opslimit=4` / `memlimit=128 MiB`），参数随文件头持久化，未来可无损增强。
+- **密钥派生**：Argon2id（默认 `opslimit=4` / `memlimit=128 MB`），参数随文件头持久化，未来可无损增强。
 - **完整性保护**
   - 每文件 `salt` + `iv` 随机生成；每块 `nonce = sodium_increment(iv)` 逐块自增，杜绝 nonce 复用。
   - 明文 **Blake2b** 哈希写入文件头，解密后重新计算并比对，端到端验证完整性。
@@ -30,6 +30,13 @@
 - **安全细节**：解密原子落盘（先写 `.part` 再重命名）、输出锁防并发写、路径穿越防御、符号链接 / 重解析点拒绝、密钥 `sodium_mlock` 锁定、POSIX 下半成品 `chmod 0600`。
 
 ---
+
+## v1.7.2 配置引擎迁移 yaml-cpp / 限速 / 删除 -j / 单位统一
+
+- **配置解析迁移至 yaml-cpp**：YAML 配置解析由手写极简解析器改为使用 [yaml-cpp](https://github.com/jbeder/yaml-cpp) 库，支持标准 YAML 语法（含注释、引号、嵌套不强制限制），解析失败时给出明确错误并回退默认配置。依赖项新增 yaml-cpp（头文件 + 静态库），CMake 自动查找（系统安装或 `YAMLCPP_ROOT` 指定），Docker 镜像已加入 `libyaml-cpp-dev`。
+- **新增进程级限速（`max_speed`）**：YAML 新增 `max_speed` 项，可将进程总吞吐（加/解密，覆盖批处理全部并发线程）限制为指定速率。单位支持 `KB` / `MB` / `GB`（**1024 进制**），可带 `/s` 后缀，例如 `10MB/s`、`1.5GB/s`、`512KB/s`；`0` 或省略 = 不限速。限速器为令牌桶实现，按已处理字节数记账，超出速率则休眠。
+- **删除 `-j` 参数**：此前已废弃的 `-j <线程数>` 现**彻底移除**；传入会报 `Unknown option` 并退出。并发线程数只能由 YAML `worker_threads` 配置（CLI 不可覆盖）。
+- **计量单位统一（KB / MB / GB，1024 进制）**：所有面向用户的字节量显示（进度条已处理/总量、吞吐率、批量“Total size”）统一使用 `KB`/`MB`/`GB`（1024 进制），不再混用 `MiB` 等表述；新增统一的 `format_size()` / `parse_size()` 辅助函数。
 
 ## v1.7.0 输出名 / 扩展名混淆
 
@@ -61,12 +68,12 @@
 
 - **一.1 密钥文件 / 环境变量输入（非交互）**：除交互式口令外，新增 `-k <keyfile>` 从文件读取密钥材料，或用环境变量 `ENCRYPTOR_KEY` 传入。优先级：`-k` > `ENCRYPTOR_KEY` > 交互式输入（适用无人值守 / CI 场景）。
 - **一.2 结构化 JSON 日志**：运行时可输出结构化日志（`{"ts","level","msg",["fields"]}`），日志文件路径与级别由 YAML `log_file` / `log_level` 控制；控制台进度条不受影响。
-- **一.4（部分）资源与并发配置（YAML）**：`worker_threads`（并发线程数，0=自动）、`max_memory_bytes`（预留上限，暂未强制）、`io_buffer_size`（内部流式缓冲）。*注：超大文件分块 `--chunk-size` 因会改变磁盘格式版本（v3 头结构），本期未实现，分块大小仍固定 1 MiB。*
+- **一.4（部分）资源与并发配置（YAML）**：`worker_threads`（并发线程数，0=自动）、`max_memory_bytes`（预留上限，暂未强制）、`io_buffer_size`（内部流式缓冲）。*注：超大文件分块 `--chunk-size` 因会改变磁盘格式版本（v3 头结构），本期未实现，分块大小仍固定 1 MB。*
 - **二.3（部分）进度文件轮转**：覆盖 `.progress` 前先备份为 `.progress.bak`（`progress_rotation`，默认开），降低写坏丢失断点的风险。
 - **二.4 路径长度 / 白名单**：YAML `max_path_length`（UTF-8 字节上限）、`path_whitelist_enabled` + `path_whitelist`（启用后输入/输出必须位于白名单根目录之下），校验失败时拒绝处理并保留默认安全行为。
 - **二.5 供应链签名（发布脚本）**：`scripts/sign-release.sh` 对发布产物生成 SHA256SUMS 并可用 GPG 签名；日志默认命名格式 `{YY-MM-DD_HHMMSS}.log`。
 - **一.5 容器化与静态发布（发布脚本）**：`Dockerfile` 提供基于 Debian 的构建/运行镜像；`scripts/build-release.sh` 产出各平台静态二进制与零依赖 DEB/RPM。
-- **CLI 调整**：`-j <线程数>` 已废弃（被忽略并打印警告），并发数改由 YAML `worker_threads` 配置；强制覆盖标志由 `-f` 改为 `-y` / `--force`。
+- **CLI 调整**：`-j <线程数>` 已于 v1.7.2 **彻底删除**（传入报 `Unknown option` 并退出）；并发数由 YAML `worker_threads` 配置；强制覆盖标志由 `-f` 改为 `-y` / `--force`。
 
 ---
 
@@ -74,6 +81,7 @@
 
 - **C++17** 编译器（MSVC / g++ / Clang）。
 - **libsodium >= 1.0.19**（AEGIS-256 需要；1.0.22 及以上推荐）。CMake 会在配置阶段校验版本，过低会给出明确报错。
+- **yaml-cpp**（YAML 配置解析，v1.7.2 起依赖）。Linux 安装 `libyaml-cpp-dev`；Windows 提供头文件与静态库（如 `C:\Program Files\yaml-cpp`），或设置 `YAMLCPP_ROOT` 指向其根目录，CMake 自动定位。
 
 ---
 
@@ -85,7 +93,7 @@
 
 ```bash
 # 1) 安装构建与打包工具（一次性）
-sudo apt install cmake ninja-build pkg-config fakeroot rpm
+sudo apt install cmake ninja-build pkg-config fakeroot rpm libyaml-cpp-dev
 #    libsodium 需 >= 1.0.19；推荐从源码安装到 /usr/local（会被 CMake 优先选中）：
 sudo apt remove libsodium-dev            # 若系统存在旧的 apt 版，建议先移除
 curl -sSL https://github.com/jedisct1/libsodium/releases/download/1.0.22-RELEASE/libsodium-1.0.22.tar.gz | tar xz
@@ -99,7 +107,7 @@ cmake --build --preset linux-release
 
 # 3) 打包（同时产出 .deb 和 .rpm）
 cd out/build/linux-release && cpack
-# 产物：file-encryptor_1.7.1-1_amd64.deb 与 file-encryptor-1.7.1-1.x86_64.rpm
+# 产物：file-encryptor_1.7.2-1_amd64.deb 与 file-encryptor-1.7.2-1.x86_64.rpm
 ```
 
 > 若系统中同时存在多个 libsodium（如 apt 旧版 + `/usr/local` 新版），可显式指定：
@@ -107,9 +115,9 @@ cd out/build/linux-release && cpack
 
 最终用户安装：
 ```bash
-sudo dpkg -i file-encryptor_1.7.1-1_amd64.deb
+sudo dpkg -i file-encryptor_1.7.2-1_amd64.deb
 # 或
-sudo rpm -ivh file-encryptor-1.7.1-1.x86_64.rpm
+sudo rpm -ivh file-encryptor-1.7.2-1.x86_64.rpm
 ```
 
 ### Windows（预编译 libsodium + MSVC）
@@ -128,6 +136,8 @@ cmake --build --preset windows-release
 - 静态链接时 CMake 会自动把运行时库切换为 `/MT`（静态 CRT），并与 libsodium 的静态库保持一致，
   避免 `LNK2038` CRT 不匹配；同时定义 `SODIUM_STATIC`，避免 `__imp_` 符号找不到（`LNK2019`）。
 - 也可用 vcpkg：`vcpkg install libsodium` 后启用 vcpkg toolchain，CMake 配置包会自动定位。
+
+> **yaml-cpp（v1.7.2 新增依赖）**：Windows 上把 yaml-cpp 安装到 `C:\Program Files\yaml-cpp`（标准布局：头文件 `include/`、静态库 `lib/`、CMake 配置 `lib/cmake/`），或设置 `YAMLCPP_ROOT` 指向其根目录；Linux 上 `sudo make install`（默认 `/usr/local`）或安装 `libyaml-cpp-dev` 均可，CMake 自动定位。注意：Windows 静态库须以 `/MT`（静态 CRT）构建，否则与本项目 `/MT` 冲突报 `LNK2038`；CMake 在静态链接时自动定义 `YAML_CPP_STATIC_DEFINE`，否则头文件会把符号声明为 `__declspec(dllimport)` 导致 `LNK2019`。
 
 ### 手动指定 libsodium（任意平台）
 
@@ -175,7 +185,6 @@ FileEncryptor <动作> <输入路径...> [选项]
   -y / --force      覆盖已存在的输出（不再询问）
   -k <keyfile>      从文件读取密钥材料（非交互；替代：ENCRYPTOR_KEY 环境变量）
   -v / --verbose     显示认证失败的详细原因（默认仅返回通用错误，防信息泄露）
-  -j <n>            【已废弃，被忽略】并发线程数，改由 fileencryptor.yaml 的 worker_threads 配置
 
 密钥来源优先级：-k 密钥文件 > ENCRYPTOR_KEY 环境变量 > 交互式输入（省略则交互式输入，不回显，须 ≥6 字符）。
 
@@ -224,14 +233,15 @@ FileEncryptor -bd ./encrypted_dir -o ./decrypted
 | `worker_threads` | `0`（自动） | 批量处理并发线程数（0 = 取硬件并发数） |
 | `max_open_files` | `256` | 资源耗尽防御：并发线程数上限 = `max_open_files / 3`，避免批量 / 高并发时文件句柄耗尽（DoS） |
 | `max_memory_bytes` | `0`（不限） | 预留上限，暂未强制限制 |
-| `io_buffer_size` | `1048576` | 内部流式缓冲字节（不影响磁盘分块格式） |
+| `io_buffer_size` | `1MB` | 内部流式缓冲字节（不影响磁盘分块格式；支持 `KB`/`MB`/`GB` 单位，1024 进制） |
+| `max_speed` | `0`（不限速） | 进程级限速：加/解密总吞吐上限，支持 `KB`/`MB`/`GB` 单位（可带 `/s`，如 `10MB/s`、`1.5GB/s`、`512KB/s`） |
 | `max_path_length` | `0`（不限） | 输入/输出路径 UTF-8 字节长度上限 |
 | `path_whitelist_enabled` | `false` | 是否启用路径白名单 |
 | `path_whitelist` | `[]` | 允许的输入/输出根目录（启用后必须位于其中之一之下） |
 | `progress_rotation` | `true` | 覆盖 `.progress` 前先备份为 `.progress.bak` |
 | `obfuscate_names` | `true` | 输出文件名混淆为 `<16位十六进制>.<伪扩展名>.ptd`（仅影响可见文件名，原始名一律加密存入尾部，与该项无关）；`false` 时退化为 `<原名>.ptd` |
 
-> 注：解析器为极简 YAML（顶层标量键 + 单层 `- item` 序列），请勿使用嵌套结构或复杂语法。
+> 注：配置由 [yaml-cpp](https://github.com/jbeder/yaml-cpp) 解析，支持标准 YAML 语法（注释、`- item` 序列、引号等）；解析失败不致命（回退默认并继续）。
 
 ---
 

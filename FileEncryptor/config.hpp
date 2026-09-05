@@ -14,9 +14,10 @@ struct Config {
 
     // ---- 并发 / 资源 ----
     int         worker_threads = 0;       // 0 = 自动（= 硬件并发数）
-    uint64_t    max_memory_bytes = 0;     // 0 = 不限（仅作提示/未来限制用）
+    uint64_t    max_memory_bytes = 0;     // 0 = 不限；支持 "512MB" 等带单位写法
     size_t      io_buffer_size = 1u << 20; // 内部流式缓冲字节（不影响磁盘分块格式）
     size_t      max_open_files = 256;     // 资源耗尽防御：限制并发线程数不超过 max_open_files/3（防句柄耗尽 DoS）
+    uint64_t    max_speed = 0;            // 限速：每秒最大处理字节数，0 = 不限速（进程级总吞吐上限）
 
     // ---- 路径安全 ----
     size_t      max_path_length = 0;       // 0 = 不限（按 UTF-8 字节计）
@@ -43,6 +44,14 @@ std::string find_config_file();
 // 解析极简 YAML（支持顶层标量键与单层序列 `- item`）到 Config。
 // 出错时返回 false 并在 err 写入原因（解析错误不致命：回退默认配置并继续）。
 bool parse_yaml_config(const std::string& text, Config& cfg, std::string& err);
+
+// 解析带单位的字节数：KB / MB / GB（1024 进制），可带 "/s" 后缀；"0"/空/缺省 = 0（不限）。
+// 例："10MB"、"1.5GB"、"512KB"、"1048576"、"10MB/s"。格式非法返回 false。
+bool parse_size(const std::string& s, uint64_t& out_bytes);
+
+// 把字节数格式化为统一单位字符串（KB / MB / GB，1024 进制）：
+// 例：1572864 -> "1.50 MB"，512 -> "512 B"。
+std::string format_size(uint64_t bytes);
 
 // 加载配置：自动定位文件，缺失时返回默认 Config。
 Config load_config();
