@@ -1,8 +1,0 @@
-<RCC>
-    <qresource prefix="/icons">
-        <!-- 引用本目录的 logogui.ico（.qrc 路径相对于本文件所在目录 GUI/）。
-             编译期嵌入 exe，运行期经 QIcon(":/icons/app.ico") 加载，
-             保证窗口标题栏图标在 Win/Linux/macOS 三端一致显示。 -->
-        <file alias="app.ico">logogui.ico</file>
-    </qresource>
-</RCC>
