@@ -1,9 +1,0 @@
-<RCC>
-    <!-- 仅 Linux / macOS 构建期嵌入（Windows 用系统 YaHei，无需此字体）。
-         路径相对于本 .qrc 所在目录（GUI/）。
-         运行期经 FontBootstrap::loadBundledFont() 通过 :/fonts/ 加载，
-         解决 Linux 默认字体不含 CJK 字形导致界面中文显示为方块（豆腐块）的问题。 -->
-    <qresource prefix="/fonts">
-        <file alias="NotoSansSC-Regular.otf">fonts/NotoSansSC-Regular.otf</file>
-    </qresource>
-</RCC>

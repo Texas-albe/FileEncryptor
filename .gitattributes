@@ -1,0 +1,31 @@
+* text=auto eol=lf
+
+# Source
+*.cs text eol=crlf
+*.csproj text eol=crlf
+*.manifest text eol=crlf
+*.sln text eol=crlf
+*.user text eol=crlf
+
+# C++ / CLI
+*.cpp text eol=crlf
+*.hpp text eol=crlf
+*.h text eol=crlf
+*.rc text eol=crlf
+*.cmake text eol=crlf
+CMakeLists.txt text eol=crlf
+
+# Text configs
+*.md text eol=lf
+*.txt text eol=lf
+*.json text eol=lf
+*.yaml text eol=lf
+Dockerfile text eol=lf
+.gitignore text eol=lf
+
+# Binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.ico binary
+*.exe binary
