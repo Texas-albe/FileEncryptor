@@ -20,6 +20,9 @@ public:
     // forceSystemDarkDetection 仅用于单元测试，生产路径不传。
     static void initialize(QApplication* app);
 
+    // 单例（供信号连接；themeChanged 在 setTheme 时发射）
+    static ThemeManager& instance();
+
     // 切换主题（同时持久化 + 应用 + 发射信号）
     static void setTheme(Theme t);
 

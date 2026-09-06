@@ -1,9 +1,4 @@
 // FileEncryptorLocator 实现
-// CLI/GUI 拆分为独立项目后的查找策略（三段）：
-//   1) 环境变量 FILEENCRYPTOR_EXE（绝对路径，显式覆盖）
-//   2) 外壳 exe 同目录（打包发布的常见布局）
-//   3) PATH 查找（Linux/macOS 安装到 /usr/bin 后）
-// 跨平台：Windows 加 .exe 后缀；其它平台不加。
 #include "FileEncryptorLocator.h"
 #include <QCoreApplication>
 #include <QDir>
@@ -11,40 +6,127 @@
 #include <QProcessEnvironment>
 
 #ifdef Q_OS_WIN
-static const QString kExeName = QStringLiteral("FileEncryptorCLI.exe");
+static const QStringList kExeNames={
+    QStringLiteral("FileEncryptorCLI-2.0.0-Windows.exe"),
+    QStringLiteral("FileEncryptorCLI.exe"),
+    QStringLiteral("FileEncryptor.exe"),
+    QStringLiteral("file-encryptor-cli.exe"),
+    QStringLiteral("fe.exe"),
+};
 #else
-static const QString kExeName = QStringLiteral("FileEncryptorCLI");
+static const QStringList kExeNames={
+    QStringLiteral("FileEncryptorCLI-2.0.0-Linux"),
+    QStringLiteral("FileEncryptorCLI"),
+    QStringLiteral("FileEncryptor"),
+    QStringLiteral("file-encryptor-cli"),
+    QStringLiteral("fe"),
+};
 #endif
 
 static bool isExecutable(const QString& path) {
     QFileInfo fi(path);
-    return fi.exists() && fi.isFile() && fi.isExecutable();
+    return fi.exists()&&fi.isFile()&&fi.isExecutable();
 }
 
 QString FileEncryptorLocator::selfDir() {
     return QCoreApplication::applicationDirPath();
 }
 
+// 在指定目录中按候选名依次探测
+static QString findInDir(const QString& dir) {
+    QDir d(dir);
+    if(!d.exists()) return {};
+    for(const QString& name:kExeNames) {
+        const QString cand=d.absoluteFilePath(name);
+        if(isExecutable(cand)) return cand;
+    }
+    return {};
+}
+
 QString FileEncryptorLocator::locate() {
-    // 1) 环境变量 FILEENCRYPTOR_EXE（绝对路径，显式覆盖）
-    const QString envPath = qEnvironmentVariable("FILEENCRYPTOR_EXE");
-    if (!envPath.isEmpty() && isExecutable(envPath)) {
+    // 1) 环境变量
+    const QString envPath=qEnvironmentVariable("FILEENCRYPTOR_EXE");
+    if(!envPath.isEmpty()&&isExecutable(envPath)) {
         return envPath;
     }
 
-    const QString dir = selfDir();
-    QDir d(dir);
+    // 2) 同目录
+    QString found=findInDir(selfDir());
+    if(!found.isEmpty()) return found;
 
-    // 2) 外壳 exe 同目录（CLI + GUI 同目录打包发布的常见布局）
-    QString cand = d.absoluteFilePath(kExeName);
-    if (isExecutable(cand)) return cand;
-
-    // 3) PATH 查找（Linux/macOS 安装到 /usr/bin 后；Windows 偶有便携需求）
-    QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
-    for (const QString& p : env.value("PATH").split(QDir::listSeparator(), Qt::SkipEmptyParts)) {
-        cand = QDir(p).absoluteFilePath(kExeName);
-        if (isExecutable(cand)) return cand;
+    // 3) PATH
+    const QProcessEnvironment env=QProcessEnvironment::systemEnvironment();
+    for(const QString& p:env.value("PATH").split(QDir::listSeparator(),Qt::SkipEmptyParts)) {
+        found=findInDir(p);
+        if(!found.isEmpty()) return found;
     }
 
     return {};
+}
+
+// ====== 新增函数实现 ======
+
+QString FileEncryptorLocator::version() {
+    return QStringLiteral("2.0.0");
+}
+
+QStringList FileEncryptorLocator::getExpectedNames() {
+    const QString ver=version();
+#ifdef Q_OS_WIN
+    return {
+        QStringLiteral("FileEncryptorCLI-%1-Windows.exe").arg(ver),
+        QStringLiteral("FileEncryptorCLI.exe"),
+        QStringLiteral("FileEncryptor.exe"),
+        QStringLiteral("file-encryptor-cli.exe"),
+        QStringLiteral("fe.exe"),
+    };
+#else
+    return {
+        QStringLiteral("FileEncryptorCLI-%1-Linux").arg(ver),
+        QStringLiteral("FileEncryptorCLI"),
+        QStringLiteral("FileEncryptor"),
+        QStringLiteral("file-encryptor-cli"),
+        QStringLiteral("fe"),
+    };
+#endif
+}
+
+static QString findInDirWithNames(const QString& dir,const QStringList& names) {
+    QDir d(dir);
+    if(!d.exists()) return {};
+    for(const QString& name:names) {
+        const QString cand=d.absoluteFilePath(name);
+        if(isExecutable(cand)) return cand;
+    }
+    return {};
+}
+
+bool FileEncryptorLocator::existsWithVersion(QString* foundPath) {
+    const QStringList names=getExpectedNames();
+
+    // 1) 环境变量
+    const QString envPath=qEnvironmentVariable("FILEENCRYPTOR_EXE");
+    if(!envPath.isEmpty()&&isExecutable(envPath)) {
+        if(foundPath) *foundPath=envPath;
+        return true;
+    }
+
+    // 2) 同目录
+    QString found=findInDirWithNames(selfDir(),names);
+    if(!found.isEmpty()) {
+        if(foundPath) *foundPath=found;
+        return true;
+    }
+
+    // 3) PATH
+    const QProcessEnvironment env=QProcessEnvironment::systemEnvironment();
+    for(const QString& p:env.value("PATH").split(QDir::listSeparator(),Qt::SkipEmptyParts)) {
+        found=findInDirWithNames(p,names);
+        if(!found.isEmpty()) {
+            if(foundPath) *foundPath=found;
+            return true;
+        }
+    }
+
+    return false;
 }

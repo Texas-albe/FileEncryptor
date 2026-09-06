@@ -6,6 +6,7 @@
 // 跨平台：Windows 加 .exe 后缀；其它平台不加。
 #pragma once
 #include <QString>
+#include <QStringList>
 
 class FileEncryptorLocator {
 public:
@@ -13,4 +14,10 @@ public:
     static QString locate();
     // 外壳 exe 所在目录（供 UI 显示当前查找上下文）
     static QString selfDir();
+    // 获取当前程序版本号
+    static QString version();
+    // 生成带版本号的可执行文件名列表
+    static QStringList getExpectedNames();
+    // 检查是否存在符合命名规则的 CLI 程序（带版本号）
+    static bool existsWithVersion(QString* foundPath=nullptr);
 };

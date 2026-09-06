@@ -7,15 +7,15 @@
 #include <QFont>
 #include <QApplication>
 
-CreditsDialog::CreditsDialog(QWidget* parent) : QDialog(parent) {
+CreditsDialog::CreditsDialog(QWidget* parent): QDialog(parent) {
     setWindowTitle(tr("鸣谢"));
-    setMinimumSize(560, 320);
+    setMinimumSize(560,320);
 
-    const auto& p = ThemeManager::htmlPalette();
-    const QString ver = qApp->applicationVersion().isEmpty()
-                          ? QStringLiteral("1.0.0") : qApp->applicationVersion();
-    auto* browser = new QTextBrowser(this);
-    browser->setOpenExternalLinks(true);  // 点击链接用系统浏览器打开
+    const auto& p=ThemeManager::htmlPalette();
+    const QString ver=qApp->applicationVersion().isEmpty()
+        ? QStringLiteral("1.0.1") : qApp->applicationVersion();
+    auto* browser=new QTextBrowser(this);
+    browser->setOpenExternalLinks(true);
     // 主题感知 HTML：body 文字/背景取自当前主题调色板，保证深色下可读（WCAG AA）
     browser->setStyleSheet(QStringLiteral("QTextBrowser{background:%1;color:%2;}")
         .arg(QLatin1String(p.bodyBg)).arg(QLatin1String(p.bodyFg)));
@@ -27,13 +27,16 @@ CreditsDialog::CreditsDialog(QWidget* parent) : QDialog(parent) {
         "<table cellspacing='8' cellpadding='2'>"
         "<tr><td><b>代码开发</b></td>"
         "<td>瑶璎珞</td>"
-        "<td><a href='https://space.bilibili.com/3546692557212318' style='color:%6;'>个人主页</a></td></tr>"
+        "<td><a href='https://space.bilibili.com/3546692557212318' style='color:%6;'>个人主页</a></td>"
+        "<td><a href='https://afdian.com/a/yaoyingluo' style='color:%6;'>赞助支持</a></td></tr>"
         "<tr><td><b>测试</b></td>"
         "<td>就不错了我</td>"
-        "<td><a href='https://space.bilibili.com/1705671238' style='color:%6;'>个人主页</a></td></tr>"
+        "<td><a href='https://space.bilibili.com/1705671238' style='color:%6;'>个人主页</a></td>"
+        "<td></td></tr>"
         "<tr><td><b>宣传</b></td>"
         "<td>Twilight飞友</td>"
-        "<td><a href='https://space.bilibili.com/3546728261224829' style='color:%6;'>个人主页</a></td></tr>"
+        "<td><a href='https://space.bilibili.com/3546728261224829' style='color:%6;'>个人主页</a></td>"
+        "<td></td></tr>"
         "</table>"
         "<hr/>"
         "<p style='color:%4; font-size:small;'>"
@@ -48,22 +51,22 @@ CreditsDialog::CreditsDialog(QWidget* parent) : QDialog(parent) {
         .arg(QLatin1String(p.linkColor))
         .arg(ver));
 
-    auto* btns = new QDialogButtonBox(QDialogButtonBox::Close, this);
-    connect(btns, &QDialogButtonBox::rejected, this, &QDialog::accept);
+    auto* btns=new QDialogButtonBox(QDialogButtonBox::Close,this);
+    connect(btns,&QDialogButtonBox::rejected,this,&QDialog::accept);
 
-    auto* lay = new QVBoxLayout(this);
+    auto* lay=new QVBoxLayout(this);
     lay->addWidget(browser);
     lay->addWidget(btns);
 }
 
-ReadmeDialog::ReadmeDialog(QWidget* parent) : QDialog(parent) {
+ReadmeDialog::ReadmeDialog(QWidget* parent): QDialog(parent) {
     setWindowTitle(tr("README 摘要"));
-    setMinimumSize(600, 420);
+    setMinimumSize(600,420);
 
-    const auto& p = ThemeManager::htmlPalette();
-    const QString ver = qApp->applicationVersion().isEmpty()
-                          ? QStringLiteral("1.0.0") : qApp->applicationVersion();
-    auto* browser = new QTextBrowser(this);
+    const auto& p=ThemeManager::htmlPalette();
+    const QString ver=qApp->applicationVersion().isEmpty()
+        ? QStringLiteral("1.0.1") : qApp->applicationVersion();
+    auto* browser=new QTextBrowser(this);
     browser->setOpenExternalLinks(true);
     browser->setStyleSheet(QStringLiteral("QTextBrowser{background:%1;color:%2;}")
         .arg(QLatin1String(p.bodyBg)).arg(QLatin1String(p.bodyFg)));
@@ -103,10 +106,10 @@ ReadmeDialog::ReadmeDialog(QWidget* parent) : QDialog(parent) {
         .arg(QLatin1String(p.mutedFg))
         .arg(ver));
 
-    auto* btns = new QDialogButtonBox(QDialogButtonBox::Close, this);
-    connect(btns, &QDialogButtonBox::rejected, this, &QDialog::accept);
+    auto* btns=new QDialogButtonBox(QDialogButtonBox::Close,this);
+    connect(btns,&QDialogButtonBox::rejected,this,&QDialog::accept);
 
-    auto* lay = new QVBoxLayout(this);
+    auto* lay=new QVBoxLayout(this);
     lay->addWidget(browser);
     lay->addWidget(btns);
 }

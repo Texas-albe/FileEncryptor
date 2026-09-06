@@ -11,6 +11,18 @@
 
 ---
 
+## [1.0.1] - 2026-09-06
+
+### Added
+- **【中·GUI】菜单栏新增"编辑"菜单**：顶层菜单（与"关于"同处一行），"编辑 YAML 配置..."按 CLI 的搜索顺序（`FILEENCRYPTOR_CONFIG` 环境变量 → CWD → CLI exe 目录 → 用户配置目录）定位 `fileencryptor.yaml`，未找到时在 CWD 生成与 CLI 一致的默认模板，再经 `QDesktopServices::openUrl` 调用系统默认编辑器打开。
+- **【低·项目】根目录新增项目概览 README**（`../README.md`）：项目用途、CLI/GUI 目录结构、快速构建与跨平台要点。
+
+### Changed
+- **【中·GUI】主题切换与视图设置移入菜单栏**：原独立顶部工具栏（导航栏）取消，"主题"下拉框（跟随系统/浅色/深色）与"视图设置"按钮经 `QMenuBar::setCornerWidget` 置于菜单栏右上角，与"关于"同一行显示。
+- **【低·版本】版本号同步至 1.0.1**：`project(FileEncryptorGUI VERSION 1.0.1)`、`setApplicationVersion`、窗口标题、鸣谢/README 摘要对话框兜底值、README 程序版本声明。
+
+---
+
 ## [1.0.0] - 2026-09-05（GUI 独立子项目首版）
 
 > **版本号重置说明**：GUI 拆分为独立子项目后版本序列重新开始（2.0.0 → 1.0.0），1.0.0 为 `GUI/` 独立子项目的首个正式版本，与 `../CLI/` 版本号解耦、不再跟随 CLI 同步升级。
@@ -30,6 +42,16 @@
 
 ### Fixed
 - **【高·GUI】Linux 下界面中文显示为方块（豆腐块）**：Linux 最小化 / 无中文字体环境里，Qt 默认字体（DejaVu Sans 等）不含 CJK 字形，中文全渲染成 □。新增 `src/FontBootstrap.{h,cpp}`：启动期依次尝试「环境变量 `FILEENCRYPTOR_UI_FONT` 显式指定 → 系统默认字体已含中文（Windows/macOS 走此分支）→ 系统候选清单挑含中文字体 → 构建期嵌入的 Noto Sans SC（`GUI/fonts.qrc` 仅非 Windows 嵌入 exe）」，命令输出窗口经 `FontBootstrap::monoFont()` 取含中文的等宽字体（无则退回界面字体，宁可不等宽也不出方块）。嵌入字体文件 `GUI/fonts/NotoSansSC-Regular.otf`（Noto Sans SC，SIL OFL 许可）仅 Linux/macOS 构建打进 exe，Windows 由系统 YaHei 覆盖故不嵌入以控制体积。
+
+### Added
+- **【中·构建】CPack 打包 DEB / RPM**：`CMakeLists.txt` 在 `if(UNIX)` 下加入 CPack 配置（与 CLI 对齐）：包名 `file-encryptor-gui`、安装前缀 `/usr`、生成器 `DEB;RPM`；DEB 关闭 `CPACK_DEBIAN_PACKAGE_SHLIBDEPS` 且 `Depends` 清空，RPM 关闭 `AUTOREQ`/`AUTOREQPROV`，确保静态 Qt6 + 嵌入字体下包零运行时依赖声明（自包含）。DEB/RPM 为 Unix 专属，配置用 `if(UNIX)` 守护，Windows 构建不受影响。生成命令：`cmake --build --preset linux-release` 后于构建目录 `cpack`。
+
+### Changed
+- **【中·GUI】导航栏主题切换（原“视图”菜单移除）**：顶部新增导航栏（QToolBar），以 `QComboBox` 提供「跟随系统 / 浅色 / 深色」三模式切换，替代原“视图(&V)”菜单中的主题选项（已删除）。`ThemeManager` 改为单例（`instance()`），`setTheme` 时发射 `themeChanged(bool)` 信号，导航栏下拉框与面板半透明底色随之同步。
+- **【中·GUI】自定义背景图（视图设置）**：新增 `ViewSettingsDialog`，用户可选图片作主窗口背景（预览 + 清除）。主窗口以铺满底图（QLabel，`KeepAspectRatioByExpanding`）+ 面板半透明（`rgba` 约 0.82，随主题变底色）呈现；选定图片后窗口按图片比例拉伸/缩小（约束在屏幕 90% 内、高 480–900）。背景图路径（键 `backgroundImage`）与窗口几何（`saveGeometry`/`restoreGeometry`，键 `geometry`）经 QSettings 持久化，重启后保持生效。
+
+### Fixed
+- **【中·GUI】CLI 重命名后 GUI 识别不到**：`FileEncryptorLocator::locate()` 原仅按固定名 `FileEncryptorCLI(.exe)` 查找，重命名 CLI（如改为 `FileEncryptor.exe`/`fe.exe`）即失效。现按候选名列表 `FileEncryptorCLI` / `FileEncryptor` / `file-encryptor-cli` / `fe`（Windows 加 `.exe`）在“同目录 + PATH”两段依次探测，任一命中即返回。
 
 ---
 

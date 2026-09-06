@@ -2,7 +2,7 @@
 
 跨平台（Windows / Linux / macOS）FileEncryptor **图形界面**。基于 Qt 6（Widgets）实现，**静态链接** Qt 主库与所有依赖（Qt6Core / Qt6Gui / Qt6Widgets 及 Qt6Bundled*），运行时**不依赖任何 Qt DLL 或插件 DLL**。
 
-- 程序版本 **1.0.0**。
+- 程序版本 **1.0.1**。
 
 ---
 
@@ -66,6 +66,13 @@ cmake --build --preset linux-release
 # 产物：out/build/linux-release/FileEncryptorGUI
 ```
 
+> **打包为 DEB / RPM**：Linux 构建后可生成发行包（需 `dpkg` / `rpmbuild`）：
+> ```bash
+> cmake --build --preset linux-release        # 产出 out/build/linux-release/FileEncryptorGUI
+> cd out/build/linux-release && cpack          # 同目录生成 .deb 与 .rpm（安装前缀 /usr，零运行时依赖声明）
+> ```
+> 包名 `file-encryptor-gui`，自动依赖探测已关闭（静态 Qt6 + 嵌入字体 = 自包含）。
+
 > **Linux 中文字体（豆腐块修复）**：最小化 / 服务器环境常无 CJK 字体，界面中文会渲染成方块（□）。
 > 本项目在 Linux/macOS 构建期把 `fonts/NotoSansSC-Regular.otf`（Noto Sans SC，SIL OFL）经
 > `fonts.qrc` 嵌入 exe，启动期由 `FontBootstrap` 自动加载为兜底界面字体，无需系统预装中文字体。
@@ -117,7 +124,7 @@ FileEncryptor/
 
 直接运行 `FileEncryptorGUI(.exe)`：
 
-- **顶栏**：关于菜单（关于对话框 + 鸣谢 + README 摘要）、视图菜单（主题切换）
+- **顶栏（菜单栏）**：关于菜单（鸣谢 + README 摘要 + 关于 Qt）、编辑菜单（“编辑 YAML 配置...”用系统默认编辑器打开 CLI 的 fileencryptor.yaml）；右上角为主题下拉框（跟随系统 / 浅色 / 深色）与 `视图设置` 按钮（自定义背景图），与“关于”同一行
 - **左侧**：文件选择面板（添加文件 / 添加目录 / 清空）
 - **中部**：动作按钮（加密 / 解密 / 批量加密 / 批量解密）+ 模式选择（XChaCha20-Poly1305 / AEGIS-256）
 - **右侧**：密码输入框（星号遮挡 + 强度提示）

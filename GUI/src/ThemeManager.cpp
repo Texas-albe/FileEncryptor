@@ -15,21 +15,22 @@ static bool g_darkActive = false;
 
 // ---------- 调色板 ----------
 QPalette ThemeManager::buildLightPalette() {
-    // 标准 Fusion 浅色调色板，加深文字对比度
+    // 柔和浅色调色板：暖白底 + 中灰文字，降低对比度（约 9~10:1，仍满足 WCAG AA），
+    // 长时间使用不易视觉疲劳
     QPalette p;
-    p.setColor(QPalette::Window,          QColor(0xF5, 0xF5, 0xF5));
-    p.setColor(QPalette::WindowText,      QColor(0x1F, 0x1F, 0x1F));  // 对比 ~14:1
-    p.setColor(QPalette::Base,            QColor(0xFF, 0xFF, 0xFF));
-    p.setColor(QPalette::AlternateBase,   QColor(0xEE, 0xEE, 0xEE));
-    p.setColor(QPalette::Text,            QColor(0x1F, 0x1F, 0x1F));
-    p.setColor(QPalette::Button,          QColor(0xE0, 0xE0, 0xE0));
-    p.setColor(QPalette::ButtonText,      QColor(0x1F, 0x1F, 0x1F));
+    p.setColor(QPalette::Window,          QColor(0xF3, 0xF3, 0xEF));  // 暖白
+    p.setColor(QPalette::WindowText,      QColor(0x33, 0x33, 0x33));  // 中灰文字
+    p.setColor(QPalette::Base,            QColor(0xFA, 0xFA, 0xFA));  // 非纯白，减刺眼
+    p.setColor(QPalette::AlternateBase,   QColor(0xEC, 0xEC, 0xEA));
+    p.setColor(QPalette::Text,            QColor(0x33, 0x33, 0x33));
+    p.setColor(QPalette::Button,          QColor(0xE8, 0xE8, 0xE6));
+    p.setColor(QPalette::ButtonText,      QColor(0x33, 0x33, 0x33));
     p.setColor(QPalette::BrightText,      QColor(0xFF, 0xFF, 0xFF));
-    p.setColor(QPalette::Highlight,       QColor(0x2E, 0x7D, 0x32));
+    p.setColor(QPalette::Highlight,       QColor(0x4A, 0x7C, 0x50));  // 柔化绿
     p.setColor(QPalette::HighlightedText,  QColor(0xFF, 0xFF, 0xFF));
-    p.setColor(QPalette::ToolTipBase,     QColor(0xFF, 0xFF, 0xFF));
-    p.setColor(QPalette::ToolTipText,     QColor(0x1F, 0x1F, 0x1F));
-    p.setColor(QPalette::PlaceholderText, QColor(0x80, 0x80, 0x80));
+    p.setColor(QPalette::ToolTipBase,     QColor(0xFA, 0xFA, 0xFA));
+    p.setColor(QPalette::ToolTipText,     QColor(0x33, 0x33, 0x33));
+    p.setColor(QPalette::PlaceholderText, QColor(0x8A, 0x8A, 0x8A));  // 更柔和的占位符
     return p;
 }
 
@@ -102,6 +103,13 @@ void ThemeManager::setTheme(Theme t) {
     if (auto* app = qApp) {
         for (QWidget* w : app->topLevelWidgets()) w->update();
     }
+    // 发射信号（单例），供导航栏下拉框 / 面板透明度同步
+    emit instance().themeChanged(g_darkActive);
+}
+
+ThemeManager& ThemeManager::instance() {
+    static ThemeManager s;
+    return s;
 }
 
 ThemeManager::Theme ThemeManager::chosenTheme() { return g_chosen; }
@@ -109,17 +117,17 @@ ThemeManager::Theme ThemeManager::chosenTheme() { return g_chosen; }
 bool ThemeManager::isDarkActive() { return g_darkActive; }
 
 unsigned int ThemeManager::stdoutColorRGB() {
-    return g_darkActive ? 0xE6E6E6u : 0x1F1F1Fu;
+    return g_darkActive ? 0xE6E6E6u : 0x333333u;
 }
 
 unsigned int ThemeManager::stderrColorRGB() {
-    return g_darkActive ? 0xFF8A80u : 0xC62828u;
+    return g_darkActive ? 0xFF8A80u : 0xC0392Bu;
 }
 
 const ThemeManager::HtmlPalette& ThemeManager::htmlPalette() {
     static const HtmlPalette light = {
-        "#1F1F1F", "#FFFFFF", "#F0F0F0", "#1F1F1F", "#666666",
-        "#2E7D32", "#1565C0", "#1565C0"};
+        "#333333", "#FAFAFA", "#ECECEA", "#333333", "#888888",
+        "#4A7C50", "#2E5C9A", "#2E5C9A"};
     static const HtmlPalette dark = {
         "#E6E6E6", "#1E1E1E", "#2D2D30", "#E6E6E6", "#999999",
         "#66BB6A", "#64B5F6", "#64B5F6"};

@@ -1,36 +1,8 @@
 cmake_minimum_required(VERSION 3.16)
-project(FileEncryptorGUI VERSION 1.0.0 LANGUAGES CXX)
+project(FileEncryptorGUI VERSION 1.1.0 LANGUAGES CXX)
 
 # FileEncryptor GUI - Qt6 跨平台图形界面（独立项目）
-# 本项目编译产出 FileEncryptorGUI(.exe)，通过 QProcess 调用 ../CLI/ 项目的 FileEncryptorCLI
-# 执行实际加解密；GUI 不链接任何加密代码（Qt6 /MD 与 libsodium /MT 的 CRT 冲突决定的
-# 进程级隔离架构）。
-#
-# 依赖：
-#   - Qt 6.x Widgets（**静态链接**，从 CMAKE_PREFIX_PATH 指向的安装目录查找）
-#   - 系统库（Windows 平台插件 / 图像格式插件等已在 main.cpp 中通过 Q_IMPORT_PLUGIN 静态导入）
-#
-# 使用示例（Windows smelibs 静态 Qt）：
-#   cmake -S . -B build -G "Visual Studio 18 2026" -A x64 \
-#         -DCMAKE_PREFIX_PATH="C:/Program Files/smelibs"
-#
-# 运行时依赖：FileEncryptorCLI(.exe) 须位于同目录，或通过 FILEENCRYPTOR_EXE 环境变量、
-# PATH 提供。
 
-# ---------- Qt 6 ----------
-# 跨平台（Windows / Linux / macOS）。需先安装 Qt 6（官方在线安装器或系统包管理器或 vcpkg）。
-#   官方安装器：https://www.qt.io/download  选 Qt 6.x + MinGW/MSVC 套件
-#   vcpkg:      vcpkg install qtbase
-#   Linux:      sudo apt install qt6-base-dev / sudo dnf install qt6-qtbase-devel
-#   macOS:      brew install qt
-# 配置时让 CMake 能找到 Qt，例如：
-#   cmake -S . -B build -DCMAKE_PREFIX_PATH="C:/Program Files/smelibs"
-#                      或 "C:/Qt/6.x.x/msvc2022_64"
-#                      或 "/usr/lib/qt6"
-#                      或 "$(brew --prefix qt)"
-# 仅 Windows + 该目录存在时加入静态 Qt 分发（smelibs）的搜索路径。
-# Linux 下用系统/发行版 Qt（/usr/lib/x86_64-linux-gnu/cmake/Qt6 等），
-# 不加这条 Windows 路径，避免把无关前缀写进 CMAKE_PREFIX_PATH。
 if(WIN32 AND EXISTS "C:/Program Files/smelibs")
   list(APPEND CMAKE_PREFIX_PATH "C:/Program Files/smelibs")
 endif()
@@ -62,19 +34,7 @@ if(POLICY CMP0091)
   cmake_policy(SET CMP0091 NEW)
 endif()
 
-# Qt6 静态链接时的关键设置：
-# Qt6 官方 Windows 预编译包（msvc2022_64 等）默认是 /MD（动态 CRT）构建。
-# 但「完全静态链接 Qt」（如本项目要求 exe 零 Qt DLL 依赖）需要使用专门的 Qt 静态构建，
-# 其 lib/ 下提供 Qt6Core.lib / Qt6Gui.lib / Qt6Widgets.lib 等静态导入库（STATIC IMPORTED）
-# 以及 Qt6Bundled* 捆绑依赖库。本项目的目标是支持这种静态 Qt 构建。
-#
-# Qt6 静态构建检测：find_package(Qt6) 找到的 Qt6::Core / Qt6::Widgets 应为 STATIC IMPORTED
-# 目标（其 Qt6CoreTargets.cmake 中 add_library(Qt6::Core STATIC IMPORTED)），无需额外设置；
-# Qt CMake 配置包会自动把 Qt6Bundled* 等静态依赖通过 INTERFACE_LINK_LIBRARIES 传递。
-#
-# 用户可使用官方 qt-online-installer 安装时勾选「Static Qt Builds」或预编译的 smelibs
-# （如 C:/Program Files/smelibs）即可。
-
+# Qt6 静态链接时的关键设置
 # ---------- 外壳源文件 ----------
 set(SHELL_SOURCES
     src/main.cpp
@@ -85,7 +45,9 @@ set(SHELL_SOURCES
     src/AboutDialogs.cpp
     src/FileEncryptorLocator.cpp
     src/FontBootstrap.cpp
-    src/ThemeManager.cpp)
+    src/ThemeManager.cpp
+    src/ViewSettingsDialog.cpp
+    src/CliNotFoundDialog.cpp)
 
 set(SHELL_HEADERS
     src/MainWindow.h
@@ -96,7 +58,9 @@ set(SHELL_HEADERS
     src/AboutDialogs.h
     src/FileEncryptorLocator.h
     src/FontBootstrap.h
-    src/ThemeManager.h)
+    src/ThemeManager.h
+    src/ViewSettingsDialog.h
+    src/CliNotFoundDialog.h)
 
 # Windows 图标资源（嵌入 exe；Linux/macOS 无 .rc，图标经窗口图标设置）
 set(SHELL_RESOURCES )
@@ -136,3 +100,51 @@ endif()
 
 # 安装
 install(TARGETS FileEncryptorGUI RUNTIME DESTINATION bin)
+
+# ---------- 安装与打包（DEB / RPM） ----------
+# GUI 经 Qt6 静态链接（Windows smelibs / Linux 静态 Qt 构建）后，exe 内已内联 Qt6 主库、
+# Qt6Bundled* 依赖与嵌入字体，运行时不再依赖 Qt6 *.so / 平台插件 DLL。打包 DEB/RPM 时
+# 关闭自动依赖探测，确保包不声明任何系统 Qt 运行时依赖（自包含）。
+#
+# 注意：本 GUI 通过 QProcess 调用 ../CLI/ 的 FileEncryptorCLI 执行实际加解密。打包后的
+# GUI 仅含界面外壳，不捆绑 CLI；终端用户需另行安装 FileEncryptorCLI（或把 CLI 放在 GUI
+# 同目录 / 经 FILEENCRYPTOR_EXE 指定）。
+if(UNIX)
+  set(CPACK_PACKAGE_NAME "file-encryptor-gui")
+  set(CPACK_PACKAGE_VENDOR "FileEncryptor")
+  set(CPACK_PACKAGE_CONTACT "maintainer@example.com")
+  set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "Cross-platform file encryption GUI (Qt6, static-linked)")
+  set(CPACK_PACKAGE_DESCRIPTION
+      "FileEncryptorGUI is the Qt6 Widgets frontend for FileEncryptor. It is statically linked \
+against Qt6 (main libraries, Qt6Bundled* dependencies and embedded Noto Sans SC font are inlined), \
+so the installed package requires no external Qt6 runtime. The GUI drives the companion \
+FileEncryptorCLI backend via QProcess for the actual encryption/decryption.")
+  set(CPACK_PACKAGE_LICENSE "GPLv3")
+  if(EXISTS "${CMAKE_SOURCE_DIR}/LICENSE")
+    set(CPACK_RESOURCE_FILE_LICENSE "${CMAKE_SOURCE_DIR}/LICENSE")
+  endif()
+
+  set(CPACK_GENERATOR "DEB;RPM")
+  set(CPACK_PACKAGING_INSTALL_PREFIX "/usr")
+
+  # —— DEB ——
+  set(CPACK_DEBIAN_PACKAGE_MAINTAINER "maintainer@example.com")
+  set(CPACK_DEBIAN_PACKAGE_SECTION "utils")
+  set(CPACK_DEBIAN_PACKAGE_PRIORITY "optional")
+  # GUI 静态链接 Qt6，无外部 .so 运行时依赖；关闭 shlibdeps 避免把 Qt6 / libsodium 写进 Depends
+  set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS OFF)
+  set(CPACK_DEBIAN_PACKAGE_DEPENDS "")
+
+  # —— RPM ——
+  set(CPACK_RPM_PACKAGE_LICENSE "GPLv3")
+  set(CPACK_RPM_PACKAGE_GROUP "Applications/System")
+  set(CPACK_RPM_PACKAGE_AUTOREQ OFF)
+  set(CPACK_RPM_PACKAGE_AUTOREQPROV OFF)
+
+  # 打包阶段剥离调试符号，减小体积（仅作用于打包副本）
+  set(CPACK_STRIP_FILES ON)
+  # RPM 发布号（包文件名中的 -1）
+  set(CPACK_PACKAGE_RELEASE "1")
+
+  include(CPack)
+endif()
