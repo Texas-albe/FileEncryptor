@@ -1,0 +1,22 @@
+# ---- Build output ----
+bin/
+obj/
+publish/
+out/
+
+# ---- IDE / tooling ----
+.vs/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+*.csproj.user
+
+# ---- OS junk ----
+Thumbs.db
+Desktop.ini
+
+# ---- Runtime binaries (engine is a separate project; see README) ----
+*.exe
+*.pdb
+*.dll

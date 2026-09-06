@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <NoWarn>$(NoWarn);WFO1000</NoWarn>
+    <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
+    <ApplicationUseCompatibleTextRendering>false</ApplicationUseCompatibleTextRendering>
+    <ApplicationDefaultFont>Segoe UI, 9pt</ApplicationDefaultFont>
+
+    <AssemblyName>FileEncryptorGUI</AssemblyName>
+    <RootNamespace>FileEncryptorGUI</RootNamespace>
+    <ApplicationIcon>..\FileEncryptorGUI.ico</ApplicationIcon>
+    <Product>FileEncryptor GUI</Product>
+    <Description>FileEncryptor 图形界面包装器</Description>
+    <Company>FileEncryptor</Company>
+    <Version>3.0.0</Version>
+
+    <!-- Single-file self-contained publish -->
+    <PublishSingleFile>true</PublishSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <SelfContained>true</SelfContained>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+    <UseAppHost>true</UseAppHost>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+  </PropertyGroup>
+
+</Project>
