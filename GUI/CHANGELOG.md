@@ -11,15 +11,14 @@
 
 ---
 
-## [1.0.1] - 2026-09-06
+## [1.1.0] - 2026-09-06
 
 ### Added
 - **【中·GUI】菜单栏新增"编辑"菜单**：顶层菜单（与"关于"同处一行），"编辑 YAML 配置..."按 CLI 的搜索顺序（`FILEENCRYPTOR_CONFIG` 环境变量 → CWD → CLI exe 目录 → 用户配置目录）定位 `fileencryptor.yaml`，未找到时在 CWD 生成与 CLI 一致的默认模板，再经 `QDesktopServices::openUrl` 调用系统默认编辑器打开。
-- **【低·项目】根目录新增项目概览 README**（`../README.md`）：项目用途、CLI/GUI 目录结构、快速构建与跨平台要点。
 
 ### Changed
 - **【中·GUI】主题切换与视图设置移入菜单栏**：原独立顶部工具栏（导航栏）取消，"主题"下拉框（跟随系统/浅色/深色）与"视图设置"按钮经 `QMenuBar::setCornerWidget` 置于菜单栏右上角，与"关于"同一行显示。
-- **【低·版本】版本号同步至 1.0.1**：`project(FileEncryptorGUI VERSION 1.0.1)`、`setApplicationVersion`、窗口标题、鸣谢/README 摘要对话框兜底值、README 程序版本声明。
+- **【低·版本】版本号同步至 1.1.0**：`project(FileEncryptorGUI VERSION 1.1.0)`、`setApplicationVersion`、窗口标题、鸣谢/README 摘要对话框兜底值、README 程序版本声明。
 
 ---
 
