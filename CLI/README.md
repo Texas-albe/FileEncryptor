@@ -3,7 +3,7 @@
 跨平台（Windows / Linux / macOS）文件加密命令行工具，基于 [libsodium](https://doc.libsodium.org/) 实现高强度、抗篡改、可续传的分块加密。
 
 - 磁盘文件格式版本 **v4**（向后兼容 v1 / v2 / v3，旧文件可直接解密，无需重加密）。
-- 程序版本 **2.1.0**。
+- 程序版本 **2.1.1**。
 
 ---
 
@@ -76,7 +76,7 @@ cmake --build --preset linux-release
 
 # 3) 打包（同时产出 .deb 和 .rpm）
 cd out/build/linux-release && cpack
-# 产物：file-encryptor-cli_2.1.0-1_amd64.deb 与 file-encryptor-cli-2.1.0-1.x86_64.rpm
+# 产物：file-encryptor-cli_2.1.1-1_amd64.deb 与 file-encryptor-cli-2.1.1-1.x86_64.rpm
 ```
 
 > 若系统中同时存在多个 libsodium（如 apt 旧版 + `/usr/local` 新版），可显式指定：
@@ -85,9 +85,9 @@ cd out/build/linux-release && cpack
 最终用户安装：
 
 ```bash
-sudo dpkg -i file-encryptor-cli_2.1.0-1_amd64.deb
+sudo dpkg -i file-encryptor-cli_2.1.1-1_amd64.deb
 # 或
-sudo rpm -ivh file-encryptor-cli-2.1.0-1.x86_64.rpm
+sudo rpm -ivh file-encryptor-cli-2.1.1-1.x86_64.rpm
 ```
 
 ### Windows（预编译 libsodium + MSVC）

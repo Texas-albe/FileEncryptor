@@ -69,5 +69,7 @@ void log_event(int level, const std::string& msg,
                const std::vector<std::pair<std::string, std::string>>& fields);
 
 // ---------- 全局配置（启动期设置一次，之后只读，线程安全） ----------
-void    set_global_config(const Config& cfg);
+// 注意：参数为值拷贝，内部以 shared_ptr<const Config> 持有，避免调用方传入临时/局部
+// Config 的引用导致悬空指针（历史实现曾存裸 const Config*，调用方传 load_config() 临时值即悬空）。
+void    set_global_config(Config cfg);
 const Config& global_config();

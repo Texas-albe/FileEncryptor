@@ -10,6 +10,19 @@
 
 ---
 
+## [2.1.1] - 2026-09-12
+
+### Changed
+- **【中·CLI】口令强策略**：交互式加密 / 口令派生（`-G`）套用统一口令策略（最小长度 8，且至少含 2 类字符或长度 ≥16；非 ASCII 口令直接放行），替代原先仅检查长度 ≥6 的弱校验。
+- **【中·CLI】批量解密文件名还原改为可选项**：新增 `-rn` / `--restore-name`，默认关闭。关闭时不逐文件执行昂贵的 Argon2id KDF 还原完整原始文件名，仅保留输出文件扩展名（混淆名自带），显著加快批量解密；开启时还原完整文件名（性能较差，由 GUI 警告后用户选择）。
+
+### Fixed
+- **【高·安全】`set_global_config` 悬空指针修复**：改为按值拷贝并以 `shared_ptr<const Config>` 持有，杜绝调用方传入 `load_config()` 临时值后悬空（此前存裸 `const Config*`）。
+- **【高·安全】收紧密钥文件权限**：`-g` / `-G` 生成的 `rage_private.txt` 私钥文件写入后收紧为仅拥有者可读（`chmod 0600` / Windows `_chmod _S_IREAD`），避免明文私钥被其它用户读取。
+- **【高·安全】`anti_debug_check` 仅主线程调用约束**：补充注释——该函数检测到调试器时直接 `exit(1)`，务必只在 `main()` 启动期、任何工作线程创建前调用，切勿移入 `process_files` 并发 worker，否则会终止整个批量任务。
+- **【高·CLI】修复中文 / Emoji 路径加密解密必崩溃**：`normalize_path_lexical` / `compute_progress_binding` 用 `fs::path` 的窄字符串构造（按 ANSI 代码页 / GBK 解释字节），含中文的 UTF-8 路径在 `.string()` 往返时抛 "No mapping for the Unicode character exists in the target multi-byte code page"，未捕获导致 `std::terminate` → fastfail（0xC0000409，GUI 侧表现为"进程崩溃"且无任何输出）。改为先经 `utf8_to_wstring` 转宽字符构造 `fs::path`、规范化后用 `wstring_to_utf8` 取回，全程无 ACP 往返。单文件加密 / 解密调用点另加异常兜底，未预期异常以干净错误退出而非崩溃。
+- **【中·CLI】修复 `-o` 在非当前工作目录的盘上无法新建输出目录**：递归创建目录时对盘符分量（如 `"E:"`）做 `_wstat64` 依赖进程级"盘符当前目录"（CWD 在其他盘时失败）、`_wmkdir("E:")` 恒失败。改为用绝对根 `"E:/"` 探测盘可访问性，存在则继续创建剩余分量。此前 GUI 选择其他盘（含 U 盘）的输出目录会报 "Cannot create output directory"。
+
 ## [2.1.0] - 2026-09-12
 
 ### Added

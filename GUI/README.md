@@ -2,7 +2,7 @@
 
 跨平台（Windows / Linux / macOS）FileEncryptor **图形界面**。基于 Qt 6（Widgets）实现，**静态链接** Qt 主库与所有依赖（Qt6Core / Qt6Gui / Qt6Widgets 及 Qt6Bundled*），运行时**不依赖任何 Qt DLL 或插件 DLL**。
 
-- 程序版本 **1.2.0**。
+- 程序版本 **1.2.1**。
 
 ---
 

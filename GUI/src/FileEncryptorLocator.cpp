@@ -7,7 +7,7 @@
 
 #ifdef Q_OS_WIN
 static const QStringList kExeNames={
-    QStringLiteral("FileEncryptorCLI-2.0.0-Windows.exe"),
+    QStringLiteral("FileEncryptorCLI-2.1.1-Windows.exe"),
     QStringLiteral("FileEncryptorCLI.exe"),
     QStringLiteral("FileEncryptor.exe"),
     QStringLiteral("file-encryptor-cli.exe"),
@@ -15,7 +15,7 @@ static const QStringList kExeNames={
 };
 #else
 static const QStringList kExeNames={
-    QStringLiteral("FileEncryptorCLI-2.0.0-Linux"),
+    QStringLiteral("FileEncryptorCLI-2.1.1-Linux"),
     QStringLiteral("FileEncryptorCLI"),
     QStringLiteral("FileEncryptor"),
     QStringLiteral("file-encryptor-cli"),
@@ -67,7 +67,7 @@ QString FileEncryptorLocator::locate() {
 // ====== 新增函数实现 ======
 
 QString FileEncryptorLocator::version() {
-    return QStringLiteral("2.1.0");
+    return QStringLiteral("2.1.1");
 }
 
 QStringList FileEncryptorLocator::getExpectedNames() {

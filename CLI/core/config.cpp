@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <mutex>
 #include <chrono>
+#include <memory>
 #include <ctime>
 
 #include <yaml-cpp/yaml.h>
@@ -511,9 +512,9 @@ void log_event(int level, const std::string& msg,
 //  全局配置访问
 // =====================================================================
 
-static const Config* g_cfg = nullptr;
+static std::shared_ptr<const Config> g_cfg;
 
-void set_global_config(const Config& cfg) { g_cfg = &cfg; }
+void set_global_config(Config cfg) { g_cfg = std::make_shared<const Config>(std::move(cfg)); }
 
 const Config& global_config() {
     static const Config fallback;

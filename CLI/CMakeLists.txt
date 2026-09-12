@@ -1,5 +1,5 @@
 ﻿cmake_minimum_required(VERSION 3.15)
-project(FileEncryptorCLI VERSION 2.1.0 LANGUAGES CXX)
+project(FileEncryptorCLI VERSION 2.1.1 LANGUAGES CXX)
 
 # FileEncryptor CLI - 命令行加密工具（独立项目）
 # 本项目编译产出 FileEncryptorCLI(.exe)；GUI 项目（../GUI）通过 QProcess 调用此程序。
@@ -461,6 +461,7 @@ set_target_properties(FileEncryptor PROPERTIES
 install(TARGETS FileEncryptor RUNTIME DESTINATION bin)
 
 set(CPACK_PACKAGE_NAME "file-encryptor-cli")
+set(CPACK_PACKAGE_VERSION "${PROJECT_VERSION}")   # 与 project(VERSION) 同步
 set(CPACK_PACKAGE_VENDOR "FileEncryptor")
 set(CPACK_PACKAGE_CONTACT "maintainer@example.com")
 set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "Cross-platform file encryption CLI (libsodium, AEGIS-256)")

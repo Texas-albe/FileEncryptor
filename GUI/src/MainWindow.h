@@ -43,8 +43,6 @@ private slots:
     // 执行回显
     void onOutputLine(const OutputLine& line);
     void onCommandFinished(const CommandResult& r);
-    // 密码强度实时
-    void onPasswordChanged(const QString& text);
     // 选项变化 → 刷新命令预览
     void refreshCommandPreview();
     // 非对称模式下显示/隐藏收件人/身份输入与密码面板
@@ -68,7 +66,6 @@ private:
     void buildNavControls();
     QWidget* buildLeftPanel();
     QWidget* buildCenterPanel();
-    QWidget* buildRightPanel();
     QWidget* buildBottomPanel();
     void connectSignals();
     void applyButtonStyles();
@@ -97,10 +94,8 @@ private:
     // 面板容器（用于半透明叠加背景图）
     QWidget* m_leftPanel=nullptr;
     QWidget* m_centerPanel=nullptr;
-    QWidget* m_rightPanel=nullptr;
     QWidget* m_bottomPanel=nullptr;
     QSplitter* m_outerSplitter=nullptr;
-    QSplitter* m_midRightSplitter=nullptr;
 
     // 背景图
     QLabel* m_bgLabel=nullptr;
@@ -146,9 +141,8 @@ private:
     QPushButton* m_btnCancel=nullptr;
     QLabel* m_statusLabel=nullptr;
 
-    // 右侧密码框
-    QLineEdit* m_passwordEdit=nullptr;
-    QLabel* m_strengthLabel=nullptr;
+    // 右侧密码框（已移除：口令改为运行时经 PasswordDialog 弹窗输入，主页面不留密码控件）
+    bool m_lastProgressLine = false;   // 上一条输出是否为进度行（用于原地刷新而非重复追加）
 
     // 下部只读文本框
     QPlainTextEdit* m_outputView=nullptr;

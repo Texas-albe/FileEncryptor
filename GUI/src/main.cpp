@@ -30,7 +30,7 @@ Q_IMPORT_PLUGIN(QICOPlugin)
 int main(int argc, char* argv[]) {
     QApplication app(argc, argv);
     app.setApplicationName("FileEncryptorGUI");
-    app.setApplicationVersion("1.2.0");
+    app.setApplicationVersion("1.2.1");
     app.setOrganizationName("FileEncryptor");
 
     // 跨平台观感一致

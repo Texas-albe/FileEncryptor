@@ -46,7 +46,7 @@ struct ShellOptions {
     QString recipientPath;       // -r <pub|file> (asymmetric encrypt: "age1..." public key or a file of them; goes via argv)
     QString identityPath;        // asymmetric decrypt: private key file, handed to the CLI as -k (never via env/argv/stdin)
 
-    QString password;            // 右侧密码框内容（对称模式经 stdin 管道注入子进程）
+    bool restoreName = false;    // 批量解密是否还原完整原始文件名（默认 false：仅保留扩展名，省去每文件 KDF）
 };
 
 class CliArgBuilder {

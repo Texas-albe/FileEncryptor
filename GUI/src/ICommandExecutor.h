@@ -10,7 +10,8 @@
 // 单行输出（stdout 或 stderr）
 struct OutputLine {
     QString text;
-    bool isError;   // true=stderr, false=stdout
+    bool isError = false;     // true=stderr, false=stdout
+    bool isProgress = false;  // true=进度行（CLI 以 \r 原地刷新）：GUI 应替换上一行而非追加
 };
 
 // 命令请求：argv + 可选 stdin 数据（安全通道，替代环境变量注入密钥）+ 工作目录

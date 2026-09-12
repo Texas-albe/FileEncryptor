@@ -8,6 +8,10 @@
 #include "ProcessCommandExecutor.h"
 #include "ViewSettingsDialog.h"
 #include "CliNotFoundDialog.h"
+#include "MsgBox.h"
+#include "PasswordDialog.h"
+#include <vector>
+#include <cstring>
 
 #include <QMenuBar>
 #include <QApplication>
@@ -51,9 +55,9 @@
 #include <QTimer>
 
 MainWindow::MainWindow(QWidget* parent): QMainWindow(parent) {
-    // 标题含版本号（与 CMake project VERSION 同步为 1.0.1）
+    // 标题含版本号（与 CMake project VERSION 同步为 1.2.1）
     setWindowTitle(QStringLiteral("FileEncryptorGUI %1").arg(
-        qApp->applicationVersion().isEmpty() ? QStringLiteral("1.0.1")
+        qApp->applicationVersion().isEmpty() ? QStringLiteral("1.2.1")
         : qApp->applicationVersion()));
     resize(1200,760);
 
@@ -71,23 +75,16 @@ MainWindow::MainWindow(QWidget* parent): QMainWindow(parent) {
     buildMenu();
     buildNavControls();
 
-    // 中央布局：左 | (中+右 纵向) | 下
+    // 中央布局：左 | 中 | 下
+    // 口令输入已移至运行期弹窗（PasswordDialog），主页面不再保留独立口令提示区，
+    // 让中央选项面板自然占满横向空间，布局更连贯。
     auto* centralSplitter=new QSplitter(Qt::Horizontal);
 
     auto* left=buildLeftPanel();
     auto* center=buildCenterPanel();
-    auto* right=buildRightPanel();
-
-    // 中 + 右 横向
-    auto* midRight=new QSplitter(Qt::Horizontal);
-    midRight->addWidget(center);
-    midRight->addWidget(right);
-    midRight->setStretchFactor(0,3);
-    midRight->setStretchFactor(1,1);
-    midRight->setSizes({700, 220});
 
     centralSplitter->addWidget(left);
-    centralSplitter->addWidget(midRight);
+    centralSplitter->addWidget(center);
     centralSplitter->setStretchFactor(0,1);
     centralSplitter->setStretchFactor(1,3);
     centralSplitter->setSizes({300, 900});
@@ -102,7 +99,6 @@ MainWindow::MainWindow(QWidget* parent): QMainWindow(parent) {
 
     setCentralWidget(outerSplitter);
     m_outerSplitter=outerSplitter;
-    m_midRightSplitter=midRight;
 
     // 背景图：面板透明，透出主窗口底图
     applyPanelTransparency();
@@ -130,11 +126,8 @@ MainWindow::~MainWindow()=default;
 void MainWindow::closeEvent(QCloseEvent* e) {
     // 运行中弹确认
     if(m_executor&&m_executor->isRunning()) {
-        auto ret=QMessageBox::question(
-            this,tr("确认退出"),
-            tr("有命令正在运行，退出将终止它。确定退出？"),
-            QMessageBox::Yes|QMessageBox::No,QMessageBox::No);
-        if(ret!=QMessageBox::Yes) {
+        if(!MsgBox::confirm(this,tr("确认退出"),
+            tr("有命令正在运行，退出将终止它。确定退出？"))) {
             e->ignore();
             return;
         }
@@ -247,7 +240,7 @@ void MainWindow::onViewSettings() {
     // 先校验可加载，避免选了损坏文件还写进设置
     const QPixmap pm(path);
     if(pm.isNull()) {
-        QMessageBox::warning(this,tr("背景图无效"),
+        MsgBox::warn(this,tr("背景图无效"),
             tr("无法加载该图片，请选择有效的 PNG/JPG 等图片文件。"));
         return;
     }
@@ -316,8 +309,8 @@ void MainWindow::applyPanelTransparency() {
     const QString transparent=QStringLiteral("background:transparent;");
     const bool dk=ThemeManager::isDarkActive();
 
-    // 四个功能面板透明（其内部的标签/单选/复选本就无填充，自然融入整体背景）
-    for(QWidget* p:{m_leftPanel, m_centerPanel, m_rightPanel, m_bottomPanel}) {
+    // 功能面板透明（其内部的标签/单选/复选本就无填充，自然融入整体背景）
+    for(QWidget* p:{m_leftPanel, m_centerPanel, m_bottomPanel}) {
         if(!p) continue;
         p->setAttribute(Qt::WA_TranslucentBackground);
         p->setAutoFillBackground(false);
@@ -355,7 +348,7 @@ void MainWindow::applyPanelTransparency() {
         "border-radius:3px;padding:2px 4px;"
         "selection-background-color:%4;selection-color:#FFFFFF;"
     ).arg(fieldBg,fieldFg,fieldBor,fieldSel);
-    for(QLineEdit* e:{m_outDirEdit, m_keyfileEdit, m_passwordEdit,
+    for(QLineEdit* e:{m_outDirEdit, m_keyfileEdit,
                        m_recipientEdit, m_identityEdit}) {
         if(e) e->setStyleSheet(fieldStyle);
     }
@@ -410,8 +403,8 @@ void MainWindow::applyPanelTransparency() {
         if(b) b->setStyleSheet(btnStyle);
     }
 
-    // 外层 splitter 与中右 splitter 透明，让背景在面板间隙也可见
-    for(QWidget* s:{m_outerSplitter, m_midRightSplitter}) {
+    // 外层 splitter 透明，让背景在面板间隙也可见
+    for(QWidget* s:{m_outerSplitter}) {
         if(!s) continue;
         s->setAttribute(Qt::WA_TranslucentBackground);
         s->setAutoFillBackground(false);
@@ -484,7 +477,7 @@ void MainWindow::onEditConfig() {
         QFile f(target);
         if(!f.exists()) {
             if(!f.open(QIODevice::WriteOnly|QIODevice::Truncate)) {
-                QMessageBox::warning(this,tr("无法创建配置文件"),
+                MsgBox::warn(this,tr("无法创建配置文件"),
                     tr("无法在以下位置创建默认配置文件：\n%1").arg(target));
                 return;
             }
@@ -494,7 +487,7 @@ void MainWindow::onEditConfig() {
     }
     // 调用系统默认编辑器打开（按文件关联；无关联时提示路径）
     if(!QDesktopServices::openUrl(QUrl::fromLocalFile(target))) {
-        QMessageBox::information(this,tr("请手动打开"),
+        MsgBox::info(this,tr("请手动打开"),
             tr("系统未关联 YAML 文件的默认编辑器，请手动打开：\n%1").arg(target));
     }
 }
@@ -523,13 +516,13 @@ void MainWindow::showCliNotFoundError(const QString& context) {
     detail+=tr("\n当前程序目录：\n  %1\n").arg(FileEncryptorLocator::selfDir());
     detail+=tr("\n也可设置环境变量 FILEENCRYPTOR_EXE 指向 CLI 程序路径。");
 
-    QMessageBox::critical(this,tr("FileEncryptor CLI 未找到"),detail);
+    MsgBox::error(this,tr("FileEncryptor CLI 未找到"),detail);
 }
 
 void MainWindow::onRetryCliDetection() {
     if(FileEncryptorLocator::existsWithVersion(&m_fileEncryptorPath)) {
         setStatus(tr("就绪 | FileEncryptor: %1").arg(m_fileEncryptorPath));
-        QMessageBox::information(this,tr("检测成功"),
+        MsgBox::info(this,tr("检测成功"),
             tr("已找到 CLI 程序：\n%1").arg(m_fileEncryptorPath));
     }
     else {
@@ -720,7 +713,7 @@ QWidget* MainWindow::buildCenterPanel() {
     lay->addWidget(lblKey,row,0);
     auto* keyRow=new QHBoxLayout;
     m_keyfileEdit=new QLineEdit;
-    m_keyfileEdit->setPlaceholderText(tr("留空 = 用右侧密码（经 stdin 注入）"));
+    m_keyfileEdit->setPlaceholderText(tr("留空 = 运行弹窗输入（经 stdin 注入）"));
     m_btnKeyfileBrowse=new QPushButton(tr("浏览..."));
     keyRow->addWidget(m_keyfileEdit);
     keyRow->addWidget(m_btnKeyfileBrowse);
@@ -757,40 +750,6 @@ QWidget* MainWindow::buildCenterPanel() {
     return w;
 }
 
-// ---------- 右侧密码输入框 ----------
-QWidget* MainWindow::buildRightPanel() {
-    auto* w=new QWidget;
-    m_rightPanel=w;
-    auto* lay=new QVBoxLayout(w);
-
-    auto* title=new QLabel(tr("<b>密码</b>"));
-    title->setAlignment(Qt::AlignCenter);
-    lay->addWidget(title);
-
-    auto* lbl=new QLabel(tr("加密口令："));
-    lay->addWidget(lbl);
-
-    m_passwordEdit=new QLineEdit;
-    m_passwordEdit->setEchoMode(QLineEdit::Password);   // 星号隐藏
-    m_passwordEdit->setPlaceholderText(tr("输入密码（经 stdin 注入，不留盘）"));
-    lay->addWidget(m_passwordEdit);
-
-    // 强度提示
-    auto* lblStrength=new QLabel(tr("强度："));
-    lay->addWidget(lblStrength);
-    m_strengthLabel=new QLabel(tr("未输入"));
-    m_strengthLabel->setAlignment(Qt::AlignCenter);
-    QFont f=m_strengthLabel->font();
-    f.setBold(true);
-    f.setPointSize(f.pointSize()+2);
-    m_strengthLabel->setFont(f);
-    lay->addWidget(m_strengthLabel);
-
-    lay->addStretch();
-
-    return w;
-}
-
 // ---------- 下部只读文本框 ----------
 QWidget* MainWindow::buildBottomPanel() {
     auto* w=new QWidget;
@@ -822,8 +781,6 @@ void MainWindow::connectSignals() {
 
     connect(m_executor,&ICommandExecutor::outputLine,this,&MainWindow::onOutputLine);
     connect(m_executor,&ICommandExecutor::finished,this,&MainWindow::onCommandFinished);
-
-    connect(m_passwordEdit,&QLineEdit::textChanged,this,&MainWindow::onPasswordChanged);
 
     // 选项变化刷新命令预览
     auto refresh=[this]{ refreshCommandPreview(); };
@@ -916,7 +873,6 @@ void MainWindow::updateAsymVisibility() {
     } else {
         m_modeCombo->setDisabled(false);
     }
-    m_passwordEdit->setDisabled(asym||keygen||pubkey);
 }
 
 // ---------- 文件选择 ----------
@@ -947,16 +903,6 @@ void MainWindow::onClearFiles() {
     refreshCommandPreview();
 }
 
-// ---------- 密码强度 ----------
-void MainWindow::onPasswordChanged(const QString& text) {
-    const StrengthResult r=PasswordStrength::evaluate(text);
-    m_strengthLabel->setText(r.label);
-    m_strengthLabel->setStyleSheet(
-        QStringLiteral("color:%1;").arg(r.colorHex));
-    m_strengthLabel->setToolTip(r.detail);
-    refreshCommandPreview();
-}
-
 // ---------- 收集选项 ----------
 ShellOptions MainWindow::collectOptions() const {
     ShellOptions o;
@@ -973,7 +919,7 @@ ShellOptions MainWindow::collectOptions() const {
     o.forceOverwrite=m_chkForce->isChecked();
     o.verbose=m_chkVerbose->isChecked();
     o.keyfilePath=m_keyfileEdit->text().trimmed();
-    o.password=m_passwordEdit->text();
+    // 口令不再存于主页面：运行时经 PasswordDialog 弹窗获取（见 onRunClicked）
 
     // 非对称（age）输入
     o.recipientPath=m_recipientEdit->text().trimmed();
@@ -1007,7 +953,7 @@ void MainWindow::onRunClicked() {
         }
     }
 
-    const ShellOptions o=collectOptions();
+    ShellOptions o=collectOptions();
 
     // 校验
     const bool isKeyGen=(o.action==CryptoAction::KeyGen);
@@ -1015,31 +961,25 @@ void MainWindow::onRunClicked() {
     const bool isPubKey=(o.action==CryptoAction::PubKey);
     const bool noInputNeeded=(isKeyGen||isDerive||isPubKey);  // 三个 rage 密钥动作都不处理输入文件
     if(!noInputNeeded && o.inputPaths.isEmpty()) {
-        QMessageBox::warning(this,tr("缺少输入"),tr("请先添加文件或目录。"));
+        MsgBox::warn(this,tr("缺少输入"),tr("请先添加文件或目录。"));
         return;
     }
     bool isBatch=(o.action==CryptoAction::BatchEncrypt||
         o.action==CryptoAction::BatchDecrypt);
     bool isEnc=(o.action==CryptoAction::Encrypt||o.action==CryptoAction::BatchEncrypt);
     if(!isBatch&&o.inputPaths.size()>1) {
-        QMessageBox::warning(this,tr("输入过多"),
+        MsgBox::warn(this,tr("输入过多"),
             tr("单文件模式只接受一个输入路径，请清空后只选一个，或改用批量模式。"));
         return;
     }
-    // 校验
     const bool isAsym=(o.mode==CryptoMode::Asymmetric)&&!noInputNeeded;
     if(isKeyGen) {
         // 随机生成：不需要公钥，也不需要口令
     } else if(isDerive) {
-        if(o.password.length()<6) {
-            QMessageBox::warning(this,tr("口令过短"),
-                tr("口令派生需要至少 6 个字符的口令，请在右侧密码框中输入。"));
-            m_passwordEdit->setFocus();
-            return;
-        }
+        // 口令在下方弹窗获取并校验（策略 + 二次确认）
     } else if(isPubKey) {
         if(o.identityPath.isEmpty()) {
-            QMessageBox::warning(this,tr("缺少私钥"),
+            MsgBox::warn(this,tr("缺少私钥"),
                 tr("请先在「私钥文件 (-k)」中选择包含 AGE-SECRET-KEY-... 的文件。"));
             m_identityEdit->setFocus();
             return;
@@ -1048,27 +988,41 @@ void MainWindow::onRunClicked() {
         // 非对称模式：不使用对称密码；加密需收件人公钥，解密需身份私钥
         if(isEnc) {
             if(o.recipientPath.isEmpty()) {
-                QMessageBox::warning(this,tr("缺少公钥"),
+                MsgBox::warn(this,tr("缺少公钥"),
                     tr("非对称加密需要公钥：粘贴 age1... 或选择一个含公钥的文件 (-r)。"));
                 m_recipientEdit->setFocus();
                 return;
             }
         } else {
             if(o.identityPath.isEmpty()) {
-                QMessageBox::warning(this,tr("缺少私钥"),
+                MsgBox::warn(this,tr("缺少私钥"),
                     tr("非对称解密需要私钥文件 (-k)，例如 rage_private.txt。"));
                 m_identityEdit->setFocus();
                 return;
             }
         }
-    } else {
-        // 对称模式：未提供密钥文件时，密码必须 >=6（main.cpp 校验）
-        if(o.keyfilePath.isEmpty()&&o.password.length()<6) {
-            QMessageBox::warning(this,tr("密码过短"),
-                tr("密码至少 6 个字符（或提供密钥文件 -k）。"));
-            m_passwordEdit->setFocus();
-            return;
+    }
+
+    // ---------- 对称模式口令（PIN 风格弹窗，默认星号掩码 / 按住显示 / 松开恢复） ----------
+    bool symNeedsPassword = !isAsym && o.keyfilePath.isEmpty()
+        && (o.action==CryptoAction::Encrypt || o.action==CryptoAction::BatchEncrypt
+            || o.action==CryptoAction::Decrypt || o.action==CryptoAction::BatchDecrypt
+            || o.action==CryptoAction::Derive);
+    std::vector<unsigned char> pw;
+    if(symNeedsPassword) {
+        if(o.action==CryptoAction::BatchDecrypt) {
+            // 缺陷修复：批量解密每文件完整执行 KDF 还原文件名很慢；警告用户是否启用
+            o.restoreName = MsgBox::confirm(this, tr("批量解密文件名"),
+                tr("批量解密将对每个文件执行昂贵的密钥派生（KDF）以还原完整原始文件名，可能很慢。\n"
+                   "是否启用「完整文件名还原」？\n（无论是否启用，输出文件的扩展名都会保留。）"));
         }
+        PasswordDialog dlg(this);
+        dlg.setPurpose(isDerive ? tr("口令派生") : (isEnc ? tr("加密口令") : tr("解密口令")));
+        dlg.setRequireConfirm(o.action==CryptoAction::Encrypt
+            || o.action==CryptoAction::BatchEncrypt || o.action==CryptoAction::Derive);
+        if(dlg.exec()!=QDialog::Accepted) return;   // 用户取消
+        pw = dlg.takePassword();
+        if(pw.empty()) return;
     }
 
     // 构建命令
@@ -1078,18 +1032,16 @@ void MainWindow::onRunClicked() {
     req.extraEnv=CliArgBuilder::buildEnvironment(o);
 
     // Key material is injected through the child's stdin pipe (never env / argv):
-    //   - symmetric mode without -k: the password;
+    //   - symmetric mode without -k: the password (from the PIN dialog, held in `pw`);
     //   - asymmetric modes: nothing - public key goes via -r, private key via -k.
-    if(isKeyGen||isPubKey) {
-        // -g 不需要任何密钥材料；-Y 的私钥走 -k 文件，不经 stdin
-    } else if(isDerive) {
-        req.stdinData=o.password.toUtf8();   // 派生口令经 stdin 管道注入（不经 argv / 环境变量）
-    } else if(isAsym) {
-        // 非对称：公钥走 -r，私钥走 -k，都不经 stdin
-    } else {
-        if(o.keyfilePath.isEmpty()) {
-            req.stdinData=o.password.toUtf8();
-        }
+    if(!(isKeyGen||isPubKey) && !isAsym && o.keyfilePath.isEmpty() && !pw.empty()) {
+        req.stdinData=QByteArray(reinterpret_cast<const char*>(pw.data()),(int)pw.size());
+    }
+
+    // 立即擦除内存中的口令副本（stdin 已写入子进程，见 ProcessCommandExecutor::execute）
+    if(!pw.empty()) {
+        std::memset(pw.data(),0,pw.size());
+        pw.clear();
     }
 
     // 输出区清空并显示命令预览
@@ -1104,6 +1056,7 @@ void MainWindow::onRunClicked() {
     setStatus(tr("运行中..."));
 
     m_executor->execute(req);
+    req.stdinData.clear();   // 擦除仍驻留于 QByteArray 的口令副本（子进程已读取）
 }
 
 void MainWindow::onCancelClicked() {
@@ -1115,6 +1068,29 @@ void MainWindow::onCancelClicked() {
 
 // ---------- 执行回显 ----------
 void MainWindow::onOutputLine(const OutputLine& line) {
+    if(line.isProgress) {
+        // 模拟 CMD 进度条：原地刷新上一行（替换），避免末尾进度行重复堆积、清屏异常
+        const unsigned int rgb=line.isError ? ThemeManager::stderrColorRGB()
+            : ThemeManager::stdoutColorRGB();
+        QTextCharFormat fmt;
+        fmt.setForeground(QColor((rgb>>16)&0xFF,(rgb>>8)&0xFF,rgb&0xFF));
+        QTextCursor cur=m_outputView->textCursor();
+        cur.movePosition(QTextCursor::End);
+        if(m_lastProgressLine) {
+            // 上一行即进度行 → 替换它
+            cur.movePosition(QTextCursor::StartOfLine);
+            cur.movePosition(QTextCursor::EndOfLine,QTextCursor::KeepAnchor);
+            cur.insertText(line.text,fmt);
+        } else {
+            // 首条进度 → 换行后另起一行，保留上一普通行
+            cur.insertText(QStringLiteral("\n")+line.text,fmt);
+        }
+        m_lastProgressLine=true;
+        QScrollBar* bar=m_outputView->verticalScrollBar();
+        bar->setValue(bar->maximum());
+        return;
+    }
+    m_lastProgressLine=false;
     appendOutput(line.text+QStringLiteral("\n"),line.isError);
 }
 

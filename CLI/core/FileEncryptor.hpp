@@ -14,8 +14,8 @@
 
 #define FE_VERSION_MAJOR 2
 #define FE_VERSION_MINOR 1
-#define FE_VERSION_PATCH 0
-#define FE_VERSION_STRING "2.1.0"
+#define FE_VERSION_PATCH 1
+#define FE_VERSION_STRING "2.1.1"
 
 enum class CryptoMode: unsigned char {
     AES_GCM=0,   // 仅用于解密旧格式（v1/v2）文件；新加密不再使用
@@ -66,6 +66,9 @@ bool decrypt_file(const std::string& in_path,
     const unsigned char* ext_key=nullptr);
 
 // 批量处理（支持并行）
+// restore_name：批量解密时是否还原完整原始文件名。默认 false —— 为省去每文件昂贵的
+//   Argon2id KDF（仅用于还原文件名），仅保留输出文件扩展名（混淆名自带扩展名）；
+//   置 true 时调用 read_original_name 还原完整文件名（性能较差，经 GUI 警告后由用户选择）。
 bool process_files(const std::vector<std::string>& input_paths,
     const std::string& out_dir,
     const SecureBuffer& password,
@@ -73,7 +76,8 @@ bool process_files(const std::vector<std::string>& input_paths,
     bool encrypt,
     bool delete_source=false,
     bool force_overwrite=false,
-    int num_threads=0);
+    int num_threads=0,
+    bool restore_name=false);
 
 // 认证失败详细输出开关（由 CLI -v/--verbose 设置）。
 // 关闭时所有认证失败只输出通用错误，避免向潜在攻击者泄露细节（最小信息泄露原则）。

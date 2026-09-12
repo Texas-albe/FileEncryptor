@@ -36,15 +36,16 @@ QStringList CliArgBuilder::buildArguments(const ShellOptions& o) {
         return args;
     }
 
-    // 模式（main.cpp L210-225）
+    // 模式（KeyGen / Derive / PubKey 已在上方提前 return，此处仅处理单/批加密解密）
     switch (o.action) {
     case CryptoAction::Encrypt:       args << QStringLiteral("-e");  break;
     case CryptoAction::Decrypt:      args << QStringLiteral("-d");  break;
     case CryptoAction::BatchEncrypt:  args << QStringLiteral("-be"); break;
     case CryptoAction::BatchDecrypt:  args << QStringLiteral("-bd"); break;
-    case CryptoAction::KeyGen:        args << QStringLiteral("-g");  break;
-    case CryptoAction::Derive:        args << QStringLiteral("-G");  break;
-    case CryptoAction::PubKey:        args << QStringLiteral("-Y");  break;
+    case CryptoAction::KeyGen:        // 不可达：上方已 return
+    case CryptoAction::Derive:        // 不可达：上方已 return
+    case CryptoAction::PubKey:        // 不可达：上方已 return
+        break;
     }
 
     // 输出目录（main.cpp L226-232，含 path traversal 校验由子进程负责）
@@ -100,6 +101,12 @@ QStringList CliArgBuilder::buildArguments(const ShellOptions& o) {
         args << QStringLiteral("-v");
     }
 
+    // 批量解密文件名还原（main.cpp --restore-name）：默认关闭以省去每文件昂贵 KDF，
+    // 仅保留输出文件扩展名；开启后还原完整原始文件名。
+    if (o.action == CryptoAction::BatchDecrypt && o.restoreName) {
+        args << QStringLiteral("--restore-name");
+    }
+
     // 密钥文件（main.cpp L251-253）。若提供 -k，则子进程用密钥文件，不经 stdin。
     if (!o.keyfilePath.isEmpty()) {
         args << QStringLiteral("-k") << o.keyfilePath;
@@ -123,25 +130,28 @@ QProcessEnvironment CliArgBuilder::buildEnvironment(const ShellOptions& /*o*/) {
     return QProcessEnvironment::systemEnvironment();
 }
 
-QString CliArgBuilder::buildPreview(const QString& programPath, const ShellOptions& o) {
-    // 命令预览：program arg1 arg2 ...（密码以 ****** 替代，避免明文展示）
-    QString cmd = QDir::toNativeSeparators(programPath);
-    if (cmd.contains(QLatin1Char(' '))) {
-        cmd = QStringLiteral("\"%1\"").arg(cmd);
+// 路径类参数（值而非 flag）统一用双引号包裹，确保带空格路径的规范与安全。
+// flag（如 -e / -m xchacha20 / -y）不加引号。
+static QString quotePathArg(const QString& a, const ShellOptions& o) {
+    if (a.isEmpty()) return a;
+    if (a == o.outputDir)        return QStringLiteral("\"%1\"").arg(a);
+    if (a == o.keyfilePath)      return QStringLiteral("\"%1\"").arg(a);
+    if (a == o.recipientPath)    return QStringLiteral("\"%1\"").arg(a);
+    if (a == o.identityPath)     return QStringLiteral("\"%1\"").arg(a);
+    for (const QString& p : o.inputPaths) {
+        if (a == p) return QStringLiteral("\"%1\"").arg(a);
     }
+    return a;
+}
 
-    // 临时构造一份预览 options，把密码替换为掩码
-    ShellOptions preview = o;
-    preview.password = o.password.isEmpty() ? QStringLiteral("(无密码)")
-                                             : QStringLiteral("******");
+QString CliArgBuilder::buildPreview(const QString& programPath, const ShellOptions& o) {
+    // 命令预览：program arg1 arg2 ...（口令经 stdin 注入，不展示明文）
+    // 所有路径字符串（程序、输出目录、输入/密钥/公钥/私钥文件路径）统一用双引号包裹。
+    QString cmd = QStringLiteral("\"%1\"").arg(QDir::toNativeSeparators(programPath));
 
-    const QStringList args = buildArguments(preview);
+    const QStringList args = buildArguments(o);
     for (const QString& a : args) {
-        if (a.contains(QLatin1Char(' '))) {
-            cmd += QStringLiteral(" \"%1\"").arg(a);
-        } else {
-            cmd += QStringLiteral(" %1").arg(a);
-        }
+        cmd += QStringLiteral(" %1").arg(quotePathArg(a, o));
     }
 
     // 密钥/身份经 stdin 注入（不展示明文）
@@ -157,7 +167,6 @@ QString CliArgBuilder::buildPreview(const QString& programPath, const ShellOptio
     }
 
     const bool isAsym = (o.mode == CryptoMode::Asymmetric);
-    const bool isEnc = (o.action == CryptoAction::Encrypt || o.action == CryptoAction::BatchEncrypt);
     bool usesStdin = false;
     // Asymmetric decryption passes the private key as a file (-k), never via stdin.
     if (!isAsym && o.keyfilePath.isEmpty()) usesStdin = true;

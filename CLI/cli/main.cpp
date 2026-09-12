@@ -18,9 +18,12 @@
 #include <windows.h>
 #include <conio.h>
 #include <shellapi.h>
+#include <io.h>            // _chmod（收紧密钥文件权限）
+#include <sys/stat.h>     // _S_IREAD
 #else
 #include <termios.h>
 #include <unistd.h>
+#include <sys/stat.h>     // chmod（收紧密钥文件权限）
 #endif
 
 #ifdef _WIN32
@@ -104,6 +107,44 @@ static std::vector<char> get_password() {
 #else
     return get_password_posix();
 #endif
+}
+
+// 收紧密钥文件权限：仅拥有者可读取，避免私钥/派生盐以明文落盘后被其它用户读取。
+static void tighten_file_permissions(const std::string& path) {
+#ifdef _WIN32
+    _chmod(path.c_str(), _S_IREAD);   // 仅拥有者可读
+#else
+    chmod(path.c_str(), 0600);        // rw-------，仅拥有者可读写
+#endif
+}
+
+// 口令强策略（与 GUI PasswordStrength::meetsPolicy 对齐）：
+//   最小长度 8；且至少包含 2 类字符（小写/大写/数字/符号），或长度 >= 16。
+//   非 ASCII（多字节）口令熵足够，直接放行。CLI 交互式加密/派生套用此策略。
+static const size_t kMinPasswordLength = 8;
+static bool password_meets_policy(const std::string& pw, std::string& reason) {
+    if (pw.size() < kMinPasswordLength) {
+        reason = "Password too short (min " + std::to_string(kMinPasswordLength) + " characters).";
+        return false;
+    }
+    bool lower = false, upper = false, digit = false, symbol = false, non_ascii = false;
+    for (unsigned char c : pw) {
+        if (c <= 0x7F) {
+            if (islower(c))       lower = true;
+            else if (isupper(c))  upper = true;
+            else if (isdigit(c))  digit = true;
+            else if (ispunct(c))  symbol = true;
+        } else {
+            non_ascii = true;     // 多字节字符（如 UTF-8 中文）熵足够
+        }
+    }
+    if (non_ascii) return true;
+    const int kinds = (lower ? 1 : 0) + (upper ? 1 : 0) +
+                      (digit ? 1 : 0) + (symbol ? 1 : 0);
+    if (kinds >= 2 || pw.size() >= 16) return true;
+    reason = "Password too weak: use at least 2 character classes "
+             "(lower/upper/digit/symbol) or length >= 16.";
+    return false;
 }
 
 static void print_usage() {
@@ -388,6 +429,7 @@ static bool run_keygen(const std::string& output_dir) {
         sodium_memzero(priv.data(),priv.size());
         return false;
     }
+    tighten_file_permissions(priv_path);   // 收紧密钥文件权限（仅拥有者可读）
 
     // stdout: the public key alone, so it can be piped straight into -r or a file
     std::cout<<pub<<"\n";
@@ -504,6 +546,7 @@ static bool run_derive(const std::string& output_dir,
 
     bool ok=write_line(priv_path,priv);
     if(ok) ok=write_line(salt_path,std::string(salt_hex));
+    if(ok) tighten_file_permissions(priv_path);   // 收紧密钥文件权限（仅拥有者可读）
 
     sodium_memzero(salt_hex,sizeof(salt_hex));
     sodium_memzero(salt.data(),salt.size());
@@ -600,6 +643,7 @@ int main(int argc,char* argv[]) {
     bool delete_source=false;
     bool force_overwrite=false;
     int num_threads=0;
+    bool restore_name=false;     // 批量解密是否还原完整原始文件名（默认 false：仅保留扩展名，省去每文件 KDF）
     std::string keyfile_path;   // 一.1：密钥文件输入（-k）
     bool asym_mode=false;       // -m age：非对称混合加密（rage/age，X25519 + ChaCha20-Poly1305）
     std::string recipient_spec; // -r <pub|file>: public key (age1...) or a file of them (encrypt)
@@ -673,6 +717,9 @@ int main(int argc,char* argv[]) {
         }
         else if(arg=="--key-stdin") {
             key_from_stdin=true;
+        }
+        else if(arg=="--restore-name"||arg=="-rn") {
+            restore_name=true;
         }
         else if(arg[0]!='-') {
             input_paths.push_back(arg);
@@ -789,9 +836,12 @@ int main(int argc,char* argv[]) {
             sodium_memzero(p.data(),p.size()); p.clear();
         }
         if(action==ACTION_DERIVE) {
-            if(password.size()<6) {
-                std::cerr<<"Derivation password too short (min 6 characters).\n";
-                return 1;
+            {
+                std::string preason;
+                if(!password_meets_policy(std::string(password.cdata(),password.size()),preason)) {
+                    std::cerr<<preason<<"\n";
+                    return 1;
+                }
             }
             return run_derive(output_dir,password,salt_spec,force_overwrite)?0:1;
         }
@@ -807,34 +857,15 @@ int main(int argc,char* argv[]) {
             }
         }
         else {
-            std::cout<<"Enter password (min 6 characters, strong recommended): ";
+            std::cout<<"Enter password (min 8 characters, strong recommended): ";
             std::vector<char> pw1=get_password();
-            if(pw1.size()<6) {
-                std::cerr<<"Password too short.\n";
-                sodium_memzero(pw1.data(),pw1.size()); pw1.clear();
-                return 1;
-            }
-
-            bool has_upper=false,has_lower=false,has_digit=false,has_special=false;
-            bool has_non_ascii=false;
-            for(char c : pw1) {
-                unsigned char u=(unsigned char)c;
-                if(u <= 127) {
-                    // 仅对 ASCII 字符做字符类检测；非 ASCII（如 UTF-8 中文）字节在 C locale
-                    // 下 is* 行为未定义/不可靠，且多字节字符本身熵很高，不应误判为弱口令。
-                    if(isupper(u)) has_upper=true;
-                    else if(islower(u)) has_lower=true;
-                    else if(isdigit(u)) has_digit=true;
-                    else if(ispunct(u)) has_special=true;
-                } else {
-                    has_non_ascii=true;
+            {
+                std::string preason;
+                if(!password_meets_policy(std::string(pw1.data(),pw1.size()),preason)) {
+                    std::cerr<<preason<<"\n";
+                    sodium_memzero(pw1.data(),pw1.size()); pw1.clear();
+                    return 1;
                 }
-            }
-            // 非 ASCII 口令（如纯中文长口令）熵足够，跳过字符类提醒，避免误判为弱密码；
-            // 仅对“纯 ASCII 且缺少某字符类”的口令给出弱密码建议。
-            if(!has_non_ascii && !(has_upper&&has_lower&&has_digit&&has_special)) {
-                std::cerr<<"Warning: Password lacks some character classes (upper/lower/digit/symbol).\n"
-                    <<"Consider using a stronger password.\n";
             }
 
             std::cout<<"Re-enter password: ";
@@ -869,7 +900,7 @@ int main(int argc,char* argv[]) {
         all_ok=run_asym(input_paths,output_dir,is_encrypt,delete_source,force_overwrite,recipient_spec,keyfile_path,password);
     }
     else if(is_batch) {
-        all_ok=process_files(input_paths,output_dir,password,mode,is_encrypt,delete_source,force_overwrite,num_threads);
+        all_ok=process_files(input_paths,output_dir,password,mode,is_encrypt,delete_source,force_overwrite,num_threads,restore_name);
     }
     else {
         // 单文件处理放入 lambda：用 early-return 替代 goto cleanup_password，
@@ -965,7 +996,17 @@ int main(int argc,char* argv[]) {
             bool ok;
             if(is_encrypt) {
                 printf("Encrypting: %s -> %s\n",in_path.c_str(),out_path.c_str());
-                ok=encrypt_file(in_path,out_path,password,mode,nullptr,true);
+                // 防御性兜底：任何未预期异常（如编码转换失败）都以干净错误退出，
+                // 而非未捕获导致 std::terminate/fastfail（GUI 侧表现为"进程崩溃"）。
+                try {
+                    ok=encrypt_file(in_path,out_path,password,mode,nullptr,true);
+                } catch(const std::exception& e) {
+                    fprintf(stderr,"Error: encryption failed: %s\n",e.what());
+                    ok=false;
+                } catch(...) {
+                    fprintf(stderr,"Error: encryption failed (unexpected exception)\n");
+                    ok=false;
+                }
                 if(ok&&delete_source) {
                     if(!remove_file_utf8(in_path)) {
                         std::cerr<<"Error: could not delete source file: "<<in_path<<"\n";
@@ -975,7 +1016,15 @@ int main(int argc,char* argv[]) {
             }
             else {
                 printf("Decrypting: %s -> %s\n",in_path.c_str(),out_path.c_str());
-                ok=decrypt_file(in_path,out_path,password,nullptr,false,true);
+                try {
+                    ok=decrypt_file(in_path,out_path,password,nullptr,false,true);
+                } catch(const std::exception& e) {
+                    fprintf(stderr,"Error: decryption failed: %s\n",e.what());
+                    ok=false;
+                } catch(...) {
+                    fprintf(stderr,"Error: decryption failed (unexpected exception)\n");
+                    ok=false;
+                }
             }
             return ok;
         }();

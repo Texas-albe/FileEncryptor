@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(FileEncryptorGUI VERSION 1.2.0 LANGUAGES CXX)
+project(FileEncryptorGUI VERSION 1.2.1 LANGUAGES CXX)
 
 # FileEncryptor GUI - Qt6 跨平台图形界面（独立项目）
 
@@ -39,6 +39,8 @@ endif()
 set(SHELL_SOURCES
     src/main.cpp
     src/MainWindow.cpp
+    src/MsgBox.cpp
+    src/PasswordDialog.cpp
     src/ProcessCommandExecutor.cpp
     src/CliArgBuilder.cpp
     src/PasswordStrength.cpp
@@ -51,6 +53,8 @@ set(SHELL_SOURCES
 
 set(SHELL_HEADERS
     src/MainWindow.h
+    src/MsgBox.h
+    src/PasswordDialog.h
     src/ICommandExecutor.h
     src/ProcessCommandExecutor.h
     src/CliArgBuilder.h
@@ -111,6 +115,7 @@ install(TARGETS FileEncryptorGUI RUNTIME DESTINATION bin)
 # 同目录 / 经 FILEENCRYPTOR_EXE 指定）。
 if(UNIX)
   set(CPACK_PACKAGE_NAME "file-encryptor-gui")
+  set(CPACK_PACKAGE_VERSION "${PROJECT_VERSION}")   # 与 project(VERSION) 同步
   set(CPACK_PACKAGE_VENDOR "FileEncryptor")
   set(CPACK_PACKAGE_CONTACT "maintainer@example.com")
   set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "Cross-platform file encryption GUI (Qt6, static-linked)")

@@ -11,6 +11,20 @@
 
 ---
 
+## [1.2.1] - 2026-09-12
+
+### Changed
+- **【高·GUI】统一弹窗模块 `MsgBox`**：封装警告 / 提示 / 错误 / 确认四类弹窗，提供 `title + content + 可选回调` 的可复用调用（`warn/info/error/confirm/show/showAsync`），风格与 ThemeManager 一致，项目内复用、调用方式统一（替换散落的 `QMessageBox::*`）。
+- **【高·GUI】口令改为运行时安全弹窗输入（PIN 风格）**：移除主页面常驻密码框；点击「运行」后经 `PasswordDialog` 输入——密码框右侧（框内）放置「小眼睛」按钮（透明背景与文本框一致），**按住显示明文、松开恢复掩码**，掩码以 `*` 表示（`EyeLineEdit` 自绘：QLineEdit 无 `setPasswordCharacter` 接口），图标在睁眼 / 闭眼间切换；加密 / 派生要求二次确认并校验口令策略，口令不经 QString 常驻、用完即擦除，经 stdin 注入子进程不落盘。
+- **【中·GUI】移除主页面独立口令提示区**：删除右栏「口令」提示面板，中央选项面板自然占满横向空间，布局更连贯；密钥文件占位文案同步更新为「运行弹窗输入」。
+- **【低·GUI】清理无用代码**：删除 `CliArgBuilder` 中不可达的 `KeyGen`/`Derive`/`PubKey` switch 分支（上方已提前 return）；移除从未赋值的 `ShellOptions::password` 字段及其预览占位逻辑。
+- **【低·GUI】命令预览路径统一加双引号**：`buildPreview` 对程序路径与全部路径类参数（`-o`/`-i`/`-k`/`-r` 值）无条件用双引号包裹，不再仅对含空格路径加引号，规范且防路径注入/歧义。
+
+### Fixed
+- **【中·GUI】补齐口令策略并对 GUI 路径生效**：`PasswordStrength::meetsPolicy` 与 CLI 策略对齐（最小长度 8、至少 2 类字符或 ≥16；非 ASCII 放行），GUI 提交前校验，拒绝弱口令与两次不一致。
+- **【中·GUI】修复模拟 CMD 进度条显示异常**：`ProcessCommandExecutor` 按 `\r` 切分进度帧、`OutputLine` 新增 `isProgress`，GUI 原地刷新上一行而非重复追加，消除末尾进度行重复堆积 / 清屏异常。
+- **【中·GUI】收紧口令内存处理**：口令存于 `std::vector<unsigned char>`（非锁页 QString），`accept` 后清空输入框明文、`takePassword` 移动出缓冲，运行后擦除 stdin 副本，降低被 dump 风险。
+
 ## [1.2.0] - 2026-09-12
 
 ### Added

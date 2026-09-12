@@ -66,3 +66,33 @@ StrengthResult PasswordStrength::evaluate(const QString& pw) {
 
     return r;
 }
+
+bool PasswordStrength::meetsPolicy(const QString& password, QString& reason) {
+    reason.clear();
+    const int len = password.length();
+    if (len < kMinPasswordLength) {
+        reason = QStringLiteral("口令过短（至少 %1 个字符）。").arg(kMinPasswordLength);
+        return false;
+    }
+
+    bool lower = false, upper = false, digit = false, symbol = false, non_ascii = false;
+    for (const QChar& ch : password) {
+        const ushort u = ch.unicode();
+        if (u <= 0x7F) {
+            if (u >= 'a' && u <= 'z') lower = true;
+            else if (u >= 'A' && u <= 'Z') upper = true;
+            else if (u >= '0' && u <= '9') digit = true;
+            else symbol = true;   // ASCII 可见符号
+        } else {
+            non_ascii = true;     // 多字节字符（如 UTF-8 中文）熵足够
+        }
+    }
+    if (non_ascii) return true;   // 非 ASCII 口令直接放行
+
+    const int kinds = (lower ? 1 : 0) + (upper ? 1 : 0) +
+                      (digit ? 1 : 0) + (symbol ? 1 : 0);
+    if (kinds >= 2 || len >= 16) return true;
+
+    reason = QStringLiteral("口令过弱：请至少含 2 类字符（小写/大写/数字/符号），或长度 >= 16。");
+    return false;
+}

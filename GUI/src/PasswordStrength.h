@@ -24,4 +24,10 @@ struct StrengthResult {
 class PasswordStrength {
 public:
     static StrengthResult evaluate(const QString& password);
+
+    // 口令强策略：GUI 路径在提交前校验，CLI 交互式加密同样套用。
+    // 规则：最小长度 8；且至少包含 2 类字符（小写/大写/数字/符号），或长度 >= 16。
+    // 非 ASCII（多字节）口令熵足够，直接放行。不合规时 reason 写入中文原因。
+    static const int kMinPasswordLength = 8;
+    static bool meetsPolicy(const QString& password, QString& reason);
 };

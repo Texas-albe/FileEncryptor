@@ -89,34 +89,50 @@ void ProcessCommandExecutor::onReadyReadStandardError() {
 }
 
 void ProcessCommandExecutor::flushLines(QString& buffer, bool isError) {
-    // 按 \n 切分；保留最后未结束的半行（继续缓冲）
-    int idx = 0;
-    while ((idx = buffer.indexOf(QLatin1Char('\n'))) != -1) {
-        QString line = buffer.left(idx);
-        // 处理 \r（Windows CRLF）：UTF-8 解码不会自动剥 \r，这里统一处理
-        if (line.endsWith(QLatin1Char('\r'))) {
-            line.chop(1);
+    // CLI 的模拟 CMD 进度条用 \r 原地刷新（print_progress 每帧 \r<进度> 不换行）。
+    // 这里同时按 \n 与 \r 切分：
+    //   - \n 段 → 普通行（isProgress=false）
+    //   - \r 段 → 进度行（isProgress=true），GUI 替换上一行，避免末尾进度行重复堆积
+    while (true) {
+        const int nl = buffer.indexOf(QLatin1Char('\n'));
+        const int cr = buffer.indexOf(QLatin1Char('\r'));
+        if (nl == -1 && cr == -1) break;   // 无终止符，保留半行继续缓冲
+        if (cr != -1 && (nl == -1 || cr < nl)) {
+            // \r 段：原地刷新（可能为空，如首帧前的 \r，跳过避免空行）
+            QString seg = buffer.left(cr);
+            buffer.remove(0, cr + 1);
+            if (seg.isEmpty()) continue;
+            emit outputLine(OutputLine{seg, isError, /*isProgress=*/true});
+        } else {
+            // \n 段：普通行（兼容 Windows CRLF，去掉行尾 \r）
+            QString line = buffer.left(nl);
+            if (line.endsWith(QLatin1Char('\r'))) line.chop(1);
+            buffer.remove(0, nl + 1);
+            emit outputLine(OutputLine{line, isError, /*isProgress=*/false});
         }
-        buffer.remove(0, idx + 1);
-        // 空行也推送，保持输出行数一致
-        emit outputLine(OutputLine{line, isError});
     }
 }
 
 void ProcessCommandExecutor::onFinished(int exitCode, QProcess::ExitStatus exitStatus) {
     Q_UNUSED(exitStatus);
-    // 刷出残余半行
+    // 刷出残余半行（同样按 \r / \n 切分，保证末尾进度行正确刷新而非重复堆积）
     if (!m_outBuffer.isEmpty()) {
-        QString line = m_outBuffer;
-        if (line.endsWith(QLatin1Char('\r'))) line.chop(1);
-        emit outputLine(OutputLine{line, false});
-        m_outBuffer.clear();
+        flushLines(m_outBuffer, false);
+        if (!m_outBuffer.isEmpty()) {
+            QString line = m_outBuffer;
+            if (line.startsWith(QLatin1Char('\r'))) line.remove(0, 1);
+            emit outputLine(OutputLine{line, false, /*isProgress=*/false});
+            m_outBuffer.clear();
+        }
     }
     if (!m_errBuffer.isEmpty()) {
-        QString line = m_errBuffer;
-        if (line.endsWith(QLatin1Char('\r'))) line.chop(1);
-        emit outputLine(OutputLine{line, true});
-        m_errBuffer.clear();
+        flushLines(m_errBuffer, true);
+        if (!m_errBuffer.isEmpty()) {
+            QString line = m_errBuffer;
+            if (line.startsWith(QLatin1Char('\r'))) line.remove(0, 1);
+            emit outputLine(OutputLine{line, true, /*isProgress=*/false});
+            m_errBuffer.clear();
+        }
     }
 
     CommandResult r;

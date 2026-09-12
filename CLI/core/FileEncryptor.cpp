@@ -233,9 +233,19 @@ static std::string normalize_path_lexical(const std::string& p) {
         }
     }
 #endif
+    // 注意：fs::path 的窄字符串构造按 ANSI 代码页（GBK）解释字节，含中文/Emoji 的
+    // UTF-8 路径在 .string() 往返时会抛 "No mapping for the Unicode character"
+    // （未捕获即 fastfail 崩溃）。必须先经 utf8_to_wstring 转宽字符再构造 path，
+    // 规范化后用 wstring_to_utf8 取回，全程无 ACP 往返、编码无损。
+#ifdef _WIN32
+    fs::path np = fs::path(utf8_to_wstring(s)).lexically_normal();
+    if(np.empty()) np = fs::path(utf8_to_wstring(s));
+    std::string out = wstring_to_utf8(np.make_preferred().wstring());
+#else
     fs::path np = fs::path(s).lexically_normal();
     if(np.empty()) np = fs::path(s);
     std::string out = np.make_preferred().string();
+#endif
 #ifdef _WIN32
     // 还原长路径前缀（规范化后已无 '..'，可安全保留长路径支持）。
     if(had_unc_prefix && out.size()>=2) out = "\\\\?\\UNC\\" + out.substr(2);
@@ -253,9 +263,17 @@ static int64_t get_file_size_utf8(const std::string& path);
 static bool peek_name_footer_len(const std::string& ptd_path, uint64_t& footer_len);
 static std::string compute_progress_binding(const std::string& in_path) {
     std::error_code ec;
+    // 同 normalize_path_lexical：宽字符往返，避免 fs::path 的 ACP 编码损失对
+    // 含中文/Emoji 的 UTF-8 路径抛异常（历史缺陷：中文路径加密必崩溃）。
+#ifdef _WIN32
+    fs::path np = fs::path(utf8_to_wstring(in_path)).lexically_normal();
+    if(np.empty()) np = fs::path(utf8_to_wstring(in_path));
+    std::string norm = wstring_to_utf8(np.make_preferred().wstring());
+#else
     fs::path np = fs::path(in_path).lexically_normal();
     if(np.empty()) np = fs::path(in_path);
     std::string norm = np.make_preferred().string();
+#endif
     int64_t sz = get_file_size_utf8(in_path);
     int64_t mt = 0;
 #ifdef _WIN32
@@ -568,6 +586,11 @@ static bool copy_file_utf8(const std::string& from,const std::string& to) {
 }
 
 // ---------- 反调试 ----------
+// 反调试检查。
+// 重要（缺陷修复约束）：本函数内部在检测到调试器时会直接 exit(1)。
+// 因此它【只能】在 main() 启动期、任何工作线程创建之前调用（当前即如此，见 cli/main.cpp）。
+// 切勿将其移入 process_files 的并发 worker 或任何子线程 —— 否则 worker 中 exit(1) 会终止整个
+// 批量加解密任务，而非仅中止单文件。保持仅在主线程调用。
 void anti_debug_check() {
 #ifdef _WIN32
     if(IsDebuggerPresent()) {
@@ -619,7 +642,20 @@ bool create_directory_recursive(const std::string& path) {
     }
     size_t pos=path.find_last_of("/\\");
     if(pos!=std::string::npos) {
-        if(!create_directory_recursive(path.substr(0,pos))) return false;
+        std::string parent=path.substr(0,pos);
+        // 盘符根（"H:"）：其 stat 依赖进程级"盘符当前目录"（CWD 在其他盘时失败），
+        // 且 _wmkdir("H:") 恒失败——两者都不可靠。改用绝对根 "H:/" 探测：
+        // 根目录存在（盘可访问）则继续创建剩余分量，否则失败。
+        if(parent.size()==2 && parent[1]==':') {
+            struct _stat64 rst;
+            if(_wstat64(utf8_to_wstring(parent+"/").c_str(),&rst)!=0 ||
+               (rst.st_mode&S_IFDIR)==0) {
+                return false;   // 盘不存在或不可访问
+            }
+            // 盘根存在 → 落到下方 _wmkdir 创建剩余分量
+        } else {
+            if(!create_directory_recursive(parent)) return false;
+        }
     }
     return _wmkdir(utf8_to_wstring(path).c_str())==0;
 #else
@@ -2111,7 +2147,8 @@ bool process_files(const std::vector<std::string>& input_paths,
     bool encrypt,
     bool delete_source,
     bool force_overwrite,
-    int num_threads) {
+    int num_threads,
+    bool restore_name) {
     // 批量模式 AEGIS-256 可用性回退：缺 AES-NI 时自动切换到 XChaCha20
     if(encrypt&&mode==CryptoMode::AEGIS256&&!aegis256_supported()) {
         if(g_aegis_fallback_choice.load()==0) {
@@ -2243,9 +2280,13 @@ bool process_files(const std::vector<std::string>& input_paths,
                     out_path.substr(out_path.size()-4)==".PTD")) {
                 out_path=out_path.substr(0,out_path.size()-4);
             }
-            std::string orig_name;
-            if(read_original_name(in_path,orig_name,password)&&!orig_name.empty()) {
-                out_path=replace_basename(out_path,orig_name);
+            // 批量解密文件名还原：默认关闭（省去每文件昂贵的 Argon2id KDF），仅保留扩展名；
+            // restore_name=true 时还原完整原始文件名（性能较差）。
+            if(restore_name) {
+                std::string orig_name;
+                if(read_original_name(in_path,orig_name,password)&&!orig_name.empty()) {
+                    out_path=replace_basename(out_path,orig_name);
+                }
             }
         }
 
@@ -2339,9 +2380,12 @@ bool process_files(const std::vector<std::string>& input_paths,
                         out_path.substr(out_path.size()-4)==".PTD")) {
                     out_path=out_path.substr(0,out_path.size()-4);
                 }
-                std::string orig_name;
-                if(read_original_name(in_path,orig_name,password)&&!orig_name.empty()) {
-                    out_path=replace_basename(out_path,orig_name);
+                // 批量解密文件名还原（与预扫描一致）：默认关闭省去每文件 KDF
+                if(restore_name) {
+                    std::string orig_name;
+                    if(read_original_name(in_path,orig_name,password)&&!orig_name.empty()) {
+                        out_path=replace_basename(out_path,orig_name);
+                    }
                 }
             }
 
