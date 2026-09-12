@@ -1,5 +1,6 @@
 #include "FileEncryptor.hpp"
 #include "config.hpp"
+#include "asym_crypto.hpp"
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -107,18 +108,29 @@ static std::vector<char> get_password() {
 
 static void print_usage() {
     std::cout<<"FileEncryptor v"<<FE_VERSION_STRING<<"\n\n"
-        <<"Modes:\n"
+        <<"Modes (file encryption / decryption):\n"
         <<"  -e                Encrypt single file\n"
         <<"  -d                Decrypt single file\n"
         <<"  -be               Batch encrypt directories/files\n"
-        <<"  -bd               Batch decrypt directories/files\n"
+        <<"  -bd               Batch decrypt directories/files\n\n"
+        <<"Key management (rage/age):\n"
+        <<"  -g                Generate an X25519 keypair (public key -> stdout)\n"
+        <<"  -G                Derive an X25519 keypair from a password (Argon2id)\n"
+        <<"  -Y                Export public key from a private key file (-k)\n\n"
         <<"  -h, --help, -?    Show this help\n\n"
         <<"Options:\n"
         <<"  -o <dir>          Output directory (optional, default: source file's directory)\n"
         <<"  -de               Delete source file after successful encryption (encryption only)\n"
-        <<"  -m <mode>         Encryption mode: xchacha20 (default) or aegis256\n"
+        <<"  -m <mode>         Encryption mode: xchacha20 (default) | aegis256 | rage\n"
+        <<"                      rage = asymmetric hybrid encryption: a random file key\n"
+  <<"                             is wrapped to X25519 recipients (rage/age format)\n"
         <<"  -y, --force       Overwrite existing output files without asking\n"
-        <<"  -k <keyfile>      Read key material from file (non-interactive; alt: ENCRYPTOR_KEY env)\n\n"
+        <<"  -k <keyfile>      Read key material from file (non-interactive; alt: ENCRYPTOR_KEY env / --key-stdin)\n"
+        <<"                      -m rage decrypt: this is the private key file (AGE-SECRET-KEY-...)\n"
+        <<"  -r <pub|file>     Public key for -m rage encrypt: an \"age1...\" string, or a file\n"
+        <<"                      holding one public key per line ('#' comments and publickey: ok)\n"
+        <<"  --key-stdin       Read the password from stdin until EOF (symmetric modes only)\n"
+        <<"  --salt <hex|file> Salt for -G: 32 hex chars, or a file holding them (default: random 16B)\n\n"
         <<"Config (YAML): log file/level, worker threads, path length/whitelist, progress\n"
         <<"  rotation, rate limit (max_speed), etc. are configured in fileencryptor.yaml (see README).\n\n"
         <<"Input:\n"
@@ -126,8 +138,14 @@ static void print_usage() {
         <<"  For batch mode:  provide directory paths via -i (multiple allowed)\n"
         <<"                   All files under directories will be processed recursively.\n\n"
         <<"Usage:\n"
-        <<"  FileEncryptor -e/-d <FileName> [-o <Path>] [-de] [-m xchacha20|aegis256] [-y]\n"
-        <<"  FileEncryptor -be/-bd <Path> [-o <Path>] [-de] [-m xchacha20|aegis256] [-y]\n";
+        <<"  File encryption / decryption:\n"
+        <<"    FileEncryptor -e/-d <FileName> [-o <Path>] [-de] [-m xchacha20|aegis256] [-y]\n"
+        <<"    FileEncryptor -be/-bd <Path> [-o <Path>] [-de] [-m xchacha20|aegis256] [-y]\n"
+        <<"    FileEncryptor -e/-d -m rage -r <pub>|-k <priv> <File> [-o <Path>] [-y]\n"
+        <<"  Key management (rage/age):\n"
+        <<"    FileEncryptor -g [-o <dir>]\n"
+        <<"    FileEncryptor -G [-o <dir>] [--salt <hex|file>]\n"
+        <<"    FileEncryptor -Y -k <private key file>\n";
 }
 
 #ifdef _WIN32
@@ -150,6 +168,384 @@ static std::vector<std::string> get_utf8_argv() {
     return argv_utf8;
 }
 #endif
+
+// Resolve -r into a list of recipient public keys.
+// The value is either a literal public key ("age1...", optionally prefixed with
+// "publickey:") or a path to a file holding one public key per line ('#' comments
+// and a "publickey:" prefix are tolerated).
+static bool collect_recipients(const std::string& spec,
+                               std::vector<std::string>& out,
+                               std::string& err) {
+    auto trim=[](const std::string& s)->std::string{
+        size_t a=0,b=s.size();
+        while(a<b && (unsigned char)s[a]<=0x20) ++a;
+        while(b>a && (unsigned char)s[b-1]<=0x20) --b;
+        return s.substr(a,b-a);
+    };
+    auto strip_prefix=[&trim](const std::string& s)->std::string{
+        return (s.rfind("publickey:",0)==0) ? trim(s.substr(10)) : s;
+    };
+    auto is_pubkey=[&trim](const std::string& s)->bool{
+        if(s.rfind("publickey:",0)==0) return true;
+        std::string low=trim(s);
+        std::transform(low.begin(),low.end(),low.begin(),
+            [](unsigned char c){ return (char)std::tolower(c); });
+        return low.rfind("age1",0)==0;
+    };
+
+    const std::string t=trim(spec);
+    if(t.empty()) { err="Empty recipient specification."; return false; }
+
+    if(is_pubkey(t)) {                      // inline public key
+        std::string v=strip_prefix(t);
+        if(v.empty()) { err="Empty recipient public key."; return false; }
+        out.push_back(v);
+        return true;
+    }
+
+    std::ifstream rf;                       // otherwise: a file of public keys
+    if(!open_stream(rf,t,std::ios::in|std::ios::binary)) {
+        err="Cannot open public key file: "+t;
+        return false;
+    }
+    std::string line;
+    while(std::getline(rf,line)) {
+        if(!line.empty()&&line.back()=='\r') line.pop_back();
+        std::string v=trim(line);
+        if(v.empty()||v[0]=='#') continue;
+        v=strip_prefix(v);
+        if(v.empty()) continue;
+        if(!is_pubkey(v)) { err="Invalid public key line (expected age1...): "+v; return false; }
+        out.push_back(v);
+    }
+    rf.close();
+    if(out.empty()) { err="No public keys found in: "+t; return false; }
+    return true;
+}
+
+// Asymmetric (hybrid) dispatch built on rage/age (X25519 + ChaCha20-Poly1305).
+//   encrypt : wrap the file key to the public key given by -r (an "age1..." string,
+//             or a file holding public keys) -> <name>.age
+//   decrypt : unwrap with the private key file given by -k ("AGE-SECRET-KEY-...")
+static bool run_asym(const std::vector<std::string>& input_paths,
+                     const std::string& output_dir,
+                     bool is_encrypt,
+                     bool delete_source,
+                     bool force_overwrite,
+                     const std::string& recipient_spec,
+                     const std::string& identity_file,
+                     const SecureBuffer& key_material) {
+    std::vector<std::string> recipients;
+    if(is_encrypt) {
+        // -r takes the public key itself ("age1...") or a file of public keys.
+        if(recipient_spec.empty()) {
+            std::cerr<<"Asymmetric encryption requires -r <public key or public key file>.\n";
+            return false;
+        }
+        std::string err;
+        if(!collect_recipients(recipient_spec,recipients,err)) {
+            std::cerr<<err<<"\n";
+            return false;
+        }
+    } else {
+        // Decryption takes the private key as a file (-k), never as an inline string.
+        if(identity_file.empty()) {
+            std::cerr<<"Asymmetric decryption requires a private key file: -k <identity file>.\n";
+            return false;
+        }
+        if(key_material.empty()) {
+            std::cerr<<"Private key file is empty or unreadable: "<<identity_file<<"\n";
+            return false;
+        }
+    }
+
+    bool all_ok=true;
+    for(const std::string& in_path: input_paths) {
+        std::string out_path;
+        if(is_encrypt) {
+            std::string base=in_path;
+            size_t pos=base.find_last_of("/\\");
+            std::string fname=(pos!=std::string::npos)?base.substr(pos+1):base;
+            if(!output_dir.empty()) {
+                if(!create_directory_recursive(output_dir)) {
+                    std::cerr<<"Cannot create output directory: "<<output_dir<<"\n";
+                    all_ok=false; break;
+                }
+                out_path=output_dir;
+                if(out_path.back()!='/'&&out_path.back()!='\\') out_path+='/';
+                out_path+=fname;
+            } else {
+                out_path=in_path;
+            }
+            out_path+=".age";
+        } else {
+            std::string lower=in_path;
+            std::transform(lower.begin(),lower.end(),lower.begin(),
+                [](unsigned char c){ return (char)std::tolower(c); });
+            if(lower.size()<4||lower.substr(lower.size()-4)!=".age") {
+                std::cerr<<"Asymmetric decryption input must have .age extension: "<<in_path<<"\n";
+                all_ok=false; continue;
+            }
+            std::string stem=in_path.substr(0,in_path.size()-4);
+            size_t spos=stem.find_last_of("/\\");
+            std::string stem_name=(spos!=std::string::npos)?stem.substr(spos+1):stem;
+            if(!output_dir.empty()) {
+                if(!create_directory_recursive(output_dir)) {
+                    std::cerr<<"Cannot create output directory: "<<output_dir<<"\n";
+                    all_ok=false; break;
+                }
+                out_path=output_dir;
+                if(out_path.back()!='/'&&out_path.back()!='\\') out_path+='/';
+                out_path+=stem_name;
+            } else {
+                out_path=stem;
+            }
+            if(out_path==in_path) {
+                std::cerr<<"Error: output path would overwrite input file.\n";
+                all_ok=false; continue;
+            }
+        }
+
+        // 覆盖确认（与对称路径一致；GUI 带 -y 跳过）
+        if(!force_overwrite) {
+            std::ifstream test;
+            if(open_stream(test,out_path,std::ios::in)&&test.good()) {
+                test.close();
+                std::cout<<"Output file exists: "<<out_path<<"\nOverwrite? (y/N): ";
+                char ch='n'; std::cin>>ch;
+                if(ch!='y'&&ch!='Y') { std::cerr<<"Aborted.\n"; all_ok=false; continue; }
+            }
+        }
+
+        AsymOutcome o;
+        if(is_encrypt) {
+            printf("Asymmetric encrypting: %s -> %s\n",in_path.c_str(),out_path.c_str());
+            o=fe_asym_encrypt(recipients,in_path,out_path);
+        } else {
+            printf("Asymmetric decrypting: %s -> %s\n",in_path.c_str(),out_path.c_str());
+            std::string identity(key_material.cdata(), key_material.size());
+            {   // the private key file may carry a trailing newline / spaces
+                size_t a=0,b=identity.size();
+                while(a<b && (unsigned char)identity[a]<=0x20) ++a;
+                while(b>a && (unsigned char)identity[b-1]<=0x20) --b;
+                if(a!=0||b!=identity.size()) identity=identity.substr(a,b-a);
+            }
+            o=fe_asym_decrypt(identity,in_path,out_path);
+            sodium_memzero(identity.data(),identity.size());
+        }
+        if(!o.ok) {
+            std::cerr<<"Failed: "<<o.error<<"\n";
+            all_ok=false; continue;
+        }
+        if(is_encrypt && delete_source) {
+            if(!remove_file_utf8(in_path)) {
+                std::cerr<<"Error: could not delete source file: "<<in_path<<"\n";
+                all_ok=false;
+            }
+        }
+    }
+    return all_ok;
+}
+
+// Generate an X25519 keypair (rage/age).
+//   stdout                     -> recipient public key "age1..." only (safe to pipe/redirect)
+//   <output_dir>/rage_private.txt -> identity "AGE-SECRET-KEY-..." (keep secret)
+// Everything informational goes to stderr so stdout stays a clean public key.
+static bool run_keygen(const std::string& output_dir) {
+    std::string pub, priv;
+    AsymOutcome o=fe_generate_keypair(pub,priv);
+    if(!o.ok) {
+        std::cerr<<"Key generation failed: "<<o.error<<"\n";
+        return false;
+    }
+
+    std::string dir=output_dir;
+    if(!dir.empty()) {
+        if(!create_directory_recursive(dir)) {
+            std::cerr<<"Cannot create output directory: "<<dir<<"\n";
+            sodium_memzero(priv.data(),priv.size());
+            return false;
+        }
+        if(dir.back()!='/'&&dir.back()!='\\') dir+='/';
+    }
+
+    auto write_line=[](const std::string& path,const std::string& content)->bool{
+        std::ofstream of;
+        if(!open_stream(of,path,std::ios::out|std::ios::binary|std::ios::trunc)) {
+            std::cerr<<"Cannot write: "<<path<<"\n";
+            return false;
+        }
+        of<<content<<"\n";
+        of.flush();
+        const bool bad=!of.good();
+        of.close();
+        return !bad;
+    };
+
+    const std::string priv_path=dir+"rage_private.txt";
+
+    if(!write_line(priv_path,priv)) {
+        sodium_memzero(priv.data(),priv.size());
+        return false;
+    }
+
+    // stdout: the public key alone, so it can be piped straight into -r or a file
+    std::cout<<pub<<"\n";
+    std::cout.flush();
+    // stderr: everything else, so redirecting stdout still yields a clean key
+    std::cerr<<"Private key file: "<<priv_path<<"\n";
+    std::cerr<<"Public key (age1...) printed above - share it freely; the private key decrypts.\n";
+
+    sodium_memzero(priv.data(),priv.size());
+    return true;
+}
+
+// 解析 --salt：32 个十六进制字符，或存放它们的文件（rage_derive_salt.txt）。
+static bool parse_salt(const std::string& spec,std::vector<unsigned char>& out) {
+    auto trim=[](const std::string& s)->std::string{
+        size_t a=0,b=s.size();
+        while(a<b&&(unsigned char)s[a]<=0x20) ++a;      // 同时吃掉 CR / LF / 空格
+        while(b>a&&(unsigned char)s[b-1]<=0x20) --b;
+        return s.substr(a,b-a);
+    };
+    auto is_hex=[](const std::string& s)->bool{
+        if(s.empty()) return false;
+        for(char c: s) if(!std::isxdigit((unsigned char)c)) return false;
+        return true;
+    };
+    std::string t=trim(spec);
+    if(t.size()!=32||!is_hex(t)) {                       // 不是裸 hex，就当作文件读取
+        std::ifstream f;
+        if(!open_stream(f,t,std::ios::in)) {
+            std::cerr<<"Cannot open salt file: "<<t<<"\n";
+            return false;
+        }
+        std::getline(f,t);
+        f.close();
+        t=trim(t);
+    }
+    if(t.size()!=32||!is_hex(t)) {
+        std::cerr<<"Invalid salt: expected 16 bytes written as 32 hex characters (got \""<<t<<"\").\n";
+        return false;
+    }
+    out.assign(16,0);
+    size_t bin_len=0;
+    if(sodium_hex2bin(out.data(),out.size(),t.c_str(),t.size(),NULL,&bin_len,NULL)!=0||bin_len!=16) {
+        std::cerr<<"Invalid salt hex: "<<t<<"\n";
+        return false;
+    }
+    return true;
+}
+
+// 由口令确定性派生 X25519 密钥对（-G）。
+//   stdout                     -> 公钥 "age1..."（可直接重定向 / 管道）
+//   <dir>/rage_private.txt     -> 私钥 "AGE-SECRET-KEY-..."
+//   <dir>/rage_derive_salt.txt -> 16 字节随机盐（hex）；复现同一密钥对必需
+// 同口令 + 同盐 ⇒ 完全相同的密钥对，因此不保存私钥也能靠口令找回。
+static bool run_derive(const std::string& output_dir,
+                       const SecureBuffer& password,
+                       const std::string& salt_spec,
+                       bool force_overwrite) {
+    std::vector<unsigned char> salt;
+    const bool reuse_salt=!salt_spec.empty();
+    if(reuse_salt&&!parse_salt(salt_spec,salt)) return false;
+
+    std::string pub,priv;
+    AsymOutcome o=fe_derive_keypair(password.cdata(),password.size(),salt,pub,priv);
+    if(!o.ok) {
+        std::cerr<<"Key derivation failed: "<<o.error<<"\n";
+        return false;
+    }
+
+    std::string dir=output_dir;
+    if(!dir.empty()) {
+        if(!create_directory_recursive(dir)) {
+            std::cerr<<"Cannot create output directory: "<<dir<<"\n";
+            sodium_memzero(priv.data(),priv.size());
+            return false;
+        }
+        if(dir.back()!='/'&&dir.back()!='\\') dir+='/';
+    }
+
+    auto file_exists=[](const std::string& p)->bool{
+        std::ifstream t;
+        if(!open_stream(t,p,std::ios::in)) return false;
+        t.close();
+        return true;
+    };
+    auto write_line=[](const std::string& path,const std::string& content)->bool{
+        std::ofstream of;
+        if(!open_stream(of,path,std::ios::out|std::ios::binary|std::ios::trunc)) {
+            std::cerr<<"Cannot write: "<<path<<"\n";
+            return false;
+        }
+        of<<content<<"\n";
+        of.flush();
+        const bool bad=!of.good();
+        of.close();
+        return !bad;
+    };
+
+    const std::string priv_path=dir+"rage_private.txt";
+    const std::string salt_path=dir+"rage_derive_salt.txt";
+    if(!force_overwrite&&(file_exists(priv_path)||file_exists(salt_path))) {
+        std::cerr<<"Refusing to overwrite existing key files in: "
+            <<(dir.empty()?std::string("."):dir)<<"\nUse -y to overwrite.\n";
+        sodium_memzero(priv.data(),priv.size());
+        return false;
+    }
+
+    char salt_hex[33];
+    if(sodium_bin2hex(salt_hex,sizeof(salt_hex),salt.data(),salt.size())==NULL) {
+        std::cerr<<"Failed to encode the salt.\n";
+        sodium_memzero(priv.data(),priv.size());
+        return false;
+    }
+
+    bool ok=write_line(priv_path,priv);
+    if(ok) ok=write_line(salt_path,std::string(salt_hex));
+
+    sodium_memzero(salt_hex,sizeof(salt_hex));
+    sodium_memzero(salt.data(),salt.size());
+    if(!ok) {
+        sodium_memzero(priv.data(),priv.size());
+        return false;
+    }
+
+    // stdout: 只有公钥本身，便于重定向
+    std::cout<<pub<<"\n";
+    std::cout.flush();
+    std::cerr<<"Private key file: "<<priv_path<<"\n";
+    std::cerr<<"Salt file:        "<<salt_path<<"\n";
+    std::cerr<<(reuse_salt
+        ? "Re-derived with the given salt: the same password + salt always yields this keypair.\n"
+        : "Derived with a fresh random salt. Keep BOTH files: the salt is required to re-derive.\n");
+
+    sodium_memzero(priv.data(),priv.size());
+    return true;
+}
+
+// 由身份私钥导出收件人公钥（-Y），等价于 rage-keygen -y。
+static bool run_pubkey(const SecureBuffer& identity) {
+    std::string id(identity.cdata(),identity.size());
+    {   // 私钥文件可能带尾随换行 / 空格
+        size_t a=0,b=id.size();
+        while(a<b&&(unsigned char)id[a]<=0x20) ++a;
+        while(b>a&&(unsigned char)id[b-1]<=0x20) --b;
+        if(a!=0||b!=id.size()) id=id.substr(a,b-a);
+    }
+    std::string pub;
+    AsymOutcome o=fe_identity_to_recipient(id,pub);
+    sodium_memzero(id.data(),id.size());
+    if(!o.ok) {
+        std::cerr<<"Cannot derive the public key: "<<o.error<<"\n";
+        return false;
+    }
+    std::cout<<pub<<"\n";
+    std::cout.flush();
+    std::cerr<<"Public key (age1...) printed above; it corresponds to the given private key.\n";
+    return true;
+}
 
 int main(int argc,char* argv[]) {
 #ifdef _WIN32
@@ -194,7 +590,8 @@ int main(int argc,char* argv[]) {
 
     enum {
         ACTION_NONE,ACTION_ENCRYPT,ACTION_DECRYPT,
-        ACTION_BATCH_ENCRYPT,ACTION_BATCH_DECRYPT
+        ACTION_BATCH_ENCRYPT,ACTION_BATCH_DECRYPT,ACTION_KEYGEN,
+        ACTION_DERIVE,ACTION_PUBKEY
     } action=ACTION_NONE;
 
     std::vector<std::string> input_paths;
@@ -204,6 +601,10 @@ int main(int argc,char* argv[]) {
     bool force_overwrite=false;
     int num_threads=0;
     std::string keyfile_path;   // 一.1：密钥文件输入（-k）
+    bool asym_mode=false;       // -m age：非对称混合加密（rage/age，X25519 + ChaCha20-Poly1305）
+    std::string recipient_spec; // -r <pub|file>: public key (age1...) or a file of them (encrypt)
+    bool key_from_stdin=false;  // --key-stdin：从 stdin 读取密钥材料（密码或 age 身份私钥）
+    std::string salt_spec;      // --salt <hex|file>：-G 派生的盐（空 = 生成随机盐）
 
     for(int i=1; i<argc; ++i) {
         std::string arg=argv[i];
@@ -223,6 +624,21 @@ int main(int argc,char* argv[]) {
             if(action!=ACTION_NONE) { std::cerr<<"Multiple modes specified.\n"; return 1; }
             action=ACTION_BATCH_DECRYPT;
         }
+        else if(arg=="-g") {
+            if(action!=ACTION_NONE) { std::cerr<<"Multiple modes specified.\n"; return 1; }
+            action=ACTION_KEYGEN;
+        }
+        else if(arg=="-G") {
+            if(action!=ACTION_NONE) { std::cerr<<"Multiple modes specified.\n"; return 1; }
+            action=ACTION_DERIVE;
+        }
+        else if(arg=="-Y") {
+            if(action!=ACTION_NONE) { std::cerr<<"Multiple modes specified.\n"; return 1; }
+            action=ACTION_PUBKEY;
+        }
+        else if(arg=="--salt"&&i+1<argc) {
+            salt_spec=argv[++i];
+        }
         else if(arg=="-o"&&i+1<argc) {
             output_dir=argv[++i];
             if(path_has_traversal(output_dir)) {
@@ -237,6 +653,7 @@ int main(int argc,char* argv[]) {
             std::string m=argv[++i];
             if(m=="xchacha20") mode=CryptoMode::XCHACHA20;
             else if(m=="aegis256") mode=CryptoMode::AEGIS256;
+            else if(m=="rage"||m=="age") asym_mode=true;   // "rage" canonical; "age" kept as alias
             else { std::cerr<<"Unknown mode: "<<m<<"\n"; return 1; }
         }
         else if(arg=="-i"&&i+1<argc) {
@@ -250,6 +667,12 @@ int main(int argc,char* argv[]) {
         }
         else if(arg=="-k"&&i+1<argc) {
             keyfile_path=argv[++i];
+        }
+        else if(arg=="-r"&&i+1<argc) {
+            recipient_spec=argv[++i];
+        }
+        else if(arg=="--key-stdin") {
+            key_from_stdin=true;
         }
         else if(arg[0]!='-') {
             input_paths.push_back(arg);
@@ -269,7 +692,13 @@ int main(int argc,char* argv[]) {
         return 0;
     }
 
-    if(input_paths.empty()) {
+    // Key generation needs no input file: -g [-o <dir>]
+    if(action==ACTION_KEYGEN) {
+        return run_keygen(output_dir) ? 0 : 1;
+    }
+
+    // -G（口令派生）/ -Y（公钥导出）只需要密钥材料，不需要输入文件
+    if(input_paths.empty()&&action!=ACTION_DERIVE&&action!=ACTION_PUBKEY) {
         std::cerr<<"No input paths specified.\n";
         print_usage();
         return 1;
@@ -323,6 +752,21 @@ int main(int argc,char* argv[]) {
         used_key_source=true;
         log_event(LOG_INFO,"key_source",{{"type","keyfile"},{"path",keyfile_path}});
     }
+    else if(key_from_stdin) {
+        // Secure channel: read entire stdin (binary-safe, until EOF) as key material.
+        // Symmetric mode -> password; asymmetric decrypt -> age identity. GUI pipes via this
+        // channel to avoid leaking through env vars / command line.
+        std::vector<char> sbuf((std::istreambuf_iterator<char>(std::cin)),
+                               std::istreambuf_iterator<char>());
+        if(sbuf.empty()) {
+            std::cerr<<"No key material received from stdin (--key-stdin).\n";
+            return 1;
+        }
+        password = SecureBuffer(sbuf.data(), sbuf.size());
+        sodium_memzero(sbuf.data(), sbuf.size()); sbuf.clear();
+        used_key_source=true;
+        log_event(LOG_INFO,"key_source",{{"type","stdin"}});
+    }
     else {
         const char* ek=std::getenv("ENCRYPTOR_KEY");
         if(ek&&*ek) {
@@ -332,7 +776,29 @@ int main(int argc,char* argv[]) {
         }
     }
 
-    if(is_encrypt) {
+    // 口令派生 / 公钥导出：只消费密钥材料，不读写任何输入文件，
+    // 因此必须在下面的“对称密码交互输入”之前拦截。
+    if(action==ACTION_DERIVE||action==ACTION_PUBKEY) {
+        if(!used_key_source) {
+            std::cout<<(action==ACTION_DERIVE
+                ? "Enter derivation password (min 6 characters): "
+                : "Enter private key (AGE-SECRET-KEY-...): ");
+            std::vector<char> p=get_password();
+            if(p.empty()) { std::cerr<<"No key material provided.\n"; return 1; }
+            password=SecureBuffer(p.data(),p.size());
+            sodium_memzero(p.data(),p.size()); p.clear();
+        }
+        if(action==ACTION_DERIVE) {
+            if(password.size()<6) {
+                std::cerr<<"Derivation password too short (min 6 characters).\n";
+                return 1;
+            }
+            return run_derive(output_dir,password,salt_spec,force_overwrite)?0:1;
+        }
+        return run_pubkey(password)?0:1;
+    }
+
+    if(is_encrypt && !asym_mode) {
         if(used_key_source) {
             // 非交互密钥源：不二次确认、不做强度提示
             if(password.size()<6) {
@@ -384,7 +850,7 @@ int main(int argc,char* argv[]) {
             sodium_memzero(pw2.data(),pw2.size()); pw2.clear();
         }
     }
-    else {
+    else if(!asym_mode) {
         if(!used_key_source) {
             std::cout<<"Enter password (min 6 characters): ";
             std::vector<char> ipw=get_password();
@@ -399,7 +865,10 @@ int main(int argc,char* argv[]) {
 
     bool all_ok=true;
 
-    if(is_batch) {
+    if(asym_mode) {
+        all_ok=run_asym(input_paths,output_dir,is_encrypt,delete_source,force_overwrite,recipient_spec,keyfile_path,password);
+    }
+    else if(is_batch) {
         all_ok=process_files(input_paths,output_dir,password,mode,is_encrypt,delete_source,force_overwrite,num_threads);
     }
     else {

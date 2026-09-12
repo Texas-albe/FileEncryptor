@@ -30,7 +30,7 @@ Q_IMPORT_PLUGIN(QICOPlugin)
 int main(int argc, char* argv[]) {
     QApplication app(argc, argv);
     app.setApplicationName("FileEncryptorGUI");
-    app.setApplicationVersion("1.1.0");
+    app.setApplicationVersion("1.2.0");
     app.setOrganizationName("FileEncryptor");
 
     // 跨平台观感一致
@@ -42,7 +42,7 @@ int main(int argc, char* argv[]) {
     // 应用图标
     app.setWindowIcon(QIcon(QStringLiteral(":/icons/app.ico")));
 
-    // 应用持久化的主题偏好（浅色/深色/跟随系统）
+    // 应用持久化的主题偏好（浅色/深色）
     ThemeManager::initialize(&app);
 
     MainWindow w;

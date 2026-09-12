@@ -22,7 +22,7 @@ void ProcessCommandExecutor::execute(const CommandRequest& request) {
 
     m_process = new QProcess(this);
 
-    // 合并环境变量：继承父进程环境 + 注入 extraEnv（如 ENCRYPTOR_KEY）
+    // 合并环境变量：继承父进程环境 + 注入 extraEnv（GUI 已不再经环境变量传递密钥）
     QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
     const QStringList keys = request.extraEnv.keys();
     for (const QString& k : keys) {
@@ -47,8 +47,16 @@ void ProcessCommandExecutor::execute(const CommandRequest& request) {
     connect(m_process, &QProcess::errorOccurred,
             this, &ProcessCommandExecutor::onErrorOccurred);
 
-    // 启动子进程。stdin 关闭（QProcess 默认无 stdin 管道时，子进程读 cin 得 EOF）。
+    // 启动子进程。
     m_process->start();
+    // 安全通道：若请求携带 stdin 数据（密钥 / 身份私钥），写入子进程后关闭写通道，
+    // 子进程据此从 stdin 读取密钥材料（CLI 侧 --key-stdin）。密钥不进环境变量、不进命令行，
+    // 避免被进程列表 / 环境窥探泄露。即使无数据也关闭写通道，保持“stdin 已关闭”语义，
+    // 防止子进程在交互式读取上阻塞。
+    if (!request.stdinData.isEmpty()) {
+        m_process->write(request.stdinData);
+    }
+    m_process->closeWriteChannel();
     // 启动是异步的；路径错误等失败经 errorOccurred -> Finished 处理
 }
 

@@ -2,7 +2,7 @@
 
 跨平台（Windows / Linux / macOS）FileEncryptor **图形界面**。基于 Qt 6（Widgets）实现，**静态链接** Qt 主库与所有依赖（Qt6Core / Qt6Gui / Qt6Widgets 及 Qt6Bundled*），运行时**不依赖任何 Qt DLL 或插件 DLL**。
 
-- 程序版本 **1.0.1**。
+- 程序版本 **1.2.0**。
 
 ---
 
@@ -124,7 +124,7 @@ FileEncryptor/
 
 直接运行 `FileEncryptorGUI(.exe)`：
 
-- **顶栏（菜单栏）**：关于菜单（鸣谢 + README 摘要 + 关于 Qt）、编辑菜单（“编辑 YAML 配置...”用系统默认编辑器打开 CLI 的 fileencryptor.yaml）；右上角为主题下拉框（跟随系统 / 浅色 / 深色）与 `视图设置` 按钮（自定义背景图），与“关于”同一行
+- **顶栏（菜单栏）**：关于菜单（鸣谢 + README 摘要 + 关于 Qt）、编辑菜单（“编辑 YAML 配置...”用系统默认编辑器打开 CLI 的 fileencryptor.yaml）；右上角为主题下拉框（浅色 / 深色）与 `视图设置` 按钮（自定义背景图），与“关于”同一行
 - **左侧**：文件选择面板（添加文件 / 添加目录 / 清空）
 - **中部**：动作按钮（加密 / 解密 / 批量加密 / 批量解密）+ 模式选择（XChaCha20-Poly1305 / AEGIS-256）
 - **右侧**：密码输入框（星号遮挡 + 强度提示）
@@ -136,7 +136,7 @@ FileEncryptor/
 
 ## 主题
 
-支持三态主题切换（**跟随系统 / 浅色 / 深色**），用户偏好经 `QSettings` 持久化到注册表 / 配置文件：
+支持双态主题切换（**浅色 / 深色**），用户偏好经 `QSettings` 持久化到注册表 / 配置文件：
 
 - **Windows**：`HKEY_CURRENT_USER\Software\FileEncryptor\FileEncryptorGUI\theme`
 - **Linux**：`~/.config/FileEncryptor/FileEncryptorGUI.conf`

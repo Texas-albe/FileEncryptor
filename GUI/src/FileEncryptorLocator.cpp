@@ -67,7 +67,7 @@ QString FileEncryptorLocator::locate() {
 // ====== 新增函数实现 ======
 
 QString FileEncryptorLocator::version() {
-    return QStringLiteral("2.0.0");
+    return QStringLiteral("2.1.0");
 }
 
 QStringList FileEncryptorLocator::getExpectedNames() {

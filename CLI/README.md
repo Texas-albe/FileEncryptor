@@ -3,7 +3,7 @@
 跨平台（Windows / Linux / macOS）文件加密命令行工具，基于 [libsodium](https://doc.libsodium.org/) 实现高强度、抗篡改、可续传的分块加密。
 
 - 磁盘文件格式版本 **v4**（向后兼容 v1 / v2 / v3，旧文件可直接解密，无需重加密）。
-- 程序版本 **2.0.0**。
+- 程序版本 **2.1.0**。
 
 ---
 
@@ -28,6 +28,7 @@
   - `XChaCha20-Poly1305`（默认，IETF 变体）—— 无需硬件加速，移动端 / 服务器通用。
   - `AEGIS-256` —— 在支持 **AES-NI** 的 CPU 上性能极高（32 字节 nonce / 32 字节 tag 的 AEAD）。
   - `AES-256-GCM` 仅用于**解密旧版 v1/v2 文件**，新加密不再使用。
+  - `age`（非对称混合加密，`-m age`）—— 基于 [rage/age](https://github.com/str4d/rage) 的 X25519 + ChaCha20-Poly1305：每个文件用随机对称文件密钥加密，再用收件人 X25519 公钥包装该密钥，支持多收件人、无需共享口令。
 - **密钥派生**：Argon2id（默认 `opslimit=4` / `memlimit=128 MB`），参数随文件头持久化，未来可无损增强。
 - **完整性保护**
   - 每文件 `salt` + `iv` 随机生成；每块 `nonce = sodium_increment(iv)` 逐块自增，杜绝 nonce 复用。
@@ -75,7 +76,7 @@ cmake --build --preset linux-release
 
 # 3) 打包（同时产出 .deb 和 .rpm）
 cd out/build/linux-release && cpack
-# 产物：file-encryptor-cli_2.0.0-1_amd64.deb 与 file-encryptor-cli-2.0.0-1.x86_64.rpm
+# 产物：file-encryptor-cli_2.1.0-1_amd64.deb 与 file-encryptor-cli-2.1.0-1.x86_64.rpm
 ```
 
 > 若系统中同时存在多个 libsodium（如 apt 旧版 + `/usr/local` 新版），可显式指定：
@@ -84,9 +85,9 @@ cd out/build/linux-release && cpack
 最终用户安装：
 
 ```bash
-sudo dpkg -i file-encryptor-cli_2.0.0-1_amd64.deb
+sudo dpkg -i file-encryptor-cli_2.1.0-1_amd64.deb
 # 或
-sudo rpm -ivh file-encryptor-cli-2.0.0-1.x86_64.rpm
+sudo rpm -ivh file-encryptor-cli-2.1.0-1.x86_64.rpm
 ```
 
 ### Windows（预编译 libsodium + MSVC）
@@ -123,24 +124,53 @@ cmake --build --preset macos-release
 ```
 FileEncryptorCLI <动作> <输入路径...> [选项]
 
-动作（单文件）：
-  -e                加密单个文件（默认动作，也可省略）
-  -d                解密单个文件（输入须为 .ptd）
-  -be               批量加密目录/文件
-  -bd               批量解密目录/文件
-  -h / --help / -?  显示帮助
+动作：
+  文件加解密：
+    -e                加密单个文件（默认动作，也可省略）
+    -d                解密单个文件（输入须为 .ptd）
+    -be               批量加密目录/文件
+    -bd               批量解密目录/文件
+    -h / --help / -?  显示帮助
+  密钥管理（rage/age）：
+    -g                随机生成 X25519（rage）密钥对（公钥→stdout，私钥→<dir>/rage_private.txt）
+    -G                由口令确定性派生 X25519 密钥对（Argon2id），输出同 -g，另写 <dir>/rage_derive_salt.txt
+    -Y                由私钥文件（-k）反推并打印对应公钥（等价 rage-keygen -y）
+    --salt <hex|file> -G 使用的盐（16 字节；省略则随机）
 
 选项：
   <输入路径>         单文件：一个位置参数；批量：用 -i <目录> 指定（可多次）
   -o <dir>          输出目录（默认：输入同级目录）
   -i <dir>          批量输入目录（可多次，仅 -be/-bd 使用）
-  -m <mode>         加密模式：xchacha20（默认）| aegis256
+  -m <mode>         加密模式：xchacha20（默认）| aegis256 | rage（非对称混合；age 为兼容别名）
+  -r <pub|file>     非对称加密（rage）的收件人公钥：可直接给 age1... 公钥字符串，
+                    或给公钥文件（每行一个，支持 # 注释 / 空行 / publickey: 前缀）
+  --key-stdin       从 stdin 读取密码直到 EOF（二进制安全，仅对称模式）；GUI 对称模式默认走此通道
   -de               加密成功后删除源文件（仅加密）
   -y / --force      覆盖已存在的输出（不再询问）
-  -k <keyfile>      从文件读取密钥材料（非交互；替代：ENCRYPTOR_KEY 环境变量）
+  -k <keyfile>      从文件读取密钥材料（非交互；替代：ENCRYPTOR_KEY 环境变量）；
+                    -m rage 解密时该文件必须是身份私钥文件（AGE-SECRET-KEY-...）
   -v / --verbose    显示认证失败的详细原因（默认仅返回通用错误，防信息泄露）
 
-密钥来源优先级：-k 密钥文件 > ENCRYPTOR_KEY 环境变量 > 交互式输入（省略则交互式输入，不回显，须 ≥6 字符）。
+密钥来源优先级（对称模式）：-k 密钥文件 > --key-stdin（stdin 管道） > ENCRYPTOR_KEY 环境变量 > 交互式输入（须 ≥6 字符）。
+非对称模式（rage）：加密用 -r 收件人公钥（公钥字符串或公钥文件）；解密用 -k <私钥文件> 传入身份私钥，**绝不走环境变量 / stdin**。
+
+# 生成 X25519 密钥对：公钥打到 stdout（可重定向），私钥落到文件
+FileEncryptorCLI -g -o ./keys > pubkey.txt
+
+# 由口令派生密钥对（口令经 stdin 传入；同口令 + 同盐永远得到同一对密钥）
+FileEncryptorCLI -G -o ./keys --key-stdin > pubkey.txt
+# 用已有的盐 + 同一个口令重新派生出同一对密钥（私钥文件丢了也能找回）
+FileEncryptorCLI -G -o ./keys --key-stdin --salt ./keys/rage_derive_salt.txt
+
+# 由私钥反推公钥
+FileEncryptorCLI -Y -k ./keys/rage_private.txt
+
+# 非对称（rage）混合加密：直接用公钥字符串，或给公钥文件
+FileEncryptorCLI -e secret.docx -m rage -r age1... -o ./out
+FileEncryptorCLI -e secret.docx -m rage -r ./recipients.txt -o ./out
+
+# 解密：私钥以文件形式经 -k 传入（不走 stdin / 环境变量）
+FileEncryptorCLI -d secret.docx.age -m rage -k ./keys/rage_private.txt -o ./out
 
 续传：单文件（`-e`/`-d`）与批量（`-be`/`-bd`）模式均默认自动；中断后重跑同一命令，若存在同名 `.progress` 即从中断点继续，无需额外开关。
 ```
@@ -197,6 +227,48 @@ FileEncryptorCLI -bd ./encrypted_dir -o ./decrypted
 - **`Dockerfile`**：基于 Debian 的多阶段镜像，可在容器内完成构建与运行，便于 CI 复现。
 - **`scripts/build-release.sh`**：一键产出各平台**静态二进制**与零依赖 `DEB`/`RPM`。
 - **`scripts/sign-release.sh`**：对发布产物生成 `SHA256SUMS` 并可用 GPG 签名。
+
+---
+
+## 非对称（混合）加密：集成 rage/age（X25519 + ChaCha20-Poly1305）
+
+非对称模式（`-m rage`，兼容别名 `age`）采用**混合加密**：每个文件用随机生成的对称文件密钥（ChaCha20-Poly1305）加密，再用收件人的 **X25519** 公钥包装该文件密钥。无需与对方共享口令，只需交换公钥；可指定多个收件人（每人都能独立解密）。底层复用 [rage/age](https://github.com/str4d/rage) 的 C-ABI 静态库 `fe_age`（封装 `age` crate v0.12.1）。
+
+- **密钥对生成**：`-g` 直接生成——**公钥打印到 stdout**（便于重定向 / 管道给 `-r`），**私钥写入 `-o <dir>/rage_private.txt`**；提示信息一律走 stderr，保证 stdout 是干净的一行公钥。
+- **加密**：`-r <pub|file>` 给收件人公钥——可直接是 `age1...` 字符串，也可以是公钥文件（每行一个，可空行 / `#` 注释 / `publickey:` 前缀），输出 `<名>.age`。
+- **解密**：**必须**用私钥文件：`-k <私钥文件>`（内容为 `AGE-SECRET-KEY-...`，自动去除首尾空白 / 换行）。身份私钥不再经 stdin 传入，**绝不走环境变量**。
+
+### 密钥派生（`-G`）与公钥导出（`-Y`）
+
+这两个动作是纯本地计算（Argon2id + X25519 + Bech32），**不依赖 `fe_age` 静态库**，因此在未集成为非对称加密的构建里同样可用。
+
+- **`-G` 口令派生**：`Argon2id(口令, 盐) → 32 字节 → X25519 钳位 → 密钥对`。
+  输出与 `-g` 一致（公钥到 stdout、私钥到 `<dir>/rage_private.txt`），额外写出 **`<dir>/rage_derive_salt.txt`**（16 字节随机盐的 hex）。
+  **同一口令 + 同一盐永远得到同一对密钥**，所以记住口令即可代替保存私钥文件；但**盐必须一并保存**，否则无法再次派生。
+  用 `--salt <hex|file>` 传入已保存的盐即可复现；口令可来自 `--key-stdin`（推荐，GUI 走此通道）、`-k <文件>`、`ENCRYPTOR_KEY` 或交互输入（≥6 字符）。
+  已存在同名密钥文件时拒绝覆盖，除非带 `-y`。
+- **`-Y` 公钥导出**：读取 `-k <私钥文件>` 中的 `AGE-SECRET-KEY-...`，做一次 X25519 基点乘法反推出 `age1...` 公钥并打印到 stdout。用于私钥还在、公钥丢失的场景（等价 `rage-keygen -y`）。
+- **Bech32 实现注意事项**：age 的身份私钥串是 `bech32_encode(HRP="AGE-SECRET-KEY-")` 之后整体大写，其**校验和按小写 HRP 展开计算**。若按大写 HRP 展开，age 会拒绝该串（`invalid Bech32 encoding`）。
+
+### 构建 fe_age 静态库（Windows / Linux）
+
+`fe_age` 源码位于仓库 `../age-ffi/`，是 `rage` workspace 的一个成员 crate（C-ABI `staticlib`）。需先分别编译出两平台静态库，再交给 CLI 的 CMake 集成：
+
+```powershell
+# Windows（MSVC，x64）：在 E:/rage 仓库根执行
+cd ../age-ffi
+./build-win.ps1          # 产出 age-ffi/lib/windows/fe_age.lib
+```
+
+```bash
+# Linux（x86_64）：在 E:/rage 仓库根执行
+cd ../age-ffi
+./build-linux.sh         # 产出 age-ffi/lib/linux/libfe_age.a
+```
+
+也可显式指定 age-ffi 目录：`cmake -S . -B build -DFE_AGE_DIR=/path/to/age-ffi ...`。
+
+> CMake 集成：`WITH_AGE`（默认 ON）。找到 `fe_age.h` + `fe_age.lib`/`libfe_age.a` 后定义 `FE_WITH_AGE` 并链接；**未找到时仅给出 WARNING，回退为不含非对称加密的版本**（相关调用返回明确错误，不中断构建）。详见 `../age-ffi/README.md`。
 
 ---
 

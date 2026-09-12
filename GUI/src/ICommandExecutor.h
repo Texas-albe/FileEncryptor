@@ -13,12 +13,15 @@ struct OutputLine {
     bool isError;   // true=stderr, false=stdout
 };
 
-// 命令请求：argv + 额外环境变量（如 ENCRYPTOR_KEY）+ 工作目录
+// 命令请求：argv + 可选 stdin 数据（安全通道，替代环境变量注入密钥）+ 工作目录
 struct CommandRequest {
     QString programPath;        // FileEncryptor.exe 可执行文件路径
     QStringList arguments;      // argv（不含程序名）
     QString workingDirectory;   // 工作目录（空=继承父进程）
-    // 额外环境变量（注入到子进程环境）。密钥经 ENCRYPTOR_KEY 喂入，非交互不落盘。
+    // 写入子进程 stdin 的数据（密钥/身份私钥经此安全管道喂入，不进环境变量、不进命令行）。
+    // 非空时执行器会写入并关闭写通道；为空时仅关闭 stdin 写通道。
+    QByteArray stdinData;
+    // 额外环境变量（一般无需注入密钥；保留供未来扩展）。
     QProcessEnvironment extraEnv;
 };
 

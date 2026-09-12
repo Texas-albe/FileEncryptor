@@ -1,6 +1,7 @@
 // ProcessCommandExecutor - 用 QProcess 异步执行 FileEncryptor 命令行程序
 // 实现：异步捕获 stdout/stderr 按行推送；CancellationToken 取消（kill 进程树）；
-//       stdin 立即关闭（让子进程任何 cin 读取得 EOF，安全避开交互式提示）。
+//       密钥/身份私钥经请求内的 stdinData 写入子进程 stdin（安全管道），随后关闭写通道，
+//       不通过环境变量注入，避免密钥在进程列表/环境中泄露。
 // 跨平台：QProcess 在 Win/Linux/macOS 行为一致。
 #pragma once
 #include "ICommandExecutor.h"

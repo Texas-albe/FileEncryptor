@@ -187,10 +187,9 @@ void MainWindow::buildNavControls() {
     lay->setContentsMargins(0,0,0,0);
     lay->setSpacing(6);
 
-    // 主题：下拉框，提供 跟随系统 / 浅色 / 深色 三种模式
+    // 主题：下拉框，提供 浅色 / 深色 两种模式
     lay->addWidget(new QLabel(tr("主题：")));
     m_themeCombo=new QComboBox;
-    m_themeCombo->addItem(tr("跟随系统"),static_cast<int>(ThemeManager::Theme::System));
     m_themeCombo->addItem(tr("浅色"),static_cast<int>(ThemeManager::Theme::Light));
     m_themeCombo->addItem(tr("深色"),static_cast<int>(ThemeManager::Theme::Dark));
     // 反映当前持久化偏好
@@ -208,7 +207,7 @@ void MainWindow::buildNavControls() {
     // 置于菜单栏右上角（与“关于”同一行）
     m_menuBar->setCornerWidget(m_navWidget,Qt::TopRightCorner);
 
-    // 主题实际生效变化（如“跟随系统”随系统切换）→ 同步下拉框并刷新面板
+    // 主题切换（用户选择）→ 同步下拉框并刷新面板
     connect(&ThemeManager::instance(),&ThemeManager::themeChanged,
         this,&MainWindow::onThemeDarkChanged);
 }
@@ -223,7 +222,7 @@ void MainWindow::onThemeComboChanged(int idx) {
 }
 
 void MainWindow::onThemeDarkChanged(bool /*dark*/) {
-    // 跟随系统模式：系统主题变化后保持下拉框与面板同步
+    // 用户切换主题后保持下拉框与面板同步
     const int idx=m_themeCombo->findData(static_cast<int>(ThemeManager::chosenTheme()));
     if(idx>=0) {
         m_themeCombo->blockSignals(true);
@@ -356,7 +355,8 @@ void MainWindow::applyPanelTransparency() {
         "border-radius:3px;padding:2px 4px;"
         "selection-background-color:%4;selection-color:#FFFFFF;"
     ).arg(fieldBg,fieldFg,fieldBor,fieldSel);
-    for(QLineEdit* e:{m_outDirEdit, m_keyfileEdit, m_passwordEdit}) {
+    for(QLineEdit* e:{m_outDirEdit, m_keyfileEdit, m_passwordEdit,
+                       m_recipientEdit, m_identityEdit}) {
         if(e) e->setStyleSheet(fieldStyle);
     }
     if(m_outputView) m_outputView->setStyleSheet(fieldStyle);
@@ -376,7 +376,9 @@ void MainWindow::applyPanelTransparency() {
     for(QWidget* c:{static_cast<QWidget*>(m_chkDeleteSource), static_cast<QWidget*>(m_chkForce),
                        static_cast<QWidget*>(m_chkVerbose),
                        static_cast<QWidget*>(m_rbEncrypt), static_cast<QWidget*>(m_rbDecrypt),
-                       static_cast<QWidget*>(m_rbBatchEncrypt), static_cast<QWidget*>(m_rbBatchDecrypt)}) {
+                       static_cast<QWidget*>(m_rbBatchEncrypt), static_cast<QWidget*>(m_rbBatchDecrypt),
+                       static_cast<QWidget*>(m_rbKeyGen), static_cast<QWidget*>(m_rbDerive),
+                       static_cast<QWidget*>(m_rbPubKey)}) {
         if(c) c->setStyleSheet(optionStyle);
     }
 
@@ -403,7 +405,8 @@ void MainWindow::applyPanelTransparency() {
         "QPushButton:disabled{background:%1;color:#999999;}"
     ).arg(ctrlBg,ctrlFg,ctrlBor,ctrlHover);
     for(QPushButton* b:{m_btnAddFiles, m_btnAddDir, m_btnClearFiles,
-                           m_btnOutDirBrowse, m_btnKeyfileBrowse, m_btnViewSettings}) {
+                           m_btnOutDirBrowse, m_btnKeyfileBrowse, m_btnViewSettings,
+                           m_btnRecipientBrowse, m_btnIdentityBrowse}) {
         if(b) b->setStyleSheet(btnStyle);
     }
 
@@ -601,20 +604,36 @@ QWidget* MainWindow::buildCenterPanel() {
     m_rbDecrypt=new QRadioButton(tr("解密 (-d)"));
     m_rbBatchEncrypt=new QRadioButton(tr("批量加密 (-be)"));
     m_rbBatchDecrypt=new QRadioButton(tr("批量解密 (-bd)"));
+    m_rbKeyGen=new QRadioButton(tr("生成密钥对 (-g)"));
+    m_rbDerive=new QRadioButton(tr("口令派生密钥对 (-G)"));
+    m_rbPubKey=new QRadioButton(tr("导出公钥 (-Y)"));
     m_actionGroup=new QButtonGroup(this);
     m_actionGroup->addButton(m_rbEncrypt,static_cast<int>(CryptoAction::Encrypt));
     m_actionGroup->addButton(m_rbDecrypt,static_cast<int>(CryptoAction::Decrypt));
     m_actionGroup->addButton(m_rbBatchEncrypt,static_cast<int>(CryptoAction::BatchEncrypt));
     m_actionGroup->addButton(m_rbBatchDecrypt,static_cast<int>(CryptoAction::BatchDecrypt));
+    m_actionGroup->addButton(m_rbKeyGen,static_cast<int>(CryptoAction::KeyGen));
+    m_actionGroup->addButton(m_rbDerive,static_cast<int>(CryptoAction::Derive));
+    m_actionGroup->addButton(m_rbPubKey,static_cast<int>(CryptoAction::PubKey));
     m_rbEncrypt->setChecked(true);
 
-    auto* actionRow=new QHBoxLayout;
-    actionRow->addWidget(m_rbEncrypt);
-    actionRow->addWidget(m_rbDecrypt);
-    actionRow->addWidget(m_rbBatchEncrypt);
-    actionRow->addWidget(m_rbBatchDecrypt);
-    actionRow->addStretch();
-    lay->addLayout(actionRow,row,1);
+    auto* encRow=new QHBoxLayout;
+    encRow->addWidget(m_rbEncrypt);
+    encRow->addWidget(m_rbDecrypt);
+    encRow->addWidget(m_rbBatchEncrypt);
+    encRow->addWidget(m_rbBatchDecrypt);
+    encRow->addStretch();
+    lay->addLayout(encRow,row,1);
+    row++;
+
+    auto* lblKeyMgmt=new QLabel(tr("密钥管理 (rage/age)"));
+    lay->addWidget(lblKeyMgmt,row,0);
+    auto* keyMgmtRow=new QHBoxLayout;
+    keyMgmtRow->addWidget(m_rbKeyGen);
+    keyMgmtRow->addWidget(m_rbDerive);
+    keyMgmtRow->addWidget(m_rbPubKey);
+    keyMgmtRow->addStretch();
+    lay->addLayout(keyMgmtRow,row,1);
     row++;
 
     // 加密模式
@@ -623,7 +642,65 @@ QWidget* MainWindow::buildCenterPanel() {
     m_modeCombo=new QComboBox;
     m_modeCombo->addItem(tr("XChaCha20-Poly1305（默认，兼容性最好）"),static_cast<int>(CryptoMode::XChaCha20));
     m_modeCombo->addItem(tr("AEGIS-256（需 AES-NI 指令）"),static_cast<int>(CryptoMode::Aegis256));
+    m_modeCombo->addItem(tr("X25519 + ChaCha20-Poly1305（非对称）"),static_cast<int>(CryptoMode::Asymmetric));
     lay->addWidget(m_modeCombo,row,1);
+    row++;
+
+    // 非对称（age / X25519）输入区
+    m_asymWidget=new QGroupBox(tr("非对称加密 (rage)"));
+    {
+        auto* av=new QVBoxLayout(m_asymWidget);
+        av->setContentsMargins(8,8,8,8);
+        av->setSpacing(6);
+        auto* intro=new QLabel(tr("混合加密：随机生成的文件密钥用 X25519 公钥封装（rage/age 格式）。\n"
+                                  "加密只需要公钥（可公开），解密才需要私钥。"));
+        intro->setWordWrap(true);
+        av->addWidget(intro);
+
+        // 收件人公钥（加密）
+        m_recipientRow=new QWidget;
+        {
+            auto* rr=new QHBoxLayout(m_recipientRow);
+            rr->setContentsMargins(0,0,0,0);
+            rr->addWidget(new QLabel(tr("公钥 (-r)：")));
+            m_recipientEdit=new QLineEdit;
+            m_recipientEdit->setPlaceholderText(tr("age1... 公钥，或每行一个公钥的文件"));
+            rr->addWidget(m_recipientEdit,1);
+            m_btnRecipientBrowse=new QPushButton(tr("浏览..."));
+            rr->addWidget(m_btnRecipientBrowse);
+        }
+        av->addWidget(m_recipientRow);
+
+        // 身份私钥（解密）
+        m_identityRow=new QWidget;
+        {
+            auto* ir=new QHBoxLayout(m_identityRow);
+            ir->setContentsMargins(0,0,0,0);
+            ir->addWidget(new QLabel(tr("私钥文件 (-k)：")));
+            m_identityEdit=new QLineEdit;
+            m_identityEdit->setPlaceholderText(tr("包含 AGE-SECRET-KEY-... 的文件（如 rage_private.txt）"));
+            ir->addWidget(m_identityEdit,1);
+            m_btnIdentityBrowse=new QPushButton(tr("浏览..."));
+            ir->addWidget(m_btnIdentityBrowse);
+        }
+        av->addWidget(m_identityRow);
+    }
+    m_asymWidget->setVisible(false);
+    lay->addWidget(m_asymWidget,row,0,1,2);
+    row++;
+
+    // rage 密钥动作（-g 随机生成 / -G 口令派生 / -Y 导出公钥）：只需要输出目录或密钥材料
+    m_keygenWidget=new QGroupBox(tr("rage 密钥管理"));
+    {
+        auto* kv=new QVBoxLayout(m_keygenWidget);
+        kv->setContentsMargins(8,8,8,8);
+        kv->setSpacing(6);
+        m_keygenIntro=new QLabel;
+        m_keygenIntro->setWordWrap(true);
+        kv->addWidget(m_keygenIntro);
+    }
+    m_keygenWidget->setVisible(false);
+    lay->addWidget(m_keygenWidget,row,0,1,2);
     row++;
 
     // 输出目录
@@ -643,7 +720,7 @@ QWidget* MainWindow::buildCenterPanel() {
     lay->addWidget(lblKey,row,0);
     auto* keyRow=new QHBoxLayout;
     m_keyfileEdit=new QLineEdit;
-    m_keyfileEdit->setPlaceholderText(tr("留空 = 用右侧密码经 ENCRYPTOR_KEY"));
+    m_keyfileEdit->setPlaceholderText(tr("留空 = 用右侧密码（经 stdin 注入）"));
     m_btnKeyfileBrowse=new QPushButton(tr("浏览..."));
     keyRow->addWidget(m_keyfileEdit);
     keyRow->addWidget(m_btnKeyfileBrowse);
@@ -656,7 +733,6 @@ QWidget* MainWindow::buildCenterPanel() {
     auto* optsRow=new QHBoxLayout;
     m_chkDeleteSource=new QCheckBox(tr("完成后删除源文件 (-de)"));
     m_chkForce=new QCheckBox(tr("覆盖已存在文件 (-y)"));
-    m_chkForce->setChecked(true);
     m_chkVerbose=new QCheckBox(tr("详细输出 (-v)"));
     optsRow->addWidget(m_chkDeleteSource);
     optsRow->addWidget(m_chkForce);
@@ -675,7 +751,6 @@ QWidget* MainWindow::buildCenterPanel() {
     runRow->addWidget(m_btnCancel);
     lay->addLayout(runRow,row,1);
     row++;
-    // 按钮样式按当前主题应用（构造期 + 主题切换期都会调用）
     applyButtonStyles();
 
     lay->setRowStretch(row,1);
@@ -697,7 +772,7 @@ QWidget* MainWindow::buildRightPanel() {
 
     m_passwordEdit=new QLineEdit;
     m_passwordEdit->setEchoMode(QLineEdit::Password);   // 星号隐藏
-    m_passwordEdit->setPlaceholderText(tr("输入密码（经环境变量注入，不留盘）"));
+    m_passwordEdit->setPlaceholderText(tr("输入密码（经 stdin 注入，不留盘）"));
     lay->addWidget(m_passwordEdit);
 
     // 强度提示
@@ -712,14 +787,6 @@ QWidget* MainWindow::buildRightPanel() {
     lay->addWidget(m_strengthLabel);
 
     lay->addStretch();
-
-    // 提示文字
-    auto* tip=new QLabel(tr(
-        "<small><i>提示：密码经 ENCRYPTOR_KEY 环境变量\n"
-        "注入子进程，不写入命令行/磁盘。\n"
-        "提供密钥文件 (-k) 时优先用密钥文件。</i></small>"));
-    tip->setWordWrap(true);
-    lay->addWidget(tip);
 
     return w;
 }
@@ -781,6 +848,75 @@ void MainWindow::connectSignals() {
             QDir::homePath(),tr("所有文件 (*)"));
         if(!f.isEmpty()) m_keyfileEdit->setText(f);
         });
+
+    // 非对称（age / X25519）：收件人公钥文件 / 身份私钥文件 浏览
+    connect(m_btnRecipientBrowse,&QPushButton::clicked,this,[this]{
+        QString f=QFileDialog::getOpenFileName(this,tr("选择公钥文件"),
+            QDir::homePath(),tr("公钥文件 (*.txt *.agepub *);;所有文件 (*)"));
+        if(!f.isEmpty()) m_recipientEdit->setText(f);
+        });
+    connect(m_btnIdentityBrowse,&QPushButton::clicked,this,[this]{
+        QString f=QFileDialog::getOpenFileName(this,tr("选择私钥文件"),
+            QDir::homePath(),tr("私钥文件 (*.txt *.agekey *);;所有文件 (*)"));
+        if(!f.isEmpty()) m_identityEdit->setText(f);
+        });
+    // 模式切换：刷新非对称输入区可见性
+    connect(m_modeCombo,QOverload<int>::of(&QComboBox::currentIndexChanged),
+        this,&MainWindow::updateAsymVisibility);
+    connect(m_actionGroup,&QButtonGroup::idClicked,
+        this,[this](int){ updateAsymVisibility(); });
+}
+
+// ---------- 动作/模式切换：刷新 rage 相关控件的可见性 ----------
+void MainWindow::updateAsymVisibility() {
+    const int act=m_actionGroup->checkedId();
+    const bool keygen=(act==static_cast<int>(CryptoAction::KeyGen));
+    const bool derive=(act==static_cast<int>(CryptoAction::Derive));
+    const bool pubkey=(act==static_cast<int>(CryptoAction::PubKey));
+    const bool isKeyAction=(keygen||derive||pubkey);
+    const bool isEnc=(act==static_cast<int>(CryptoAction::Encrypt)||
+                      act==static_cast<int>(CryptoAction::BatchEncrypt));
+    const bool asym=(!isKeyAction)&&
+        (m_modeCombo->currentData().toInt()==static_cast<int>(CryptoMode::Asymmetric));
+
+    m_asymWidget->setVisible(asym||pubkey);
+    m_recipientRow->setVisible(asym&&isEnc);
+    m_identityRow->setVisible((asym&&!isEnc)||pubkey);
+
+    m_keygenWidget->setVisible(isKeyAction);
+    if(keygen) {
+        m_keygenWidget->setTitle(tr("rage 随机生成密钥对 (-g)"));
+        m_keygenIntro->setText(tr("在下方输出目录 (-o) 中随机生成一对 X25519 密钥：\n"
+                                  "  公钥             -> 打印到输出面板（age1...，可公开分享）\n"
+                                  "  rage_private.txt -> 私钥文件（AGE-SECRET-KEY-...，务必妥善保管）"));
+    } else if(derive) {
+        m_keygenWidget->setTitle(tr("rage 口令派生密钥对 (-G)"));
+        m_keygenIntro->setText(tr("用右侧「口令」经 Argon2id 确定性派生一对 X25519 密钥：\n"
+                                  "  公钥                  -> 打印到输出面板（age1...）\n"
+                                  "  rage_private.txt      -> 私钥文件（AGE-SECRET-KEY-...）\n"
+                                  "  rage_derive_salt.txt  -> 16 字节随机盐，复现同一密钥对必需\n"
+                                  "同一口令 + 同一盐永远得到同一对密钥，因此口令可以代替私钥文件；"
+                                  "但盐必须一并保存，否则无法再次派生出来。"));
+    } else if(pubkey) {
+        m_keygenWidget->setTitle(tr("rage 由私钥导出公钥 (-Y)"));
+        m_keygenIntro->setText(tr("读取下方「私钥文件 (-k)」里的 AGE-SECRET-KEY-...，"
+                                  "反推出对应的 age1... 公钥并打印到输出面板。\n"
+                                  "用于私钥还在、公钥丢失的情况（等价 rage-keygen -y）。"));
+    }
+
+    // rage 密钥动作固定锁定到非对称算法（第三个）并禁用下拉
+    if(isKeyAction) {
+        for(int i=0;i<m_modeCombo->count();++i) {
+            if(m_modeCombo->itemData(i).toInt()==static_cast<int>(CryptoMode::Asymmetric)) {
+                m_modeCombo->setCurrentIndex(i);
+                break;
+            }
+        }
+        m_modeCombo->setDisabled(true);
+    } else {
+        m_modeCombo->setDisabled(false);
+    }
+    m_passwordEdit->setDisabled(asym||keygen||pubkey);
 }
 
 // ---------- 文件选择 ----------
@@ -839,6 +975,18 @@ ShellOptions MainWindow::collectOptions() const {
     o.keyfilePath=m_keyfileEdit->text().trimmed();
     o.password=m_passwordEdit->text();
 
+    // 非对称（age）输入
+    o.recipientPath=m_recipientEdit->text().trimmed();
+    o.identityPath=m_identityEdit->text().trimmed();
+    // Asymmetric decryption: the private key file is handed to the CLI as -k.
+    {
+        const bool asymDecrypt=(o.mode==CryptoMode::Asymmetric)&&
+            (o.action==CryptoAction::Decrypt||o.action==CryptoAction::BatchDecrypt);
+        if(asymDecrypt) o.keyfilePath=o.identityPath;
+        else if(o.action==CryptoAction::PubKey) o.keyfilePath=o.identityPath;   // -Y 从私钥文件读身份
+        else if(o.mode==CryptoMode::Asymmetric) o.keyfilePath.clear(); // asym encrypt needs no key file
+    }
+
     return o;
 }
 
@@ -862,23 +1010,65 @@ void MainWindow::onRunClicked() {
     const ShellOptions o=collectOptions();
 
     // 校验
-    if(o.inputPaths.isEmpty()) {
+    const bool isKeyGen=(o.action==CryptoAction::KeyGen);
+    const bool isDerive=(o.action==CryptoAction::Derive);
+    const bool isPubKey=(o.action==CryptoAction::PubKey);
+    const bool noInputNeeded=(isKeyGen||isDerive||isPubKey);  // 三个 rage 密钥动作都不处理输入文件
+    if(!noInputNeeded && o.inputPaths.isEmpty()) {
         QMessageBox::warning(this,tr("缺少输入"),tr("请先添加文件或目录。"));
         return;
     }
     bool isBatch=(o.action==CryptoAction::BatchEncrypt||
         o.action==CryptoAction::BatchDecrypt);
+    bool isEnc=(o.action==CryptoAction::Encrypt||o.action==CryptoAction::BatchEncrypt);
     if(!isBatch&&o.inputPaths.size()>1) {
         QMessageBox::warning(this,tr("输入过多"),
             tr("单文件模式只接受一个输入路径，请清空后只选一个，或改用批量模式。"));
         return;
     }
-    // 密钥校验：未提供密钥文件时，密码必须 >=6（main.cpp L338-341）
-    if(o.keyfilePath.isEmpty()&&o.password.length()<6) {
-        QMessageBox::warning(this,tr("密码过短"),
-            tr("密码至少 6 个字符（或提供密钥文件 -k）。"));
-        m_passwordEdit->setFocus();
-        return;
+    // 校验
+    const bool isAsym=(o.mode==CryptoMode::Asymmetric)&&!noInputNeeded;
+    if(isKeyGen) {
+        // 随机生成：不需要公钥，也不需要口令
+    } else if(isDerive) {
+        if(o.password.length()<6) {
+            QMessageBox::warning(this,tr("口令过短"),
+                tr("口令派生需要至少 6 个字符的口令，请在右侧密码框中输入。"));
+            m_passwordEdit->setFocus();
+            return;
+        }
+    } else if(isPubKey) {
+        if(o.identityPath.isEmpty()) {
+            QMessageBox::warning(this,tr("缺少私钥"),
+                tr("请先在「私钥文件 (-k)」中选择包含 AGE-SECRET-KEY-... 的文件。"));
+            m_identityEdit->setFocus();
+            return;
+        }
+    } else if(isAsym) {
+        // 非对称模式：不使用对称密码；加密需收件人公钥，解密需身份私钥
+        if(isEnc) {
+            if(o.recipientPath.isEmpty()) {
+                QMessageBox::warning(this,tr("缺少公钥"),
+                    tr("非对称加密需要公钥：粘贴 age1... 或选择一个含公钥的文件 (-r)。"));
+                m_recipientEdit->setFocus();
+                return;
+            }
+        } else {
+            if(o.identityPath.isEmpty()) {
+                QMessageBox::warning(this,tr("缺少私钥"),
+                    tr("非对称解密需要私钥文件 (-k)，例如 rage_private.txt。"));
+                m_identityEdit->setFocus();
+                return;
+            }
+        }
+    } else {
+        // 对称模式：未提供密钥文件时，密码必须 >=6（main.cpp 校验）
+        if(o.keyfilePath.isEmpty()&&o.password.length()<6) {
+            QMessageBox::warning(this,tr("密码过短"),
+                tr("密码至少 6 个字符（或提供密钥文件 -k）。"));
+            m_passwordEdit->setFocus();
+            return;
+        }
     }
 
     // 构建命令
@@ -886,6 +1076,21 @@ void MainWindow::onRunClicked() {
     req.programPath=m_fileEncryptorPath;
     req.arguments=CliArgBuilder::buildArguments(o);
     req.extraEnv=CliArgBuilder::buildEnvironment(o);
+
+    // Key material is injected through the child's stdin pipe (never env / argv):
+    //   - symmetric mode without -k: the password;
+    //   - asymmetric modes: nothing - public key goes via -r, private key via -k.
+    if(isKeyGen||isPubKey) {
+        // -g 不需要任何密钥材料；-Y 的私钥走 -k 文件，不经 stdin
+    } else if(isDerive) {
+        req.stdinData=o.password.toUtf8();   // 派生口令经 stdin 管道注入（不经 argv / 环境变量）
+    } else if(isAsym) {
+        // 非对称：公钥走 -r，私钥走 -k，都不经 stdin
+    } else {
+        if(o.keyfilePath.isEmpty()) {
+            req.stdinData=o.password.toUtf8();
+        }
+    }
 
     // 输出区清空并显示命令预览
     m_outputView->clear();

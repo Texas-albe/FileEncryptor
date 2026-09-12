@@ -91,7 +91,7 @@ ReadmeDialog::ReadmeDialog(QWidget* parent): QDialog(parent) {
         "FileEncryptor -be/-bd &lt;Path&gt; [-o &lt;Path&gt;] [-de] [-m xchacha20|aegis256] [-y]"
         "</pre>"
         "<h3>密钥来源优先级</h3>"
-        "<p><code>-k &lt;keyfile&gt;</code>（密钥文件） &gt; <code>ENCRYPTOR_KEY</code>（环境变量）"
+        "<p><code>-k &lt;keyfile&gt;</code>（密钥文件） &gt; <code>--key-stdin</code>（stdin 管道） &gt; <code>ENCRYPTOR_KEY</code>（环境变量） &gt; 交互式输入；非对称模式用 X25519 身份私钥"
         " &gt; 交互式输入</p>"
         "<h3>许可证</h3>"
         "<p>GPLv3</p>"

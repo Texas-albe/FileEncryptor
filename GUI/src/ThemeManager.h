@@ -1,10 +1,10 @@
-// ThemeManager - 浅色/深色/跟随系统 主题管理
+// ThemeManager - 浅色/深色 主题管理
 // 职责：
-//   1) 提供 Light / Dark / System 三种主题，统一通过 QPalette 应用到 QApplication
-//   2) 用 QSettings 持久化用户选择（键 "theme"，值 0=System 1=Light 2=Dark）
+//   1) 提供 Light / Dark 两种主题，统一通过 QPalette 应用到 QApplication
+//   2) 用 QSettings 持久化用户选择（键 "theme"，值 0=Light 1=Dark）
 //   3) 暴露 currentTheme() / isDarkActive() 供 UI 组件（如输出着色、对话框 HTML）
 //      在当前主题下选用高对比度颜色，满足 WCAG AA（对比度 >= 4.5:1）
-// 跨平台；不依赖 Qt 的 QStyleHints 主题探测，自行管理调色板，保证 Win/Linux/macOS 一致。
+// 跨平台；自行管理调色板，保证 Win/Linux/macOS 一致。
 #pragma once
 #include <QObject>
 
@@ -14,7 +14,7 @@ class QPalette;
 class ThemeManager : public QObject {
     Q_OBJECT
 public:
-    enum class Theme { System = 0, Light = 1, Dark = 2 };
+    enum class Theme { Light = 0, Dark = 1 };
 
     // 应用启动期调用：读取持久化偏好并应用到 app。
     // forceSystemDarkDetection 仅用于单元测试，生产路径不传。
@@ -29,7 +29,7 @@ public:
     // 当前用户选择（持久化的偏好，未必等于实际生效的浅/深）
     static Theme chosenTheme();
 
-    // 当前实际生效的是否为深色（System 时按系统暗色探测）
+    // 当前实际生效的是否为深色
     static bool isDarkActive();
 
     // 输出着色：stdout/stderr 在当前主题下的高对比度颜色
@@ -58,7 +58,6 @@ private:
     ThemeManager() = default;
     static QPalette buildLightPalette();
     static QPalette buildDarkPalette();
-    static bool detectSystemDark();
     static void persist(Theme t);
     static Theme load();
 };

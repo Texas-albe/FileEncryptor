@@ -5,12 +5,46 @@
 QStringList CliArgBuilder::buildArguments(const ShellOptions& o) {
     QStringList args;
 
+    // 三个 rage 密钥动作都只需要密钥材料 / 输出目录，不需要输入文件与模式：
+    //   -g          随机生成密钥对
+    //   -G          由口令派生密钥对（口令经 stdin 注入，避免出现在命令行）
+    //   -Y          由私钥文件导出公钥
+    if (o.action == CryptoAction::KeyGen) {
+        args << QStringLiteral("-g");
+        if (!o.outputDir.isEmpty()) {
+            args << QStringLiteral("-o") << o.outputDir;
+        }
+        return args;
+    }
+    if (o.action == CryptoAction::Derive) {
+        args << QStringLiteral("-G");
+        if (!o.outputDir.isEmpty()) {
+            args << QStringLiteral("-o") << o.outputDir;
+        }
+        // GUI 非交互，默认带 -y，允许覆盖同名密钥文件
+        if (o.forceOverwrite) {
+            args << QStringLiteral("-y");
+        }
+        args << QStringLiteral("--key-stdin");   // 口令走 stdin 管道，不经 argv / 环境变量
+        return args;
+    }
+    if (o.action == CryptoAction::PubKey) {
+        args << QStringLiteral("-Y");
+        if (!o.identityPath.isEmpty()) {
+            args << QStringLiteral("-k") << o.identityPath;
+        }
+        return args;
+    }
+
     // 模式（main.cpp L210-225）
     switch (o.action) {
     case CryptoAction::Encrypt:       args << QStringLiteral("-e");  break;
     case CryptoAction::Decrypt:      args << QStringLiteral("-d");  break;
     case CryptoAction::BatchEncrypt:  args << QStringLiteral("-be"); break;
     case CryptoAction::BatchDecrypt:  args << QStringLiteral("-bd"); break;
+    case CryptoAction::KeyGen:        args << QStringLiteral("-g");  break;
+    case CryptoAction::Derive:        args << QStringLiteral("-G");  break;
+    case CryptoAction::PubKey:        args << QStringLiteral("-Y");  break;
     }
 
     // 输出目录（main.cpp L226-232，含 path traversal 校验由子进程负责）
@@ -23,11 +57,22 @@ QStringList CliArgBuilder::buildArguments(const ShellOptions& o) {
         args << QStringLiteral("-de");
     }
 
-    // 加密模式（main.cpp L236-241）
+    const bool isAsym = (o.mode == CryptoMode::Asymmetric);
+    const bool isEnc = (o.action == CryptoAction::Encrypt ||
+                        o.action == CryptoAction::BatchEncrypt);
+
+    // Encryption mode (main.cpp -m rage asymmetric branch)
     if (o.mode == CryptoMode::XChaCha20) {
         args << QStringLiteral("-m") << QStringLiteral("xchacha20");
-    } else {
+    } else if (o.mode == CryptoMode::Aegis256) {
         args << QStringLiteral("-m") << QStringLiteral("aegis256");
+    } else { // Asymmetric
+        args << QStringLiteral("-m") << QStringLiteral("rage");
+    }
+
+    // 非对称加密：收件人公钥文件（main.cpp -r）
+    if (isAsym && isEnc && !o.recipientPath.isEmpty()) {
+        args << QStringLiteral("-r") << o.recipientPath;
     }
 
     // 输入路径（main.cpp L242-244 批模式 -i；L254-256 单模式位置参数）
@@ -55,22 +100,27 @@ QStringList CliArgBuilder::buildArguments(const ShellOptions& o) {
         args << QStringLiteral("-v");
     }
 
-    // 密钥文件（main.cpp L251-253）。若提供 -k，则子进程用密钥文件而非 ENCRYPTOR_KEY env
+    // 密钥文件（main.cpp L251-253）。若提供 -k，则子进程用密钥文件，不经 stdin。
     if (!o.keyfilePath.isEmpty()) {
         args << QStringLiteral("-k") << o.keyfilePath;
+    }
+
+    // Asymmetric decryption hands the private key to the CLI as a file (-k);
+    // nothing is piped through stdin there. Symmetric modes keep piping the
+    // password through stdin whenever no -k file is used.
+    if (!isAsym) {
+        if (o.keyfilePath.isEmpty()) {
+            args << QStringLiteral("--key-stdin");
+        }
     }
 
     return args;
 }
 
-QProcessEnvironment CliArgBuilder::buildEnvironment(const ShellOptions& o) {
-    QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
-    // 仅当未用 -k 密钥文件时，把右侧密码框内容注入 ENCRYPTOR_KEY
-    // （main.cpp L326-333：keyfile_path 空时读 ENCRYPTOR_KEY env）
-    if (o.keyfilePath.isEmpty() && !o.password.isEmpty()) {
-        env.insert(QStringLiteral("ENCRYPTOR_KEY"), o.password);
-    }
-    return env;
+QProcessEnvironment CliArgBuilder::buildEnvironment(const ShellOptions& /*o*/) {
+    // 不再注入 ENCRYPTOR_KEY：密钥/身份经子进程 stdin 管道注入（见 buildArguments 的 --key-stdin），
+    // 较环境变量更不易被其它进程通过 /proc 或环境窥探。此处仅返回系统环境。
+    return QProcessEnvironment::systemEnvironment();
 }
 
 QString CliArgBuilder::buildPreview(const QString& programPath, const ShellOptions& o) {
@@ -94,9 +144,27 @@ QString CliArgBuilder::buildPreview(const QString& programPath, const ShellOptio
         }
     }
 
-    // 若密码经 env 注入，预览里标注（不展示明文）
-    if (o.keyfilePath.isEmpty() && !o.password.isEmpty()) {
-        cmd += QStringLiteral("   [ENCRYPTOR_KEY=******]");
+    // 密钥/身份经 stdin 注入（不展示明文）
+    // Keypair generation injects no key material via stdin.
+    if (o.action == CryptoAction::KeyGen) {
+        return cmd;
+    }
+    if (o.action == CryptoAction::Derive) {
+        return cmd + QStringLiteral("   [派生口令经 stdin 注入]");
+    }
+    if (o.action == CryptoAction::PubKey) {
+        return cmd + QStringLiteral("   [私钥来自 -k 文件]");
+    }
+
+    const bool isAsym = (o.mode == CryptoMode::Asymmetric);
+    const bool isEnc = (o.action == CryptoAction::Encrypt || o.action == CryptoAction::BatchEncrypt);
+    bool usesStdin = false;
+    // Asymmetric decryption passes the private key as a file (-k), never via stdin.
+    if (!isAsym && o.keyfilePath.isEmpty()) usesStdin = true;
+    if (usesStdin) {
+        cmd += QStringLiteral("   [password via stdin]");
+    } else if (!o.keyfilePath.isEmpty()) {
+        cmd += QStringLiteral("   [key from -k file]");
     }
 
     return cmd;

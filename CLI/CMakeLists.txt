@@ -1,5 +1,5 @@
 ﻿cmake_minimum_required(VERSION 3.15)
-project(FileEncryptorCLI VERSION 2.0.0 LANGUAGES CXX)
+project(FileEncryptorCLI VERSION 2.1.0 LANGUAGES CXX)
 
 # FileEncryptor CLI - 命令行加密工具（独立项目）
 # 本项目编译产出 FileEncryptorCLI(.exe)；GUI 项目（../GUI）通过 QProcess 调用此程序。
@@ -259,6 +259,7 @@ endif()
 set(SOURCES
   core/FileEncryptor.cpp
   core/config.cpp
+  core/asym_crypto.cpp
   cli/main.cpp)
 
 # Windows 图标资源（嵌入 exe；Linux/macOS 无 .rc）
@@ -363,6 +364,67 @@ endif()
 # Linux 静态链接 libsodium / yaml-cpp 时，动态加载器符号（dlopen 等）需显式链接
 if(UNIX)
   target_link_libraries(FileEncryptor PRIVATE ${CMAKE_DL_LIBS})
+endif()
+
+# ---------- 非对称（混合）加密：集成 rage/age（C-ABI 静态库 fe_age） ----------
+# 需先用 age-ffi/build-win.ps1（Windows / MSVC）或 build-linux.sh（Linux）编译出
+# 静态库 fe_age.lib / libfe_age.a，并放在 age-ffi/lib/<platform>/ 下。
+# 可用 -DFE_AGE_DIR=<age-ffi 目录> 显式指定位置。
+option(WITH_AGE "Enable asymmetric (age/rage) encryption support" ON)
+set(FE_AGE_FOUND FALSE)
+if(WITH_AGE)
+  # The default search root is platform specific: WSL / Linux sees the Windows
+  # tree through /mnt/<drive>, so a Windows path must not be used there.
+  if(WIN32)
+    set(_age_ffi_root "E:/rage/age-ffi")
+    set(_age_hdr_hints "C:/Program Files/rage/include" "C:/Program Files/rage")
+    set(_age_lib_install "C:/Program Files/rage/libs/windows" "C:/Program Files/rage/lib")
+    set(_age_lib_subdir "lib/windows")
+  else()
+    set(_age_ffi_root "/mnt/e/rage/age-ffi")
+    set(_age_hdr_hints "/mnt/c/Program Files/rage/include" "/usr/local/include")
+    set(_age_lib_install "/mnt/c/Program Files/rage/libs/linux" "/usr/local/lib")
+    set(_age_lib_subdir "lib/linux")
+  endif()
+  if(DEFINED FE_AGE_DIR AND FE_AGE_DIR)
+    set(_age_ffi_root "${FE_AGE_DIR}")
+  endif()
+  # header lives in the source tree; lib may sit in <root>/lib/<platform> or be installed under C:/Program Files/rage/libs/<platform>
+  find_path(FE_AGE_INCLUDE_DIR NAMES fe_age.h
+    HINTS "${_age_ffi_root}" "${_age_ffi_root}/include" ${_age_hdr_hints} "${CMAKE_SOURCE_DIR}/../age-ffi")
+  if(WIN32)
+    find_library(FE_AGE_LIBRARY NAMES fe_age
+      HINTS "${_age_ffi_root}/lib/windows" "${_age_ffi_root}/lib"
+            ${_age_lib_install}
+            "${CMAKE_SOURCE_DIR}/../age-ffi/lib/windows")
+  else()
+    find_library(FE_AGE_LIBRARY NAMES fe_age libfe_age
+      HINTS "${_age_ffi_root}/${_age_lib_subdir}" "${_age_ffi_root}/lib"
+            ${_age_lib_install}
+            "${CMAKE_SOURCE_DIR}/../age-ffi/${_age_lib_subdir}")
+  endif()
+  if(FE_AGE_INCLUDE_DIR AND FE_AGE_LIBRARY)
+    set(FE_AGE_FOUND TRUE)
+    target_include_directories(FileEncryptor PRIVATE ${FE_AGE_INCLUDE_DIR})
+    target_link_libraries(FileEncryptor PRIVATE ${FE_AGE_LIBRARY})
+    target_compile_definitions(FileEncryptor PRIVATE FE_WITH_AGE)
+    if(WIN32)
+      # Rust staticlib (MSVC target) 运行所需的系统库
+      # ntdll: Rust std on Windows calls NtReadFile/NtWriteFile (LNK2019 __imp_NtReadFile / __imp_NtWriteFile)
+      target_link_libraries(FileEncryptor PRIVATE bcrypt advapi32 userenv kernel32 ws2_32 ncrypt crypt32 ntdll)
+    else()
+      target_link_libraries(FileEncryptor PRIVATE pthread dl m)
+    endif()
+    message(STATUS "fe_age: 已集成 (${FE_AGE_LIBRARY})")
+  else()
+    message(WARNING
+      "WITH_AGE=ON but fe_age was not found.\n"
+      "  header=${FE_AGE_INCLUDE_DIR}\n"
+      "  library=${FE_AGE_LIBRARY}\n"
+      "  searched root: ${_age_ffi_root}\n"
+      "Building WITHOUT asymmetric (rage) encryption. Run age-ffi/build-win.ps1 or build-linux.sh first,\n"
+      "or pass -DFE_AGE_DIR=<age-ffi dir>.")
+  endif()
 endif()
 
 # Windows 动态链接时，把 libsodium.dll 复制到 exe 所在目录，保证直接运行

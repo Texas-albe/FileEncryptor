@@ -4,13 +4,12 @@
 #include <QGuiApplication>
 #include <QPalette>
 #include <QSettings>
-#include <QStyleHints>
 #include <QWidget>
 
 static const char* kOrg = "FileEncryptor";
 static const char* kApp = "FileEncryptorGUI";
 static const char* kKey = "theme";
-static ThemeManager::Theme g_chosen = ThemeManager::Theme::System;
+static ThemeManager::Theme g_chosen = ThemeManager::Theme::Light;
 static bool g_darkActive = false;
 
 // ---------- 调色板 ----------
@@ -53,19 +52,6 @@ QPalette ThemeManager::buildDarkPalette() {
     return p;
 }
 
-bool ThemeManager::detectSystemDark() {
-    // Qt 6.5+ 提供 colorScheme；旧版本回退到窗口背景明度判断
-    if (auto* hints = QGuiApplication::styleHints()) {
-        // Qt::ColorScheme::Dark == 1
-        const int scheme = static_cast<int>(hints->colorScheme());
-        if (scheme == 1) return true;
-        if (scheme == 0) return false;  // 显式 Light
-    }
-    // 回退：探测系统调色板窗口色明度
-    const QColor win = QGuiApplication::palette().color(QPalette::Window);
-    return win.lightness() < 128;
-}
-
 // ---------- 持久化 ----------
 void ThemeManager::persist(Theme t) {
     QSettings s(kOrg, kApp);
@@ -75,17 +61,18 @@ void ThemeManager::persist(Theme t) {
 ThemeManager::Theme ThemeManager::load() {
     QSettings s(kOrg, kApp);
     bool ok = false;
-    const int v = s.value(kKey, static_cast<int>(Theme::System)).toInt(&ok);
-    if (!ok) return Theme::System;
-    if (v < 0 || v > 2) return Theme::System;
-    return static_cast<Theme>(v);
+    const int v = s.value(kKey, static_cast<int>(Theme::Light)).toInt(&ok);
+    if (!ok) return Theme::Light;
+    // 兼容旧版持久化值（旧：0=System 1=Light 2=Dark；新：0=Light 1=Dark）
+    if (v == 2) return Theme::Dark;   // 原 Dark
+    if (v == 1) return Theme::Light; // 原 Light
+    return Theme::Light;              // 0（原 System）/ 非法 → 浅色
 }
 
 // ---------- 公开 API ----------
 void ThemeManager::initialize(QApplication* app) {
     g_chosen = load();
-    const bool dark = (g_chosen == Theme::Dark) ||
-                      (g_chosen == Theme::System && detectSystemDark());
+    const bool dark = (g_chosen == Theme::Dark);
     g_darkActive = dark;
     app->setPalette(dark ? buildDarkPalette() : buildLightPalette());
 }
@@ -93,8 +80,7 @@ void ThemeManager::initialize(QApplication* app) {
 void ThemeManager::setTheme(Theme t) {
     g_chosen = t;
     persist(t);
-    const bool dark = (t == Theme::Dark) ||
-                      (t == Theme::System && detectSystemDark());
+    const bool dark = (t == Theme::Dark);
     g_darkActive = dark;
     if (auto* app = qApp) {
         app->setPalette(dark ? buildDarkPalette() : buildLightPalette());

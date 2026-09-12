@@ -1,4 +1,4 @@
-// MainWindow - Qt GUI 主窗口，五区域布局
+// MainWindow - Qt GUI 主窗口，五区布局
 
 #pragma once
 #include <QMainWindow>
@@ -17,6 +17,7 @@ class QCheckBox;
 class QPushButton;
 class QButtonGroup;
 class QActionGroup;
+class QGroupBox;
 class QToolBar;
 class QSplitter;
 class QPixmap;
@@ -46,15 +47,17 @@ private slots:
     void onPasswordChanged(const QString& text);
     // 选项变化 → 刷新命令预览
     void refreshCommandPreview();
+    // 非对称模式下显示/隐藏收件人/身份输入与密码面板
+    void updateAsymVisibility();
     // 主题切换（菜单栏下拉框）
     void onThemeComboChanged(int idx);
     // 视图设置（背景图）
     void onViewSettings();
     // 编辑 FileEncryptorCLI 的 yaml 配置（系统默认编辑器）
     void onEditConfig();
-    // 主题实际生效变化（来自 ThemeManager 信号，如跟随系统随系统切换）
+    // 主题实际生效变化（来自 ThemeManager 信号，切换主题后）
     void onThemeDarkChanged(bool dark);
-    // 窗口尺寸变化 → 重铺背景图
+    // 窗口几何变化 → 重绘背景图
     void resizeEvent(QResizeEvent* e) override;
     // 手动重试 CLI 检测
     void onRetryCliDetection();
@@ -83,7 +86,7 @@ private:
     void appendOutput(const QString& text,bool isError);
     void setStatus(const QString& msg);
 
-    // 顶栏菜单
+    // 菜单栏
     QMenuBar* m_menuBar=nullptr;
 
     // 导航栏（菜单栏右上角控件）
@@ -116,6 +119,9 @@ private:
     QRadioButton* m_rbDecrypt=nullptr;
     QRadioButton* m_rbBatchEncrypt=nullptr;
     QRadioButton* m_rbBatchDecrypt=nullptr;
+    QRadioButton* m_rbKeyGen=nullptr;
+    QRadioButton* m_rbDerive=nullptr;    // -G：口令派生密钥对
+    QRadioButton* m_rbPubKey=nullptr;    // -Y：由私钥导出公钥
     QComboBox* m_modeCombo=nullptr;
     QCheckBox* m_chkDeleteSource=nullptr;
     QCheckBox* m_chkForce=nullptr;
@@ -124,6 +130,18 @@ private:
     QPushButton* m_btnOutDirBrowse=nullptr;
     QLineEdit* m_keyfileEdit=nullptr;
     QPushButton* m_btnKeyfileBrowse=nullptr;
+
+    // Asymmetric (rage / X25519) input area
+    QGroupBox* m_asymWidget=nullptr;     // recipients / identity rows
+    QGroupBox* m_keygenWidget=nullptr;   // -g / -G / -Y 的说明区（标题与正文随动作切换）
+    QLabel* m_keygenIntro=nullptr;
+    QWidget* m_recipientRow=nullptr;   // public key input (-r, asymmetric encrypt)
+    QWidget* m_identityRow=nullptr;    // private key file (-k, asymmetric decrypt)
+    QLineEdit* m_recipientEdit=nullptr;
+    QPushButton* m_btnRecipientBrowse=nullptr;
+    QLineEdit* m_identityEdit=nullptr;
+    QPushButton* m_btnIdentityBrowse=nullptr;
+
     QPushButton* m_btnRun=nullptr;
     QPushButton* m_btnCancel=nullptr;
     QLabel* m_statusLabel=nullptr;

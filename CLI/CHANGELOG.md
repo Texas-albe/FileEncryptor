@@ -10,7 +10,25 @@
 
 ---
 
-## [Unreleased]
+## [2.1.0] - 2026-09-12
+
+### Added
+- **【中·CLI】新增 `-G` / `--derive` 口令派生密钥对**：`Argon2id(口令, 盐) → X25519 密钥对`，输出与 `-g` 一致（公钥到 stdout、私钥到 `<dir>/rage_private.txt`），并额外写出 `<dir>/rage_derive_salt.txt`（16B 随机盐的 hex）。同一口令 + 同一盐永远得到同一对密钥，可用 `--salt <hex|file>` 复现；口令支持 `--key-stdin` / `-k` / `ENCRYPTOR_KEY` / 交互输入（≥6 字符）。已存在同名密钥文件时拒绝覆盖（除非 `-y`）。
+- **【中·CLI】新增 `-Y` / `--pubkey` 由私钥导出公钥**：读取 `-k <私钥文件>` 的 `AGE-SECRET-KEY-...`，做一次 X25519 基点乘法反推 `age1...` 并打印到 stdout，等价 `rage-keygen -y`。
+- **【中·算法】Bech32 编解码 + X25519 本地实现**（`core/asym_crypto.cpp`）：使上面两个动作**不依赖 `fe_age` 静态库**，未集成非对称加密的构建同样可用。实现要点：age 私钥串的 Bech32 **校验和按小写 HRP 展开**（串本身整体大写），按大写 HRP 展开会被 age 拒绝。
+- **【中·CLI】新增 `-g` / `--keygen` 密钥对生成动作**：生成 X25519（rage）密钥对，**公钥打印到 stdout**（可重定向 / 管道），**私钥写入 `-o <dir>/rage_private.txt`**；所有提示信息走 stderr，保证 stdout 只有一行干净的 `age1...` 公钥。无需输入文件，私钥用后立即 `sodium_memzero` 清零。
+- **【高·算法】非对称（混合）加密模式（`-m age`）**：基于 [rage/age](https://github.com/str4d/rage) 的 X25519 + ChaCha20-Poly1305 混合加密——每个文件用随机对称文件密钥加密，再用收件人 X25519 公钥包装该密钥，支持多收件人。集成 C-ABI 静态库 `fe_age`（`../age-ffi/`），对外提供 `fe_asym_encrypt` / `fe_asym_decrypt` / `fe_generate_keypair` 调用接口；`WITH_AGE` 默认 ON，未找到静态库时仅 WARNING 并回退为不含非对称加密的版本。
+- **【中·CLI】新增 `-r <file>` / `--key-stdin`**：`-r` 指定 age 收件人公钥文件（每行一个 `age1...` 公钥，支持 `#` 注释 / 空行）；`--key-stdin` 从 stdin 读取整段密钥材料（密码或 age 身份私钥，二进制安全），对应 GUI 的安全注入通道。
+
+### Changed
+- **【中·版本】全量版本号同步至 2.1.0**：`FE_VERSION_*` 宏（`core/FileEncryptor.hpp`）、`project(FileEncryptorCLI VERSION 2.1.0)`、CPack 包名示例（`file-encryptor-cli_2.1.0-1`）、README / CHANGELOG 同步。本版本同时包含下方全部 rage/age 非对称加密能力，作为 CLI/GUI 拆分后独立发版的 2.1.0 里程碑。
+- **【中·CLI】`-m age` 正式更名为 `-m rage`**：`rage` 为规范名，`age` 保留为兼容别名，既有脚本不受影响；帮助文本改为英文介绍混合加密原理（随机文件密钥 + X25519 包装）。
+- **【中·CLI】`-r` 可直接接受公钥字符串**：`-r` 的值若以 `age1`（或 `publickey:`）开头即按公钥字符串处理，否则按公钥文件解析（新增 `collect_recipients()`）；文件模式新增公钥格式校验，非法行直接报错而非静默传入底层。
+- **【高·CLI】非对称解密改为强制私钥文件**：`-m rage` 解密**必须**通过 `-k <私钥文件>` 提供身份私钥（自动去除首尾空白 / 换行），不再接受身份私钥经 stdin 传入；`--key-stdin` 现在只用于对称模式的密码。未提供 `-k` 时给出明确错误提示。
+
+### Security
+- **【高·密钥通道】密钥经 stdin 管道注入**：对称密码与非对称身份私钥统一通过 `--key-stdin` 由 stdin 传入，不再依赖 `ENCRYPTOR_KEY` 环境变量，降低被环境 / 进程列表窥探的风险。
+- **【中·密钥通道】非对称私钥改走文件 `-k`**：身份私钥不再经 stdin 管道传递（管道会被 `QProcess` 等父进程完整持有），改为由 CLI 自行读取 `-k` 指定的私钥文件；公钥本身非机密，可安全地在 argv / stdout 中出现。
 
 ### Changed
 - **【高·架构】项目独立化为 CLI 单一子项目**：本仓库原为「CLI + GUI 统一项目」（共享 `core/`），现拆分为两个独立构建单元：CLI 在本目录（`./`）独立编译产出 `FileEncryptorCLI(.exe)`；GUI 迁至 `../GUI/`，作为独立 Qt6 子项目，通过 `QProcess` 调用本 CLI。本 CLI 不再包含 GUI 相关的 `find_package(Qt6)` / `add_subdirectory(gui)` 逻辑，CMakeLists/CMakePresets/README/LICENSE 各自维护。CLI 行为零变更（加密 / 解密 / 续传 / 批量 / YAML 配置 / 磁盘格式 v4 完全不变）。
