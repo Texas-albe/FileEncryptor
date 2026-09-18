@@ -1,0 +1,10 @@
+/mnt/e/rage/target/x86_64-unknown-linux-gnu/release/deps/libfluent_langneg-2fa83b1ed9bf0297.rmeta: /home/yaoyingluo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/fluent-langneg-0.13.1/src/lib.rs /home/yaoyingluo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/fluent-langneg-0.13.1/src/accepted_languages.rs /home/yaoyingluo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/fluent-langneg-0.13.1/src/negotiate/mod.rs /home/yaoyingluo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/fluent-langneg-0.13.1/src/negotiate/likely_subtags.rs
+
+/mnt/e/rage/target/x86_64-unknown-linux-gnu/release/deps/libfluent_langneg-2fa83b1ed9bf0297.rlib: /home/yaoyingluo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/fluent-langneg-0.13.1/src/lib.rs /home/yaoyingluo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/fluent-langneg-0.13.1/src/accepted_languages.rs /home/yaoyingluo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/fluent-langneg-0.13.1/src/negotiate/mod.rs /home/yaoyingluo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/fluent-langneg-0.13.1/src/negotiate/likely_subtags.rs
+
+/mnt/e/rage/target/x86_64-unknown-linux-gnu/release/deps/fluent_langneg-2fa83b1ed9bf0297.d: /home/yaoyingluo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/fluent-langneg-0.13.1/src/lib.rs /home/yaoyingluo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/fluent-langneg-0.13.1/src/accepted_languages.rs /home/yaoyingluo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/fluent-langneg-0.13.1/src/negotiate/mod.rs /home/yaoyingluo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/fluent-langneg-0.13.1/src/negotiate/likely_subtags.rs
+
+/home/yaoyingluo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/fluent-langneg-0.13.1/src/lib.rs:
+/home/yaoyingluo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/fluent-langneg-0.13.1/src/accepted_languages.rs:
+/home/yaoyingluo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/fluent-langneg-0.13.1/src/negotiate/mod.rs:
+/home/yaoyingluo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/fluent-langneg-0.13.1/src/negotiate/likely_subtags.rs:

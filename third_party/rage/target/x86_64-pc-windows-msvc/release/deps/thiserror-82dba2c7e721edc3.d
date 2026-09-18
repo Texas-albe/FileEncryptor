@@ -1,0 +1,14 @@
+E:\rage\target\x86_64-pc-windows-msvc\release\deps\libthiserror-82dba2c7e721edc3.rmeta: C:\Users\Administrator\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\thiserror-2.0.18\src\lib.rs C:\Users\Administrator\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\thiserror-2.0.18\src\aserror.rs C:\Users\Administrator\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\thiserror-2.0.18\src\display.rs C:\Users\Administrator\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\thiserror-2.0.18\src\var.rs C:\Users\Administrator\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\thiserror-2.0.18\src\private.rs E:\rage\target\x86_64-pc-windows-msvc\release\build\thiserror-0e1080af5e4b33e8\out/private.rs
+
+E:\rage\target\x86_64-pc-windows-msvc\release\deps\libthiserror-82dba2c7e721edc3.rlib: C:\Users\Administrator\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\thiserror-2.0.18\src\lib.rs C:\Users\Administrator\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\thiserror-2.0.18\src\aserror.rs C:\Users\Administrator\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\thiserror-2.0.18\src\display.rs C:\Users\Administrator\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\thiserror-2.0.18\src\var.rs C:\Users\Administrator\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\thiserror-2.0.18\src\private.rs E:\rage\target\x86_64-pc-windows-msvc\release\build\thiserror-0e1080af5e4b33e8\out/private.rs
+
+E:\rage\target\x86_64-pc-windows-msvc\release\deps\thiserror-82dba2c7e721edc3.d: C:\Users\Administrator\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\thiserror-2.0.18\src\lib.rs C:\Users\Administrator\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\thiserror-2.0.18\src\aserror.rs C:\Users\Administrator\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\thiserror-2.0.18\src\display.rs C:\Users\Administrator\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\thiserror-2.0.18\src\var.rs C:\Users\Administrator\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\thiserror-2.0.18\src\private.rs E:\rage\target\x86_64-pc-windows-msvc\release\build\thiserror-0e1080af5e4b33e8\out/private.rs
+
+C:\Users\Administrator\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\thiserror-2.0.18\src\lib.rs:
+C:\Users\Administrator\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\thiserror-2.0.18\src\aserror.rs:
+C:\Users\Administrator\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\thiserror-2.0.18\src\display.rs:
+C:\Users\Administrator\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\thiserror-2.0.18\src\var.rs:
+C:\Users\Administrator\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\thiserror-2.0.18\src\private.rs:
+E:\rage\target\x86_64-pc-windows-msvc\release\build\thiserror-0e1080af5e4b33e8\out/private.rs:
+
+# env-dep:OUT_DIR=E:\\rage\\target\\x86_64-pc-windows-msvc\\release\\build\\thiserror-0e1080af5e4b33e8\\out

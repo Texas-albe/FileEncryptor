@@ -1,0 +1,11 @@
+E:\rage\target\release\deps\libi18n_embed-da4c3dbec0644e74.rmeta: C:\Users\Administrator\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\i18n-embed-0.16.0\src\lib.rs C:\Users\Administrator\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\i18n-embed-0.16.0\src\assets.rs C:\Users\Administrator\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\i18n-embed-0.16.0\src\requester.rs C:\Users\Administrator\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\i18n-embed-0.16.0\src\util.rs C:\Users\Administrator\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\i18n-embed-0.16.0\src\fluent.rs
+
+E:\rage\target\release\deps\libi18n_embed-da4c3dbec0644e74.rlib: C:\Users\Administrator\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\i18n-embed-0.16.0\src\lib.rs C:\Users\Administrator\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\i18n-embed-0.16.0\src\assets.rs C:\Users\Administrator\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\i18n-embed-0.16.0\src\requester.rs C:\Users\Administrator\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\i18n-embed-0.16.0\src\util.rs C:\Users\Administrator\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\i18n-embed-0.16.0\src\fluent.rs
+
+E:\rage\target\release\deps\i18n_embed-da4c3dbec0644e74.d: C:\Users\Administrator\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\i18n-embed-0.16.0\src\lib.rs C:\Users\Administrator\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\i18n-embed-0.16.0\src\assets.rs C:\Users\Administrator\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\i18n-embed-0.16.0\src\requester.rs C:\Users\Administrator\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\i18n-embed-0.16.0\src\util.rs C:\Users\Administrator\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\i18n-embed-0.16.0\src\fluent.rs
+
+C:\Users\Administrator\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\i18n-embed-0.16.0\src\lib.rs:
+C:\Users\Administrator\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\i18n-embed-0.16.0\src\assets.rs:
+C:\Users\Administrator\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\i18n-embed-0.16.0\src\requester.rs:
+C:\Users\Administrator\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\i18n-embed-0.16.0\src\util.rs:
+C:\Users\Administrator\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\i18n-embed-0.16.0\src\fluent.rs:

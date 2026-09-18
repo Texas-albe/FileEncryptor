@@ -1,0 +1,41 @@
+# Build / IDE 临时产物（不应进入仓库）
+build/
+out/
+.vs/
+*.obj
+*.o
+*.exe.recipe
+*.tlog/
+*.lastbuildstate
+*.vcxproj
+*.vcxproj.filters
+*.slnx
+*.db
+*.sqlite
+*.cache
+CMakeCache.txt
+CMakeFiles/
+CMakeUserPresets.json
+Testing/
+
+# 用户级 / 系统文件
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# 编辑器 / IDE 临时
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+
+# 沙箱元数据（仅本机，不入库）
+.workbuddy/
+
+# 构建期间 MOC/RCC/UIC 自动产物
+*_autogen/
+*.moc
+moc_*.cpp
+qrc_*.cpp
+ui_*.h

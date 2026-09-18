@@ -1,0 +1,18 @@
+[package]
+name = "fe_age"
+version = "0.12.1"
+edition = "2021"
+description = "C-ABI FFI wrapper around the rage/age library, providing hybrid (X25519 + ChaCha20-Poly1305) asymmetric encryption for FileEncryptor."
+license = "MIT OR Apache-2.0"
+
+[lib]
+name = "fe_age"
+# staticlib  -> 可直接链接进 C++ 可执行文件的 .lib (Windows) / .a (Linux)
+# cdylib     -> 备用：若希望以动态库方式集成
+crate-type = ["staticlib", "cdylib"]
+
+[dependencies]
+# 指向 E:/rage/age（本 crate 已作为 E:/rage 工作区成员，age 的 workspace 依赖如 age-core 可正常解析）
+age = { workspace = true }
+secrecy = { workspace = true }
+

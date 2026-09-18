@@ -1,0 +1,11 @@
+/mnt/e/rage/target/release/deps/libi18n_embed-9bc60b374241506a.rmeta: /home/yaoyingluo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/i18n-embed-0.16.0/src/lib.rs /home/yaoyingluo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/i18n-embed-0.16.0/src/assets.rs /home/yaoyingluo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/i18n-embed-0.16.0/src/requester.rs /home/yaoyingluo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/i18n-embed-0.16.0/src/util.rs /home/yaoyingluo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/i18n-embed-0.16.0/src/fluent.rs
+
+/mnt/e/rage/target/release/deps/libi18n_embed-9bc60b374241506a.rlib: /home/yaoyingluo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/i18n-embed-0.16.0/src/lib.rs /home/yaoyingluo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/i18n-embed-0.16.0/src/assets.rs /home/yaoyingluo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/i18n-embed-0.16.0/src/requester.rs /home/yaoyingluo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/i18n-embed-0.16.0/src/util.rs /home/yaoyingluo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/i18n-embed-0.16.0/src/fluent.rs
+
+/mnt/e/rage/target/release/deps/i18n_embed-9bc60b374241506a.d: /home/yaoyingluo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/i18n-embed-0.16.0/src/lib.rs /home/yaoyingluo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/i18n-embed-0.16.0/src/assets.rs /home/yaoyingluo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/i18n-embed-0.16.0/src/requester.rs /home/yaoyingluo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/i18n-embed-0.16.0/src/util.rs /home/yaoyingluo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/i18n-embed-0.16.0/src/fluent.rs
+
+/home/yaoyingluo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/i18n-embed-0.16.0/src/lib.rs:
+/home/yaoyingluo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/i18n-embed-0.16.0/src/assets.rs:
+/home/yaoyingluo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/i18n-embed-0.16.0/src/requester.rs:
+/home/yaoyingluo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/i18n-embed-0.16.0/src/util.rs:
+/home/yaoyingluo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/i18n-embed-0.16.0/src/fluent.rs:
