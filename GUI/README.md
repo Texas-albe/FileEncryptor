@@ -44,10 +44,10 @@ cmake --build --preset windows-vs2026-release --config Release
 #     （完全自包含：无 Qt6Core.dll / Qt6Gui.dll / Qt6Widgets.dll / platforms/qwindows.dll 依赖）
 ```
 
-静态 Qt 分发已随仓库放于 `../third_party/smelibs/`，CMake 优先使用该目录；不存在时回退 `C:/Program Files/smelibs`。如使用其他路径的静态 Qt，可在命令行覆盖：
+静态 Qt 分发已随仓库放于 `../third_party/smelibs/`，CMake 只使用这一条仓库相对路径（不再引用任何本机绝对路径）。如使用其他位置的静态 Qt，在命令行覆盖：
 ```powershell
 cmake -S . -B build -G "Visual Studio 18 2026" -A x64 `
-      -DCMAKE_PREFIX_PATH="D:/Qt/6.11.2/static_msvc2022_64"
+      -DCMAKE_PREFIX_PATH="<静态 Qt 根目录>"   # 例: ../third_party/smelibs
 ```
 
 > **关键前提（Windows）**：`Qt6::Core` / `Qt6::Gui` / `Qt6::Widgets` 必须是 **STATIC IMPORTED** 目标（`add_library(Qt6::Core STATIC IMPORTED)`，见 `lib/cmake/Qt6Core/Qt6CoreTargets.cmake`）才能得到零 DLL 的自包含 exe。动态构建的 Qt（官方 msvc2022_64 默认）也能构建成功，但会链接到 `Qt6Core.dll`，运行时需把 Qt DLL 放在 exe 同目录（与本项目"不依赖 Qt DLL"目标不符）。Linux / macOS 使用系统动态 Qt 时同理（运行时依赖 Qt6 *.so / framework）。
@@ -130,9 +130,16 @@ FileEncryptor/
 
 - **顶栏（菜单栏）**：关于菜单（鸣谢 + README 摘要 + 关于 Qt）、编辑菜单（“编辑 YAML 配置...”用系统默认编辑器打开 CLI 的 fileencryptor.yaml）；右上角为主题下拉框（浅色 / 深色）与 `视图设置` 按钮（自定义背景图），与“关于”同一行
 - **左侧**：文件选择面板（添加文件 / 添加目录 / 清空；支持从资源管理器拖放文件 / 目录）
-- **中部**：动作按钮（加密 / 解密 / 批量加密 / 批量解密）+ 模式选择（XChaCha20-Poly1305 / AEGIS-256）；「密钥管理」行的「密钥库...」按钮（及工具菜单「密钥库管理...」）常显——可导入、移除、导出本机 age 密钥并把选中条目应用为收件人或身份，存储与 CLI 共用（`<用户配置目录>/keys/`），命令行可用 `-L` / `-K` 操作同一密钥库
+- **中部**：动作按钮（加密 / 解密 / 批量加密 / 批量解密）+ 模式选择（XChaCha20-Poly1305 / AEGIS-256）。密钥库管理已整体下线 GUI——改由 CLI 的 `-L` 子命令（list/add/remove/show/pub/export）与 `-K` 按名解析收件人 / 身份承担，两端共用 `<用户配置目录>/keys/`。
 - **右侧**：密码输入框（星号遮挡 + 强度提示）
-- **下部**：只读命令输出窗口（实时显示 CLI 子进程 stdout/stderr，按主题着色）
+- **下部**：只读命令输出窗口（实时显示 CLI 子进程 stdout/stderr，按主题着色）；其标题行右侧为「任务历史...」入口（功能5）。输出区**上部固定**一块「批量进度面板」（功能6，仅批量模式 `-be` / `-bd` 可见）：由 CLI 的进度帧驱动，渲染「汇总行（总大小 | 已处理大小 | 总速率 | ETA）+ 每线程一行（文件路径 | 进度条 | 速率 | ETA）」，字段顺序、分隔符与自适应单位（B/KB/MB/GB/TB）与 CLI 终端帧完全一致；空闲时按历史吞吐预估总耗时。任务历史面板列出每次运行的开始时间、动作、模式、规模、耗时、吞吐与结果，支持清空、双击回填参数重跑（功能5）。
+
+### 任务历史（功能5）
+
+- **存储**：`<用户配置目录>/history/tasks.log`（JSONL，每行一条记录，追加写；单条损坏不影响其余条目；扩展名统一为 3 字符）。路径与密钥库同根，统一经 `QDir::toNativeSeparators()` 归一化，不含混用分隔符。
+- **记录内容**：任务 id、起止时间、耗时、动作（`-e/-d/-be/-bd/-g/-G/-Y`）、加密模式、输入路径数、输入字节总量（目录递归统计）、已完成文件数、输出目录、退出码、是否取消、错误、结果（成功 / 失败 / 已取消）。
+- **ETA 算法（仅用于批量面板空闲预估）**：取历史中「完整成功」记录的吞吐中位数（抗单次异常值），按 `动作+模式 → 动作 → 全体` 三级分层取样，最多取最近 10 条；运行中改用 CLI 实时进度帧外推。样本不足时批量面板明示「暂无历史样本」而不给出臆测数字。
+- **入口**：输出区标题行右侧「任务历史...」按钮（工具菜单仅保留「任务历史」一项）。
 
 详细交互说明见源文件注释与 `src/MainWindow.cpp`。
 
@@ -171,7 +178,7 @@ FileEncryptor/
 | `windows-vs2026-release` | Windows | Visual Studio 18 2026 | Release | **VS2026 一键编译** |
 | `windows-vs2026-debug` | Windows | Visual Studio 18 2026 | Debug | **VS2026 一键调试** |
 
-Windows 预设的默认 `CMAKE_PREFIX_PATH="C:/Program Files/smelibs"`（用户提供的静态 Qt），如路径不同请在命令行覆盖。
+预设不写入任何本机绝对路径，Qt 一律取自仓库相对路径 `../third_party/smelibs/`；如静态 Qt 放在别处，请在命令行用 `-DCMAKE_PREFIX_PATH=...` 覆盖。
 
 ---
 

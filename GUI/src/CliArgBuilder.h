@@ -47,6 +47,10 @@ struct ShellOptions {
     QString identityPath;        // asymmetric decrypt: private key file, handed to the CLI as -k (never via env/argv/stdin)
 
     bool restoreName = false;    // 批量解密是否还原完整原始文件名（默认 false：仅保留扩展名，省去每文件 KDF）
+
+    bool writeSha256 = false;    // --sha256：加密成功后生成 <out>.ptd.sha256 校验单（仅加密下发）
+
+    int compressionLevel = 0;    // zstd 压缩级别；0=不压缩（仅对称加密有效；GUI 勾选后设为 spinbox 值）
 };
 
 class CliArgBuilder {

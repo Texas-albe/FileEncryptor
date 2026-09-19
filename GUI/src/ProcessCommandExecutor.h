@@ -31,6 +31,10 @@ private:
     bool m_finishedEmitted = false;  // 缺陷10：finished 每次执行至多发一次
 
     void flushLines(QString& buffer, bool isError);
+    void handleLine(const QString& line, bool isError);   // 帧哨兵 / 普通行分流
     void emitFinished(const CommandResult& r);
     void cleanup();
+
+    QStringList m_frameLines;   // 当前帧累计的行（哨兵 BEGIN/END 之间）
+    bool m_inFrame = false;
 };

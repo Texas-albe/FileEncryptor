@@ -10,7 +10,8 @@
 #include "CliNotFoundDialog.h"
 #include "MsgBox.h"
 #include "PasswordDialog.h"
-#include "KeyLibraryDialog.h"
+#include "TaskHistory.h"
+#include "TaskHistoryDialog.h"
 #include <vector>
 #include <cstring>
 
@@ -36,6 +37,8 @@ static void secure_zero(void* p,size_t n) {
 #include <QComboBox>
 #include <QRadioButton>
 #include <QCheckBox>
+#include <QSpinBox>
+#include <QProcess>
 #include <QPushButton>
 #include <QButtonGroup>
 #include <QHBoxLayout>
@@ -48,6 +51,8 @@ static void secure_zero(void* p,size_t n) {
 #include <QDragEnterEvent>
 #include <QDropEvent>
 #include <QMimeData>
+#include <QDirIterator>
+#include <QDateTime>
 #include <QUrl>
 #include <QSaveFile>
 #include <QRegularExpression>
@@ -58,8 +63,10 @@ static void secure_zero(void* p,size_t n) {
 #include <QSet>
 #include <QTextCharFormat>
 #include <QTextCursor>
+#include <QTextDocument>
 #include <QScrollBar>
 #include <QFontDatabase>
+#include <QFontMetrics>
 #include <QColor>
 #include <QToolBar>
 #include <QPixmap>
@@ -69,6 +76,7 @@ static void secure_zero(void* p,size_t n) {
 #include <QDesktopServices>
 #include <QUrl>
 #include <QFile>
+#include <QThread>    // 批量线程数参考（CLI 侧同策略）
 #include <QTimer>
 
 MainWindow::MainWindow(QWidget* parent): QMainWindow(parent) {
@@ -115,7 +123,7 @@ MainWindow::MainWindow(QWidget* parent): QMainWindow(parent) {
     outerSplitter->addWidget(bottom);
     outerSplitter->setStretchFactor(0,6);
     outerSplitter->setStretchFactor(1,1);
-    outerSplitter->setSizes({610, 150});
+    outerSplitter->setSizes({520, 380});   // 拟 cmd 输出区加高（批量帧行数多）
 
     setCentralWidget(outerSplitter);
     m_outerSplitter=outerSplitter;
@@ -138,6 +146,9 @@ MainWindow::MainWindow(QWidget* parent): QMainWindow(parent) {
         : tr("就绪 | FileEncryptor: %1").arg(m_fileEncryptorPath));
 
     connectSignals();
+    // zstd 能力探测（同步 QProcess，--features 秒回），随后按结果裁决压缩控件初始状态
+    probeZstdSupport();
+    updateAsymVisibility();
     refreshCommandPreview();
 }
 
@@ -192,10 +203,12 @@ void MainWindow::buildMenu() {
     auto* actEditConfig=editMenu->addAction(tr("编辑 YAML 配置..."));
     connect(actEditConfig,&QAction::triggered,this,&MainWindow::onEditConfig);
 
-    // —— 工具菜单（可选，添加 CLI 重试检测）——
+    // —— 工具菜单 ——
+    // v1.3.0：密钥库管理与批量 ETA 入口已从工具菜单移除（密钥库功能已整体下线，
+    // 批量 ETA 迁到拟命令行上部的「批量进度面板」），菜单仅保留「任务历史」。
     auto* toolsMenu=m_menuBar->addMenu(tr("工具(&T)"));
-    auto* actKeyLib=toolsMenu->addAction(tr("密钥库管理..."));
-    connect(actKeyLib,&QAction::triggered,this,&MainWindow::onOpenKeyLibrary);
+    auto* actTaskHistory=toolsMenu->addAction(tr("任务历史..."));
+    connect(actTaskHistory,&QAction::triggered,this,&MainWindow::onOpenTaskHistory);
     toolsMenu->addSeparator();
     auto* actRetryCli=toolsMenu->addAction(tr("重新检测 CLI 程序"));
     connect(actRetryCli,&QAction::triggered,this,&MainWindow::onRetryCliDetection);
@@ -380,7 +393,28 @@ void MainWindow::applyPanelTransparency() {
                        m_recipientEdit, m_identityEdit}) {
         if(e) e->setStyleSheet(fieldStyle);
     }
-    if(m_outputView) m_outputView->setStyleSheet(fieldStyle);
+    if(m_outputView) {
+        // 输出框 + 滚动条一体样式：部分样式表会让 QAbstractScrollArea 的原生滚动条
+        // 退化为样式表基元绘制（Windows 上典型表现为滑块与上下箭头按钮重叠错乱）。
+        // 此处显式接管滚动条：箭头按钮尺寸清零（移除），仅保留滑块，配色随主题。
+        const QString sbHandle=dk ? QStringLiteral("#5A5A5A") : QStringLiteral("#A8A8A4");
+        const QString sbHover=dk ? QStringLiteral("#6E6E6E") : QStringLiteral("#8A8A86");
+        m_outputView->setStyleSheet(QStringLiteral(
+            "QPlainTextEdit{background:%1;color:%2;border:1px solid %3;"
+            "border-radius:3px;padding:2px 4px;"
+            "selection-background-color:%4;selection-color:#FFFFFF;}"
+            "QScrollBar:vertical{background:%5;width:12px;margin:0;}"
+            "QScrollBar::handle:vertical{background:%6;min-height:24px;"
+            "border-radius:5px;}"
+            "QScrollBar::handle:vertical:hover{background:%7;}"
+            "QScrollBar:horizontal{background:%5;height:12px;margin:0;}"
+            "QScrollBar::handle:horizontal{background:%6;min-width:24px;"
+            "border-radius:5px;}"
+            "QScrollBar::handle:horizontal:hover{background:%7;}"
+            "QScrollBar::add-line,QScrollBar::sub-line{width:0;height:0;}"
+            "QScrollBar::add-page,QScrollBar::sub-page{background:transparent;}"
+        ).arg(fieldBg,fieldFg,fieldBor,fieldSel,altBg,sbHandle,sbHover));
+    }
 
     // 勾选框(QCheckBox)/单选框(QRadioButton)：随主题，亮色浅灰底+深字
     const QString optionStyle=QStringLiteral(
@@ -396,6 +430,7 @@ void MainWindow::applyPanelTransparency() {
     ).arg(fieldBg,fieldFg,fieldBor,indBor,indBg,fieldSel);
     for(QWidget* c:{static_cast<QWidget*>(m_chkDeleteSource), static_cast<QWidget*>(m_chkForce),
                        static_cast<QWidget*>(m_chkVerbose),
+                       static_cast<QWidget*>(m_chkSha256),
                        static_cast<QWidget*>(m_rbEncrypt), static_cast<QWidget*>(m_rbDecrypt),
                        static_cast<QWidget*>(m_rbBatchEncrypt), static_cast<QWidget*>(m_rbBatchDecrypt),
                        static_cast<QWidget*>(m_rbKeyGen), static_cast<QWidget*>(m_rbDerive),
@@ -420,6 +455,15 @@ void MainWindow::applyPanelTransparency() {
     for(QComboBox* cb:{m_themeCombo, m_modeCombo}) {
         if(cb) cb->setStyleSheet(comboStyle);
     }
+
+    // 数值框(QSpinBox：压缩级别)：与输入框同配色。SpinBox 已 setButtonSymbols(NoButtons)
+    // （无上下按钮），显式样式用于规避父级 background:transparent 层级导致的输入框透明。
+    const QString spinStyle=QStringLiteral(
+        "QSpinBox{background:%1;color:%2;border:1px solid %3;border-radius:3px;"
+        "padding:2px 4px;selection-background-color:%4;selection-color:#FFFFFF;}"
+        "QSpinBox:disabled{background:%5;color:#999999;border:1px solid %3;}"
+    ).arg(fieldBg,fieldFg,fieldBor,fieldSel,altBg);
+    if(m_compressLevel) m_compressLevel->setStyleSheet(spinStyle);
     const QString btnStyle=QStringLiteral(
         "QPushButton{background:%1;color:%2;border:1px solid %3;border-radius:3px;padding:4px 10px;}"
         "QPushButton:hover{background:%4;}"
@@ -427,7 +471,8 @@ void MainWindow::applyPanelTransparency() {
     ).arg(ctrlBg,ctrlFg,ctrlBor,ctrlHover);
     for(QPushButton* b:{m_btnAddFiles, m_btnAddDir, m_btnClearFiles,
                            m_btnOutDirBrowse, m_btnKeyfileBrowse, m_btnViewSettings,
-                           m_btnRecipientBrowse, m_btnIdentityBrowse, m_btnKeyLibrary}) {
+                           m_btnRecipientBrowse, m_btnIdentityBrowse,
+                           m_btnTaskHistory}) {
         if(b) b->setStyleSheet(btnStyle);
     }
 
@@ -460,22 +505,32 @@ static const char* kDefaultConfigYaml=
 "path_whitelist_enabled: false\n"
 "# path_whitelist:\n"
 "#   - C:/Data/In\n"
-"progress_rotation: true   # 覆盖 .progress 前先备份 .progress.bak\n"
 "obfuscate_names: true     # 混淆输出文件名\n";
 
-// 定位 CLI 的 yaml 配置（与 CLI core/config.cpp::find_config_file 搜索顺序一致）
+// 定位 CLI 的 yml 配置（与 CLI core/config.cpp::find_config_file 搜索顺序一致）。
+// v1.3.1：统一回归标准 .yaml 后缀（与 CLI 一致）；旧名 fileencryptor.yml 仅读取时回退。
 QString MainWindow::locateConfigFile() const {
     const QString name=QStringLiteral("fileencryptor.yaml");
+    const QString legacy=QStringLiteral("fileencryptor.yml");
+    // 在某目录下按「.yaml 优先、.yml 回退」查找的辅助逻辑
+    auto findIn=[&](const QString& dir)->QString{
+        if(dir.isEmpty()) return {};
+        const QString p=QDir::toNativeSeparators(dir+QLatin1Char('/')+name);
+        if(QFileInfo(p).isFile()) return p;
+        const QString pl=QDir::toNativeSeparators(dir+QLatin1Char('/')+legacy);
+        if(QFileInfo(pl).isFile()) return pl;
+        return {};
+    };
     // 1) FILEENCRYPTOR_CONFIG 环境变量（显式，最高优先）
     const QString env=qEnvironmentVariable("FILEENCRYPTOR_CONFIG");
     if(!env.isEmpty()&&QFileInfo(env).isFile()) return env;
     // 2) CWD：用户在哪个目录启动，配置就在哪里
-    QString p=QDir::current().absoluteFilePath(name);
-    if(QFileInfo(p).isFile()) return p;
+    QString p=findIn(QDir::current().absolutePath());
+    if(!p.isEmpty()) return p;
     // 3) CLI 可执行文件目录
     if(!m_fileEncryptorPath.isEmpty()) {
-        p=QFileInfo(m_fileEncryptorPath).absolutePath()+QLatin1Char('/')+name;
-        if(QFileInfo(p).isFile()) return p;
+        p=findIn(QFileInfo(m_fileEncryptorPath).absolutePath());
+        if(!p.isEmpty()) return p;
     }
     // 4) 用户配置目录
     QString ucd;
@@ -490,16 +545,13 @@ QString MainWindow::locateConfigFile() const {
         if(!home.isEmpty()) ucd=home+QLatin1String("/.config/fileencryptor");
     }
 #endif
-    if(!ucd.isEmpty()) {
-        p=ucd+QLatin1Char('/')+name;
-        if(QFileInfo(p).isFile()) return p;
-    }
-    return {};
+    return findIn(ucd);
 }
 
 void MainWindow::onEditConfig() {
     QString target=locateConfigFile();
-    // 未找到 → 按 CLI 行为在 CWD 生成默认配置（便于用户直接编辑）
+    // 未找到 → 按 CLI 行为在 CWD 生成默认配置（便于用户直接编辑）。
+    // 新写入一律用 .yaml（标准 YAML 后缀），保持与 CLI 一致。
     if(target.isEmpty()) {
         target=QDir::current().absoluteFilePath(QStringLiteral("fileencryptor.yaml"));
         QFile f(target);
@@ -518,25 +570,6 @@ void MainWindow::onEditConfig() {
         MsgBox::info(this,tr("请手动打开"),
             tr("系统未关联 YAML 文件的默认编辑器，请手动打开：\n%1").arg(target));
     }
-}
-
-// ---------- 密钥库（功能1） ----------
-void MainWindow::onOpenKeyLibrary() {
-    // CLI 路径用于「导入身份时自动派生并缓存公钥」（-Y）；缺失时导入仍可用，仅无缓存公钥
-    QString cli=m_fileEncryptorPath;
-    if(cli.isEmpty()||!QFileInfo::exists(cli)) cli=FileEncryptorLocator::locate();
-    KeyLibraryDialog dlg(cli,this);
-    if(dlg.exec()!=QDialog::Accepted) return;
-    // 应用为收件人：公钥串追加进收件人框（resolveRecipients 支持逗号分隔的 age1 串）
-    const QString pubs=dlg.recipientPublicKeys();
-    if(!pubs.isEmpty()) {
-        const QString cur=m_recipientEdit->text().trimmed();
-        m_recipientEdit->setText(cur.isEmpty() ? pubs : (cur+QLatin1String(", ")+pubs));
-    }
-    // 应用为身份：私钥文件路径填入身份框
-    const QString idPath=dlg.identityKeyPath();
-    if(!idPath.isEmpty()) m_identityEdit->setText(idPath);
-    if(!pubs.isEmpty()||!idPath.isEmpty()) refreshCommandPreview();
 }
 
 // ---------- CLI 检测相关 ----------
@@ -566,11 +599,31 @@ void MainWindow::showCliNotFoundError(const QString& context) {
     MsgBox::error(this,tr("FileEncryptor CLI 未找到"),detail);
 }
 
+// ---------- CLI zstd 能力探测 ----------
+void MainWindow::probeZstdSupport() {
+    m_zstdAvailable=false;
+    if(m_fileEncryptorPath.isEmpty()) return;
+    QProcess p;
+    p.start(m_fileEncryptorPath,QStringList{QStringLiteral("--features")});
+    if(!p.waitForStarted(2000)) return;
+    if(!p.waitForFinished(3000)) {
+        p.kill();
+        p.waitForFinished(1000);
+        return;
+    }
+    // CLI 输出按 UTF-8（GUI 读 CLI 输出统一 fromUtf8 约定）
+    const QString out=QString::fromUtf8(p.readAllStandardOutput());
+    m_zstdAvailable=out.contains(QStringLiteral("zstd=1"));
+}
+
 void MainWindow::onRetryCliDetection() {
     if(FileEncryptorLocator::existsWithVersion(&m_fileEncryptorPath)) {
         setStatus(tr("就绪 | FileEncryptor: %1").arg(m_fileEncryptorPath));
         MsgBox::info(this,tr("检测成功"),
             tr("已找到 CLI 程序：\n%1").arg(m_fileEncryptorPath));
+        // 重新探测 zstd 能力并刷新压缩控件状态
+        probeZstdSupport();
+        updateAsymVisibility();
     }
     else {
         showCliNotFoundError(tr("手动重试"));
@@ -672,10 +725,6 @@ QWidget* MainWindow::buildCenterPanel() {
     keyMgmtRow->addWidget(m_rbKeyGen);
     keyMgmtRow->addWidget(m_rbDerive);
     keyMgmtRow->addWidget(m_rbPubKey);
-    // 密钥库入口常显（不放进非对称组——该组默认隐藏，用户会找不到入口）
-    m_btnKeyLibrary=new QPushButton(tr("密钥库..."));
-    m_btnKeyLibrary->setToolTip(tr("管理本机密钥：导入/移除/导出，或直接应用为收件人/身份"));
-    keyMgmtRow->addWidget(m_btnKeyLibrary);
     keyMgmtRow->addStretch();
     lay->addLayout(keyMgmtRow,row,1);
     row++;
@@ -688,6 +737,34 @@ QWidget* MainWindow::buildCenterPanel() {
     m_modeCombo->addItem(tr("AEGIS-256（需 AES-NI 指令）"),static_cast<int>(CryptoMode::Aegis256));
     m_modeCombo->addItem(tr("X25519 + ChaCha20-Poly1305（非对称）"),static_cast<int>(CryptoMode::Asymmetric));
     lay->addWidget(m_modeCombo,row,1);
+    row++;
+
+    // zstd 压缩（v5 磁盘格式；仅对称加密有意义，非对称 rage 由 CLI 拒绝）
+    m_compressTitle=new QLabel(tr("压缩 (zstd)"));
+    lay->addWidget(m_compressTitle,row,0);
+    auto* compRow=new QHBoxLayout;
+    m_chkCompress=new QCheckBox(tr("压缩数据 (-z)"));
+    m_chkCompress->setToolTip(tr("加密时逐块 zstd 压缩（磁盘格式 v5，旧版本 CLI 无法读取）。\n"
+                                 "仅对称加密有效；输出名混淆下压缩率统计见 CLI -v 输出。"));
+    m_compressLabel=new QLabel(tr("压缩级别："));
+    m_compressLevel=new QSpinBox;
+    m_compressLevel->setRange(-5,22);
+    m_compressLevel->setValue(3);   // zstd 默认级别
+    m_compressLevel->setToolTip(tr("zstd 级别：1..22 常规（越大越慢、压缩率越高），-1..-5 快速档；默认 3\n"
+                                   "直接键入数值，回车或移开焦点后生效；也可用键盘 ↑/↓ 微调"));
+    // 输入体验：右对齐、固定宽度、无上下按钮（纯数字输入框，配色与输入框一致，
+    // 按用户要求移除与整体风格不符的箭头控件）；键盘 ↑/↓ 仍可微调。
+    m_compressLevel->setButtonSymbols(QAbstractSpinBox::NoButtons);
+    m_compressLevel->setAlignment(Qt::AlignRight);
+    m_compressLevel->setKeyboardTracking(false);
+    m_compressLevel->setFixedWidth(84);
+    // 中心面板是 background:transparent 的样式表层级，QSpinBox 若无显式样式会渲染退化
+    // （内部输入框透明导致看似无法编辑）；统一样式在 applyPanelTransparency() 里随主题设置。
+    compRow->addWidget(m_chkCompress);
+    compRow->addWidget(m_compressLabel);
+    compRow->addWidget(m_compressLevel);
+    compRow->addStretch();
+    lay->addLayout(compRow,row,1);
     row++;
 
     // 非对称（age / X25519）输入区
@@ -778,9 +855,13 @@ QWidget* MainWindow::buildCenterPanel() {
     m_chkDeleteSource=new QCheckBox(tr("完成后删除源文件 (-de)"));
     m_chkForce=new QCheckBox(tr("覆盖已存在文件 (-y)"));
     m_chkVerbose=new QCheckBox(tr("详细输出 (-v)"));
+    m_chkSha256=new QCheckBox(tr("生成校验单 (--sha256)"));
+    m_chkSha256->setToolTip(tr("加密成功后额外生成 <输出名>.ptd.sha256 校验单（密文 SHA-256 十六进制 + 文件名），\n"
+                               "便于与外部备份 / 传输工具链配合校验传输完整性。仅加密动作有效。"));
     optsRow->addWidget(m_chkDeleteSource);
     optsRow->addWidget(m_chkForce);
     optsRow->addWidget(m_chkVerbose);
+    optsRow->addWidget(m_chkSha256);
     optsRow->addStretch();
     lay->addLayout(optsRow,row,1);
     row++;
@@ -808,11 +889,25 @@ QWidget* MainWindow::buildBottomPanel() {
     auto* lay=new QVBoxLayout(w);
     lay->setContentsMargins(0,0,0,0);
 
-    auto* header=new QLabel(tr("<b>命令浏览与执行输出</b>"));
-    lay->addWidget(header);
+    auto* headerRow=new QHBoxLayout;
+    headerRow->setContentsMargins(0,0,0,0);
+    headerRow->addWidget(new QLabel(tr("<b>命令浏览与执行输出</b>")));
+    headerRow->addStretch();
+    // 功能5：历史面板入口
+    m_btnTaskHistory=new QPushButton(tr("任务历史..."));
+    m_btnTaskHistory->setToolTip(tr("查看任务历史记录，双击一条可回填参数（回放）"));
+    headerRow->addWidget(m_btnTaskHistory);
+    lay->addLayout(headerRow);
 
+    // 功能6：批量进度帧直接在 m_outputView（拟 cmd）内原地整帧刷新，
+    // 不再使用独立面板（空闲态常驻的 TOTAL/ETA 行显得突兀，用户已下线）。
     m_outputView=new QPlainTextEdit;
     m_outputView->setReadOnly(true);
+    // 拟 cmd：禁止自动折行（进度行超宽时横向滚动兜底，保证每条进度条独占一行不折行）
+    m_outputView->setLineWrapMode(QPlainTextEdit::NoWrap);
+    // 加大最小垂直高度：批量帧为 1 汇总行 + N 线程行（N=CPU 核数），
+    // 预留足够行数避免帧内容被遮挡/溢出
+    m_outputView->setMinimumHeight(360);
     m_outputView->setPlaceholderText(tr("此处显示命令预览与执行输出。stdout 默认色，stderr 红色。"));
     // 等宽字体便于对齐
     m_outputView->setFont(FontBootstrap::monoFont());
@@ -842,6 +937,11 @@ void MainWindow::connectSignals() {
     connect(m_chkDeleteSource,&QCheckBox::stateChanged,this,refresh);
     connect(m_chkForce,&QCheckBox::stateChanged,this,refresh);
     connect(m_chkVerbose,&QCheckBox::stateChanged,this,refresh);
+    connect(m_chkSha256,&QCheckBox::stateChanged,this,refresh);
+    // 压缩：勾选变化同时联动级别框可用性（updateAsymVisibility 内统一裁决）
+    connect(m_chkCompress,&QCheckBox::stateChanged,this,refresh);
+    connect(m_chkCompress,&QCheckBox::stateChanged,this,[this](int){ updateAsymVisibility(); });
+    connect(m_compressLevel,QOverload<int>::of(&QSpinBox::valueChanged),this,refresh);
     // 文件列表勾选框切换 → 刷新命令预览（仅勾选项进入命令）
     connect(m_fileList,&QListWidget::itemChanged,this,refresh);
 
@@ -868,8 +968,11 @@ void MainWindow::connectSignals() {
             QDir::homePath(),tr("私钥文件 (*.txt *.agekey *);;所有文件 (*)"));
         if(!f.isEmpty()) m_identityEdit->setText(f);
         });
-    // 密钥库（功能1）
-    connect(m_btnKeyLibrary,&QPushButton::clicked,this,&MainWindow::onOpenKeyLibrary);
+    // 任务历史面板（功能5）
+    connect(m_btnTaskHistory,&QPushButton::clicked,this,&MainWindow::onOpenTaskHistory);
+
+    // 输入清单变化 → 重算待处理规模（字节/文件数）并刷新批量面板的空闲预估
+    connect(m_fileList,&QListWidget::itemChanged,this,[this]{ recomputePending(); });
     // 模式切换：刷新非对称输入区可见性
     connect(m_modeCombo,QOverload<int>::of(&QComboBox::currentIndexChanged),
         this,&MainWindow::updateAsymVisibility);
@@ -926,6 +1029,22 @@ void MainWindow::updateAsymVisibility() {
     } else {
         m_modeCombo->setDisabled(false);
     }
+
+    // zstd 压缩（v1.3.0）：仅「加密 / 批量加密」动作显示整行（含行首标题）；
+    // 非对称模式由 CLI 拒绝压缩，故 asym 下同样隐藏。行可见时级别框始终可编辑
+    // （不随勾选态/zstd 探测结果禁用，避免灰色不可输入）。
+    const bool compAllowed=isEnc && !asym;
+    m_compressTitle->setVisible(compAllowed);
+    m_chkCompress->setVisible(compAllowed);
+    m_compressLabel->setVisible(compAllowed);
+    m_compressLevel->setVisible(compAllowed);
+    m_chkCompress->setEnabled(compAllowed);
+    m_compressLabel->setEnabled(compAllowed);
+    m_compressLevel->setEnabled(compAllowed);
+    if(compAllowed && !m_zstdAvailable) {
+        m_chkCompress->setToolTip(tr("当前 CLI 不支持 zstd（--features zstd=0），压缩参数不会下发。\n"
+                                     "请更换带 zstd 库构建的 FileEncryptorCLI。"));
+    }
 }
 
 // ---------- 文件选择 ----------
@@ -942,7 +1061,25 @@ void MainWindow::addInputPaths(const QStringList& paths) {
         item->setCheckState(Qt::Checked);
         added=true;
     }
-    if(added) refreshCommandPreview();
+    if(added) {
+        // 单文件动作（-e/-d）不支持目录输入：加入目录时自动切换为对应批量动作，
+        // 否则 CLI 会以 "Input is a directory" 拒绝整次任务
+        const int act=m_actionGroup->checkedId();
+        bool hasDir=false;
+        for(const QString& p:paths)
+            if(QFileInfo(p).isDir()) { hasDir=true; break; }
+        if(hasDir&&(act==static_cast<int>(CryptoAction::Encrypt)||
+                    act==static_cast<int>(CryptoAction::Decrypt))) {
+            const CryptoAction batch=(act==static_cast<int>(CryptoAction::Encrypt))
+                ? CryptoAction::BatchEncrypt : CryptoAction::BatchDecrypt;
+            if(QAbstractButton* b=m_actionGroup->button(static_cast<int>(batch)))
+                b->setChecked(true);
+            updateAsymVisibility();
+            setStatus(tr("检测到目录输入，已自动切换为批量动作（-be/-bd）"));
+        }
+        refreshCommandPreview();
+    }
+    recomputePending();   // 功能6：输入变化即刷新待处理规模与 ETA
 }
 
 void MainWindow::onAddFiles() {
@@ -960,6 +1097,7 @@ void MainWindow::onAddDir() {
 void MainWindow::onClearFiles() {
     m_fileList->clear();
     refreshCommandPreview();
+    recomputePending();   // 功能6：清空后 ETA 归零
 }
 
 // ---------- 拖放（功能4） ----------
@@ -998,7 +1136,10 @@ ShellOptions MainWindow::collectOptions() const {
     o.deleteSource=m_chkDeleteSource->isChecked();
     o.forceOverwrite=m_chkForce->isChecked();
     o.verbose=m_chkVerbose->isChecked();
+    o.writeSha256=m_chkSha256->isChecked();
     o.keyfilePath=m_keyfileEdit->text().trimmed();
+    // zstd 压缩级别：勾选才生效；非对称/解密等场景由 CliArgBuilder 再次把关（不落 --compression-level）
+    o.compressionLevel=(m_chkCompress->isChecked()) ? m_compressLevel->value() : 0;
     // 口令不再存于主页面：运行时经 PasswordDialog 弹窗获取（见 onRunClicked）
 
     // 非对称（age）输入。功能8：收件人框支持多收件人（逗号/分号分隔的 age1... 公钥串，
@@ -1137,6 +1278,17 @@ void MainWindow::onRunClicked() {
     req.programPath=m_fileEncryptorPath;
     req.arguments=CliArgBuilder::buildArguments(o);
     req.extraEnv=CliArgBuilder::buildEnvironment(o);
+    // 功能6：批量模式让 CLI 输出「帧式进度」（1 行汇总 + 每线程 1 行），
+    // GUI 解析整帧后在拟 cmd 输出区原地刷新，字段与 CLI 终端显示完全一致。
+    if(o.action==CryptoAction::BatchEncrypt||o.action==CryptoAction::BatchDecrypt) {
+        req.extraEnv.insert(QStringLiteral("FILEENCRYPTOR_PROGRESS_FRAME"),QStringLiteral("1"));
+        // 帧宽按输出区可用宽度注入（等宽字符列数），保证不会折行/跳动
+        const QFontMetrics fm(m_outputView->font());
+        const int cw=fm.horizontalAdvance(QLatin1Char('M'));
+        int cols=cw>0?(m_outputView->viewport()->width()-8)/cw:100;
+        cols=qBound(60,cols,200);
+        req.extraEnv.insert(QStringLiteral("COLUMNS"),QString::number(cols));
+    }
 
     // Key material is injected through the child's stdin pipe (never env / argv):
     //   - symmetric mode without -k: the password (from the PIN dialog, held in `pw`);
@@ -1163,7 +1315,12 @@ void MainWindow::onRunClicked() {
     m_btnRun->setEnabled(false);
     m_btnCancel->setEnabled(true);
     m_runFileStarts=0;   // 功能11：重新统计本次运行的文件开始标记
+    m_framePos=-1;              // 批量进度帧块随新任务重建
+    m_frameLen=0;
     setStatus(tr("运行中..."));
+
+    // 功能5：登记本次任务（结束时补全结果写入历史）
+    beginTaskRecord(o);
 
     m_executor->execute(req);
     // v2.1.2：QByteArray::clear() 只减引用计数、**不清零**，口令明文会留在堆上直到被复用。
@@ -1183,6 +1340,52 @@ void MainWindow::onCancelClicked() {
 
 // ---------- 执行回显 ----------
 void MainWindow::onOutputLine(const OutputLine& line) {
+    // 功能6：批量进度帧 → 在拟 cmd 输出区内「原地整帧刷新」：
+    // 首帧在文档末尾另起一行写入，后续帧按字符区间 [帧首, 帧尾) 整体替换。
+    // 字符区间之前的文本只会追加（位置不变），不会像块锚点那样漂移，
+    // 从而保证每条进度条始终覆盖刷新、显示区域固定、不越刷越多。
+    if(line.isFrame) {
+        QStringList lines=line.text.split(QLatin1Char('\n'));
+        while(!lines.isEmpty()&&lines.last().trimmed().isEmpty()) lines.removeLast();
+        if(lines.isEmpty()) return;
+        // 帧文本以换行结尾：与后续普通输出行保持块结构隔离
+        const QString block=lines.join(QLatin1Char('\n'))+QLatin1Char('\n');
+        const unsigned int rgb=ThemeManager::stdoutColorRGB();
+        QTextCharFormat fmt;
+        fmt.setForeground(QColor((rgb>>16)&0xFF,(rgb>>8)&0xFF,rgb&0xFF));
+
+        bool replaced=false;
+        const int docLen=m_outputView->document()->characterCount();
+        if(m_framePos>=0&&m_frameLen>0&&m_framePos+m_frameLen<=docLen) {
+            // 自校验：帧首应是汇总行开头（'T'，即 "TOTAL ..."）。
+            // 文档被裁剪/外部改动导致区间失效时立即放弃替换，回退追加，自愈不留残影。
+            if(m_outputView->document()->characterAt(m_framePos)==QLatin1Char('T')) {
+                // 视图光标先挪到末尾并清选区，避免残留选区干扰替换
+                QTextCursor guard=m_outputView->textCursor();
+                guard.movePosition(QTextCursor::End);
+                m_outputView->setTextCursor(guard);
+
+                QTextCursor sel(m_outputView->document());
+                sel.setPosition(m_framePos);
+                sel.setPosition(m_framePos+m_frameLen,QTextCursor::KeepAnchor);
+                sel.insertText(block,fmt);   // 原地整帧替换（新旧帧长度可不同）
+                replaced=true;
+            }
+        }
+        if(!replaced) {
+            // 首帧或区间失效：追加新帧块到文档末尾，记录其字符区间
+            QTextCursor cur=m_outputView->textCursor();
+            cur.movePosition(QTextCursor::End);
+            const int base=cur.position();
+            cur.insertText(QStringLiteral("\n")+block,fmt);
+            m_framePos=base+1;           // 前导换行之后即帧首
+        }
+        m_frameLen=block.size();
+        m_lastProgressLine=false;
+        QScrollBar* bar=m_outputView->verticalScrollBar();
+        bar->setValue(bar->maximum());
+        return;
+    }
     if(line.isProgress) {
         // 模拟 CMD 进度条：原地刷新上一行（替换），避免末尾进度行重复堆积、清屏异常
         const unsigned int rgb=line.isError ? ThemeManager::stderrColorRGB()
@@ -1210,6 +1413,7 @@ void MainWindow::onOutputLine(const OutputLine& line) {
     if(line.text.startsWith(QLatin1String("Encrypting: "))||
        line.text.startsWith(QLatin1String("Decrypting: "))) {
         ++m_runFileStarts;
+        m_currentTask.filesDone=m_runFileStarts;   // 功能5：记录已完成文件数（取消时也保留）
     }
     appendOutput(line.text+QStringLiteral("\n"),line.isError);
 }
@@ -1217,14 +1421,15 @@ void MainWindow::onOutputLine(const OutputLine& line) {
 void MainWindow::onCommandFinished(const CommandResult& r) {
     m_btnRun->setEnabled(true);
     m_btnCancel->setEnabled(false);
+    finishTaskRecord(r);         // 功能5：结果落盘
 
     QString summary;
     if(r.wasCancelled) {
         // 功能11：取消不回滚已完成的输出。最后一个已开始的文件可能被中断，
-        // 以「文件开始标记数 - 1」估算已保留的完成文件数；重跑同一任务可从 .progress 续传。
+        // 以「文件开始标记数 - 1」估算已保留的完成文件数；重跑同一任务可从 .prs 续传。
         const int preserved=qMax(0,m_runFileStarts-1);
         summary=tr("--- 已取消（退出码 %1）：已保留 %2 个已完成文件的输出，"
-                   "重跑同一任务将从 .progress 续传未完成部分 ---")
+                   "重跑同一任务将从 .prs 续传未完成部分 ---")
                     .arg(r.exitCode).arg(preserved);
         setStatus(tr("已取消（已保留 %1 个文件）").arg(preserved));
     }
@@ -1241,6 +1446,129 @@ void MainWindow::onCommandFinished(const CommandResult& r) {
         setStatus(tr("结束（退出码 %1）").arg(r.exitCode));
     }
     appendOutput(QStringLiteral("\n%1\n").arg(summary),r.exitCode!=0);
+}
+
+// ---------- 功能5 / 功能6：任务历史与批量进度面板 ----------
+QString MainWindow::actionKey(CryptoAction a) {
+    switch(a) {
+        case CryptoAction::Encrypt:       return QStringLiteral("encrypt");
+        case CryptoAction::Decrypt:       return QStringLiteral("decrypt");
+        case CryptoAction::BatchEncrypt:  return QStringLiteral("batch-encrypt");
+        case CryptoAction::BatchDecrypt:  return QStringLiteral("batch-decrypt");
+        case CryptoAction::KeyGen:        return QStringLiteral("keygen");
+        case CryptoAction::Derive:        return QStringLiteral("derive");
+        case CryptoAction::PubKey:        return QStringLiteral("pubkey");
+    }
+    return QStringLiteral("encrypt");
+}
+
+QString MainWindow::modeKey(CryptoMode m) {
+    switch(m) {
+        case CryptoMode::XChaCha20:   return QStringLiteral("xchacha20");
+        case CryptoMode::Aegis256:    return QStringLiteral("aegis256");
+        case CryptoMode::Asymmetric:  return QStringLiteral("asymmetric");
+    }
+    return QStringLiteral("xchacha20");
+}
+
+// 统计单个输入路径的字节数与文件数（目录递归）
+static void scanPath(const QString& path,qint64& bytes,int& files) {
+    QFileInfo fi(path);
+    if(fi.isFile()) { bytes+=fi.size(); ++files; return; }
+    if(!fi.isDir()) return;
+    QDirIterator it(path,QDir::Files,QDirIterator::Subdirectories);
+    while(it.hasNext()) {
+        it.next();
+        bytes+=it.fileInfo().size();
+        ++files;
+    }
+}
+
+void MainWindow::recomputePending() {
+    const ShellOptions o=collectOptions();
+    qint64 bytes=0;
+    int files=0;
+    for(const QString& p : o.inputPaths) scanPath(p,bytes,files);
+    m_pendingBytes=bytes;
+    m_pendingFiles=files;
+}
+
+void MainWindow::beginTaskRecord(const ShellOptions& o) {
+    m_currentTask=TaskRecord();
+    m_currentTask.id=TaskHistory::newId();
+    m_currentTask.startedAt=QDateTime::currentDateTime()
+        .toString(QStringLiteral("yyyy-MM-dd HH:mm:ss"));
+    m_currentTask.action=actionKey(o.action);
+    m_currentTask.actionLabel=TaskHistory::actionLabel(m_currentTask.action);
+    m_currentTask.mode=modeKey(o.mode);
+    m_currentTask.inputCount=o.inputPaths.size();
+    m_currentTask.inputPaths=o.inputPaths;   // 回放时据原路径恢复输入列表
+    m_currentTask.totalBytes=m_pendingBytes;
+    m_currentTask.outputDir=o.outputDir;
+    m_runTimer.start();
+}
+
+void MainWindow::finishTaskRecord(const CommandResult& r) {
+    if(m_currentTask.id.isEmpty()) return;
+    m_currentTask.finishedAt=QDateTime::currentDateTime()
+        .toString(QStringLiteral("yyyy-MM-dd HH:mm:ss"));
+    m_currentTask.durationMs=m_runTimer.isValid() ? m_runTimer.elapsed() : 0;
+    m_currentTask.filesDone=m_runFileStarts;
+    m_currentTask.exitCode=r.exitCode;
+    m_currentTask.cancelled=r.wasCancelled;
+    m_currentTask.error=r.errorString;
+    m_currentTask.status=r.wasCancelled
+        ? QStringLiteral("cancelled")
+        : ((!r.errorString.isEmpty()||r.exitCode!=0) ? QStringLiteral("failed")
+                                                     : QStringLiteral("success"));
+    const TaskRecord done=m_currentTask;
+    m_currentTask=TaskRecord();     // 先摘出再清空，避免落盘期间被后续运行覆盖
+    QString err;
+    if(!TaskHistory::append(done,err))
+        appendOutput(tr("（警告：任务历史写入失败：%1）\n").arg(err),true);
+}
+
+void MainWindow::onOpenTaskHistory() {
+    TaskHistoryDialog dlg(this);
+    if(dlg.exec()!=QDialog::Accepted) return;
+    const TaskRecord rec=dlg.selectedRecord();
+    if(rec.id.isEmpty()) return;
+    applyTaskRecord(rec);
+}
+
+// 回放：把历史记录的动作/模式/输出目录回填到主窗口（输入路径需用户自行选择）
+void MainWindow::applyTaskRecord(const TaskRecord& rec) {
+    auto setAction=[&](CryptoAction a){
+        if(QAbstractButton* b=m_actionGroup->button(static_cast<int>(a))) b->setChecked(true);
+    };
+    if(rec.action==QStringLiteral("encrypt"))             setAction(CryptoAction::Encrypt);
+    else if(rec.action==QStringLiteral("decrypt"))        setAction(CryptoAction::Decrypt);
+    else if(rec.action==QStringLiteral("batch-encrypt"))  setAction(CryptoAction::BatchEncrypt);
+    else if(rec.action==QStringLiteral("batch-decrypt"))  setAction(CryptoAction::BatchDecrypt);
+    else if(rec.action==QStringLiteral("keygen"))         setAction(CryptoAction::KeyGen);
+    else if(rec.action==QStringLiteral("derive"))         setAction(CryptoAction::Derive);
+    else if(rec.action==QStringLiteral("pubkey"))         setAction(CryptoAction::PubKey);
+
+    int mode=-1;
+    if(rec.mode==QStringLiteral("xchacha20"))      mode=static_cast<int>(CryptoMode::XChaCha20);
+    else if(rec.mode==QStringLiteral("aegis256"))  mode=static_cast<int>(CryptoMode::Aegis256);
+    else if(rec.mode==QStringLiteral("asymmetric")) mode=static_cast<int>(CryptoMode::Asymmetric);
+    if(mode>=0) {
+        const int idx=m_modeCombo->findData(mode);
+        if(idx>=0) m_modeCombo->setCurrentIndex(idx);
+    }
+    if(!rec.outputDir.isEmpty()) m_outDirEdit->setText(rec.outputDir);
+
+    // 输入路径随记录回填：把该次任务处理的文件/文件夹恢复到输入列表原位
+    if(!rec.inputPaths.isEmpty()) {
+        m_fileList->clear();
+        addInputPaths(rec.inputPaths);
+    }
+
+    updateAsymVisibility();
+    refreshCommandPreview();
+    recomputePending();
+    setStatus(tr("已回填历史任务参数：%1").arg(rec.actionLabel));
 }
 
 // ---------- 输出追加 + 自动滚动 ----------

@@ -1,17 +1,11 @@
 cmake_minimum_required(VERSION 3.16)
-project(FileEncryptorGUI VERSION 1.2.2 LANGUAGES CXX)
+project(FileEncryptorGUI VERSION 1.3.0 LANGUAGES CXX)
 
 # FileEncryptor GUI - Qt6 跨平台图形界面（独立项目）
 
-# Qt6 来源：优先仓库内 third_party/smelibs（静态 Qt 分发随项目走），
-# 回退本机安装的 C:/Program Files/smelibs。
-if(WIN32)
-  if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/smelibs")
-    list(APPEND CMAKE_PREFIX_PATH "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/smelibs")
-  elseif(EXISTS "C:/Program Files/smelibs")
-    list(APPEND CMAKE_PREFIX_PATH "C:/Program Files/smelibs")
-  endif()
-endif()
+# Qt6 来源：只走仓库相对路径 ../third_party/smelibs（静态 Qt 分发随项目走），
+# 不引用任何本机绝对路径；如使用其他位置的静态 Qt，用 -DCMAKE_PREFIX_PATH=... 覆盖。
+list(APPEND CMAKE_PREFIX_PATH "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/smelibs")
 
 find_package(Qt6 6.2 COMPONENTS Widgets REQUIRED)
 
@@ -54,10 +48,12 @@ set(SHELL_SOURCES
     src/FileEncryptorLocator.cpp
     src/FontBootstrap.cpp
     src/ThemeManager.cpp
-    src/KeyLibrary.cpp
-    src/KeyLibraryDialog.cpp
     src/ViewSettingsDialog.cpp
-    src/CliNotFoundDialog.cpp)
+    src/CliNotFoundDialog.cpp
+    src/TaskHistory.cpp
+    src/EtaEstimator.cpp
+    src/BatchProgressPanel.cpp
+    src/TaskHistoryDialog.cpp)
 
 set(SHELL_HEADERS
     src/MainWindow.h
@@ -72,7 +68,11 @@ set(SHELL_HEADERS
     src/FontBootstrap.h
     src/ThemeManager.h
     src/ViewSettingsDialog.h
-    src/CliNotFoundDialog.h)
+    src/CliNotFoundDialog.h
+    src/TaskHistory.h
+    src/EtaEstimator.h
+    src/BatchProgressPanel.h
+    src/TaskHistoryDialog.h)
 
 # Windows 图标资源（嵌入 exe；Linux/macOS 无 .rc，图标经窗口图标设置）
 set(SHELL_RESOURCES )

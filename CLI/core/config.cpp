@@ -157,7 +157,6 @@ bool parse_yaml_config(const std::string& text, Config& cfg, std::string& err, s
         else if (n) note(key, "expected a scalar boolean");
     };
     opt_bool("path_whitelist_enabled", cfg.path_whitelist_enabled);
-    opt_bool("progress_rotation", cfg.progress_rotation);
     opt_bool("obfuscate_names", cfg.obfuscate_names);
     opt_bool("write_sha256", cfg.write_sha256);
 
@@ -321,7 +320,6 @@ static const char* DEFAULT_CONFIG_YAML =
 "path_whitelist_enabled: false\n"
 "# path_whitelist:\n"
 "#   - C:/Data/In\n"
-"progress_rotation: true   # 覆盖 .progress 前先备份 .progress.bak\n"
 "obfuscate_names: true     # 混淆输出文件名（<名>.<伪扩展名>.ptd）\n";
 
 static bool read_file_utf8(const std::string& path, std::string& out) {
@@ -433,6 +431,22 @@ std::string to_native_path(const std::string& p) {
 #endif
 }
 
+// 配置文件名：fileencryptor.yaml（v2.3.1 起按用户要求统一回归标准 .yaml 后缀；
+// v2.3.0 曾短暂使用 .yml）。旧名 fileencryptor.yml 仅在读取时回退（同目录找不到
+// .yaml 才试），新写入一律 .yaml。
+static const char* const kConfigName       = "fileencryptor.yaml";
+static const char* const kConfigNameLegacy = "fileencryptor.yml";
+
+// 在给定目录里挑配置文件：优先 .yaml，其次旧名 .yml
+static std::string pick_config_in(const std::string& dir) {
+    if (dir.empty()) return "";
+    std::string p = to_native_path(dir + "/" + kConfigName);
+    if (file_exists_utf8(p)) return p;
+    std::string legacy = to_native_path(dir + "/" + kConfigNameLegacy);
+    if (file_exists_utf8(legacy)) return legacy;
+    return "";
+}
+
 std::string find_config_file(ConfigSource* src) {
     if (src) *src = ConfigSource::None;
     // 1) 环境变量（显式，最高优先）
@@ -441,23 +455,14 @@ std::string find_config_file(ConfigSource* src) {
         if (file_exists_utf8(env)) { if (src) *src = ConfigSource::Env; return env; }
     }
     // 2) 运行目录（CWD）：用户在哪个目录启动程序，配置就在哪里
-    std::string cwd = get_cwd();
-    if (!cwd.empty()) {
-        std::string p = cwd + "/fileencryptor.yaml";
-        if (file_exists_utf8(p)) { if (src) *src = ConfigSource::Cwd; return p; }
-    }
+    std::string p = pick_config_in(get_cwd());
+    if (!p.empty()) { if (src) *src = ConfigSource::Cwd; return p; }
     // 3) 可执行文件目录
-    std::string exe_dir = get_exe_dir();
-    if (!exe_dir.empty()) {
-        std::string p = exe_dir + "/fileencryptor.yaml";
-        if (file_exists_utf8(p)) { if (src) *src = ConfigSource::ExeDir; return p; }
-    }
+    p = pick_config_in(get_exe_dir());
+    if (!p.empty()) { if (src) *src = ConfigSource::ExeDir; return p; }
     // 4) 用户配置目录
-    std::string ucd = get_user_config_dir();
-    if (!ucd.empty()) {
-        std::string p = to_native_path(ucd + "/fileencryptor.yaml");
-        if (file_exists_utf8(p)) { if (src) *src = ConfigSource::UserConfig; return p; }
-    }
+    p = pick_config_in(get_user_config_dir());
+    if (!p.empty()) { if (src) *src = ConfigSource::UserConfig; return p; }
     return "";
 }
 
@@ -472,7 +477,7 @@ Config load_config() {
         std::string cwd = get_cwd();
         bool wrote = false;
         if (!cwd.empty()) {
-            std::string def = cwd + "/fileencryptor.yaml";
+            std::string def = to_native_path(cwd + "/" + kConfigName);
             if (!file_exists_utf8(def)) {
                 wrote = write_file_utf8(def, DEFAULT_CONFIG_YAML);
             } else {
@@ -482,7 +487,7 @@ Config load_config() {
         if (!wrote) {
             std::string ucd = get_user_config_dir();
             if (!ucd.empty()) {
-                std::string def = to_native_path(ucd + "/fileencryptor.yaml");
+                std::string def = to_native_path(ucd + "/" + kConfigName);
                 if (!file_exists_utf8(def)) {
                     create_directory_recursive(ucd);
                     write_file_utf8(def, DEFAULT_CONFIG_YAML);

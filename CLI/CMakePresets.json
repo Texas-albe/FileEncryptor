@@ -59,8 +59,8 @@
       "generator": "Visual Studio 18 2026",
       "architecture": { "value": "x64", "strategy": "set" },
       "cacheVariables": {
-        "SODIUM_ROOT": "C:/Program Files/libsodium",
-        "CMAKE_PREFIX_PATH": "C:/Program Files/yaml-cpp"
+        "SODIUM_ROOT": "${sourceDir}/../third_party/libsodium",
+        "CMAKE_PREFIX_PATH": "${sourceDir}/../third_party/yaml-cpp"
       }
     },
     {
@@ -72,8 +72,8 @@
       "generator": "Visual Studio 18 2026",
       "architecture": { "value": "x64", "strategy": "set" },
       "cacheVariables": {
-        "SODIUM_ROOT": "C:/Program Files/libsodium",
-        "CMAKE_PREFIX_PATH": "C:/Program Files/yaml-cpp"
+        "SODIUM_ROOT": "${sourceDir}/../third_party/libsodium",
+        "CMAKE_PREFIX_PATH": "${sourceDir}/../third_party/yaml-cpp"
       }
     }
   ],

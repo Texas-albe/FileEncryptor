@@ -71,6 +71,18 @@ QStringList CliArgBuilder::buildArguments(const ShellOptions& o) {
         args << QStringLiteral("-m") << QStringLiteral("rage");
     }
 
+    // 压缩（仅对称加密有效；zstd 级别参照上游约定 1..22 常规 / -1..-5 快速档）。
+    // 与 CLI 一致：compressionLevel==0 表示不压缩，故仅当非 0 时下发 --compression-level。
+    if (o.compressionLevel != 0 && isEnc && !isAsym) {
+        args << QStringLiteral("--compression-level") << QString::number(o.compressionLevel);
+    }
+
+    // SHA-256 校验单（main.cpp --sha256）：加密成功后生成 <out>.ptd.sha256；仅加密动作下发
+    // （对称与非对称加密均可，CLI 侧解密方向忽略）
+    if (o.writeSha256 && isEnc) {
+        args << QStringLiteral("--sha256");
+    }
+
     // 非对称加密：收件人公钥文件（main.cpp -r）
     if (isAsym && isEnc && !o.recipientPath.isEmpty()) {
         args << QStringLiteral("-r") << o.recipientPath;
@@ -142,13 +154,22 @@ QString CliArgBuilder::buildPreview(const QString& programPath, const ShellOptio
 
     static const QStringList valueFlags = {
         QStringLiteral("-o"), QStringLiteral("-i"), QStringLiteral("-k"),
-        QStringLiteral("-r"), QStringLiteral("--salt")
+        QStringLiteral("-r"), QStringLiteral("--salt"),
+        QStringLiteral("--compression-level")
     };
 
     const QStringList args = buildArguments(o);
     bool expectValue = false;
+    // 纯整数字面量（如 --compression-level 的 3 / -3）即使紧跟取值 flag 也不加引号
+    auto isIntLiteral=[](const QString& s)->bool {
+        if(s.isEmpty()) return false;
+        int i=(s.at(0)==QLatin1Char('-')||s.at(0)==QLatin1Char('+'))?1:0;
+        if(i>=s.size()) return false;
+        for(;i<s.size();++i) if(!s.at(i).isDigit()) return false;
+        return true;
+    };
     for (const QString& a : args) {
-        const bool needsQuote = expectValue ||
+        const bool needsQuote = (expectValue && !isIntLiteral(a)) ||
                                 a.contains(QLatin1Char(' ')) ||
                                 a.contains(QLatin1Char('\t')) ||
                                 a.contains(QLatin1Char('"'));

@@ -2,9 +2,13 @@
 
 #pragma once
 #include <QMainWindow>
+#include <QElapsedTimer>
+#include <QTimer>
+#include <QTextCursor>
 #include "ICommandExecutor.h"
 #include "CliArgBuilder.h"
 #include "ThemeManager.h"
+#include "TaskHistory.h"
 
 // 前置声明
 class QListWidget;
@@ -12,6 +16,7 @@ class QPlainTextEdit;
 class QLineEdit;
 class QLabel;
 class QComboBox;
+class QSpinBox;
 class QRadioButton;
 class QCheckBox;
 class QPushButton;
@@ -55,14 +60,14 @@ private slots:
     void onViewSettings();
     // 编辑 FileEncryptorCLI 的 yaml 配置（系统默认编辑器）
     void onEditConfig();
-    // 密钥库管理（功能1）：导入/移除/导出密钥，应用为收件人或身份
-    void onOpenKeyLibrary();
     // 主题实际生效变化（来自 ThemeManager 信号，切换主题后）
     void onThemeDarkChanged(bool dark);
     // 窗口几何变化 → 重绘背景图
     void resizeEvent(QResizeEvent* e) override;
     // 手动重试 CLI 检测
     void onRetryCliDetection();
+    // 功能5：打开任务历史面板
+    void onOpenTaskHistory();
 
 private:
     // 构建各区域
@@ -81,6 +86,8 @@ private:
     // CLI 检测相关
     bool checkCliExists(bool showDialog=true);
     void showCliNotFoundError(const QString& context=QString());
+    // CLI zstd 能力探测（--features 输出 zstd=1/0 → m_zstdAvailable）
+    void probeZstdSupport();
 
     // 业务
     ShellOptions collectOptions() const;
@@ -88,6 +95,14 @@ private:
     void setStatus(const QString& msg);
     void addInputPaths(const QStringList& paths);         // 功能4：去重追加到文件列表
     QString resolveRecipients(const QString& raw) const;  // 功能8：多收件人归一化
+
+    // 功能5/6：任务记录与 ETA
+    void beginTaskRecord(const ShellOptions& o);          // 运行前登记任务
+    void finishTaskRecord(const CommandResult& r);        // 运行结束落盘历史
+    void applyTaskRecord(const TaskRecord& rec);          // 回放：回填参数
+    void recomputePending();                              // 重算待处理字节/文件数（目录递归）
+    static QString actionKey(CryptoAction a);
+    static QString modeKey(CryptoMode m);
 
     // 菜单栏
     QMenuBar* m_menuBar=nullptr;
@@ -127,6 +142,12 @@ private:
     QCheckBox* m_chkDeleteSource=nullptr;
     QCheckBox* m_chkForce=nullptr;
     QCheckBox* m_chkVerbose=nullptr;
+    QCheckBox* m_chkSha256=nullptr;          // --sha256：加密成功后生成 <out>.ptd.sha256 校验单
+    QCheckBox* m_chkCompress=nullptr;        // zstd 压缩开关（仅对称加密有效）
+    QSpinBox* m_compressLevel=nullptr;       // zstd 级别（-5..22；默认 1）
+    QLabel*   m_compressLabel=nullptr;
+    QLabel*   m_compressTitle=nullptr;       // 行首标题「压缩 (zstd)」，随压缩行整体显隐
+    bool      m_zstdAvailable=false;         // 由 CLI --features 探测
     QLineEdit* m_outDirEdit=nullptr;
     QPushButton* m_btnOutDirBrowse=nullptr;
     QLineEdit* m_keyfileEdit=nullptr;
@@ -140,7 +161,6 @@ private:
     QWidget* m_identityRow=nullptr;    // private key file (-k, asymmetric decrypt)
     QLineEdit* m_recipientEdit=nullptr;
     QPushButton* m_btnRecipientBrowse=nullptr;
-    QPushButton* m_btnKeyLibrary=nullptr;   // 密钥库（功能1）：与收件人/身份输入联动
     QLineEdit* m_identityEdit=nullptr;
     QPushButton* m_btnIdentityBrowse=nullptr;
 
@@ -152,6 +172,22 @@ private:
     bool m_lastProgressLine = false;   // 上一条输出是否为进度行（用于原地刷新而非重复追加）
     int m_runFileStarts = 0;           // 功能11：本次运行 CLI 已开始处理的文件数（取消时据此汇总）
     mutable QString m_recipientTempFile; // 功能8：多收件人临时公钥文件（仅含公钥，非机密）
+
+    // 批量进度帧在拟 cmd 输出区内的原地整帧刷新（取代独立批量进度面板）：
+    // 用字符区间 [m_framePos, m_framePos+m_frameLen) 定位帧块（含尾部换行），
+    // 新帧到达时整体替换。区间之前的文本只会被追加（位置不变），比块锚点稳健；
+    // 替换前自校验帧首字符，文档被裁剪/改动时放弃替换改为追加，自愈不留残影。
+    int m_framePos=-1;
+    int m_frameLen=0;
+
+    // 功能5：本次运行的任务记录（结束后写入历史）
+    TaskRecord m_currentTask;
+    QElapsedTimer m_runTimer;
+    int m_runFileTotal=0;          // 本次运行待处理文件数快照（目录已展开）
+    // 功能6：批量进度 / ETA 面板（已下线——进度帧改在拟 cmd 输出区内原地刷新）
+    QPushButton* m_btnTaskHistory=nullptr;
+    qint64 m_pendingBytes=0;
+    int m_pendingFiles=0;
 
     // 下部只读文本框
     QPlainTextEdit* m_outputView=nullptr;

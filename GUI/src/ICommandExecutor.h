@@ -12,7 +12,16 @@ struct OutputLine {
     QString text;
     bool isError = false;     // true=stderr, false=stdout
     bool isProgress = false;  // true=进度行（CLI 以 \r 原地刷新）：GUI 应替换上一行而非追加
+    // true=批量进度帧（CLI 以哨兵行包裹的整帧，含 1 行汇总 + 每线程 1 行）。
+    // GUI 应整帧替换「批量进度面板」的内容，而不是追加到输出区。
+    bool isFrame = false;
 };
+
+// 批量进度帧的哨兵行（与 CLI core/progress_frame.cpp 中的 FE_FRAME_BEGIN/END 一致）。
+// CLI 仅在宿主显式开启帧模式（环境变量 FILEENCRYPTOR_PROGRESS_FRAME=1）时输出，
+// 普通重定向/管道场景不会出现，故旧宿主无需处理。
+inline const char* feFrameBeginMarker() { return "\x1b[FEPRG+"; }
+inline const char* feFrameEndMarker()   { return "\x1b[FEPRG-"; }
 
 // 命令请求：argv + 可选 stdin 数据（安全通道，替代环境变量注入密钥）+ 工作目录
 struct CommandRequest {

@@ -24,9 +24,6 @@ struct Config {
     bool        path_whitelist_enabled = false; // 仅当 path_whitelist 显式列出至少一项时为 true；空列表（仅写键名）不启用，所有路径均放行
     std::vector<std::string> path_whitelist; // 允许的输入/输出根目录（非空且启用时强制校验）
 
-    // ---- 进度文件 ----
-    bool        progress_rotation = true;  // 覆盖 .progress 前先备份为 .progress.bak
-
     // ---- 输出文件名混淆（v1.7.0 引入，v1.7.1 起语义收窄）----
     // 仅控制"可见输出文件名"是否混淆为 "<16 位十六进制>.<混淆扩展名>.ptd"。
     // 混淆前的原始名一律以加密信封存入密文尾部，与本项无关（不受配置开关影响）。

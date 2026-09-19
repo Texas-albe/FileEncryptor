@@ -13,9 +13,9 @@
 #endif
 
 #define FE_VERSION_MAJOR 2
-#define FE_VERSION_MINOR 2
+#define FE_VERSION_MINOR 3
 #define FE_VERSION_PATCH 0
-#define FE_VERSION_STRING "2.2.0"
+#define FE_VERSION_STRING "2.3.0"
 
 enum class CryptoMode: unsigned char {
     AES_GCM=0,   // 仅用于解密旧格式（v1/v2）文件；新加密不再使用
@@ -42,6 +42,9 @@ std::string replace_basename(const std::string& path,const std::string& newbase)
 // 递归创建目录
 bool create_directory_recursive(const std::string& path);
 
+// 判断路径是否为已存在的目录（供单文件 -e/-d 拒绝目录输入时使用）
+bool fe_path_is_directory(const std::string& path);
+
 // 路径穿越检测：拒绝任何包含 ".." 组件（前缀或中间）的路径。
 // 1.5.2 起同时供 CLI 输出目录校验、目录创建与白名单校验复用。
 bool path_has_traversal(const std::string& p);
@@ -57,7 +60,7 @@ bool path_is_symlink(const std::string& path);
 bool validate_io_paths(const std::string& in_path,const std::string& out_path,bool silent);
 
 // UTF-8 安全的原子替换（Windows: MoveFileExW REPLACE_EXISTING；POSIX: rename）。
-// 用于「先写 .part 再落盘」，避免半截明文残留。
+// 用于「先写 .prt 再落盘」，避免半截明文残留。
 bool replace_file_utf8(const std::string& from,const std::string& to);
 
 // 清除 Windows 只读属性位（覆盖写入前调用；POSIX 无此概念，空操作）。
@@ -72,12 +75,16 @@ void clear_readonly_attribute(const std::string& path);
 void tighten_file_permissions(const std::string& path);
 
 // 加密文件（支持续传）
+// compress_level: 0 = 不压缩；>0 / <0 = zstd 压缩级别（参照 zstd，1..22 常规，负数 -1..-5 为快速档）。
+//   非 0 时磁盘格式升级为 v5（头部含压缩标记字节），解密端按头部标记自动解压。
+//   构建时若未集成 zstd（FE_WITHOUT_ZSTD），非 0 值会被调用方拒绝。
 bool encrypt_file(const std::string& in_path,
     const std::string& out_path,
     const SecureBuffer& password,
     CryptoMode mode,
     std::function<void(size_t,size_t)> progress_callback=nullptr,
-    bool resume=false);
+    bool resume=false,
+    int compress_level=0);
 
 // 解密文件（支持续传）
 // ext_key: 可选，外部已派生的 32 字节密钥。非 nullptr 时跳过内部 crypto_pwhash，
@@ -103,6 +110,8 @@ struct PtdMeta {
     std::string   plaintext_hash_hex; // 明文 Blake2b（v3/v4 头部字段），空=旧格式无
     bool          has_name_footer=false; // 密文尾部是否带（加密）文件名信封
     bool          valid=false;       // 文件是否为本程序合法产出（magic + 已知版本）
+    unsigned char compression=0;     // 压缩方式：0=无；1=zstd（v5+）
+    unsigned char comp_level=0;     // zstd 压缩级别（仅 compression==1 时有效）
 };
 bool read_ptd_metadata(const std::string& ptd_path, PtdMeta& meta);
 
@@ -127,7 +136,8 @@ bool process_files(const std::vector<std::string>& input_paths,
     bool delete_source=false,
     bool force_overwrite=false,
     int num_threads=0,
-    bool restore_name=false);
+    bool restore_name=false,
+    int compress_level=0);
 
 // 认证失败详细输出开关（由 CLI -v/--verbose 设置）。
 // 关闭时所有认证失败只输出通用错误，避免向潜在攻击者泄露细节（最小信息泄露原则）。

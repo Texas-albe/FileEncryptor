@@ -19,6 +19,8 @@ void ProcessCommandExecutor::execute(const CommandRequest& request) {
     m_cancelled = false;
     m_outBuffer.clear();
     m_errBuffer.clear();
+    m_frameLines.clear();
+    m_inFrame = false;
     m_finishedEmitted = false;
 
     m_process = new QProcess(this);
@@ -90,28 +92,61 @@ void ProcessCommandExecutor::onReadyReadStandardError() {
 }
 
 void ProcessCommandExecutor::flushLines(QString& buffer, bool isError) {
-    // CLI 的模拟 CMD 进度条用 \r 原地刷新（print_progress 每帧 \r<进度> 不换行）。
-    // 这里同时按 \n 与 \r 切分：
-    //   - \n 段 → 普通行（isProgress=false）
-    //   - \r 段 → 进度行（isProgress=true），GUI 替换上一行，避免末尾进度行重复堆积
-    while (true) {
-        const int nl = buffer.indexOf(QLatin1Char('\n'));
-        const int cr = buffer.indexOf(QLatin1Char('\r'));
-        if (nl == -1 && cr == -1) break;   // 无终止符，保留半行继续缓冲
-        if (cr != -1 && (nl == -1 || cr < nl)) {
-            // \r 段：原地刷新（可能为空，如首帧前的 \r，跳过避免空行）
-            QString seg = buffer.left(cr);
-            buffer.remove(0, cr + 1);
-            if (seg.isEmpty()) continue;
-            emit outputLine(OutputLine{seg, isError, /*isProgress=*/true});
-        } else {
-            // \n 段：普通行（兼容 Windows CRLF，去掉行尾 \r）
-            QString line = buffer.left(nl);
-            if (line.endsWith(QLatin1Char('\r'))) line.chop(1);
-            buffer.remove(0, nl + 1);
-            emit outputLine(OutputLine{line, isError, /*isProgress=*/false});
-        }
+    // 切分策略（顺序重要）：
+    //   1) 先按 \n 切出完整行交给 handleLine —— 帧哨兵是整行，必须按行识别；
+    //   2) 再处理缓冲区里"最后一个 \r 之前"的残留：CLI 的单行进度条以 \r 原地刷新
+    //      且不带换行，若等到 \n 才处理，进度就会在结束时才一次性刷出。
+    int nl;
+    while ((nl = buffer.indexOf(QLatin1Char('\n'))) != -1) {
+        QString line = buffer.left(nl);
+        buffer.remove(0, nl + 1);
+        if (line.endsWith(QLatin1Char('\r'))) line.chop(1);   // 兼容 CRLF
+        handleLine(line, isError);
     }
+    const int lastCr = buffer.lastIndexOf(QLatin1Char('\r'));
+    if (lastCr != -1) {
+        QString part = buffer.left(lastCr);
+        buffer.remove(0, lastCr + 1);
+        int start = 0;
+        int cr;
+        while ((cr = part.indexOf(QLatin1Char('\r'), start)) != -1) {
+            const QString seg = part.mid(start, cr - start);
+            start = cr + 1;
+            if (!seg.isEmpty()) emit outputLine(OutputLine{seg, isError, true, false});
+        }
+        const QString seg = part.mid(start);
+        if (!seg.isEmpty()) emit outputLine(OutputLine{seg, isError, true, false});
+    }
+}
+
+void ProcessCommandExecutor::handleLine(const QString& line, bool isError) {
+    // 帧哨兵：BEGIN 与 END 之间的行即一帧（汇总行 + 每线程行），整帧一次性发出
+    if (line == QLatin1String(feFrameBeginMarker())) {
+        m_frameLines.clear();
+        m_inFrame = true;
+        return;
+    }
+    if (line == QLatin1String(feFrameEndMarker())) {
+        m_inFrame = false;
+        if (!m_frameLines.isEmpty())
+            emit outputLine(OutputLine{m_frameLines.join(QLatin1Char('\n')), isError, false, true});
+        m_frameLines.clear();
+        return;
+    }
+    if (m_inFrame) {
+        m_frameLines << line;
+        return;
+    }
+    // 普通行：行内的 \r 段按旧语义处理（原地刷新单行进度条）
+    int start = 0;
+    int cr;
+    while ((cr = line.indexOf(QLatin1Char('\r'), start)) != -1) {
+        const QString seg = line.mid(start, cr - start);
+        start = cr + 1;
+        if (!seg.isEmpty()) emit outputLine(OutputLine{seg, isError, true, false});
+    }
+    const QString tail = line.mid(start);
+    if (!tail.isEmpty()) emit outputLine(OutputLine{tail, isError, false, false});
 }
 
 void ProcessCommandExecutor::onFinished(int exitCode, QProcess::ExitStatus exitStatus) {
@@ -122,16 +157,22 @@ void ProcessCommandExecutor::onFinished(int exitCode, QProcess::ExitStatus exitS
         if (!m_outBuffer.isEmpty()) {
             QString line = m_outBuffer;
             if (line.startsWith(QLatin1Char('\r'))) line.remove(0, 1);
-            emit outputLine(OutputLine{line, false, /*isProgress=*/false});
+            handleLine(line, false);
             m_outBuffer.clear();
         }
+    }
+    // 进程被中断（取消/崩溃）时可能有未闭合的帧：把已收到的半帧补发出去
+    if (m_inFrame && !m_frameLines.isEmpty()) {
+        m_inFrame = false;
+        emit outputLine(OutputLine{m_frameLines.join(QLatin1Char('\n')), false, false, true});
+        m_frameLines.clear();
     }
     if (!m_errBuffer.isEmpty()) {
         flushLines(m_errBuffer, true);
         if (!m_errBuffer.isEmpty()) {
             QString line = m_errBuffer;
             if (line.startsWith(QLatin1Char('\r'))) line.remove(0, 1);
-            emit outputLine(OutputLine{line, true, /*isProgress=*/false});
+            handleLine(line, true);
             m_errBuffer.clear();
         }
     }
@@ -191,4 +232,6 @@ void ProcessCommandExecutor::cleanup() {
     m_cancelled = false;
     m_outBuffer.clear();
     m_errBuffer.clear();
+    m_frameLines.clear();
+    m_inFrame = false;
 }

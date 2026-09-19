@@ -1,5 +1,5 @@
 ﻿cmake_minimum_required(VERSION 3.15)
-project(FileEncryptorCLI VERSION 2.2.0 LANGUAGES CXX)
+project(FileEncryptorCLI VERSION 2.3.0 LANGUAGES CXX)
 
 # FileEncryptor CLI - 命令行加密工具（独立项目）
 # 本项目编译产出 FileEncryptorCLI(.exe)；GUI 项目（../GUI）通过 QProcess 调用此程序。
@@ -288,6 +288,7 @@ set(SOURCES
   core/FileEncryptor.cpp
   core/config.cpp
   core/keylib.cpp
+  core/progress_frame.cpp
   core/asym_crypto.cpp
   cli/main.cpp)
 
@@ -359,8 +360,8 @@ if(NOT YAMLCPP_TARGET)
     "  仓库内:  确认 third_party/yaml-cpp/ 存在（include/ + lib/yaml-cpp.lib）\n"
     "  Linux  (Debian/Ubuntu): sudo apt install libyaml-cpp-dev\n"
     "  Linux  (Fedora):        sudo dnf install yaml-cpp-devel\n"
-    "  Windows:                把 yaml-cpp 安装/编译到 C:\\Program Files\\yaml-cpp，\n"
-    "                          或设置 YAMLCPP_ROOT 指向其根目录。")
+    "  Windows:                yaml-cpp 已随仓库放于 ../third_party/yaml-cpp/，\n"
+    "                          或设置 YAMLCPP_ROOT 指向其根目录（相对路径亦可）。")
 endif()
 
 # ---------- 链接 libsodium ----------
@@ -425,12 +426,13 @@ endif()
 option(WITH_AGE "Enable asymmetric (age/rage) encryption support" ON)
 set(FE_AGE_FOUND FALSE)
 if(WITH_AGE)
-  # 库来源：默认随仓库分发的 third_party/age-ffi（源码 + lib/<platform>/ 预编译静态库），
+  # 库来源：默认随仓库分发的 third_party/rage/age-ffi（源码 + lib/<platform>/ 预编译静态库），
   # 旧的本机安装路径仅作回退。-DFE_AGE_DIR=<age-ffi 目录> 可显式覆盖。
-  set(_age_ffi_root "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/age-ffi")
+  set(_age_ffi_root "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/rage/age-ffi")
   if(WIN32)
-    set(_age_hdr_hints "C:/Program Files/rage/include" "C:/Program Files/rage")
-    set(_age_lib_install "C:/Program Files/rage/libs/windows" "C:/Program Files/rage/lib")
+    # 全部走仓库相对路径：third_party/rage/age-ffi 为唯一默认来源，不再引用任何本机绝对路径
+    set(_age_hdr_hints "")
+    set(_age_lib_install "")
     set(_age_lib_subdir "lib/windows")
   else()
     set(_age_hdr_hints "/usr/local/include")
@@ -440,19 +442,19 @@ if(WITH_AGE)
   if(DEFINED FE_AGE_DIR AND FE_AGE_DIR)
     set(_age_ffi_root "${FE_AGE_DIR}")
   endif()
-  # header lives in the source tree; lib may sit in <root>/lib/<platform> or be installed under C:/Program Files/rage/libs/<platform>
+  # header lives in the source tree; lib may sit in <root>/lib/<platform> under third_party/rage/age-ffi
   find_path(FE_AGE_INCLUDE_DIR NAMES fe_age.h
-    HINTS "${_age_ffi_root}" "${_age_ffi_root}/include" ${_age_hdr_hints} "${CMAKE_SOURCE_DIR}/../age-ffi")
+    HINTS "${_age_ffi_root}" "${_age_ffi_root}/include" ${_age_hdr_hints} "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/rage/age-ffi")
   if(WIN32)
     find_library(FE_AGE_LIBRARY NAMES fe_age
       HINTS "${_age_ffi_root}/lib/windows" "${_age_ffi_root}/lib"
             ${_age_lib_install}
-            "${CMAKE_SOURCE_DIR}/../age-ffi/lib/windows")
+            "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/rage/age-ffi/lib/windows")
   else()
     find_library(FE_AGE_LIBRARY NAMES fe_age libfe_age
       HINTS "${_age_ffi_root}/${_age_lib_subdir}" "${_age_ffi_root}/lib"
             ${_age_lib_install}
-            "${CMAKE_SOURCE_DIR}/../age-ffi/${_age_lib_subdir}")
+            "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/rage/age-ffi/${_age_lib_subdir}")
   endif()
   if(FE_AGE_INCLUDE_DIR AND FE_AGE_LIBRARY)
     set(FE_AGE_FOUND TRUE)
@@ -476,6 +478,81 @@ if(WITH_AGE)
       "Building WITHOUT asymmetric (rage) encryption. Run age-ffi/build-win.ps1 or build-linux.sh first,\n"
       "or pass -DFE_AGE_DIR=<age-ffi dir>.")
   endif()
+endif()
+
+# ---------- zstd 压缩支持（参照 zstd，可自定义压缩级别） ----------
+# 优先从源码编译（third_party/zstd/src/lib）：与当前工具链 / CRT 完全一致，
+# 规避预编译静态库（由更新版 MSVC 构建，引用 ___chkstk_ms 等本机 CRT 缺失符号）导致的 LNK2001。
+# 预编译库（third_party/zstd/static/libzstd_static.lib）作为“源码缺失时的回退”保留，
+# 但因其工具链不匹配在 Windows 下通常无法链接，故默认走源码编译。
+# 缺失（且既无源码也无预编译库）时构建为“无压缩”版本（CLI 的 -z 会被拒绝并明确提示）。
+# 可用 -DWITH_ZSTD=OFF 彻底关闭压缩相关代码。
+option(WITH_ZSTD "Enable zstd compression support" ON)
+set(FE_ZSTD_FOUND FALSE)
+if(WITH_ZSTD)
+  set(_zstd_root "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/zstd")
+  set(_zstd_src "${_zstd_root}/src/lib")
+  if(EXISTS "${_zstd_src}/zstd.h")
+    # ---- 从源码构建 zstd 静态库（与本工程同工具链 / 同 /MT 运行时）----
+    set(FE_ZSTD_FOUND TRUE)
+    enable_language(C)   # zstd 为 C 源码，工程默认仅启用 CXX
+    file(GLOB _zstd_common     "${_zstd_src}/common/*.c")
+    file(GLOB _zstd_compress   "${_zstd_src}/compress/*.c")
+    file(GLOB _zstd_decompress "${_zstd_src}/decompress/*.c")
+    file(GLOB _zstd_dict       "${_zstd_src}/dictBuilder/*.c")
+    add_library(zstd_static STATIC
+      ${_zstd_common} ${_zstd_compress} ${_zstd_decompress} ${_zstd_dict})
+    target_include_directories(zstd_static PRIVATE
+      "${_zstd_src}" "${_zstd_src}/common" "${_zstd_src}/compress"
+      "${_zstd_src}/decompress" "${_zstd_src}/dictBuilder"
+      "${_zstd_root}/include")
+    target_compile_definitions(zstd_static PRIVATE ZSTD_DISABLE_ASM)
+    if(MSVC)
+      # 与 FileEncryptor 的 /MT 静态 CRT 保持一致，否则链接期 LNK2038
+      set_target_properties(zstd_static PROPERTIES MSVC_RUNTIME_LIBRARY "MultiThreaded")
+      target_compile_options(zstd_static PRIVATE /w)   # 抑制第三方源码告警
+    endif()
+    target_include_directories(FileEncryptor PRIVATE "${_zstd_root}/include")
+    target_link_libraries(FileEncryptor PRIVATE zstd_static)
+    target_compile_definitions(FileEncryptor PRIVATE FE_WITH_ZSTD)
+    if(NOT WIN32)
+      target_link_libraries(FileEncryptor PRIVATE pthread)
+    endif()
+    message(STATUS "zstd: 已从源码编译集成 (${_zstd_src})")
+  else()
+    # ---- 回退：使用预编译静态库（需自行放置，且工具链须兼容）----
+    if(WIN32)
+      find_path(ZSTD_INCLUDE_DIR NAMES zstd.h
+        HINTS "${_zstd_root}/include" NO_DEFAULT_PATH)
+      find_library(ZSTD_LIBRARY NAMES zstd libzstd libzstd_static zstd_static
+        HINTS "${_zstd_root}/static" NO_DEFAULT_PATH)
+    else()
+      find_path(ZSTD_INCLUDE_DIR NAMES zstd.h
+        HINTS "${_zstd_root}/include" "/usr/local/include" "/usr/include")
+      find_library(ZSTD_LIBRARY NAMES zstd libzstd_static
+        HINTS "${_zstd_root}/static/linux" "/usr/local/lib" "/usr/lib" "/usr/lib64")
+    endif()
+    if(ZSTD_INCLUDE_DIR AND ZSTD_LIBRARY)
+      set(FE_ZSTD_FOUND TRUE)
+      target_include_directories(FileEncryptor PRIVATE ${ZSTD_INCLUDE_DIR})
+      target_link_libraries(FileEncryptor PRIVATE ${ZSTD_LIBRARY})
+      target_compile_definitions(FileEncryptor PRIVATE FE_WITH_ZSTD)
+      if(WIN32)
+        target_link_libraries(FileEncryptor PRIVATE ws2_32)
+      else()
+        target_link_libraries(FileEncryptor PRIVATE pthread)
+      endif()
+      message(STATUS "zstd: 已集成预编译库 (${ZSTD_LIBRARY})")
+    else()
+      message(WARNING
+        "WITH_ZSTD=ON 但未找到 zstd 源码或预编译库，将构建为“无压缩”版本。\n"
+        "  请将 zstd 源码放到 third_party/zstd/src/lib，或放置预编译静态库。\n"
+        "CLI 的 -z / --compression-level 会在运行时被拒绝。")
+    endif()
+  endif()
+endif()
+if(NOT FE_ZSTD_FOUND)
+  target_compile_definitions(FileEncryptor PRIVATE FE_WITHOUT_ZSTD)
 endif()
 
 # Windows 动态链接时，把 libsodium.dll 复制到 exe 所在目录，保证直接运行

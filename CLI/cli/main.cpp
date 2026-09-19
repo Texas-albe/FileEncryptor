@@ -202,6 +202,7 @@ static void print_usage() {
         <<"  File encryption / decryption:\n"
         <<"    FileEncryptor -e/-d <FileName> [-o <Path>] [-de] [-m xchacha20|aegis256] [-y]\n"
         <<"    FileEncryptor -be/-bd <Path> [-o <Path>] [-de] [-m xchacha20|aegis256] [-y]\n"
+        <<"    FileEncryptor -e/-be <File> [-z] [--compression-level <N>]   (zstd: 1..22 normal, -1..-5 fast)\n"
         <<"    FileEncryptor -e/-d -m rage -r <pub>|-k <priv> <File> [-o <Path>] [-y]\n"
         <<"  Key management (rage/age):\n"
         <<"    FileEncryptor -g [-o <dir>]\n"
@@ -300,7 +301,7 @@ static bool collect_recipients(const std::string& spec,
 //
 // v2.1.2 加固（对应安全审计 1 / 5 / 6）：
 //   - 此前本函数完全绕过 validate_io_paths()，即绕过路径白名单与 max_path_length；
-//   - 输出无符号链接守卫、无 .part 原子落盘（对称路径三处守卫 + 原子替换全无）；
+//   - 输出无符号链接守卫、无 .prt 原子落盘（对称路径三处守卫 + 原子替换全无）；
 //   - 输出文件名恒为明文（对称模式默认混淆）。现加 --obfuscate-name 显式开启，
 //     未开启时打印元数据泄露提示。
 static bool run_asym(const std::vector<std::string>& input_paths,
@@ -375,6 +376,7 @@ static bool run_asym(const std::vector<std::string>& input_paths,
             } else {
                 out_path=in_path;
             }
+            out_path=to_native_path(out_path);   // 分隔符统一（Windows）
             out_path+=".age";
         } else {
             std::string lower=in_path;
@@ -398,6 +400,7 @@ static bool run_asym(const std::vector<std::string>& input_paths,
             } else {
                 out_path=stem;
             }
+            out_path=to_native_path(out_path);   // 分隔符统一（Windows）
             if(out_path==in_path) {
                 std::cerr<<"Error: output path would overwrite input file.\n";
                 all_ok=false; continue;
@@ -432,8 +435,8 @@ static bool run_asym(const std::vector<std::string>& input_paths,
             }
         }
 
-        // v2.1.2：先写 .part 再原子替换——避免中断时留下半截（明文）输出被误认为成品。
-        const std::string part_path=out_path+".part";
+        // v2.1.2：先写 .prt 再原子替换——避免中断时留下半截（明文）输出被误认为成品。
+        const std::string part_path=out_path+".prt";
         remove_file_utf8(part_path);   // 清掉上次残留
 
         AsymOutcome o;
@@ -971,6 +974,7 @@ int main(int argc,char* argv[]) {
     std::string keylib_as;      // --as <name>：-L add 的库内名称
     std::string keylib_alias;   // --alias <text>：-L add 的展示别名
     std::string keylib_notes;   // --notes <text>：-L add 的备注
+    int compress_level=0;       // -z/--compress 或 --compression-level N：zstd 级别；0=不压缩
 
     for(int i=1; i<argc; ++i) {
         std::string arg=argv[i];
@@ -1080,6 +1084,27 @@ int main(int argc,char* argv[]) {
         else if(arg=="--rename") {
             recover_rename=true;   // 配合 -R：原地重命名 .ptd 为原始名（内容不变）
         }
+        else if(arg=="-z"||arg=="--compress") {
+            // 启用 zstd 压缩；未显式 --compression-level 时默认级别 1
+            if(compress_level==0) compress_level=1;
+        }
+        else if((arg=="--compression-level"||arg=="-cl")&&i+1<argc) {
+            compress_level=std::atoi(argv[++i]);
+            if(compress_level==0) {
+                std::cerr<<"--compression-level requires a non-zero integer: "
+                    "zstd level 1..22 (normal) or -1..-5 (fast).\n";
+                return 1;
+            }
+        }
+        else if(arg=="--features") {
+            // 供 GUI 探测能力（如 zstd 是否可用）；每行 key=value
+#ifdef FE_WITH_ZSTD
+            std::cout<<"zstd=1\n";
+#else
+            std::cout<<"zstd=0\n";
+#endif
+            return 0;
+        }
         else if(arg[0]!='-') {
             input_paths.push_back(arg);
         }
@@ -1132,6 +1157,28 @@ int main(int argc,char* argv[]) {
     if(delete_source&&!is_encrypt) {
         std::cerr<<"-de option is only valid for encryption.\n";
         return 1;
+    }
+
+    // 压缩选项校验：仅对称加密可用；未集成 zstd 时拒绝；级别需在 zstd 支持范围内
+    if(compress_level!=0) {
+#ifndef FE_WITH_ZSTD
+        std::cerr<<"Compression requested but this build was compiled without zstd support.\n";
+        return 1;
+#endif
+        if(asym_mode) {
+            std::cerr<<"Compression (-z/--compression-level) is only available for symmetric modes, not -m rage/age.\n";
+            return 1;
+        }
+        if(!is_encrypt) {
+            std::cerr<<"-z/--compression-level is only valid for encryption (-e/-be).\n";
+            return 1;
+        }
+        // zstd 级别范围：常规 1..22，快速档 -1..-5（“参照 zstd”约定）
+        if(compress_level<-5 || compress_level>22) {
+            std::cerr<<"Invalid compression level "<<compress_level
+                <<": zstd accepts 1..22 (normal) or -1..-5 (fast).\n";
+            return 1;
+        }
     }
 
     // 功能1：-K 从密钥库解析收件人（加密）或身份（解密）。
@@ -1335,13 +1382,20 @@ int main(int argc,char* argv[]) {
         all_ok=run_asym(input_paths,output_dir,is_encrypt,delete_source,force_overwrite,recipient_spec,keyfile_path,password,obfuscate_name,lib_recipients);
     }
     else if(is_batch) {
-        all_ok=process_files(input_paths,output_dir,password,mode,is_encrypt,delete_source,force_overwrite,num_threads,restore_name);
+        all_ok=process_files(input_paths,output_dir,password,mode,is_encrypt,delete_source,force_overwrite,num_threads,restore_name,compress_level);
     }
     else {
         // 单文件处理放入 lambda：用 early-return 替代 goto cleanup_password，
         // 避免跨过带非平凡析构的 std::ifstream 声明（严格 C++ 下 ill-formed，MSVC -W4 报 C4533）。
         all_ok = [&]() -> bool {
             const std::string& in_path=input_paths[0];
+            // 目录不属于单文件动作：批量动作（-be/-bd）才有目录递归展开，
+            // 否则会打印 "Encrypting: <目录>" 后才报打不开，语义误导
+            if(fe_path_is_directory(in_path)) {
+                std::cerr<<"Input is a directory: "<<in_path<<"\n"
+                         <<"Use -be / -bd (batch) to process directories.\n";
+                return false;
+            }
             std::string out_path;
             if(!output_dir.empty()) {
                 if(!create_directory_recursive(output_dir)) {
@@ -1359,6 +1413,7 @@ int main(int argc,char* argv[]) {
             else {
                 out_path=in_path;
             }
+            out_path=to_native_path(out_path);   // Windows 下把 '/' 统一为 '\'，避免 "E:\1/name.ptd" 混排
 
             if(action==ACTION_DECRYPT) {
                 std::string lower=in_path;
@@ -1395,17 +1450,17 @@ int main(int argc,char* argv[]) {
                 out_path+=".ptd";
             }
 
-            // 续传无缝衔接：若检测到续传元数据（加密看 .progress；解密需 .progress + .part），
+            // 续传无缝衔接：若检测到续传元数据（加密看 .prs；解密需 .prs + .prt），
             // 跳过覆盖确认，直接交给 encrypt/decrypt_file 续传，避免大文件中断后重跑被“覆盖？”打断。
             bool has_resume_meta=false;
             {
                 std::ifstream pf;
-                if(open_stream(pf,out_path+".progress",std::ios::in|std::ios::binary)&&pf.good()) {
+                if(open_stream(pf,out_path+".prs",std::ios::in|std::ios::binary)&&pf.good()) {
                     pf.close();
                     if(is_encrypt) has_resume_meta=true;
                     else {
                         std::ifstream part;
-                        if(open_stream(part,out_path+".part",std::ios::in|std::ios::binary)&&part.good()) {
+                        if(open_stream(part,out_path+".prt",std::ios::in|std::ios::binary)&&part.good()) {
                             part.close();
                             has_resume_meta=true;
                         }
@@ -1434,7 +1489,7 @@ int main(int argc,char* argv[]) {
                 // 防御性兜底：任何未预期异常（如编码转换失败）都以干净错误退出，
                 // 而非未捕获导致 std::terminate/fastfail（GUI 侧表现为"进程崩溃"）。
                 try {
-                    ok=encrypt_file(in_path,out_path,password,mode,nullptr,true);
+                    ok=encrypt_file(in_path,out_path,password,mode,nullptr,true,compress_level);
                 } catch(const std::exception& e) {
                     fprintf(stderr,"Error: encryption failed: %s\n",e.what());
                     ok=false;

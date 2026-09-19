@@ -133,7 +133,14 @@ std::string keylib_dir() {
 std::string keylib_index_path() {
     const std::string dir = keylib_dir();
     if (dir.empty()) return "";
-    return to_native_path(dir + "/library.yaml");
+    // 索引文件名：library.yaml（v2.3.1 起按用户要求统一回归标准 .yaml 后缀；
+    // v2.3.0 曾短暂使用 .yml）。旧名 library.yml 仍可读取，避免升级后旧的
+    // 密钥索引"凭空消失"（材料文件仍在，只是索引名变了）。
+    const std::string cur = to_native_path(dir + "/library.yaml");
+    if (file_exists(cur)) return cur;
+    const std::string legacy = to_native_path(dir + "/library.yml");
+    if (file_exists(legacy)) return legacy;
+    return cur;
 }
 
 // 密钥库内文件（<dir>/<file>）：拼接后统一归一化为系统原生分隔符，

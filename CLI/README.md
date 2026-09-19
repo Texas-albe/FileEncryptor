@@ -93,8 +93,7 @@ sudo rpm -ivh file-encryptor-cli-2.1.2-1.x86_64.rpm
 ### Windows（预编译 libsodium + MSVC）
 
 预编译包已随仓库放于 **`../third_party/libsodium/`**，CMake 默认直接使用，无需安装。
-若要用系统安装的版本，把官方预编译包（含 `static` 子目录的 MSVC 版）放到
-`C:\Program Files\libsodium`，或传 `-DSODIUM_ROOT=<根目录>` 覆盖。
+若要用别的版本，传 `-DSODIUM_ROOT=<根目录>` 覆盖（相对路径如 `../third_party/libsodium` 亦可）。
 CMake 会自动按 `x64/Release/v143/static/` 找到静态库并完成静态链接（无需 DLL）：
 
 ```powershell
@@ -149,6 +148,13 @@ FileEncryptorCLI <动作> <输入路径...> [选项]
   -o <dir>          输出目录（默认：输入同级目录）
   -i <dir>          批量输入目录（可多次，仅 -be/-bd 使用）
   -m <mode>         加密模式：xchacha20（默认）| aegis256 | rage（非对称混合；age 为兼容别名）
+  -z / --compress   对称加密（-e/-be）启用逐块 zstd 压缩（磁盘格式 v5；不压缩仍为 v4）。
+                    未显式给 --compression-level 时默认级别 1
+  --compression-level <N>, -cl <N>
+                    zstd 压缩级别：1..22 常规（越大越慢、压缩率越高），-1..-5 快速档；
+                    单独出现即启用压缩。仅对称加密有效，非对称（rage）与解密方向会拒绝；
+                    未集成 zstd 的构建请求压缩时报错退出。
+                    解密无需任何参数：按密文头自动识别并解压，旧格式（v1~v4）不受影响。
   -r <pub|file>     非对称加密（rage）的收件人公钥：可直接给 age1... 公钥字符串，
                     或给公钥文件（每行一个，支持 # 注释 / 空行 / publickey: 前缀）
   -K <name>[,...]   按名称引用密钥库（-L 管理）中的密钥，仅 -m rage：
@@ -298,23 +304,23 @@ FileEncryptorCLI -bd ./encrypted_dir -o ./decrypted
 
 ### 构建 fe_age 静态库（Windows / Linux）
 
-`fe_age` 源码与两平台预编译静态库随仓库放于 `../third_party/age-ffi/`（Rust crate，C-ABI `staticlib`）。预编译库缺失时按下面步骤重编：
+`fe_age` 源码与两平台预编译静态库随仓库放于 `../third_party/rage/age-ffi/`（Rust crate，C-ABI `staticlib`）。预编译库缺失时按下面步骤重编：
 
 ```powershell
 # Windows（MSVC，x64）
-cd ../third_party/age-ffi
+cd ../third_party/rage/age-ffi
 ./build-win.ps1          # 产出 age-ffi/lib/windows/fe_age.lib
 ```
 
 ```bash
 # Linux（x86_64）
-cd ../third_party/age-ffi
+cd ../third_party/rage/age-ffi
 ./build-linux.sh         # 产出 age-ffi/lib/linux/libfe_age.a
 ```
 
 也可显式指定 age-ffi 目录：`cmake -S . -B build -DFE_AGE_DIR=/path/to/age-ffi ...`。
 
-> CMake 集成：`WITH_AGE`（默认 ON）。找到 `fe_age.h` + `fe_age.lib`/`libfe_age.a` 后定义 `FE_WITH_AGE` 并链接；**未找到时仅给出 WARNING，回退为不含非对称加密的版本**（相关调用返回明确错误，不中断构建）。详见 `../third_party/age-ffi/README.md`。
+> CMake 集成：`WITH_AGE`（默认 ON）。找到 `fe_age.h` + `fe_age.lib`/`libfe_age.a` 后定义 `FE_WITH_AGE` 并链接；**未找到时仅给出 WARNING，回退为不含非对称加密的版本**（相关调用返回明确错误，不中断构建）。详见 `../third_party/rage/age-ffi/README.md`。
 
 ---
 

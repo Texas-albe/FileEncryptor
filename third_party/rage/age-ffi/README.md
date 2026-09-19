@@ -6,7 +6,7 @@
 
 ```
 age-ffi/
-├── Cargo.toml          # fe_age crate（staticlib + cdylib），依赖 age workspace (E:/rage)
+├── Cargo.toml          # fe_age crate（staticlib + cdylib），依赖上级 rage workspace（../，即 third_party/rage）
 ├── src/lib.rs          # C-ABI 封装：fe_age_encrypt_file / fe_age_decrypt_file / fe_age_generate_keypair ...
 ├── fe_age.h            # C 头文件（供 CLI 的 core/asym_crypto.cpp 包含）
 ├── cbindgen.toml       # 可选：用 cbindgen 重新生成 fe_age.h
@@ -20,15 +20,15 @@ age-ffi/
 ## 前置依赖
 
 - Rust 工具链（cargo / rustc）。Windows 需 MSVC 目标 `x86_64-pc-windows-msvc`；Linux 需 `x86_64-unknown-linux-gnu`。
-- 本 crate 通过 `Cargo.toml` 的 `workspace = true (E:/rage)` 引用位于 `E:/rage` 的 rage 仓库，  `E:/rage/Cargo.toml` 已把本目录注册为 workspace 成员，故 `age` 及其 `age-core` 等依赖的 workspace 解析可正常解析。
+- 本 crate 通过 `Cargo.toml` 的 `age = { workspace = true }` 引用**上级目录的 rage workspace**（`third_party/rage/Cargo.toml` 已把 `age-ffi` 注册为 workspace 成员），故 `age` 及其 `age-core` 等依赖的 workspace 解析可正常解析。重编前请确认 `third_party/rage/` 下 rage 仓库源码完整。
 
 ## 构建
 
 ### Windows（MSVC x64）
 
 ```powershell
-cd E:/rage            # rage 仓库根（本 crate 是其 workspace 成员）
-cd E:/rage/age-ffi   # 或直接在此目录运行脚本
+cd third_party/rage            # rage 仓库根（本 crate 是其 workspace 成员）
+cd third_party/rage/age-ffi   # 或直接在此目录运行脚本
 ./build-win.ps1
 # 产物：age-ffi/lib/windows/fe_age.lib
 ```
@@ -36,14 +36,14 @@ cd E:/rage/age-ffi   # 或直接在此目录运行脚本
 ### Linux（x86_64）
 
 ```bash
-cd E:/rage
+cd third_party/rage
 ./build-linux.sh
 # 产物：age-ffi/lib/linux/libfe_age.a
 ```
 
 ## 与 CLI 的集成
 
-CLI 的 `CMakeLists.txt` 通过 `WITH_AGE`（默认 ON）查找本目录：
+CLI 的 `CMakeLists.txt` 通过 `WITH_AGE`（默认 ON）查找本目录（默认根：`third_party/rage/age-ffi`）：
 
 - `find_path(FE_AGE_INCLUDE_DIR NAMES fe_age.h HINTS ../age-ffi)` 定位头文件；
 - `find_library(FE_AGE_LIBRARY ... HINTS ../age-ffi/lib/windows|linux)` 定位静态库；
