@@ -7,14 +7,14 @@
 
 > **GUI 与 CLI 拆分子项目的边界（自 2.1.0 起）**：
 > - GUI 仅描述本项目自身的实现变更（界面、主题、图标、构建、依赖查找等）。
-> - 加密核心 / 算法 / 磁盘格式 v4 / 续传 / YAML 配置 等行为变更请见 `../CLI/CHANGELOG.md`（CLI 是行为实现的承担者）。
-
+> - 加密核心 / 算法 / 磁盘格式 v4 / 续传 / YAML 配置 等行为变更请见 `../CLI/CHANGELOG.md`（CLI 是行为实现的承担者）。
+
 ## [1.4.0] - 2026-09-24
 
 配套 CLI 2.4.0：新增密钥轮换界面、源文件安全处理选项，以及 AEGIS-256 非交互场景的弹窗警告。
 
 ### Added
-- **「密钥轮换 (Rewrap)」动作**：运行按钮行新增「🔑 密钥轮换」按钮，依次弹出旧口令与新口令输入框，
+- **「密钥轮换 (Rewrap)」动作**：运行按钮行新增「 密钥轮换」按钮，依次弹出旧口令与新口令输入框，
   经临时密钥文件把两者交予 CLI `--rewrap`（payload 不动，仅重裹 DEK）；运行结束后删除该临时文件。
 - **源文件处理选项组**：加密动作下新增「加密后处理源文件」——可选项为「保留」「删除到回收站」
   「安全擦除」。对应 CLI `--recycle-source` / `--wipe-source`（保留 `-de` 直接删除）。
@@ -59,8 +59,8 @@
 
 ### Changed
 - 链接新增 `Qt6::Concurrent`（静态库，随 `third_party/smelibs` 分发）；`find_package` 补 `Concurrent` 组件。
-- `MainWindow` 析构中先置扫描取消标志再 `waitForFinished()`，避免工作线程在窗口析构后访问已释放对象。
-
+- `MainWindow` 析构中先置扫描取消标志再 `waitForFinished()`，避免工作线程在窗口析构后访问已释放对象。
+
 ---
 ## [1.3.0] - 2026-09-19
 
@@ -84,8 +84,8 @@
 - 批量 ETA 口径随之调整：运行中的 ETA 由 CLI 进度帧直接给出（内嵌于输出区帧内）；空闲态预估不再展示。
 
 ### Removed
-- **下线 GUI 密钥库（`KeyLibrary` / `KeyLibraryDialog`）**：密钥库管理入口整体移除（中部「密钥库...」按钮、工具菜单项、路由与全部源文件），相关死代码一并清除。密钥库管理改由 CLI `-L` 子命令承担；GUI 任务历史配置目录改用与 CLI 同源的用户配置根（不再依赖 `KeyLibrary::dir()`）。
-
+- **下线 GUI 密钥库（`KeyLibrary` / `KeyLibraryDialog`）**：密钥库管理入口整体移除（中部「密钥库...」按钮、工具菜单项、路由与全部源文件），相关死代码一并清除。密钥库管理改由 CLI `-L` 子命令承担；GUI 任务历史配置目录改用与 CLI 同源的用户配置根（不再依赖 `KeyLibrary::dir()`）。
+
 ## [1.2.2] - 2026-09-18
 
 本次为功能与交互增强版本（GUI 自身版本序列保持 1.2.2，配套 CLI 2.2.0，见 `../CLI/CHANGELOG.md`）。
@@ -145,8 +145,8 @@
 - **【中·GUI】非对称解密改用 `-k` 传私钥**：不再把身份私钥内容读入后写入子进程 stdin，改为把私钥文件路径作为 `-k` 传给 CLI；非对称模式下不再向子进程注入任何 stdin 数据。
 
 ### Security
-- **【高·密钥通道】GUI 不再经环境变量注入密钥**：对称密码与非对称身份私钥一律经子进程 **stdin 管道** 注入（CLI 侧 `--key-stdin` 读取），避免被 `/proc` 或环境窥探；`CliArgBuilder::buildEnvironment` 仅返回系统环境，不再写入 `ENCRYPTOR_KEY`。
-
+- **【高·密钥通道】GUI 不再经环境变量注入密钥**：对称密码与非对称身份私钥一律经子进程 **stdin 管道** 注入（CLI 侧 `--key-stdin` 读取），避免被 `/proc` 或环境窥探；`CliArgBuilder::buildEnvironment` 仅返回系统环境，不再写入 `ENCRYPTOR_KEY`。
+
 ## [1.0.1] - 2026-09-06
 
 ### Added
@@ -155,8 +155,8 @@
 
 ### Changed
 - **【中·GUI】主题切换与视图设置移入菜单栏**：原独立顶部工具栏（导航栏）取消，"主题"下拉框（跟随系统/浅色/深色）与"视图设置"按钮经 `QMenuBar::setCornerWidget` 置于菜单栏右上角，与"关于"同一行显示。
-- **【低·版本】版本号同步至 1.0.1**：`project(FileEncryptorGUI VERSION 1.0.1)`、`setApplicationVersion`、窗口标题、鸣谢/README 摘要对话框兜底值、README 程序版本声明。
-
+- **【低·版本】版本号同步至 1.0.1**：`project(FileEncryptorGUI VERSION 1.0.1)`、`setApplicationVersion`、窗口标题、鸣谢/README 摘要对话框兜底值、README 程序版本声明。
+
 ## [1.0.0] - 2026-09-05（GUI 独立子项目首版）
 
 > **版本号重置说明**：GUI 拆分为独立子项目后版本序列重新开始（2.0.0 → 1.0.0），1.0.0 为 `GUI/` 独立子项目的首个正式版本，与 `../CLI/` 版本号解耦、不再跟随 CLI 同步升级。
@@ -185,8 +185,8 @@
 - **【中·GUI】自定义背景图（视图设置）**：新增 `ViewSettingsDialog`，用户可选图片作主窗口背景（预览 + 清除）。主窗口以铺满底图（QLabel，`KeepAspectRatioByExpanding`）+ 面板半透明（`rgba` 约 0.82，随主题变底色）呈现；选定图片后窗口按图片比例拉伸/缩小（约束在屏幕 90% 内、高 480–900）。背景图路径（键 `backgroundImage`）与窗口几何（`saveGeometry`/`restoreGeometry`，键 `geometry`）经 QSettings 持久化，重启后保持生效。
 
 ### Fixed
-- **【中·GUI】CLI 重命名后 GUI 识别不到**：`FileEncryptorLocator::locate()` 原仅按固定名 `FileEncryptorCLI(.exe)` 查找，重命名 CLI（如改为 `FileEncryptor.exe`/`fe.exe`）即失效。现按候选名列表 `FileEncryptorCLI` / `FileEncryptor` / `file-encryptor-cli` / `fe`（Windows 加 `.exe`）在“同目录 + PATH”两段依次探测，任一命中即返回。
-
+- **【中·GUI】CLI 重命名后 GUI 识别不到**：`FileEncryptorLocator::locate()` 原仅按固定名 `FileEncryptorCLI(.exe)` 查找，重命名 CLI（如改为 `FileEncryptor.exe`/`fe.exe`）即失效。现按候选名列表 `FileEncryptorCLI` / `FileEncryptor` / `file-encryptor-cli` / `fe`（Windows 加 `.exe`）在“同目录 + PATH”两段依次探测，任一命中即返回。
+
 ## [2.0.0] - 2026-09-05（标题栏图标 / 版本号同步 / 主题切换）
 
 > GUI 主版本号升级（1.7.2 → 2.0.0）。GUI 行为零变更（仅是项目结构 / 图标 / 主题 / 版本号层面的里程碑）。
@@ -197,20 +197,20 @@
 
 ### Changed
 - **【中·版本】全量版本号同步至 2.0.0**：`FE_VERSION_*` 宏、`project(FileEncryptorGUI VERSION 2.0.0)`、`setApplicationVersion`、`FileEncryptorGUI 2.0.0` 窗口标题、关于对话框（鸣谢 / README 摘要标题均含版本号，取自 `qApp->applicationVersion()` 单一真相源）、README 程序版本声明。
-- **【低·GUI】命令输出窗口高度优化**：下部命令浏览窗口高度缩减为原来的一半，给主功能区更多空间。
-
+- **【低·GUI】命令输出窗口高度优化**：下部命令浏览窗口高度缩减为原来的一半，给主功能区更多空间。
+
 ## [1.7.2] - 2026-09-05（GUI 行为无变更）
 
-> GUI 项目版本号随 CLI 同步升级（1.7.1 → 1.7.2）。本期无 GUI 行为变更，仅跟随 CLI 版本号。
-
+> GUI 项目版本号随 CLI 同步升级（1.7.1 → 1.7.2）。本期无 GUI 行为变更，仅跟随 CLI 版本号。
+
 ## [1.7.0] - 2026-09-04（GUI 行为无变更）
 
-> GUI 项目版本号随 CLI 同步升级（1.6.0 → 1.7.0）。本期无 GUI 行为变更。
-
+> GUI 项目版本号随 CLI 同步升级（1.6.0 → 1.7.0）。本期无 GUI 行为变更。
+
 ## [1.6.0] - 2026-08-27（GUI 行为无变更）
 
-> GUI 项目版本号随 CLI 同步升级。本期无 GUI 行为变更。
-
+> GUI 项目版本号随 CLI 同步升级。本期无 GUI 行为变更。
+
 ## [1.0.0-rc1] - 2026-08-20（首版 GUI 引入 / 整合为统一项目）
 
 > GUI 子项目首版。架构设计：CLI + GUI 整合为统一项目，共享 `core/` 加密核心；GUI 通过 `QProcess` 调用 `FileEncryptorCLI.exe` 执行实际加解密。
@@ -222,6 +222,6 @@
 
 ### Notes
 - GUI 运行时依赖 `FileEncryptorCLI.exe`：CLI 须位于 GUI exe 同目录，或通过 `FILEENCRYPTOR_EXE` 环境变量指向，或在 PATH 中可找到。
-- GUI 不链接任何加密代码：所有加解密逻辑均在 CLI 中实现。
-
+- GUI 不链接任何加密代码：所有加解密逻辑均在 CLI 中实现。
+
 > 早期版本（v0.x、1.0.x）的 GUI 行为变更记录不在此文件维护，详见 Git 提交记录。

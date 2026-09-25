@@ -399,20 +399,24 @@ void MainWindow::applyPanelTransparency() {
     const QString hoverBg=dk ? QStringLiteral("#333333") : QStringLiteral("#E0E0DC");
     const QString indBg=dk ? QStringLiteral("#2A2A2A") : QStringLiteral("#FFFFFF");
     const QString indBor=dk ? QStringLiteral("#5A5A5A") : QStringLiteral("#999999");
+    const QString ctrlBg=dk ? QStringLiteral("#3D3D40") : QStringLiteral("#ECECEA");
+    const QString ctrlFg=dk ? QStringLiteral("#E6E6E6") : QStringLiteral("#333333");
+    const QString ctrlBor=dk ? QStringLiteral("#4A4A4D") : QStringLiteral("#C8C8C4");
+    const QString ctrlHover=dk ? QStringLiteral("#4A4A4D") : QStringLiteral("#DCDCD8");
 
     // 文件列表：随主题——亮色浅灰底+深字，暗色深底+浅字
     if(m_fileList) {
         m_fileList->setStyleSheet(QStringLiteral(
             "QListWidget{background:%1;color:%2;border:1px solid %3;"
             "border-radius:3px;outline:0;}"
-            "QListWidget::item{background:%1;color:%2;padding:2px 4px;}"
+            "QListWidget::item{padding:2px 4px;}"
             "QListWidget::item:alternate{background:%4;}"
             "QListWidget::item:selected{background:%5;color:#FFFFFF;}"
             "QListWidget::item:hover{background:%6;}"
             "QListWidget::indicator{width:14px;height:14px;border:1px solid %7;"
             "border-radius:2px;background:%8;}"
             "QListWidget::indicator:checked{background:%5;border:1px solid %7;}"
-        ).arg(fieldBg,fieldFg,fieldBor,altBg,fieldSel,hoverBg,indBor,indBg));
+        ).arg(ctrlBg,ctrlFg,ctrlBor,altBg,fieldSel,hoverBg,indBor,indBg));
     }
 
     // 文本输入框(QLineEdit)与命令预览/输出框：随主题，亮色浅灰底+深字
@@ -471,10 +475,6 @@ void MainWindow::applyPanelTransparency() {
 
     // 下拉框(QComboBox：主题/模式) 与其余按钮：随主题显式配色，
     // 亮色浅灰底+深字（避免依赖调色板在某些环境下仍渲染深色）
-    const QString ctrlBg=dk ? QStringLiteral("#3D3D40") : QStringLiteral("#ECECEA");
-    const QString ctrlFg=dk ? QStringLiteral("#E6E6E6") : QStringLiteral("#333333");
-    const QString ctrlBor=dk ? QStringLiteral("#4A4A4D") : QStringLiteral("#C8C8C4");
-    const QString ctrlHover=dk ? QStringLiteral("#4A4A4D") : QStringLiteral("#DCDCD8");
     const QString comboStyle=QStringLiteral(
         "QComboBox{background:%1;color:%2;border:1px solid %3;border-radius:3px;padding:2px 6px;min-width:60px;}"
         "QComboBox::drop-down{border:none;width:18px;}"
@@ -483,7 +483,7 @@ void MainWindow::applyPanelTransparency() {
         "QComboBox QAbstractItemView{background:%1;color:%2;border:1px solid %3;"
         "selection-background-color:%4;selection-color:#FFFFFF;outline:0;}"
     ).arg(ctrlBg,ctrlFg,ctrlBor,fieldSel);
-    for(QComboBox* cb:{m_themeCombo, m_modeCombo}) {
+    for(QComboBox* cb:{m_themeCombo, m_modeCombo, m_sourceCombo}) {
         if(cb) cb->setStyleSheet(comboStyle);
     }
 
@@ -686,12 +686,12 @@ void MainWindow::applyButtonStyles() {
     if(m_btnRewrap)
         m_btnRewrap->setStyleSheet(
             dark
-            ? "QPushButton{background:#1565C0;color:#FFFFFF;padding:6px 14px;font-weight:bold;border-radius:4px;}"
-              "QPushButton:hover{background:#1E88E5;}"
-              "QPushButton:disabled{background:#555;color:#ccc;}"
-            : "QPushButton{background:#2E5C8A;color:white;padding:6px 14px;font-weight:bold;border-radius:4px;}"
-              "QPushButton:hover{background:#24496E;}"
-              "QPushButton:disabled{background:#999;color:#eee;}");
+            ? "QPushButton{background:#3D3D40;color:#E6E6E6;border:1px solid #4A4A4D;border-radius:3px;padding:4px 10px;}"
+              "QPushButton:hover{background:#4A4A4D;}"
+              "QPushButton:disabled{background:#3D3D40;color:#999999;}"
+            : "QPushButton{background:#ECECEA;color:#333333;border:1px solid #C8C8C4;border-radius:3px;padding:4px 10px;}"
+              "QPushButton:hover{background:#DCDCD8;}"
+              "QPushButton:disabled{background:#ECECEA;color:#999999;}");
 }
 
 // ---------- 左侧文件选择面板 ----------
@@ -924,7 +924,7 @@ QWidget* MainWindow::buildCenterPanel() {
     auto* runRow=new QHBoxLayout;
     m_btnRun=new QPushButton(tr("▶ 运行"));
     m_btnCancel=new QPushButton(tr("■ 取消"));
-    m_btnRewrap=new QPushButton(tr("🔑 密钥轮换"));
+    m_btnRewrap=new QPushButton(tr("密钥轮换"));
     m_btnRewrap->setToolTip(tr("对 v6 容器用新口令重裹 DEK（rewrap）：载荷密文不动，零重加密开销。"));
     m_btnCancel->setEnabled(false);
     runRow->addWidget(m_btnRewrap);
