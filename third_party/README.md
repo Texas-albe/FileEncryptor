@@ -5,7 +5,7 @@
 | `libsodium/` | 预编译 MSVC 包（头文件 + x64/Release/v143 静态库等） | libsodium 官方预编译发行包 |
 | `yaml-cpp/` | 完整源码（`include/` + `src/`）+ `/MT` 静态库 `lib/yaml-cpp.lib` | 上游源码；静态库用本机 MSVC 14.44 重建（/MT，与 smelibs 的 /MT CRT 匹配） |
 | `rage/age-ffi/` | fe_age Rust 源码 + 构建脚本 + 预编译静态库（`lib/windows/`、`lib/linux/`）；`rage/` 同时收纳上游 rage 仓库源码 | 本项目配套的 rage/age C-ABI 封装 |
-| `smelibs/` | 预编译静态 Qt6 分发（Windows /MT，含主库与集成插件） | 预编译分发，不含 Qt 源码 |
+| `smelibs/` | 预编译静态 Qt6（Windows /MT，含主库与集成插件） | 按需下载，本仓库不再附带 |
 
 构建系统优先使用本目录，系统安装路径作为回退：
 
