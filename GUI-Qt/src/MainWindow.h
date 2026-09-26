@@ -207,10 +207,7 @@ private:
     int m_runFileStarts = 0;           // 功能11：本次运行 CLI 已开始处理的文件数（取消时据此汇总）
     mutable QString m_recipientTempFile; // 功能8：多收件人临时公钥文件（仅含公钥，非机密）
 
-    // 批量进度帧在拟 cmd 输出区内的原地整帧刷新（取代独立批量进度面板）：
-    // 用 QTextBlock 句柄锚定帧首块（position() 随文档裁剪自动前移），
-    // 新帧到达时整体替换。块被裁剪掉则 m_frameBlock.isValid() 失效、回退追加，
-    // 自愈不留残影。m_frameLen 记录上一帧文本长度（用于构造替换区间）。
+    // 批量进度帧在拟 cmd 输出区内原地整帧刷新：用 QTextBlock 句柄锚定帧首块（position 随文档裁剪自动前移），新帧整体替换；块被裁剪则回退追加自愈。m_frameLen 记录上一帧长度用于构造替换区间。
     QTextBlock m_frameBlock;
     int m_frameLen=0;
 

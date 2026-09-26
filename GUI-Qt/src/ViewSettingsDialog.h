@@ -1,7 +1,4 @@
-// ViewSettingsDialog - “视图设置”对话框
-// 提供“自定义背景图”功能：用户选择一张图片作为主窗口背景，支持预览与清除。
-// 选择结果（图片绝对路径，空串表示清除）由 selectedImagePath() 在 exec()==Accepted 后返回，
-// 由 MainWindow 负责应用、按图片比例调整窗口大小并持久化。
+// ViewSettingsDialog - "视图设置"对话框：自定义主窗口背景图（预览/清除），结果经 selectedImagePath() 在 Accepted 后返回，由 MainWindow 应用并持久化。
 #pragma once
 #include <QDialog>
 

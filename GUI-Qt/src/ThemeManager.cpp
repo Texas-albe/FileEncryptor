@@ -146,13 +146,9 @@ HtmlPaletteStore makeHtmlPalette(const QPalette& p,
 } // namespace
 
 const ThemeManager::HtmlPalette& ThemeManager::htmlPalette() {
-    // 中性色（正文/背景/代码块/弱化文字）此前同时维护两份——
-    // buildXxxPalette() 里的 QColor 与此处的十六进制字符串，改动一处极易遗漏另一处
-    // （本次审计即发现 light.mutedFg(#888888) 与 PlaceholderText(0x8A8A8A) 已漂移）。
-    // 现统一从 QPalette 派生，仅强调色（标题绿/蓝、链接）保留独立定义——
-    // 深色下的强调色刻意比 Highlight 更亮以保证对比度，不属于重复。
-    // 注意：静态变量必须是 HtmlPaletteStore 而非 HtmlPalette——view 里的 const char*
-    // 指向 store 内部持有的 std::string，若只保存 view，字符串随临时 store 析构即悬空。
+    // 中性色统一从 QPalette 派生，避免此前 buildXxxPalette() 的 QColor 与这里的十六进制字符串两份维护漂移（审计曾发现 light.mutedFg 与 PlaceholderText 已不一致）；
+    // 仅强调色（标题绿/蓝、链接）保留独立定义——深色下刻意比 Highlight 更亮以保证对比度。
+    // 注意：静态变量必须是 HtmlPaletteStore 而非 HtmlPalette——view 里的 const char* 指向 store 内 std::string，只存 view 会随临时 store 析构而悬空。
     static const HtmlPaletteStore light = makeHtmlPalette(
         buildLightPalette(), "#4A7C50", "#2E5C9A");
     static const HtmlPaletteStore dark = makeHtmlPalette(

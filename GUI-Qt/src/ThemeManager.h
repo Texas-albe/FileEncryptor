@@ -1,10 +1,5 @@
-// ThemeManager - 浅色/深色 主题管理
-// 职责：
-//   1) 提供 Light / Dark 两种主题，统一通过 QPalette 应用到 QApplication
-//   2) 用 QSettings 持久化用户选择（键 "theme"，值 0=Light 1=Dark）
-//   3) 暴露 currentTheme() / isDarkActive() 供 UI 组件（如输出着色、对话框 HTML）
-//      在当前主题下选用高对比度颜色，满足 WCAG AA（对比度 >= 4.5:1）
-// 跨平台；自行管理调色板，保证 Win/Linux/macOS 一致。
+// ThemeManager - 浅色/深色主题管理：通过 QPalette 统一应用 Light/Dark 主题，QSettings 持久化选择，并暴露 isDarkActive()/stdoutColorRGB()/htmlPalette() 供 UI 取高对比色（WCAG AA）。
+// 跨平台自行管理调色板，保证 Win/Linux/macOS 一致。
 #pragma once
 #include <QObject>
 
@@ -32,9 +27,7 @@ public:
     // 当前实际生效的是否为深色
     static bool isDarkActive();
 
-    // 输出着色：stdout/stderr 在当前主题下的高对比度颜色
-    //   浅色：stdout 深灰 #1F1F1F（对白底对比 ~14:1），stderr 深红 #C62828（对白底 ~5.9:1）
-    //   深色：stdout 浅灰 #E6E6E6（对 #1E1E1E 底 ~13:1），stderr 亮红 #FF8A80（对 #1E1E1E 底 ~5.4:1）
+    // 输出着色：stdout/stderr 在当前主题下的高对比度颜色（浅：stdout #1F1F1F、stderr #C62828；深：stdout #E6E6E6、stderr #FF8A80）。
     static unsigned int stdoutColorRGB();
     static unsigned int stderrColorRGB();
 

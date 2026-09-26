@@ -12,10 +12,7 @@ endif()
 # 输出文件名框架标识
 set(FE_GUI_FRAMEWORK "Qt")
 
-# Qt6 来源：
-# - Windows：仓库相对路径 ../third_party/smelibs（静态 Qt 分发随项目走）
-# - Linux/WSL：/opt/smelibs（Linux 静态 Qt6），不存在时回退系统 Qt6
-# 如使用其他位置的静态 Qt，用 -DCMAKE_PREFIX_PATH=... 覆盖。
+# Qt6 来源：Windows 用 ../third_party/smelibs（静态 Qt 随仓库）；Linux/WSL 用 /opt/smelibs，不存在则回退系统 Qt6；其它位置用 -DCMAKE_PREFIX_PATH=... 覆盖。
 if(WIN32)
   list(APPEND CMAKE_PREFIX_PATH "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/smelibs")
 elseif(EXISTS "/opt/smelibs/lib/cmake/Qt6/Qt6Config.cmake")
@@ -31,9 +28,7 @@ set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 set(CMAKE_AUTOUIC ON)
 
-# 源码含 UTF-8 中文注释与中文字符串，MSVC 默认按系统代码页（如 936/GBK）解析，
-# 会触发 C4819，并可能把注释内误解析出的反斜杠当成行拼接、吞掉代码。强制以 UTF-8
-# 读取源文件，并让执行字符集也是 UTF-8（保证 tr("中文") 字面量为 UTF-8 字节）。
+# 源码含 UTF-8 中文注释与字符串：MSVC 默认按系统代码页解析会触发 C4819 并可能吞掉代码，强制 /utf-8（读取与执行字符集均为 UTF-8）；GNU/Clang 同理用 -finput-charset/-fexec-charset。
 if(MSVC)
   add_compile_options(/utf-8)
 elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
@@ -99,10 +94,7 @@ endif()
 # Qt 资源（图标嵌入 exe，供 setWindowIcon 在三端标题栏统一渲染）
 list(APPEND SHELL_RESOURCES "${CMAKE_CURRENT_SOURCE_DIR}/icons.qrc")
 
-# 字体资源（仅非 Windows 嵌入）：Linux/macOS 默认字体常不含 CJK 字形，
-# 界面中文会渲染成方块；运行时经 FontBootstrap::loadBundledFont() 从 :/fonts/
-# 加载内嵌的 Noto Sans SC 作为兜底。Windows 由系统 YaHei 覆盖（hasCjkGlyph 为真），
-# 不嵌入以控制 exe 体积。
+# 字体资源（仅非 Windows 嵌入）：Linux/macOS 默认字体常不含 CJK 字形致中文方块，运行时 FontBootstrap 从 :/fonts/ 加载内嵌 Noto Sans SC 兜底；Windows 由系统 YaHei 覆盖，不嵌入以控体积。
 if(NOT WIN32)
   list(APPEND SHELL_RESOURCES "${CMAKE_CURRENT_SOURCE_DIR}/fonts.qrc")
 endif()
@@ -110,17 +102,10 @@ endif()
 add_executable(FileEncryptorGUI WIN32 ${SHELL_SOURCES} ${SHELL_HEADERS} ${SHELL_RESOURCES})
 target_link_libraries(FileEncryptorGUI PRIVATE Qt6::Widgets Qt6::Concurrent Qt6::Network)
 
-# Qt 静态构建时，Qt6::Widgets 等目标已通过 INTERFACE_LINK_LIBRARIES 把 Qt6Bundled*
-# 依赖（Qt6BundledFreetype / Qt6BundledHarfbuzz / Qt6BundledLibjpeg / Qt6BundledLibpng /
-# Qt6BundledPcre2 等）传递进来；无需手动 link。
-#
-# 插件（平台抽象、图像格式）通过 src/main.cpp 中的 Q_IMPORT_PLUGIN(QWindowsIntegrationPlugin)
-# 等声明静态导入，运行时无需 Qt6Core.dll / Qt6Gui.dll / Qt6Widgets.dll / platforms/qwindows.dll
-# 等 DLL。
+# Qt 静态构建：Qt6::Widgets 等目标已通过 INTERFACE_LINK_LIBRARIES 把 Qt6Bundled*（Freetype/Harfuzz/Libjpeg/Libpng/Pcre2 等）依赖传递进来，无需手动 link。
+# 平台抽象与图像格式插件经 main.cpp 的 Q_IMPORT_PLUGIN 静态导入，运行时无需 Qt6*.dll 与 platforms/qwindows.dll。
 
-# 命名规范：<原名称>-<版本号>-<框架>-<平台>
-# 例：FileEncryptorGUI-2.0.0-Qt-Linux / FileEncryptorGUI-2.0.0-Qt-Windows.exe
-# 版本号取自 PROJECT_VERSION（随 project(VERSION) 自动同步）。
+# 命名规范：<原名称>-<版本号>-<框架>-<平台>（如 FileEncryptorGUI-2.0.0-Qt-Linux）；版本号取自 PROJECT_VERSION。
 get_target_property(FE_GUI_OUTPUT_NAME_BASE FileEncryptorGUI OUTPUT_NAME)
 if(NOT FE_GUI_OUTPUT_NAME_BASE)
   set(FE_GUI_OUTPUT_NAME_BASE "FileEncryptorGUI")
@@ -136,11 +121,8 @@ set(FE_GUI_RENAMED_EXE "${FE_GUI_OUTPUT_NAME_BASE}-${PROJECT_VERSION}-${FE_GUI_F
 # 构建即按规范命名产出（链接器直接写出规范文件名），无需事后复制/重命名。
 set_target_properties(FileEncryptorGUI PROPERTIES OUTPUT_NAME "${FE_GUI_RENAMED_EXE}")
 
-# Linux：构建完成后复制到约定发布目录，文件本身已是规范命名，此处仅做副本分发；
-# Windows 不做此复制步骤（用户要求）。发布目录优先落到「Windows 可见」位置：
-# 经 VS+WSL 构建时 E: 盘以 DrvFS 挂载于 /mnt/e 且含本项目，则直接写入 /mnt/e/...，
-# 使产物出现在 E:\FileEncryptor\...\out\Ubuntu-26.04\...；纯 Linux 原生构建（无
-# DrvFS）回落到源码树下的同源目录，不破坏原生流程。
+# Linux 构建后复制到约定发布目录做副本分发（Windows 不做此步）。发布目录优先落 Windows 可见位置：
+# 经 VS+WSL 构建时若 E: 盘以 DrvFS 挂载于 /mnt/e 且含本项目则写入 /mnt/e/...；纯 Linux 原生构建回落到源码树下同源目录。
 if(NOT WIN32)
   get_filename_component(FE_GUI_SRC_LEAF "${CMAKE_SOURCE_DIR}" NAME)
   if(EXISTS "/mnt/e/FileEncryptor/${FE_GUI_SRC_LEAF}/CMakeLists.txt")
@@ -156,10 +138,7 @@ if(NOT WIN32)
             "${FE_GUI_OUT_DIR}/${FE_GUI_RENAMED_EXE}"
     VERBATIM)
 
-  # 构建后自动打包 DEB/RPM：VS+WSL、cmake --build 以及 IDE 的 --target <主目标>
-  # 都只做 configure + build，永远不会执行 cpack，故挂在 POST_BUILD 上。
-  # 同一 POST_BUILD 内命令按序执行，天然保证「复制 → 打包」的先后。
-  # 包直接落到 Windows 可见目录（CPACK_PACKAGE_DIRECTORY 需在 include(CPack) 前设置）。
+  # 构建后自动打包 DEB/RPM：VS+WSL、cmake --build 及 IDE --target 都只做 configure+build 不会执行 cpack，故挂 POST_BUILD；同 POST_BUILD 内命令按序执行天然保证复制→打包。包落到 Windows 可见目录。
   set(FE_GUI_PKG_DIR "${FE_GUI_STAGE_BASE}/out/packages")
   set(CPACK_PACKAGE_DIRECTORY "${FE_GUI_PKG_DIR}")
   if(EXISTS "${CMAKE_CURRENT_LIST_DIR}/cmake/package_linux.cmake")
