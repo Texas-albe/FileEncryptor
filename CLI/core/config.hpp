@@ -72,7 +72,7 @@ std::string to_native_path(const std::string& p);
 
 // 解析极简 YAML（支持顶层标量键与单层序列 `- item`）到 Config。
 // 出错时返回 false 并在 err 写入原因（解析错误不致命：回退默认配置并继续）。
-// warn（可空）收集非致命的类型/单位解析告警，由调用方统一输出（缺陷13：避免用户
+// warn（可空）收集非致命的类型/单位解析告警，由调用方统一输出（避免用户
 // 写错类型时完全无反馈）。
 bool parse_yaml_config(const std::string& text, Config& cfg, std::string& err, std::string* warn = nullptr);
 

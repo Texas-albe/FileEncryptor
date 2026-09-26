@@ -28,7 +28,7 @@ private:
     QString m_outBuffer;   // stdout 行缓冲（按 \n 切分）
     QString m_errBuffer;   // stderr 行缓冲
     bool m_cancelled = false;
-    bool m_finishedEmitted = false;  // 缺陷10：finished 每次执行至多发一次
+    bool m_finishedEmitted = false;  // finished 每次执行至多发一次
 
     void flushLines(QString& buffer, bool isError);
     void handleLine(const QString& line, bool isError);   // 帧哨兵 / 普通行分流

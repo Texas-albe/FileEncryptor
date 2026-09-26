@@ -16,14 +16,10 @@
 #include <QPalette>
 #include <QColor>
 
-// 安全擦除：volatile 逐字节写零，避免被编译器当 dead store 优化掉（审计问题 9）。
-static void secure_zero(void* p, size_t n) {
-    if (!p || n == 0) return;
-    volatile unsigned char* vp = static_cast<volatile unsigned char*>(p);
-    while (n--) *vp++ = 0;
-}
+// 安全擦除：见 secure_zero.h（MainWindow 与 PasswordDialog 共用）。
+#include "secure_zero.h"
 
-// 缺陷8/9 修复：不再使用自绘的 EyeLineEdit。
+// 不再使用自绘的 EyeLineEdit。
 //   缺陷9（自绘）：完全接管 paintEvent 会绕开 QLineEdit 内置的输入法预编辑（IME）、
 //   选区高亮、长文本滚动与 RTL 布局，深色主题下还需自配文字颜色，极易与平台行为漂移；
 //  掩码字符随系统用标准圆点显示（QLineEdit 未公开 setPasswordCharacter，自绘仅为换 *），

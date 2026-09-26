@@ -4,7 +4,9 @@
 #include <QMainWindow>
 #include <QElapsedTimer>
 #include <QTimer>
+#include <QProcess>
 #include <QTextCursor>
+#include <QTextBlock>
 #include <QHash>
 #include <QString>
 #include <QStringList>
@@ -113,6 +115,7 @@ private:
     void showCliNotFoundError(const QString& context=QString());
     // CLI zstd 能力探测（--features 输出 zstd=1/0 → m_zstdAvailable）
     void probeZstdSupport();
+    void onProbeFinished(int exitCode, QProcess::ExitStatus status);  // 异步探测完成
 
     // 业务
     ShellOptions collectOptions() const;
@@ -205,10 +208,10 @@ private:
     mutable QString m_recipientTempFile; // 功能8：多收件人临时公钥文件（仅含公钥，非机密）
 
     // 批量进度帧在拟 cmd 输出区内的原地整帧刷新（取代独立批量进度面板）：
-    // 用字符区间 [m_framePos, m_framePos+m_frameLen) 定位帧块（含尾部换行），
-    // 新帧到达时整体替换。区间之前的文本只会被追加（位置不变），比块锚点稳健；
-    // 替换前自校验帧首字符，文档被裁剪/改动时放弃替换改为追加，自愈不留残影。
-    int m_framePos=-1;
+    // 用 QTextBlock 句柄锚定帧首块（position() 随文档裁剪自动前移），
+    // 新帧到达时整体替换。块被裁剪掉则 m_frameBlock.isValid() 失效、回退追加，
+    // 自愈不留残影。m_frameLen 记录上一帧文本长度（用于构造替换区间）。
+    QTextBlock m_frameBlock;
     int m_frameLen=0;
 
     // 功能5：本次运行的任务记录（结束后写入历史）
@@ -247,4 +250,8 @@ private:
     // 命令执行器
     ICommandExecutor* m_executor=nullptr;
     QString m_fileEncryptorPath;
+
+    // 异步能力探测（probeZstdSupport）：避免主线程同步等待阻塞 UI
+    QProcess* m_probeProcess=nullptr;
+    QTimer*   m_probeTimer=nullptr;
 };

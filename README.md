@@ -1,7 +1,8 @@
 # FileEncryptor
 
 跨平台 C++17 文件加密工具，基于 libsodium（XChaCha20-Poly1305 / AEGIS-256），GPLv3 许可。
-支持 Windows / Linux（macOS 未充分测试）。磁盘格式 v4（141B 头 + header_hmac 安全信封，向后兼容 v1–v3）。
+支持 Windows / Linux（macOS 未充分测试）。磁盘格式默认 v6（可扩展加密容器，含 header_hmac 安全信封；
+按需可写 v4/v5 头，v1–v6 全部可直接解密，向后兼容）。
 
 ## 项目用途
 

@@ -11,11 +11,7 @@
       "name": "linux-release",
       "displayName": "Linux Release",
       "inherits": "base",
-      "condition": {
-        "type": "equals",
-        "lhs": "${hostSystemName}",
-        "rhs": "Linux"
-      },
+      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Linux" },
       "generator": "Ninja",
       "cacheVariables": { "CMAKE_BUILD_TYPE": "Release" }
     },
@@ -23,11 +19,7 @@
       "name": "linux-debug",
       "displayName": "Linux Debug",
       "inherits": "base",
-      "condition": {
-        "type": "equals",
-        "lhs": "${hostSystemName}",
-        "rhs": "Linux"
-      },
+      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Linux" },
       "generator": "Ninja",
       "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug" }
     },
@@ -35,11 +27,7 @@
       "name": "macos-release",
       "displayName": "macOS Release",
       "inherits": "base",
-      "condition": {
-        "type": "equals",
-        "lhs": "${hostSystemName}",
-        "rhs": "Darwin"
-      },
+      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Darwin" },
       "generator": "Ninja",
       "cacheVariables": { "CMAKE_BUILD_TYPE": "Release" }
     },
@@ -47,11 +35,7 @@
       "name": "windows-release",
       "displayName": "Windows x64 Release (Ninja)",
       "inherits": "base",
-      "condition": {
-        "type": "equals",
-        "lhs": "${hostSystemName}",
-        "rhs": "Windows"
-      },
+      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Windows" },
       "generator": "Ninja",
       "cacheVariables": { "CMAKE_BUILD_TYPE": "Release" }
     },
@@ -59,19 +43,35 @@
       "name": "windows-debug",
       "displayName": "Windows x64 Debug (Ninja)",
       "inherits": "base",
-      "condition": {
-        "type": "equals",
-        "lhs": "${hostSystemName}",
-        "rhs": "Windows"
-      },
+      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Windows" },
       "generator": "Ninja",
       "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug" }
+    },
+    {
+      "name": "windows-vs2026-release",
+      "displayName": "VS2026 x64 Release",
+      "description": "Visual Studio 18 2026 generator. Open Folder in VS2026 Community or: cmake --preset windows-vs2026-release && cmake --build --preset windows-vs2026-release",
+      "inherits": "base",
+      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Windows" },
+      "generator": "Visual Studio 18 2026",
+      "architecture": { "value": "x64", "strategy": "set" }
+    },
+    {
+      "name": "windows-vs2026-debug",
+      "displayName": "VS2026 x64 Debug",
+      "description": "Visual Studio 18 2026 generator, Debug for one-click build/debug in VS2026 Community.",
+      "inherits": "base",
+      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Windows" },
+      "generator": "Visual Studio 18 2026",
+      "architecture": { "value": "x64", "strategy": "set" }
     }
   ],
   "buildPresets": [
     { "name": "linux-release", "configurePreset": "linux-release" },
     { "name": "linux-debug", "configurePreset": "linux-debug" },
     { "name": "windows-release", "configurePreset": "windows-release" },
-    { "name": "windows-debug", "configurePreset": "windows-debug" }
+    { "name": "windows-debug", "configurePreset": "windows-debug" },
+    { "name": "windows-vs2026-release", "configurePreset": "windows-vs2026-release", "configuration": "Release" },
+    { "name": "windows-vs2026-debug", "configurePreset": "windows-vs2026-debug", "configuration": "Debug" }
   ]
 }

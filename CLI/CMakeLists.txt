@@ -1,5 +1,5 @@
 ﻿cmake_minimum_required(VERSION 3.15)
-project(FileEncryptorCLI VERSION 2.4.0 LANGUAGES CXX)
+project(FileEncryptorCLI VERSION 2.4.1 LANGUAGES CXX)
 
 # FileEncryptor CLI - 命令行加密工具（独立项目）
 # 本项目编译产出 FileEncryptorCLI(.exe)；GUI 项目（../GUI）通过 QProcess 调用此程序。
@@ -591,9 +591,114 @@ set_target_properties(FileEncryptor PROPERTIES
   RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
   INSTALL_RPATH_USE_LINK_PATH TRUE)
 
+# ---------- PGO（Profile-Guided Optimization，MSVC 两阶段构建） ----------
+# 在既有 LTO（/GL + /LTCG，Release 已默认开启）基础上再做基于训练样本的优化。
+# 两阶段（同一构建目录重配即可）：
+#   Phase 1（插桩）:
+#     cmake -B out/build/pgo-windows -DFE_PGO=INSTRUMENT
+#     cmake --build out/build/pgo-windows
+#     运行代表训练负载（混合加/解密样本各跑一遍，覆盖常用模式与压缩档）
+#     → 输出目录 bin/ 产生 FileEncryptorCLI.pgd 与训练期 *.pgc
+#   Phase 2（优化）:
+#     cmake -B out/build/pgo-windows -DFE_PGO=OPTIMIZE   （同一目录重配）
+#     cmake --build out/build/pgo-windows
+#     → 链接期 /LTCG:PGOPTIMIZE + /USEPROFILE 合并 .pgc，产出最终优化二进制
+# 注意：.pgd/.pgc 默认落在 bin/（exe 旁），Phase 2 必须复用 Phase 1 的构建目录
+# 才能自动发现训练数据；切换回普通构建时把 FE_PGO 置空即可（源码/产物不变）。
+# 非 MSVC 编译器不支持（GCC 用 -fprofile-generate/-fprofile-use，另行配置）。
+set(FE_PGO "" CACHE STRING "MSVC PGO 阶段：INSTRUMENT（插桩）/ OPTIMIZE（优化）；留空=关闭")
+if(FE_PGO)
+  if(NOT MSVC)
+    message(WARNING "FE_PGO 仅支持 MSVC，当前编译器不支持，已忽略。")
+  elseif(FE_PGO STREQUAL "INSTRUMENT")
+    target_link_options(FileEncryptor PRIVATE /LTCG:PGINSTRUMENT)
+    # 插桩 exe 运行时需要 PGO 运行时库 pgort140.dll（否则进程直接起不来、退出码 126/127）。
+    # 从编译器同目录取并复制到 exe 旁；仅插桩阶段需要，最终 OPTIMIZE 二进制不依赖它。
+    get_filename_component(_fe_pgort_dir "${CMAKE_CXX_COMPILER}" DIRECTORY)
+    find_file(FE_PGORT_DLL NAMES pgort140.dll HINTS "${_fe_pgort_dir}")
+    if(FE_PGORT_DLL)
+      add_custom_command(TARGET FileEncryptor POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different "${FE_PGORT_DLL}"
+                "$<TARGET_FILE_DIR:FileEncryptor>/"
+        VERBATIM)
+      message(STATUS "PGO: 已安排复制 PGO 运行时 ${FE_PGORT_DLL} 到 exe 目录")
+    else()
+      message(WARNING "PGO: 未找到 pgort140.dll，插桩 exe 可能无法启动（请把它放到 exe 同目录）")
+    endif()
+    message(STATUS "PGO: 插桩阶段——构建后运行训练负载生成 .pgc，再以 FE_PGO=OPTIMIZE 重配重链")
+  elseif(FE_PGO STREQUAL "OPTIMIZE")
+    target_link_options(FileEncryptor PRIVATE /LTCG:PGOPTIMIZE /USEPROFILE)
+    message(STATUS "PGO: 优化阶段——合并训练 .pgc，产出 PGO 优化二进制")
+  else()
+    message(FATAL_ERROR "FE_PGO 取值无效：${FE_PGO}（应为 INSTRUMENT 或 OPTIMIZE）")
+  endif()
+endif()
+
 # ---------- 安装与打包（DEB / RPM） ----------
 # 静态链接后最终二进制不依赖任何外部 libsodium，安装包内无需再下载依赖库。
-install(TARGETS FileEncryptor RUNTIME DESTINATION bin)
+#
+# 规范命名：构建即产出 <原名称>-<版本号>-<平台> 的可执行文件（不保留原名），
+# 例：FileEncryptorCLI-2.4.1-Linux / FileEncryptorCLI-2.4.1-Windows.exe。
+# 版本号取自构建变量 PROJECT_VERSION（随 project(VERSION) 自动同步），
+# 平台取 Linux / Windows，原名称取目标 OUTPUT_NAME（CLI 为 FileEncryptorCLI）。
+# GUI 的 FileEncryptorLocator::getExpectedNames() 已按此命名探测 CLI，无需保留原名。
+get_target_property(FE_OUTPUT_NAME_BASE FileEncryptor OUTPUT_NAME)
+if(NOT FE_OUTPUT_NAME_BASE)
+  set(FE_OUTPUT_NAME_BASE "FileEncryptor")
+endif()
+if(WIN32)
+  set(FE_PLATFORM "Windows")
+else()
+  set(FE_PLATFORM "Linux")
+endif()
+# Windows 链接器会自动追加 .exe；OUTPUT_NAME 不再手动加，避免生成 ...Windows.exe.exe。
+set(FE_RENAMED_EXE "${FE_OUTPUT_NAME_BASE}-${PROJECT_VERSION}-${FE_PLATFORM}")
+
+# 构建即按规范命名产出（链接器直接写出规范文件名），无需事后复制/重命名。
+set_target_properties(FileEncryptor PROPERTIES OUTPUT_NAME "${FE_RENAMED_EXE}")
+
+# Linux：构建完成后复制到约定发布目录，文件本身已是规范命名，此处仅做副本分发；
+# Windows 不做此复制步骤（用户要求）。发布目录优先落到「Windows 可见」位置：
+# 经 VS+WSL 构建时 E: 盘以 DrvFS 挂载于 /mnt/e 且含本项目，则直接写入 /mnt/e/...，
+# 使产物出现在 E:\FileEncryptor\...\out\Ubuntu-26.04\...；纯 Linux 原生构建（无
+# DrvFS）回落到源码树下的同源目录，不破坏原生流程。
+if(NOT WIN32)
+  get_filename_component(FE_SRC_LEAF "${CMAKE_SOURCE_DIR}" NAME)
+  if(EXISTS "/mnt/e/FileEncryptor/${FE_SRC_LEAF}/CMakeLists.txt")
+    set(FE_STAGE_BASE "/mnt/e/FileEncryptor/${FE_SRC_LEAF}")
+  else()
+    set(FE_STAGE_BASE "${CMAKE_SOURCE_DIR}")
+  endif()
+  set(FE_OUT_DIR "${FE_STAGE_BASE}/out/Ubuntu-26.04/build/linux-release/bin")
+  add_custom_command(TARGET FileEncryptor POST_BUILD
+    COMMENT "Stage executable -> ${FE_OUT_DIR}/${FE_RENAMED_EXE}"
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${FE_OUT_DIR}"
+    COMMAND ${CMAKE_COMMAND} -E copy "$<TARGET_FILE:FileEncryptor>"
+            "${FE_OUT_DIR}/${FE_RENAMED_EXE}"
+    VERBATIM)
+
+  # 构建后自动打包 DEB/RPM：VS+WSL、cmake --build 以及 IDE 的 --target <主目标>
+  # 都只做 configure + build，永远不会执行 cpack，故挂在 POST_BUILD 上。
+  # 同一 POST_BUILD 内命令按序执行，天然保证「复制 → 打包」的先后。
+  # 包直接落到 Windows 可见目录（CPACK_PACKAGE_DIRECTORY 需在 include(CPack) 前设置）。
+  set(FE_PKG_DIR "${FE_STAGE_BASE}/out/packages")
+  set(CPACK_PACKAGE_DIRECTORY "${FE_PKG_DIR}")
+  if(EXISTS "${CMAKE_CURRENT_LIST_DIR}/cmake/package_linux.cmake")
+    add_custom_command(TARGET FileEncryptor POST_BUILD
+      COMMENT "Packaging DEB/RPM -> ${FE_PKG_DIR}"
+      COMMAND ${CMAKE_COMMAND}
+              -DFE_PKG_BUILD_DIR=${CMAKE_BINARY_DIR}
+              -DFE_PKG_OUT_DIR=${FE_PKG_DIR}
+              -P "${CMAKE_CURRENT_LIST_DIR}/cmake/package_linux.cmake"
+      VERBATIM)
+  endif()
+endif()
+
+# 安装 / 打包（DEB/RPM）时放置规范命名的二进制到 /usr/bin（包内文件名即规范命名）。
+install(TARGETS FileEncryptor RUNTIME DESTINATION bin
+        PERMISSIONS OWNER_EXECUTE OWNER_READ
+                    GROUP_EXECUTE GROUP_READ
+                    WORLD_EXECUTE WORLD_READ)
 
 set(CPACK_PACKAGE_NAME "file-encryptor-cli")
 set(CPACK_PACKAGE_VERSION "${PROJECT_VERSION}")   # 与 project(VERSION) 同步

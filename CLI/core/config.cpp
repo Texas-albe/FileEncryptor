@@ -1,6 +1,6 @@
 #define _CRT_SECURE_NO_WARNINGS
 #include "config.hpp"
-#include "FileEncryptor.hpp"  // for create_directory_recursive (user config dir fallback, 缺陷15)
+#include "FileEncryptor.hpp"  // for create_directory_recursive (user config dir fallback)
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -72,7 +72,7 @@ bool parse_yaml_config(const std::string& text, Config& cfg, std::string& err, s
     if (!root || root.IsNull()) return true; // 空文档 → 默认配置
     if (!root.IsMap()) { err = "配置顶层必须是映射(map)"; return false; }
 
-    // 非致命告警累加（缺陷13：用户写错类型时给出明确键名，而非静默忽略）
+    // 非致命告警累加（用户写错类型时给出明确键名，而非静默忽略）
     auto note = [&](const char* key, const char* why) {
         if (warn) {
             if (!warn->empty()) *warn += "; ";
@@ -346,7 +346,7 @@ static bool read_file_utf8(const std::string& path, std::string& out) {
 #endif
 }
 
-// 缺陷14：YAML 别名炸弹（Billion Laughs）防护。配置文件通常由上层注入
+// YAML 别名炸弹（Billion Laughs）防护。配置文件通常由上层注入
 //（FILEENCRYPTOR_CONFIG），yaml-cpp 默认不限制别名展开，极小输入可膨胀成 GB 级内存。
 // 硬性限制配置文件大小：超过 1 MB 直接拒绝，回退默认配置（运维参数无需如此之大）。
 static constexpr int64_t kMaxConfigBytes = 1 << 20;
@@ -472,7 +472,7 @@ Config load_config() {
     std::string path = find_config_file(&src);
     if (path.empty()) {
         // 运行目录（CWD）下生成默认配置文件，便于用户查看/修改（best-effort）。
-        // 缺陷15：CWD 不可写（只读介质 / 无写权限）时回退到用户配置目录，
+        // CWD 不可写（只读介质 / 无写权限）时回退到用户配置目录，
         // 否则模板静默丢失、用户误以为配置从未生成。
         std::string cwd = get_cwd();
         bool wrote = false;
@@ -497,7 +497,7 @@ Config load_config() {
         }
         return cfg; // 默认配置（与生成的模板一致）
     }
-    // 缺陷14：YAML 别名炸弹防护——配置文件超过 1 MB 直接拒绝。
+    // YAML 别名炸弹防护——配置文件超过 1 MB 直接拒绝。
     if (get_file_size_raw(path) > kMaxConfigBytes) {
         std::cerr << "Warning: config file too large (" << path << "); refusing to load (> "
                   << (kMaxConfigBytes >> 20) << " MB). Using defaults.\n";
@@ -521,7 +521,7 @@ Config load_config() {
         std::cerr << "Warning: config parse error (" << err << "); using defaults.\n";
         return Config();
     }
-    // 缺陷13：非致命的类型/单位解析告警，统一输出一次，避免用户写错键值时毫无反馈。
+    // 非致命的类型/单位解析告警，统一输出一次，避免用户写错键值时毫无反馈。
     if (!warn.empty()) {
         std::cerr << "Warning: config at " << path << " has ignored values: " << warn << "\n";
         log_event(LOG_WARN, "config_ignored_values", {{"detail", warn}});

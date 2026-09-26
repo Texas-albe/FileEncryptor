@@ -15,8 +15,8 @@
 
 #define FE_VERSION_MAJOR 2
 #define FE_VERSION_MINOR 4
-#define FE_VERSION_PATCH 0
-#define FE_VERSION_STRING "2.4.0"
+#define FE_VERSION_PATCH 1
+#define FE_VERSION_STRING "2.4.1"
 
 enum class CryptoMode: unsigned char {
     AES_GCM=0,   // 仅用于解密旧格式（v1/v2）文件；新加密不再使用
@@ -102,7 +102,8 @@ bool decrypt_file(const std::string& in_path,
     bool silent=false,
     bool resume=false,
     const unsigned char* ext_key=nullptr,
-    const unsigned char* ext_kek=nullptr, size_t ext_kek_len=0);
+    const unsigned char* ext_kek=nullptr, size_t ext_kek_len=0,
+    bool verify_only=false);
 
 // ---------- 只读元数据 / 校验（功能2 / 功能3） ----------
 // 不解密、不校验密钥，纯元数据预览（功能2 文件头信息查看器）。

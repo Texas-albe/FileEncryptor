@@ -1,4 +1,4 @@
-# ChangeLog - FileEncryptor CLI
+﻿# ChangeLog - FileEncryptor CLI
 
 本文件记录 **FileEncryptor CLI** 子项目的所有重要变更（命令行加密工具 `FileEncryptorCLI(.exe)`）。
 图形界面项目的变更记录请见 `../GUI/CHANGELOG.md`。
@@ -10,8 +10,82 @@
 > 头部含预留扩展字段（key_version、wrapped DEK、保留区）以支持密钥轮换 / 多接收方 / 分块等未来能力。
 > 不压缩且未启用容器扩展时仍写 v4 头以最大限度兼容；v6 与 v4 / v5 共用同一套 AEAD 载荷格式，
 > 2.4.0 可读取并解密 v1 ~ v6 全部格式，旧产物无需重加密即可解密。
-> CLI 主版本号历史上与合并项目同步；自 2.1.0 起 CLI/GUI 拆分独立发版。
-
+> CLI 主版本号历史上与合并项目同步；自 2.1.0 起 CLI/GUI 拆分独立发版。
+
+## [2.4.1] - 2026-09-25
+
+本版本修复批量加解密在超大目录（海量散文件 + 多层嵌套）下吞吐骤降与进度停滞的问题，
+并完成纯性能与可移植性加固：新增 MSVC PGO 两阶段构建选项、批量进度补位消除每文件
+二次 stat、加解密输入流引入 4 MiB 页对齐大缓冲，并将全部磁盘头解析从
+`reinterpret_cast` 类型双关（strict-aliasing 未定义行为）改为 memcpy 安全装载。
+磁盘格式与加解密算法不变，v1~v6 产物完全兼容，加解密结果逐字节一致。
+
+### Added
+- **PGO 构建（MSVC，`-DFE_PGO=INSTRUMENT` / `OPTIMIZE`）**：在既有 LTO
+  （`/GL` + `/LTCG`）基础上支持两阶段 Profile-Guided Optimization——插桩构建 →
+  运行代表性训练负载（生成 `.pgc`）→ 同一构建目录重配 `FE_PGO=OPTIMIZE` 重链，
+  链接期 `/LTCG:PGOPTIMIZE` + `/USEPROFILE` 合并训练数据。非 MSVC 编译器下
+  自动忽略并告警；留空即关闭，不影响普通构建。
+  发布二进制基于 **50 次代表性训练**优化（`scripts/pgo_train.ps1`），模拟 GUI
+  `QProcess` 调用路径（密钥经 stdin 注入、参数与 `CliArgBuilder::buildArguments`
+  一致），覆盖：单文件加/解密（小/中/大文件）、批量加/解密（含文件名还原）、
+  zstd 压缩（多级别）、AEGIS-256、非对称 rage 加/解密、密钥生成/派生/导出、
+  rewrap 密钥轮换、verify 校验、源文件处置（删除/回收站/擦除）、SHA256 校验单
+  等普通用户高频场景；49/50 份 `.pgc` 有效合并（`--help` 运行无 profile 数据）。
+
+### Performance
+- **批量进度补位不再二次 stat**：`process_files` 预扫描阶段把每文件尺寸存入
+  `size_cache`，worker 成功处理后的进度补位（此前每文件再 `stat` 一次）改为
+  查表复用；源文件已按 `-de` 等处置删除时缓存仍可用，进度补位更准确。
+  超大批量（数万文件）省去等量文件系统元数据调用。
+- **输入流 4 MiB 页对齐大缓冲**：`encrypt_file` / `decrypt_file` 的输入流内部缓冲
+  由 CRT 默认（约 4 KiB）提升到 4 MiB 页对齐缓冲，1 MiB 块读取从约 256 次内核读
+  压缩到约 1 次，与既有写出侧 AggWriter（4 MiB）对称。大文件吞吐有明显收益。
+- **预扫描阶段（帧输出之前）优化**：该阶段此前无任何进度输出，超大目录下
+  GUI 表现为「进度停滞 / 无响应」。
+  - 输出子目录创建按目录缓存：同目录仅 `create_directory_recursive` 一次，
+    避免数万文件逐个递归 stat 各级路径组件；
+  - 存在性检查改为先 `stat` 再打开：不再对不存在的输出路径逐文件做失败的
+    `CreateFile`（该调用同样经过过滤驱动 / AV 实时扫描）；
+  - 每 2,000 个文件输出一行 `Pre-scanning: N/M files` 进度。
+
+### Changed
+- **头部解析 strict-aliasing 加固（安全审计遗留项）**：`read_original_name` /
+  `read_ptd_metadata` / `rewrap_file` / `encrypt_file`（续传）/ `decrypt_file`
+  全部 24 处把 `char[]` 头部缓冲 `reinterpret_cast` 成 `FileHeaderV*` 直接读取的
+  代码改为 `ptd_format.hpp` 新增的 `load_header<T>()`（memcpy 装载到本地 POD 结构）。
+  MSVC `/GL` 下行为不变；消除 GCC/Clang `-fstrict-aliasing` 下的未定义行为，
+  为 Linux/macOS 移植铺路。`rewrap_file` 中容器区改动先写回字节缓冲再重算
+  `header_hmac`，落盘字节与旧实现完全一致。
+
+### Fixed
+- **逐块进度落盘拖垮吞吐（批量卡顿根因）**：`encrypt_file` / `decrypt_file` 在每个
+  1 MiB 块后执行 `fout.flush()` + `save_progress()`，而每次保存含
+  `remove(.prs.tmp)` + `CreateFile` + write + close + `MoveFileExW(MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)`
+  共 5 次文件系统元数据操作（写穿 rename 强制同步落盘）。15 GB 任务约 15,360 块 →
+  约 7.7 万次元数据操作，Windows（Defender 实时扫描 / NTFS 元数据日志）下每次数毫秒，
+  有效吞吐被拖到个位数 MB/s（复现症状：磁盘读仅 ~7 MB/s、进度长时间近乎停滞）。
+  改为按时间节流（每 500 ms 最多保存一次），保存前先 flush 数据流，
+  保持「磁盘 .prt 内容 ≥ .prs 记账」不变式；断点续传语义不变——进程被强杀时
+  `.prt` 截断到最近一次记账字节，多写的块重算。
+- **`save_progress` 冗余元数据操作**：去掉每次保存前对 `.prs.tmp` 的预 unlink
+  （`.tmp` 以 trunc 打开本就会覆盖残留）。
+- **伪 .ptd 白跑 KDF**：批量解密 worker 新增 5 字节魔数预检——magic 不匹配的
+  `.ptd` 后缀文件直接计入 SKIP 并跳过（`Skipped: <path> (not a PTD encrypted file)`），
+  不再对其白跑一次 128 MB Argon2id 后报 Failed。混合「已加密 + 未加密」目录
+  既不中断任务也不再误标失败。
+
+### 验证
+- Windows x64（MSVC 2026 / Ninja / Release）普通构建与 PGO 两阶段构建均通过；
+  往返（加密→解密）逐字节一致，批量 / 续传 / rewrap / 压缩（zstd）回归通过。
+- 603 文件（600 散文件 + 3×30 MB，11 层嵌套目录）批量加密 → 批量解密（含 `-rn`）：
+  目录层级逐目录一致，603 文件 md5 全部匹配；2 个明文文件预扫描跳过、
+  1 个伪 .ptd 被 worker 预检跳过（SKIP 计数入帧）。
+- 300 MB 单文件加密 107 MB/s（逐块落盘开销消除）；解密中途强杀后
+  `.prs/.prt` 状态正确，重启续传 1.8 s 完成且 md5 一致。
+- 批量解密 Argon2id（每文件 128 MB×4 趟，内存带宽受限）为安全设计成本，
+  并行 worker 已充分利用多核，不在本次修改范围。
+
 ## [2.4.0] - 2026-09-24
 
 本版本引入可扩展加密容器（v6）与密钥轮换（rewrap）能力，并强化非交互场景下的
@@ -51,8 +125,8 @@
   现以「原路径是否仍存在」为最终判据，成功时不再误报。
 - **`-H` 头部查看器的 `original size` 恒为 0**：该字段不在任何版本的头部结构内，而是位于头部之后的
   16 字节块元数据（`chunk_size` / `total_chunks` / `orig_size`）中，此前未读取。现已正确解析，
-  并为 v6 容器新增 `key version` 行（便于确认密钥轮换是否生效）。
-
+  并为 v6 容器新增 `key version` 行（便于确认密钥轮换是否生效）。
+
 ### 解密流程修复与进度帧增强（配套 GUI 1.4.0）
 
 ### Added
@@ -69,19 +143,19 @@
   不再中断整批；错误文件列表在末尾统一汇总（`Total N files failed.`）。
 - **解密成功亦按源处理处置（含 `-de`）**：批量解密在 `ok` 后同样调用 `secure_handle_source()`
   （删除 `.ptd` / 安全擦除 / 移回收站），修复此前仅加密侧执行、解密侧遗漏的问题；
-  「已存在且有效」的跳过条目也按 `-de` 等处置，避免重跑永远清不掉 `.ptd`。
-
+  「已存在且有效」的跳过条目也按 `-de` 等处置，避免重跑永远清不掉 `.ptd`。
+
 ### 性能优化（解密正确性已逐字节验证）
 
-- **批量解密 `-rn` 的 Argon2id KDF 冗余消除（#1）**：`restore_name` 批量解密此前每文件派生 KEK 3 次
+- **批量解密 `-rn` 的 Argon2id KDF 冗余消除**：`restore_name` 批量解密此前每文件派生 KEK 3 次
   （预扫描 `read_original_name` + worker `read_original_name` + `decrypt_file` 内部）。现 `process_files`
   在预扫描阶段派生 KEK 后按输入路径缓存；`read_original_name` 新增 `pre_kek` 参数复用该 KEK、
   `decrypt_file` 新增 `ext_kek` 参数（仅跳过 Argon2id，仍按版本解裹 DEK），worker 直接复用缓存。
   效果：开启 `-rn` 的批量解密从每文件 3× → 1× Argon2id（普通批量解密本就 1×，无影响）。
-- **全程序优化 LTO（#2）**：`CMakeLists.txt` 增加 `set(CMAKE_INTERPROCEDURAL_OPTIMIZATION_RELEASE ON)`
+- **全程序优化 LTO**：`CMakeLists.txt` 增加 `set(CMAKE_INTERPROCEDURAL_OPTIMIZATION_RELEASE ON)`
   （Release 配置 `/GL` + `/LTCG`），对跨 TU 热点（KDF 调用、AEAD 循环）生效。
-- 安全：进程退出前对缓存的派生密钥 `sodium_memzero` 清零，避免明文残留。
-
+- 安全：进程退出前对缓存的派生密钥 `sodium_memzero` 清零，避免明文残留。
+
 ### 安全审计与缺陷修复（CLI `FileEncryptor.cpp` / `config.cpp` 相关）
 
 - **修复 `compute_progress_binding` 栈缓冲区越界读（高危，#F1）**：原实现用固定 256 字节栈缓冲 +
@@ -125,8 +199,8 @@
 - **AEGIS-256 硬件能力自适应（P0）**：请求 `-m aegis256` 但本机缺 AES-NI 时，按交互性决定行为——交互终端询问用户（默认降级到 XChaCha20-Poly1305），非交互场景（GUI 经管道传参、`--key-stdin`、cron 等）一律自动降级并打印 `Selected XChaCha20-Poly1305 based on hardware capability.`，**不再调用 `std::cin` 读取**，杜绝吞掉密码流或卡死。单文件与批量入口统一经 `resolve_encrypt_mode()` 解析；原 `process_files` 内的阻塞式交互询问已移除，仅保留非交互防御性兜底。
 
 ### Removed
-- **移除 `progress_rotation` 开关**：不再在覆盖 `.prs` 前备份 `.prs.bak`（简化逻辑，避免产生冗余备份文件；进度续传仍由 `.prs` 自身 HMAC 绑定路径 + size + mtime 保证安全）。
-
+- **移除 `progress_rotation` 开关**：不再在覆盖 `.prs` 前备份 `.prs.bak`（简化逻辑，避免产生冗余备份文件；进度续传仍由 `.prs` 自身 HMAC 绑定路径 + size + mtime 保证安全）。
+
 ## [2.2.0] - 2026-09-18
 
 本次版本在 2.1.2 安全修复基线之上，补齐了一批运维与可审计能力，并修复了若干长期遗留的健壮性问题。所有新增 CLI 选项与 YAML 键均为增量、向后兼容：旧配置与旧密文不受影响。
@@ -219,15 +293,15 @@
 
 ### Fixed
 - **【中·跨平台】修复非 ASCII 文件名下的字符分类未定义行为**：`std::transform(..., ::tolower)` 直接把 `char` 传给 C 字符分类函数，中文等 UTF-8 多字节字节值为负，属未定义行为（glibc 下可能越界查表）。改为 `[](unsigned char c){ return (char)std::tolower(c); }`（`core/FileEncryptor.cpp` 批量 `.ptd` 后缀过滤、`cli/main.cpp` 单文件 `.ptd` 后缀校验、`core/config.cpp` 布尔 / 日志等级解析）。`core/FileEncryptor.cpp` 中盘符判断的 `isalpha()` 同样补 `(unsigned char)` 转换。
-- **【低·构建】Linux 老工具链链接善后**：GCC < 9（Ubuntu 18.04 等）的 `std::filesystem` 需显式链接 `stdc++fs`（CMake 已按编译器版本自动追加）；Linux 下统一链接 `${CMAKE_DL_LIBS}`，避免静态链接 libsodium / yaml-cpp 时缺 `dl` 符号。
-
+- **【低·构建】Linux 老工具链链接善后**：GCC < 9（Ubuntu 18.04 等）的 `std::filesystem` 需显式链接 `stdc++fs`（CMake 已按编译器版本自动追加）；Linux 下统一链接 `${CMAKE_DL_LIBS}`，避免静态链接 libsodium / yaml-cpp 时缺 `dl` 符号。
+
 ## [2.0.0] - 2026-09-05（程序版本号升级 / CLI 行为不变）
 
 > CLI 主版本号升级（1.7.2 → 2.0.0）。CLI 行为零变更（加密 / 解密 / 续传 / 批量 / YAML 配置 / 磁盘格式 v4 完全不变）；此版本仅是版本号与项目结构层面的里程碑。
 
 ### Changed
-- **【中·版本】全量版本号同步至 2.0.0**：`FE_VERSION_*` 宏（`core/FileEncryptor.hpp`）、`project(FileEncryptorCLI VERSION 2.0.0)`、CPack 包名示例（`file-encryptor-cli_2.0.0-1`）、README / CHANGELOG 同步。
-
+- **【中·版本】全量版本号同步至 2.0.0**：`FE_VERSION_*` 宏（`core/FileEncryptor.hpp`）、`project(FileEncryptorCLI VERSION 2.0.0)`、CPack 包名示例（`file-encryptor-cli_2.0.0-1`）、README / CHANGELOG 同步。
+
 ## [1.7.2] - 2026-09-05（yaml-cpp 迁移 / 限速 / 删除 -j / 单位统一）
 
 > 程序版本号 1.7.1 → 1.7.2。磁盘文件格式版本保持 **v4**（向后兼容 v1 / v2 / v3）。
@@ -241,16 +315,16 @@
 - **【低·UX】计量单位统一（KB / MB / GB，1024 进制）**：进度条（已处理/总量、吞吐率 `MB/s`）与批量"Total size"等所有面向用户的字节量显示统一为 `KB`/`MB`/`GB`（1024 进制），不再使用 `MiB` 等混用表述；`io_buffer_size` 等 YAML 字段支持带单位写法（如 `1MB`、`512KB`）。
 
 ### Fixed
-- **【低·兼容性】`DEFAULT_CONFIG_YAML` 模板更新**：默认配置模板（CWD 自动生成）新增 `max_speed` 项并把 `io_buffer_size` 改为带单位写法 `1MB`（默认值不变，仍为 1048576 字节）。
-
+- **【低·兼容性】`DEFAULT_CONFIG_YAML` 模板更新**：默认配置模板（CWD 自动生成）新增 `max_speed` 项并把 `io_buffer_size` 改为带单位写法 `1MB`（默认值不变，仍为 1048576 字节）。
+
 ## [1.7.1] - 2026-09-04（文件名加密存储加固）
 
 > 程序版本号 1.7.0 → 1.7.1。磁盘文件格式版本保持 **v4**（向后兼容 v1 / v2 / v3 / 1.7.0）。
 
 ### Security
 - **【高·隐私】原始文件名改为密文存储（修复 1.7.0 明文泄露）**：1.7.0 曾把混淆前的原始基名以**明文**追加到密文末尾（`FENM` 信封），导致源文件名可在 `.ptd` 中直接读出。现改用与主密文**相同加密配置**——XChaCha20-Poly1305、同一 Argon2 派生主密钥、nonce 由本文件 `salt` 派生并与 `salt` 绑定 AAD——加密后存入尾部（`FENX` 信封，含 16 字节 AEAD tag），解密须正确口令，源文件名不再以明文暴露。保留对 1.7.0 明文尾部（`FENM`）的兼容读取，但新写入一律加密。同时移除 YAML 配置中对"原始名存储位置"的注释，配置不再暴露存储细节。
-- **【低·健壮性】加密名尾部改为始终写入**：不再受 YAML `obfuscate_names` 开关控制，无论是否混淆可见文件名，尾部均携带加密后的原始名，解密命名更稳健且不依赖 YAML 暴露存储行为。
-
+- **【低·健壮性】加密名尾部改为始终写入**：不再受 YAML `obfuscate_names` 开关控制，无论是否混淆可见文件名，尾部均携带加密后的原始名，解密命名更稳健且不依赖 YAML 暴露存储行为。
+
 ## [1.7.0] - 2026-09-04（输出名 / 扩展名混淆）
 
 > 程序版本号 1.6.0 → 1.7.0。磁盘文件格式版本保持 **v4**。
@@ -260,8 +334,8 @@
 - **【中·隐私】原始名尾部安全还原**：混淆文件名不含原始信息，故把原始基名以明文（未认证）追加到密文**末尾**（8 字节头部 `FENM`(4) + 名称长度(4) + 名称）。解密据此还原原始输出名，多语言（UTF-8，含中文 / 西里尔 / 希腊等）文件名正确还原；尾部未做认证，还原前严格净化（拒绝 `..`、绝对路径、空名、超长）以防越权输出路径。
 
 ### Changed
-- **【低·文档】精简 YAML 与部分代码注释**：去除配置模板与代码中的冗余注释，保留安全 / 设计意图相关的"为什么"注释；`fileencryptor.yaml`、`DEFAULT_CONFIG_YAML` 模板与 `build_test/fileencryptor.yaml` 三者现已一致。
-
+- **【低·文档】精简 YAML 与部分代码注释**：去除配置模板与代码中的冗余注释，保留安全 / 设计意图相关的"为什么"注释；`fileencryptor.yaml`、`DEFAULT_CONFIG_YAML` 模板与 `build_test/fileencryptor.yaml` 三者现已一致。
+
 ## [1.6.0] - 2026-08-27（配置 / 日志 / 路径与健壮性加固）
 
 > 程序版本号 1.5.2 → 1.6.0。磁盘文件格式版本保持 **v4**。
@@ -278,8 +352,8 @@
 - **【低·安全】`SecureBuffer::wipe()` 强制释放**：用 `std::vector<unsigned char>().swap(data_)` 代替 `clear()+shrink_to_fit()`，确保清零并 `sodium_munlock` 后立即真正释放后备内存。
 
 ### Added
-- **【文档】`path_whitelist_enabled` 语义澄清**：仅当 `path_whitelist` 显式列出至少一项时才启用；空列表（仅写键名）不启用白名单。
-
+- **【文档】`path_whitelist_enabled` 语义澄清**：仅当 `path_whitelist` 显式列出至少一项时才启用；空列表（仅写键名）不启用白名单。
+
 ## [1.5.2] - 2026-08-29（路径穿越安全加固 / 缺陷修复）
 
 > 程序版本号 1.5.1 → 1.5.2。磁盘文件格式版本升至 **v4**（141 字节头，向后兼容 v1 / v2 / v3）。
@@ -290,8 +364,8 @@
 - **【低·UB】非交互覆盖提示未初始化 `char ch` UB 修复**：`main.cpp` 覆盖确认与 AEGIS 回退提示中 `char ch;` 在 stdin 为空/EOF 时提取失败保持未初始化，随后读取属未定义行为。改为 `char ch='n';` 默认安全拒绝。
 
 ### Security
-- **【高·防御文件头篡改】v4 头 HMAC 安全信封**：v4 在 v3 头部基础上追加 32 字节 `header_hmac`，由"元数据认证密钥"（与主密钥域分离派生，标签 `FE_header_auth_v4`）对文件头前 77 字节（magic / version / mode / Argon2 参数 / salt / iv）做独立 HMAC-SHA512/256 认证；替换 salt / iv / mode 等头字段的篡改会在解密端被拒绝（仅通用错误，不泄露细节）。`SecureBuffer` 锁页 + 析构清零确保中间密钥不残留；写头瞬间即计算 HMAC 落盘，即便中断也带合法 HMAC。
-
+- **【高·防御文件头篡改】v4 头 HMAC 安全信封**：v4 在 v3 头部基础上追加 32 字节 `header_hmac`，由"元数据认证密钥"（与主密钥域分离派生，标签 `FE_header_auth_v4`）对文件头前 77 字节（magic / version / mode / Argon2 参数 / salt / iv）做独立 HMAC-SHA512/256 认证；替换 salt / iv / mode 等头字段的篡改会在解密端被拒绝（仅通用错误，不泄露细节）。`SecureBuffer` 锁页 + 析构清零确保中间密钥不残留；写头瞬间即计算 HMAC 落盘，即便中断也带合法 HMAC。
+
 ## [1.5.1] - 2026-08-26（运维与安全增强 / 缺陷修复）
 
 > 设计原则（混合架构）：**所有运维类参数**（日志位置/级别、并发线程数、资源上限、路径安全策略、进度轮转）统一由 **YAML 配置文件** 提供，**CLI 不可覆盖**；CLI 仅保留动作与输入接口（密钥、密码、路径、模式等）。
@@ -307,8 +381,8 @@
 
 ### Changed
 - **【中·CLI】强制覆盖标志由 `-f` 改为 `-y` / `--force`**：与多数 Unix 工具一致；`-f` 仍接受为别名。
-- **【低·CLI】`-j <线程数>` 已于 v1.7.2 彻底删除**（传入报 `Unknown option` 并退出）；并发数由 YAML `worker_threads` 配置。
-
+- **【低·CLI】`-j <线程数>` 已于 v1.7.2 彻底删除**（传入报 `Unknown option` 并退出）；并发数由 YAML `worker_threads` 配置。
+
 ## [1.4.1] - 2026-08-23（路径处理与多线程稳健性）
 
 > 程序版本号 1.4.0 → 1.4.1。磁盘文件格式版本保持 v3。
@@ -319,8 +393,8 @@
 
 ### Changed
 - **【低·UX】统一 UTF-8 文件名处理**：所有 `std::filesystem` API 切换到 UTF-8 直通模式（Windows 下底层走 `_w*` API），含中文 / Emoji 的文件名可正确加解密、批处理递归、解密命名还原。
-- **【低·稳健性】批量并发线程数回退**：CLI 解析 `-j` 时若 `try_parse_int` 抛异常则回退默认线程数（避免崩溃）。
-
+- **【低·稳健性】批量并发线程数回退**：CLI 解析 `-j` 时若 `try_parse_int` 抛异常则回退默认线程数（避免崩溃）。
+
 ## [1.4.0] - 2026-08-20（批处理 / 多线程 / YAML 配置）
 
 > 程序版本号 1.3.0 → 1.4.0。磁盘文件格式版本保持 v3。
@@ -332,8 +406,8 @@
 - **【中·UX】进度条**：控制台实时显示已处理字节 / 总字节 / 吞吐率。
 
 ### Changed
-- **【中·CLI】参数语义调整**：运维类参数（线程数、路径白名单等）从 CLI 选项移除，统一改由 YAML 配置。
-
+- **【中·CLI】参数语义调整**：运维类参数（线程数、路径白名单等）从 CLI 选项移除，统一改由 YAML 配置。
+
 ## [1.3.0] - 2026-08-10（XChaCha20-Poly1305 默认 / v3 头）
 
 > 程序版本号 1.2.0 → 1.3.0。磁盘文件格式版本升至 **v3**（向后兼容 v1 / v2）。
@@ -347,8 +421,8 @@
 - **【低·UX】进度条吞吐显示**：进度条新增 `MB/s` 实时显示。
 
 ### Security
-- **【中·抗重放】每块 nonce = sodium_increment(iv)**：杜绝 nonce 复用风险；每块 AEAD tag 独立校验。
-
+- **【中·抗重放】每块 nonce = sodium_increment(iv)**：杜绝 nonce 复用风险；每块 AEAD tag 独立校验。
+
 ## [1.2.0] - 2026-07-15（v2 头 / AES-GCM 默认 / 路径安全）
 
 > 程序版本号 1.1.x → 1.2.0。磁盘文件格式版本升至 **v2**（向后兼容 v1）。
@@ -362,8 +436,8 @@
 - **【中·安全】`path_has_traversal` 拒绝任何 `..` 组件**：防止构造越权输出路径。
 
 ### Security
-- **【中·抗 TOCTOU】符号链接拒绝**：输入 / 输出路径若为符号链接 / 重解析点则拒绝处理（防止攻击者构造指向白名单外的链接）。
-
+- **【中·抗 TOCTOU】符号链接拒绝**：输入 / 输出路径若为符号链接 / 重解析点则拒绝处理（防止攻击者构造指向白名单外的链接）。
+
 ## [1.1.1] - 2026-07-01（基线版本）
 
 > 程序版本号 1.0.0 → 1.1.1。磁盘文件格式版本 **v1**。
@@ -380,6 +454,6 @@
 - **【低·稳健性】32/32 字节级测试（`_verify/verify.cpp`）**：回归套件覆盖 S1 畸形头、S2 真实重解析点、S4 路径穿越、V1 兼容性。
 
 ### Notes
-- **回归套件**：`_verify/verify.cpp` 提供 32/32 字节级测试。该套件**保留在仓库作为固定验收**，但**不编入发布版 `FileEncryptorCLI.exe`**（与 `main.cpp` 的 `wmain` 冲突、依赖 `<windows.h>`），仅作独立测试目标。
-
+- **回归套件**：`_verify/verify.cpp` 提供 32/32 字节级测试。该套件**保留在仓库作为固定验收**，但**不编入发布版 `FileEncryptorCLI.exe`**（与 `main.cpp` 的 `wmain` 冲突、依赖 `<windows.h>`），仅作独立测试目标。
+
 > 早期版本（v0.x、1.0.x）变更历史不在此文件维护，详见 Git 提交记录。

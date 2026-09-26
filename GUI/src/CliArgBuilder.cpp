@@ -152,7 +152,7 @@ QProcessEnvironment CliArgBuilder::buildEnvironment(const ShellOptions& /*o*/) {
 
 QString CliArgBuilder::buildPreview(const QString& programPath, const ShellOptions& o) {
     // 命令预览：program arg1 arg2 ...（口令经 stdin 注入，不展示明文）
-    // 缺陷3 修复：引号策略从"字符串相等比对"改为"按位置判断"——上一项是取值 flag
+    // 引号策略从"字符串相等比对"改为"按位置判断"——上一项是取值 flag
     // （-o/-i/-k/-r/--salt）则当前项是路径值，需要加引号；另外任何含空格 / 制表符 /
     // 双引号的参数也统一加引号，并对内嵌双引号做反斜杠转义。原先靠与 ShellOptions
     // 成员逐个比对的写法既会漏掉等值撞车（如某输入路径恰与输出目录相同被重复判定），
@@ -179,7 +179,15 @@ QString CliArgBuilder::buildPreview(const QString& programPath, const ShellOptio
         for(;i<s.size();++i) if(!s.at(i).isDigit()) return false;
         return true;
     };
-    for (const QString& a : args) {
+    for (int i=0; i<args.size(); ++i) {
+        const QString& a = args[i];
+        // 多收件人：预览不以临时公钥文件路径泄露（临时文件仅含公钥、非机密，但应展示语义）。
+        // 预览显示"N 个收件人"，实际执行仍经 -r 传递临时文件（buildArguments 不受影响）。
+        if (expectValue && o.recipientCount > 1 && a == o.recipientPath) {
+            cmd += QStringLiteral(" %1 个收件人").arg(o.recipientCount);
+            expectValue = false;
+            continue;
+        }
         const bool needsQuote = (expectValue && !isIntLiteral(a)) ||
                                 a.contains(QLatin1Char(' ')) ||
                                 a.contains(QLatin1Char('\t')) ||

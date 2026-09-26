@@ -31,7 +31,7 @@ Q_IMPORT_PLUGIN(QICOPlugin)
 int main(int argc, char* argv[]) {
     QApplication app(argc, argv);
     app.setApplicationName("FileEncryptorGUI");
-    // 缺陷18：GUI 版本单一来源 FileEncryptorLocator::guiVersion()（与 CMake project VERSION 同步）
+    // GUI 版本单一来源 FileEncryptorLocator::guiVersion()（与 CMake project VERSION 同步）
     app.setApplicationVersion(FileEncryptorLocator::guiVersion());
     app.setOrganizationName("FileEncryptor");
 

@@ -14,7 +14,6 @@ public:
     static QString locate();
     // 外壳 exe 所在目录（供 UI 显示当前查找上下文）
     static QString selfDir();
-    // 获取当前程序版本号
     static QString version();
     // GUI 自身版本（单一来源；main/MainWindow/AboutDialogs 统一读取）
     static QString guiVersion();

@@ -37,7 +37,6 @@ public:
     static bool append(const TaskRecord& r,QString& err);
     // 读取全部记录（最新在前）；文件不存在视为空历史（返回 true）
     static bool load(QVector<TaskRecord>& out,QString& err);
-    // 清空历史
     static bool clear(QString& err);
     // 仅保留最近 keepLatest 条（超出部分丢弃）
     static bool prune(int keepLatest,QString& err);

@@ -94,7 +94,6 @@ QString TaskHistory::filePath() {
     const QString d=dir();
     if(d.isEmpty()) return QString();
     // v1.3.0：扩展名统一为 3 个字符（.log，JSONL 内容不变）；旧文件 tasks.jsonl 仍会读取。
-    if(d.isEmpty()) return QString();
     const QString cur=QDir::toNativeSeparators(d+QStringLiteral("/tasks.log"));
     if(QFileInfo::exists(cur)) return cur;
     const QString legacy=QDir::toNativeSeparators(d+QStringLiteral("/tasks.jsonl"));
@@ -133,6 +132,9 @@ bool TaskHistory::append(const TaskRecord& r,QString& err) {
     ts << QJsonDocument(toJson(r)).toJson(QJsonDocument::Compact) << '\n';
     ts.flush();
     if(ts.status()!=QTextStream::Ok) { err=QStringLiteral("写入历史失败"); return false; }
+    // 控制历史体积：每次追加后自动裁剪到最近 1000 条（裁剪失败不影响本次追加结果）。
+    QString perr;
+    prune(1000, perr);
     return true;
 }
 

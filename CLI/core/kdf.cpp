@@ -4,6 +4,7 @@
 #include <vector>
 #include <mutex>
 #include <condition_variable>
+#include <atomic>
 
 namespace {
 
@@ -13,28 +14,30 @@ namespace {
 struct KdfSemaphore {
     std::mutex mtx;
     std::condition_variable cv;
-    long permits = 0;   // 0 = 不限制
-    bool init = false;
+    std::atomic<long> permits{0};   // 0 = 不限制（无锁快路径读，消除 data race）
+    std::atomic<bool> init{false};
     void ensure() {
+        if(init.load(std::memory_order_acquire)) return;   // 无锁快路径
         std::lock_guard<std::mutex> lk(mtx);
-        if(init) return;
+        if(init.load(std::memory_order_relaxed)) return;   // 双重检查
         const uint64_t budget = global_config().max_memory_bytes;
+        long cap = 0;
         if(budget > 0) {
-            long cap = (long)(budget / (128ULL*1024*1024));   // 以标准预设 128MB 为单份
+            cap = (long)(budget / (128ULL*1024*1024));   // 以标准预设 128MB 为单份
             if(cap < 1) cap = 1;
-            permits = cap;
         }
-        init = true;
+        permits.store(cap, std::memory_order_relaxed);
+        init.store(true, std::memory_order_release);
     }
     void acquire() {
-        if(permits == 0) return;
+        if(permits.load(std::memory_order_acquire) == 0) return;   // 无锁读，无 data race
         std::unique_lock<std::mutex> lk(mtx);
-        cv.wait(lk, [&]{ return permits > 0; });
-        --permits;
+        cv.wait(lk, [&]{ return permits.load(std::memory_order_relaxed) > 0; });
+        permits.fetch_sub(1, std::memory_order_acq_rel);
     }
     void release() {
-        if(permits == 0) return;
-        { std::lock_guard<std::mutex> lk(mtx); ++permits; }
+        if(permits.load(std::memory_order_acquire) == 0) return;
+        permits.fetch_add(1, std::memory_order_acq_rel);
         cv.notify_one();
     }
 };

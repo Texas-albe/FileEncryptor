@@ -146,7 +146,7 @@ HtmlPaletteStore makeHtmlPalette(const QPalette& p,
 } // namespace
 
 const ThemeManager::HtmlPalette& ThemeManager::htmlPalette() {
-    // 缺陷17 修复：中性色（正文/背景/代码块/弱化文字）此前同时维护两份——
+    // 中性色（正文/背景/代码块/弱化文字）此前同时维护两份——
     // buildXxxPalette() 里的 QColor 与此处的十六进制字符串，改动一处极易遗漏另一处
     // （本次审计即发现 light.mutedFg(#888888) 与 PlaceholderText(0x8A8A8A) 已漂移）。
     // 现统一从 QPalette 派生，仅强调色（标题绿/蓝、链接）保留独立定义——

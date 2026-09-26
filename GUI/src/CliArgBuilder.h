@@ -45,6 +45,7 @@ struct ShellOptions {
     bool verbose = false;        // -v
     QString keyfilePath;         // -k <keyfile>（对称模式：密钥文件；空=密码经 stdin）
     QString recipientPath;       // -r <pub|file> (asymmetric encrypt: "age1..." public key or a file of them; goes via argv)
+    int recipientCount = 0;       // 收件人条数（collectOptions 统计；多收件人预览显示"N 个收件人"而非临时文件路径）
     QString identityPath;        // asymmetric decrypt: private key file, handed to the CLI as -k (never via env/argv/stdin)
 
     bool restoreName = false;    // 批量解密是否还原完整原始文件名（默认 false：仅保留扩展名，省去每文件 KDF）

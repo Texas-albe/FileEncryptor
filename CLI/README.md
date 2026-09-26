@@ -2,8 +2,8 @@
 
 跨平台（Windows / Linux / macOS）文件加密命令行工具，基于 [libsodium](https://doc.libsodium.org/) 实现高强度、抗篡改、可续传的分块加密。
 
-- 磁盘文件格式版本 **v4**（向后兼容 v1 / v2 / v3，旧文件可直接解密，无需重加密）。
-- 程序版本 **2.2.0**。
+- 磁盘文件格式默认版本 **v6**（可扩展加密容器；v4/v5 按需写出，v1~v6 全部可直接解密，旧文件无需重加密）。
+- 程序版本 **2.4.1**。
 
 ---
 
@@ -108,6 +108,31 @@ cmake --build --preset windows-vs2026-release --config Release
 - 静态链接时 CMake 会自动把运行时库切换为 `/MT`（静态 CRT），并与 libsodium 的静态库保持一致，
   避免 `LNK2038` CRT 不匹配；同时定义 `SODIUM_STATIC`，避免 `__imp_` 符号找不到（`LNK2019`）。
 - 也可用 vcpkg：`vcpkg install libsodium` 后启用 vcpkg toolchain，CMake 配置包会自动定位。
+
+#### PGO（Profile-Guided Optimization，MSVC 可选）
+
+在既有 LTO（`/GL` + `/LTCG`）基础上可再做基于训练样本的优化（两阶段、同一构建目录）：
+
+```powershell
+# Phase 1：插桩构建
+cmake -B out/build/pgo-windows -DFE_PGO=INSTRUMENT
+cmake --build out/build/pgo-windows
+# 运行代表性训练负载（混合加/解密样本各跑一遍，覆盖常用模式与压缩档）
+# → out/build/pgo-windows/bin/ 产生 FileEncryptorCLI.pgd 与训练期 *.pgc
+# Phase 2：同一目录重配 + 重链（链接期合并 .pgc）
+cmake -B out/build/pgo-windows -DFE_PGO=OPTIMIZE
+cmake --build out/build/pgo-windows
+```
+
+`FE_PGO` 留空即关闭（默认）；非 MSVC 编译器不支持并自动忽略。
+注意 Phase 2 必须复用 Phase 1 的构建目录（`.pgd`/`.pgc` 默认在 `bin/` 下相邻）。
+
+**训练数据**：项目提供 `scripts/pgo_train.ps1`，执行 50 次代表性运行以模拟普通用户
+经 GUI `QProcess` 调用 CLI 的真实路径（密钥经 stdin 注入、参数与 `CliArgBuilder::buildArguments`
+一致）。覆盖单文件加/解密（小/中/大文件）、批量加/解密（含文件名还原）、zstd 压缩
+（多级别）、AEGIS-256、非对称 rage、密钥管理、rewrap、verify、源文件处置等高频场景。
+训练后优化二进制约 2.59 MB（普通 Release 约 2.70 MB），核心热路径（KDF / AEAD / 块循环）
+经 profile 引导布局与内联调整。插桩运行时需 `pgort140.dll`（CMake 自动复制到 exe 同目录）。
 
 ### macOS
 

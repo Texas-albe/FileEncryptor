@@ -9,6 +9,27 @@
 > - GUI 仅描述本项目自身的实现变更（界面、主题、图标、构建、依赖查找等）。
 > - 加密核心 / 算法 / 磁盘格式 v4 / 续传 / YAML 配置 等行为变更请见 `../CLI/CHANGELOG.md`（CLI 是行为实现的承担者）。
 
+## [1.4.1] - 2026-09-25
+
+GUI 本体性能与代码质量优化（配套 CLI 期望版本仍为 2.4.1）。
+
+### Performance
+- **输出区无限增长限制**：拟 cmd 输出文档设 `setMaximumBlockCount(5000)`，长批量任务下不再无限累积文本拖慢渲染。
+- **CLI 能力探测异步化**：`probeZstdSupport` 由主线程同步 `waitForFinished` 改为 QProcess `finished` 信号 + 单发 1s 超时定时器，避免界面卡顿（原超时 3s+kill 等待，现 1s）。
+- **目录扫描缓存改为共享快照**：`scanInputs` 入参由值传递 `QHash` 改为 `shared_ptr<const QHash>`，每轮只增引用计数、不再整表拷贝（快照不可变，无竞态）。
+- **进程清理等待降至 200ms**：`ProcessCommandExecutor::cleanup` 的 `waitForFinished(1000)` 降为 200ms，限制取消/析构路径阻塞。
+
+### Fixed
+- **进度帧锚点抗裁剪**：`renderFrameLine` 改用 `QTextBlock` 句柄锚定帧首块（随文档裁剪自动前移，块被裁掉则回退追加），修复 `setMaximumBlockCount` 裁剪后字符偏移锚点失效导致的残影/重复帧。
+- **收件人临时文件仅运行时写入**：`resolveRecipients` 由 `collectOptions`（含 pending 扫描调用）移至 `onRunClicked` 运行时调用，避免非运行时残留临时公钥文件；预览在多收件人时显示「N 个收件人」而非临时文件路径。
+
+### Refactored
+- **`secure_zero` 抽到公共头**（新增 `src/secure_zero.h`），`MainWindow` 与 `PasswordDialog` 共用，消除两处重复实现。
+- **`applyPanelTransparency` 抽公共字段 QSS 模板** `fieldCss`，输入框/输出框/数值框复用同一基础样式。
+- **`AboutDialogs` 改用命名参数**（`%{bodyFg}` 等）替代位置占位符 `%1..%7`，提升可维护性。
+- **`TaskHistory::append` 后自动 `prune(1000)`** 控制历史体积；删除 `filePath()` 冗余的 `d.isEmpty()` 检查。
+- **`closeEvent` 兜底清理 `m_rewrapTempKey`**（轮换被中途关闭时不再残留临时密钥文件）。
+
 ## [1.4.0] - 2026-09-24
 
 配套 CLI 2.4.0：新增密钥轮换界面、源文件安全处理选项，以及 AEGIS-256 非交互场景的弹窗警告。

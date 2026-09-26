@@ -16,13 +16,8 @@
 #include <vector>
 #include <cstring>
 
-// 安全擦除：std::memset 紧跟着释放/clear 会被编译器判定为 dead store 而优化掉，
-// 口令明文因此长期残留在堆上（审计问题 9）。用 volatile 指针逐字节写零可确保落内存。
-static void secure_zero(void* p,size_t n) {
-    if(!p||n==0) return;
-    volatile unsigned char* vp=static_cast<volatile unsigned char*>(p);
-    while(n--) *vp++=0;
-}
+// 安全擦除：见 secure_zero.h（MainWindow 与 PasswordDialog 共用）
+#include "secure_zero.h"
 
 #include <QMenuBar>
 #include <QApplication>
@@ -33,6 +28,7 @@ static void secure_zero(void* p,size_t n) {
 #include <QFileDialog>
 #include <QListWidget>
 #include <QPlainTextEdit>
+#include <QTextBlock>
 #include <QLineEdit>
 #include <QLabel>
 #include <QComboBox>
@@ -86,7 +82,7 @@ static void secure_zero(void* p,size_t n) {
 #include <memory>
 
 MainWindow::MainWindow(QWidget* parent): QMainWindow(parent) {
-    // 标题含版本号（缺陷18：兜底值统一取 FileEncryptorLocator::guiVersion()，不再各自硬编码）
+    // 标题含版本号（兜底值统一取 FileEncryptorLocator::guiVersion()，不再各自硬编码）
     setWindowTitle(QStringLiteral("FileEncryptorGUI %1").arg(
         qApp->applicationVersion().isEmpty() ? FileEncryptorLocator::guiVersion()
         : qApp->applicationVersion()));
@@ -200,6 +196,12 @@ void MainWindow::closeEvent(QCloseEvent* e) {
     if(!m_recipientTempFile.isEmpty()) {
         QFile::remove(m_recipientTempFile);
         m_recipientTempFile.clear();
+    }
+    // rewrap 新口令临时密钥文件：运行结束时 onCommandFinished 已删除，但窗口在
+    // 轮换进行中被关闭（已 cancel）时该路径可能残留，此处兜底清理。
+    if(!m_rewrapTempKey.isEmpty()) {
+        QFile::remove(m_rewrapTempKey);
+        m_rewrapTempKey.clear();
     }
     // 持久化窗口几何（含背景图设置后的窗口大小，重启后保持生效）
     QSettings(QStringLiteral("FileEncryptor"),QStringLiteral("FileEncryptorGUI"))
@@ -419,15 +421,15 @@ void MainWindow::applyPanelTransparency() {
         ).arg(ctrlBg,ctrlFg,ctrlBor,altBg,fieldSel,hoverBg,indBor,indBg));
     }
 
-    // 文本输入框(QLineEdit)与命令预览/输出框：随主题，亮色浅灰底+深字
-    const QString fieldStyle=QStringLiteral(
-        "background:%1;color:%2;border:1px solid %3;"
-        "border-radius:3px;padding:2px 4px;"
-        "selection-background-color:%4;selection-color:#FFFFFF;"
-    ).arg(fieldBg,fieldFg,fieldBor,fieldSel);
+    // 公共字段 QSS 模板：输入框/输出框/数值框共用的基础样式（随主题替换占位符），
+    // 一处定义、多处复用，避免三处重复书写同一段样式（P2-3 抽公共模板）。
+    const QString fieldCss=QStringLiteral(
+        "background:%1;color:%2;border:1px solid %3;border-radius:3px;padding:2px 4px;"
+        "selection-background-color:%4;selection-color:#FFFFFF;")
+        .arg(fieldBg,fieldFg,fieldBor,fieldSel);
     for(QLineEdit* e:{m_outDirEdit, m_keyfileEdit,
                        m_recipientEdit, m_identityEdit}) {
-        if(e) e->setStyleSheet(fieldStyle);
+        if(e) e->setStyleSheet(fieldCss);
     }
     if(m_outputView) {
         // 输出框 + 滚动条一体样式：部分样式表会让 QAbstractScrollArea 的原生滚动条
@@ -436,9 +438,7 @@ void MainWindow::applyPanelTransparency() {
         const QString sbHandle=dk ? QStringLiteral("#5A5A5A") : QStringLiteral("#A8A8A4");
         const QString sbHover=dk ? QStringLiteral("#6E6E6E") : QStringLiteral("#8A8A86");
         m_outputView->setStyleSheet(QStringLiteral(
-            "QPlainTextEdit{background:%1;color:%2;border:1px solid %3;"
-            "border-radius:3px;padding:2px 4px;"
-            "selection-background-color:%4;selection-color:#FFFFFF;}"
+            "QPlainTextEdit{%1}"
             "QScrollBar:vertical{background:%5;width:12px;margin:0;}"
             "QScrollBar::handle:vertical{background:%6;min-height:24px;"
             "border-radius:5px;}"
@@ -449,7 +449,7 @@ void MainWindow::applyPanelTransparency() {
             "QScrollBar::handle:horizontal:hover{background:%7;}"
             "QScrollBar::add-line,QScrollBar::sub-line{width:0;height:0;}"
             "QScrollBar::add-page,QScrollBar::sub-page{background:transparent;}"
-        ).arg(fieldBg,fieldFg,fieldBor,fieldSel,altBg,sbHandle,sbHover));
+        ).arg(fieldCss,altBg,sbHandle,sbHover));
     }
 
     // 勾选框(QCheckBox)/单选框(QRadioButton)：随主题，亮色浅灰底+深字
@@ -490,10 +490,9 @@ void MainWindow::applyPanelTransparency() {
     // 数值框(QSpinBox：压缩级别)：与输入框同配色。SpinBox 已 setButtonSymbols(NoButtons)
     // （无上下按钮），显式样式用于规避父级 background:transparent 层级导致的输入框透明。
     const QString spinStyle=QStringLiteral(
-        "QSpinBox{background:%1;color:%2;border:1px solid %3;border-radius:3px;"
-        "padding:2px 4px;selection-background-color:%4;selection-color:#FFFFFF;}"
-        "QSpinBox:disabled{background:%5;color:#999999;border:1px solid %3;}"
-    ).arg(fieldBg,fieldFg,fieldBor,fieldSel,altBg);
+        "QSpinBox{%1}"
+        "QSpinBox:disabled{background:%2;color:#999999;border:1px solid %3;}"
+    ).arg(fieldCss,altBg,fieldBor);
     if(m_compressLevel) m_compressLevel->setStyleSheet(spinStyle);
     const QString btnStyle=QStringLiteral(
         "QPushButton{background:%1;color:%2;border:1px solid %3;border-radius:3px;padding:4px 10px;}"
@@ -630,25 +629,41 @@ void MainWindow::showCliNotFoundError(const QString& context) {
     MsgBox::error(this,tr("FileEncryptor CLI 未找到"),detail);
 }
 
-// ---------- CLI zstd / aegis 能力探测 ----------
+// ---------- CLI zstd / aegis 能力探测（异步，避免主线程阻塞） ----------
 void MainWindow::probeZstdSupport() {
     m_zstdAvailable=false;
     m_aegisAvailable=true;   // 默认乐观，避免误拦
     if(m_fileEncryptorPath.isEmpty()) return;
-    QProcess p;
-    p.start(m_fileEncryptorPath,QStringList{QStringLiteral("--features")});
-    if(!p.waitForStarted(2000)) return;
-    if(!p.waitForFinished(3000)) {
-        p.kill();
-        p.waitForFinished(1000);
-        return;
+    // 复用同一 QProcess：已有探测在跑则先终止，避免排队堆积
+    if(!m_probeProcess) {
+        m_probeProcess=new QProcess(this);
+        connect(m_probeProcess,QOverload<int,QProcess::ExitStatus>::of(&QProcess::finished),
+                this,&MainWindow::onProbeFinished);
     }
+    if(m_probeProcess->state()!=QProcess::NotRunning) m_probeProcess->kill();
+    m_probeProcess->start(m_fileEncryptorPath,QStringList{QStringLiteral("--features")});
+    // 单发定时器：超时（1s）即 kill，维持默认乐观值（zstd 不可用 / aegis 可用）
+    if(!m_probeTimer) {
+        m_probeTimer=new QTimer(this);
+        m_probeTimer->setSingleShot(true);
+        connect(m_probeTimer,&QTimer::timeout,this,[this]{
+            if(m_probeProcess&&m_probeProcess->state()!=QProcess::NotRunning)
+                m_probeProcess->kill();
+        });
+    }
+    m_probeTimer->start(1000);
+}
+
+void MainWindow::onProbeFinished(int, QProcess::ExitStatus) {
+    if(m_probeTimer) m_probeTimer->stop();
+    if(!m_probeProcess) return;
     // CLI 输出按 UTF-8（GUI 读 CLI 输出统一 fromUtf8 约定）
-    const QString out=QString::fromUtf8(p.readAllStandardOutput());
+    const QString out=QString::fromUtf8(m_probeProcess->readAllStandardOutput());
     m_zstdAvailable=out.contains(QStringLiteral("zstd=1"));
     // aegis=1 → 支持；aegis=0 → 不支持（缺 AES-NI）；缺省行按支持处理
     if(out.contains(QStringLiteral("aegis=0"))) m_aegisAvailable=false;
     else if(out.contains(QStringLiteral("aegis=1"))) m_aegisAvailable=true;
+    updateAsymVisibility();   // 探测完成后刷新压缩/非对称控件可用性
 }
 
 void MainWindow::onRetryCliDetection() {
@@ -968,6 +983,10 @@ QWidget* MainWindow::buildBottomPanel() {
     m_outputView->setPlaceholderText(tr("此处显示命令预览与执行输出。stdout 默认色，stderr 红色。"));
     // 等宽字体便于对齐
     m_outputView->setFont(FontBootstrap::monoFont());
+    // 长任务（批量进度帧逐 120ms 刷出）下输出文档会无限增长，拖慢渲染与内存。
+    // 上限 5000 块：超出后 QTextDocument 自动从头部裁剪最旧块，与 renderFrameLine
+    // 的 QTextBlock 锚点配合（块被裁掉则 isValid() 失效、回退追加），不会残留旧帧。
+    m_outputView->document()->setMaximumBlockCount(5000);
     lay->addWidget(m_outputView);
 
     return w;
@@ -1211,9 +1230,15 @@ ShellOptions MainWindow::collectOptions() const {
     o.compressionLevel=o.compress ? m_compressLevel->value() : 0;
     // 口令不再存于主页面：运行时经 PasswordDialog 弹窗获取（见 onRunClicked）
 
-    // 非对称（age）输入。功能8：收件人框支持多收件人（逗号/分号分隔的 age1... 公钥串，
-    // 自动写临时公钥文件走 -r 文件通道）；单条目维持原语义（公钥串或公钥文件路径）。
-    o.recipientPath=resolveRecipients(m_recipientEdit->text().trimmed());
+    // 非对称（age）输入。功能8：收件人框支持多收件人（逗号/分号分隔的 age1... 公钥串）。
+    // collectOptions 被 pending 扫描也调用，故此处【不】解析收件人（避免非运行时写临时文件）；
+    // 仅统计条数供预览展示，真正写临时公钥文件推迟到 onRunClicked 运行时（见 resolveRecipients）。
+    const QString rawRecip=m_recipientEdit->text().trimmed();
+    o.recipientPath=rawRecip;
+    o.recipientCount=0;
+    for(const QString& seg:rawRecip.split(QRegularExpression(QStringLiteral("[,，;；]")),Qt::SkipEmptyParts)) {
+        if(!seg.trimmed().isEmpty()) ++o.recipientCount;
+    }
     o.identityPath=m_identityEdit->text().trimmed();
     // Asymmetric decryption: the private key file is handed to the CLI as -k.
     {
@@ -1271,6 +1296,10 @@ void MainWindow::onRunClicked() {
     }
 
     ShellOptions o=collectOptions();
+
+    // 功能8：多收件人临时公钥文件【仅运行时】写盘（pending 扫描不会触发，避免残留临时文件）。
+    // 单收件人或普通路径原样返回；多条公钥串才写临时文件供 -r 通道使用。
+    o.recipientPath=resolveRecipients(o.recipientPath);
 
     // AEGIS-256 非交互一致性：选中 AEGIS-256 但本机探测到不支持（缺 AES-NI）时，
     // 弹窗明确警告并中止任务，与 CLI 非交互「明确拒绝、绝不自动降级」行为完全一致。
@@ -1395,7 +1424,7 @@ void MainWindow::onRunClicked() {
     m_runFileStarts=0;   // 功能11：重新统计本次运行的文件开始标记
     m_doneFiles=0; m_skipFiles=0; m_failFiles=0; m_totalFiles=0;
     m_currentFile.clear();
-    m_framePos=-1;              // 批量进度帧块随新任务重建
+    m_frameBlock=QTextBlock();  // 批量进度帧块随新任务重建
     m_frameLen=0;
     updateProgressLabel();
     setStatus(tr("运行中..."));
@@ -1614,28 +1643,30 @@ void MainWindow::renderFrameLine(const OutputLine& line) {
     fmt.setForeground(QColor((rgb>>16)&0xFF,(rgb>>8)&0xFF,rgb&0xFF));
 
     bool replaced=false;
-    const int docLen=m_outputView->document()->characterCount();
-    if(m_framePos>=0&&m_frameLen>0&&m_framePos+m_frameLen<=docLen) {
-        // 区间自愈：帧首不再是汇总行 'T' 即视为失效，放弃替换、回退追加，避免残影
-        if(m_outputView->document()->characterAt(m_framePos)==QLatin1Char('T')) {
-            QTextCursor guard=m_outputView->textCursor();
-            guard.movePosition(QTextCursor::End);
-            m_outputView->setTextCursor(guard);
-
+    // 用 QTextBlock 句柄锚定帧首块：position() 随文档裁剪（setMaximumBlockCount）
+    // 自动前移，因此字符偏移无需自行维护；块被裁掉则 isValid() 失效 → 回退追加。
+    if(m_frameBlock.isValid()&&m_frameLen>0) {
+        const int pos=m_frameBlock.position();
+        const int docLen=m_outputView->document()->characterCount();
+        if(pos>=0&&pos+m_frameLen<=docLen
+           // 区间自愈：帧首不再是汇总行 'T' 即视为失效，放弃替换、回退追加，避免残影
+           &&m_outputView->document()->characterAt(pos)==QLatin1Char('T')) {
             QTextCursor sel(m_outputView->document());
-            sel.setPosition(m_framePos);
-            sel.setPosition(m_framePos+m_frameLen,QTextCursor::KeepAnchor);
+            sel.setPosition(pos);
+            sel.setPosition(pos+m_frameLen,QTextCursor::KeepAnchor);
             sel.insertText(block,fmt);   // 原地整帧替换（新旧帧长度可不同）
             replaced=true;
         }
     }
     if(!replaced) {
-        // 首帧或区间失效：追加新帧块到文档末尾，记录其字符区间
+        // 首帧或区间失效：追加新帧块到文档末尾，记录其首块句柄
         QTextCursor cur=m_outputView->textCursor();
         cur.movePosition(QTextCursor::End);
         const int base=cur.position();
         cur.insertText(QStringLiteral("\n")+block,fmt);
-        m_framePos=base+1;           // 前导换行之后即帧首
+        QTextCursor anchor(m_outputView->document());
+        anchor.setPosition(base+1);          // 前导换行之后即帧首
+        m_frameBlock=anchor.block();
     }
     m_frameLen=block.size();
     m_lastProgressLine=false;
@@ -1736,14 +1767,14 @@ QString MainWindow::modeKey(CryptoMode m) {
 
 // 工作线程递归统计规模；命中缓存的输入不再遍历（勾选/取消频繁重算，无缓存会反复全盘扫）
 static ScanResult scanInputs(const QStringList& paths,
-                             const QHash<QString,DirStat> cache,
+                             std::shared_ptr<const QHash<QString,DirStat>> cache,
                              std::shared_ptr<std::atomic<bool>> cancel) {
     ScanResult r;
     auto cancelled=[&]{ return cancel && cancel->load(std::memory_order_relaxed); };
     for(const QString& p : paths) {
         if(cancelled()) { r.complete=false; return r; }
-        auto hit=cache.constFind(p);
-        if(hit!=cache.constEnd()) {
+        auto hit=cache->constFind(p);
+        if(hit!=cache->constEnd()) {
             r.bytes+=hit->bytes;
             r.files+=hit->files;
             continue;
@@ -1792,7 +1823,9 @@ void MainWindow::startPendingScan() {
     m_scanCancel=std::make_shared<std::atomic<bool>>(false);
     auto cancel=m_scanCancel;
     const QStringList paths=collectOptions().inputPaths;
-    const QHash<QString,DirStat> cache=m_dirCache;
+    // 以共享快照传入工作线程：按值捕获 shared_ptr（仅原子增引用计数，不拷贝整张 QHash），
+    // 既避免每轮整表拷贝，又因快照不可变、主线程仅在扫描结束后回填而天然无竞态。
+    auto cache=std::make_shared<const QHash<QString,DirStat>>(m_dirCache);
     m_scanWatcher->setFuture(QtConcurrent::run(
         [paths,cache,cancel]{ return scanInputs(paths,cache,cancel); }));
 }

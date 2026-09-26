@@ -206,7 +206,7 @@ void ProcessCommandExecutor::onErrorOccurred(QProcess::ProcessError error) {
 }
 
 void ProcessCommandExecutor::emitFinished(const CommandResult& r) {
-    // 缺陷10 修复：finished 保证每次 execute() 至多发一次。崩溃等场景下
+    // finished 保证每次 execute() 至多发一次。崩溃等场景下
     // errorOccurred 与 finished 可能先后到达（或 errorOccurred 自身多次触发），
     // 此前两条路径都会走 emitFinished，导致上层把一次任务当成两次结束
     // （进度条提前归零、取消按钮状态错乱、输出窗口被重置两次）。
@@ -224,7 +224,9 @@ void ProcessCommandExecutor::cleanup() {
         m_process->disconnect(this);
         if (m_process->state() != QProcess::NotRunning) {
             m_process->kill();
-            m_process->waitForFinished(1000);
+            // 仅短暂等待子进程退出，避免阻塞调用线程（取消/析构路径）过久。
+            // 200ms 足够正常终止；超时则由后续 deleteLater 兜底回收。
+            m_process->waitForFinished(200);
         }
         m_process->deleteLater();
         m_process = nullptr;

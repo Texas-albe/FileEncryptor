@@ -8,50 +8,61 @@
 #include <QFont>
 #include <QApplication>
 
+static QString renderHtml(const QString& tpl, const ThemeManager::HtmlPalette& p,
+                          const QString& ver) {
+    QString h = tpl;
+    h.replace(QStringLiteral("%{bodyFg}"),       QLatin1String(p.bodyFg))
+      .replace(QStringLiteral("%{bodyBg}"),       QLatin1String(p.bodyBg))
+      .replace(QStringLiteral("%{headingGreen}"),  QLatin1String(p.headingGreen))
+      .replace(QStringLiteral("%{headingBlue}"),   QLatin1String(p.headingBlue))
+      .replace(QStringLiteral("%{preBg}"),         QLatin1String(p.preBg))
+      .replace(QStringLiteral("%{preFg}"),         QLatin1String(p.preFg))
+      .replace(QStringLiteral("%{mutedFg}"),       QLatin1String(p.mutedFg))
+      .replace(QStringLiteral("%{linkColor}"),     QLatin1String(p.linkColor))
+      .replace(QStringLiteral("%{ver}"),           ver);
+    return h;
+}
+
+// 版本号优先取应用元数据；未设置时回退到定位器报告的实际 GUI 版本，避免硬编码漂移。
+static QString resolvedVersion() {
+    return qApp->applicationVersion().isEmpty()
+        ? FileEncryptorLocator::guiVersion()
+        : qApp->applicationVersion();
+}
+
 CreditsDialog::CreditsDialog(QWidget* parent): QDialog(parent) {
     setWindowTitle(tr("鸣谢"));
     setMinimumSize(560,320);
 
     const auto& p=ThemeManager::htmlPalette();
-    // 缺陷18：兜底版本统一取 FileEncryptorLocator::guiVersion()（原为硬编码 1.0.1，与主窗口不一致）
-    const QString ver=qApp->applicationVersion().isEmpty()
-        ? FileEncryptorLocator::guiVersion() : qApp->applicationVersion();
     auto* browser=new QTextBrowser(this);
     browser->setOpenExternalLinks(true);
-    // 主题感知 HTML：body 文字/背景取自当前主题调色板，保证深色下可读（WCAG AA）
     browser->setStyleSheet(QStringLiteral("QTextBrowser{background:%1;color:%2;}")
         .arg(QLatin1String(p.bodyBg)).arg(QLatin1String(p.bodyFg)));
-    browser->setHtml(QStringLiteral(
+    browser->setHtml(renderHtml(QStringLiteral(
         "<html><body style='font-family: \"Microsoft YaHei\", \"Noto Sans CJK SC\", "
-        "line-height: 1.7; color:%1; background:%2;'>"
-        "<h2 style='color:%3;'>FileEncryptor v%7 — 鸣谢</h2>"
+        "line-height: 1.7; color:%{bodyFg}; background:%{bodyBg};'>"
+        "<h2 style='color:%{headingGreen};'>FileEncryptor v%{ver} — 鸣谢</h2>"
         "<p>感谢以下贡献者的付出：</p>"
         "<table cellspacing='8' cellpadding='2'>"
         "<tr><td><b>代码开发</b></td>"
         "<td>瑶璎珞</td>"
-        "<td><a href='https://space.bilibili.com/3546692557212318' style='color:%6;'>个人主页</a></td>"
-        "<td><a href='https://afdian.com/a/yaoyingluo' style='color:%6;'>赞助支持</a></td></tr>"
+        "<td><a href='https://space.bilibili.com/3546692557212318' style='color:%{linkColor};'>个人主页</a></td>"
+        "<td><a href='https://afdian.com/a/yaoyingluo' style='color:%{linkColor};'>赞助支持</a></td></tr>"
         "<tr><td><b>测试</b></td>"
         "<td>就不错了我</td>"
-        "<td><a href='https://space.bilibili.com/1705671238' style='color:%6;'>个人主页</a></td>"
+        "<td><a href='https://space.bilibili.com/1705671238' style='color:%{linkColor};'>个人主页</a></td>"
         "<td></td></tr>"
         "<tr><td><b>宣传</b></td>"
         "<td>Twilight飞友</td>"
-        "<td><a href='https://space.bilibili.com/3546728261224829' style='color:%6;'>个人主页</a></td>"
+        "<td><a href='https://space.bilibili.com/3546728261224829' style='color:%{linkColor};'>个人主页</a></td>"
         "<td></td></tr>"
         "</table>"
         "<hr/>"
-        "<p style='color:%4; font-size:small;'>"
+        "<p style='color:%{mutedFg}; font-size:small;'>"
         "本项目基于 libsodium 实现文件加密（XChaCha20-Poly1305 / AEGIS-256），"
         "采用 C++17 编写，跨平台运行于 Windows / Linux / macOS。</p>"
-        "</body></html>")
-        .arg(QLatin1String(p.bodyFg))
-        .arg(QLatin1String(p.bodyBg))
-        .arg(QLatin1String(p.headingGreen))
-        .arg(QLatin1String(p.mutedFg))
-        .arg(QLatin1String(p.headingGreen))
-        .arg(QLatin1String(p.linkColor))
-        .arg(ver));
+        "</body></html>"), p, resolvedVersion()));
 
     auto* btns=new QDialogButtonBox(QDialogButtonBox::Close,this);
     connect(btns,&QDialogButtonBox::rejected,this,&QDialog::accept);
@@ -66,17 +77,14 @@ ReadmeDialog::ReadmeDialog(QWidget* parent): QDialog(parent) {
     setMinimumSize(600,420);
 
     const auto& p=ThemeManager::htmlPalette();
-    // 缺陷18：兜底版本统一取 FileEncryptorLocator::guiVersion()（原为硬编码 1.0.1，与主窗口不一致）
-    const QString ver=qApp->applicationVersion().isEmpty()
-        ? FileEncryptorLocator::guiVersion() : qApp->applicationVersion();
     auto* browser=new QTextBrowser(this);
     browser->setOpenExternalLinks(true);
     browser->setStyleSheet(QStringLiteral("QTextBrowser{background:%1;color:%2;}")
         .arg(QLatin1String(p.bodyBg)).arg(QLatin1String(p.bodyFg)));
-    browser->setHtml(QStringLiteral(
+    browser->setHtml(renderHtml(QStringLiteral(
         "<html><body style='font-family: \"Microsoft YaHei\", \"Noto Sans CJK SC\", "
-        "line-height: 1.7; color:%1; background:%2;'>"
-        "<h2 style='color:%3;'>FileEncryptor v%7 — 项目摘要</h2>"
+        "line-height: 1.7; color:%{bodyFg}; background:%{bodyBg};'>"
+        "<h2 style='color:%{headingBlue};'>FileEncryptor v%{ver} — 项目摘要</h2>"
         "<p><b>简介</b>：跨平台（Windows / Linux / macOS）文件加密工具，"
         "基于 libsodium 实现 XChaCha20-Poly1305 与 AEGIS-256 加密。</p>"
         "<h3>核心特性</h3>"
@@ -89,7 +97,7 @@ ReadmeDialog::ReadmeDialog(QWidget* parent): QDialog(parent) {
         "<li><b>配置化</b>：日志/并发/路径策略等运维参数经 YAML 配置</li>"
         "</ul>"
         "<h3>命令行用法</h3>"
-        "<pre style='background:%4; color:%5; padding:8px; border-radius:4px;'>"
+        "<pre style='background:%{preBg}; color:%{preFg}; padding:8px; border-radius:4px;'>"
         "FileEncryptor -e/-d &lt;FileName&gt; [-o &lt;Path&gt;] [-de] [-m xchacha20|aegis256] [-y]\n"
         "FileEncryptor -be/-bd &lt;Path&gt; [-o &lt;Path&gt;] [-de] [-m xchacha20|aegis256] [-y]"
         "</pre>"
@@ -99,15 +107,8 @@ ReadmeDialog::ReadmeDialog(QWidget* parent): QDialog(parent) {
         "<h3>许可证</h3>"
         "<p>GPLv3</p>"
         "<hr/>"
-        "<p style='color:%6; font-size:small;'>本窗口为 README 摘要，完整文档请见项目根目录 README.md</p>"
-        "</body></html>")
-        .arg(QLatin1String(p.bodyFg))
-        .arg(QLatin1String(p.bodyBg))
-        .arg(QLatin1String(p.headingBlue))
-        .arg(QLatin1String(p.preBg))
-        .arg(QLatin1String(p.preFg))
-        .arg(QLatin1String(p.mutedFg))
-        .arg(ver));
+        "<p style='color:%{mutedFg}; font-size:small;'>本窗口为 README 摘要，完整文档请见项目根目录 README.md</p>"
+        "</body></html>"), p, resolvedVersion()));
 
     auto* btns=new QDialogButtonBox(QDialogButtonBox::Close,this);
     connect(btns,&QDialogButtonBox::rejected,this,&QDialog::accept);

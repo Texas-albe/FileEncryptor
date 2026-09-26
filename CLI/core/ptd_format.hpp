@@ -2,6 +2,7 @@
 // 盘面格式模块：.ptd 头部结构（v1..v6）、布局常量与 DEK 包裹原语。
 // 只描述字节布局与格式级操作，不包含加解密流程；所有常量取值与既有盘面严格一致。
 #include <cstddef>
+#include <cstring>
 #include <sodium.h>
 
 // 格式级长度常量（libsodium 定值）
@@ -171,4 +172,16 @@ inline void put_be32(unsigned char* p, uint32_t v) {
 }
 inline uint32_t get_be32(const unsigned char* p) {
     return ((uint32_t)p[0]<<24) | ((uint32_t)p[1]<<16) | ((uint32_t)p[2]<<8) | (uint32_t)p[3];
+}
+
+// 从字节缓冲装载磁盘头结构（strict-aliasing 安全）。
+// 禁止把 char[] 缓冲直接 reinterpret_cast 成 FileHeaderV* 读取——GCC/Clang
+// -fstrict-aliasing 下这是未定义行为（MSVC /GL 不 exploiting 此 UB 才未出错，
+// 属审计记录的 GCC/Clang 移植加固项）。memcpy 到本地 POD 结构后再读字段，
+// 布局与值完全一致。调用方须保证 buf 至少含 sizeof(T) 字节且已读入完整头部。
+template<typename T>
+inline T load_header(const unsigned char* buf) {
+    T h;
+    std::memcpy(&h, buf, sizeof(T));
+    return h;
 }
