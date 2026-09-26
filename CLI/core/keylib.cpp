@@ -86,13 +86,13 @@ bool read_key_material(const std::string& path, std::string& content, std::strin
         err = "Key file too large (>256 KB): " + path;
         return false;
     }
-    // 修剪首尾空白（含 CR/LF）
+    // 修剪首尾空白（含 CR/LF）；就地 erase + move 避免 substr 产生无法擦除的临时副本
     size_t a = 0, b = buf.size();
     while (a < b && (unsigned char)buf[a] <= 0x20) ++a;
     while (b > a && (unsigned char)buf[b - 1] <= 0x20) --b;
-    content = buf.substr(a, b - a);
-    // 就地擦除原始缓冲（材料可能含私钥）
-    sodium_memzero(buf.data(), buf.size());
+    if (a != 0) buf.erase(0, a);
+    if (b < buf.size()) buf.erase(b);
+    content = std::move(buf);
     if (content.empty()) {
         err = "Key file is empty: " + path;
         return false;
@@ -107,11 +107,12 @@ bool read_key_material(const std::string& path, std::string& content, std::strin
     if (low.rfind("age1", 0) == 0 || low.rfind("publickey:", 0) == 0) {
         // 统一剥掉可选的 publickey: 前缀
         if (low.rfind("publickey:", 0) == 0) {
-            content = content.substr(10);
+            content.erase(0, 10);
             a = 0; b = content.size();
             while (a < b && (unsigned char)content[a] <= 0x20) ++a;
             while (b > a && (unsigned char)content[b - 1] <= 0x20) --b;
-            content = content.substr(a, b - a);
+            if (a != 0) content.erase(0, a);
+            if (b < content.size()) content.erase(b);
         }
         kind = "recipient";
         return true;

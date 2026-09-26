@@ -1,7 +1,7 @@
 <Project Sdk="WixToolset.Sdk/4.0.5">
   <PropertyGroup>
     <OutputType>Package</OutputType>
-    <OutputName>FileEncryptorGUI-2.0.0-WinUI-Windows</OutputName>
+    <OutputName>FileEncryptorGUI-2.0.1-WinUI-Windows</OutputName>
     <Platform>x64</Platform>
     <DefineConstants>PublishDir=..\bin\x64\Release\net8.0-windows10.0.19041.0\win-x64\publish</DefineConstants>
     <SuppressIces>ICE03</SuppressIces>

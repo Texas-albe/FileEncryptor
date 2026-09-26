@@ -54,16 +54,16 @@ QString FileEncryptorLocator::locate() {
 
 // 期望的配套 CLI 版本（发布包文件名随之变化）。升级 CLI 时只需改这一处。
 QString FileEncryptorLocator::version() {
-    return QStringLiteral("2.4.2");
+    return QStringLiteral("2.4.3");
 }
 
 // GUI 自身版本（与 GUI/CMakeLists.txt project VERSION 同步）；此前 main/MainWindow/AboutDialogs 三处硬编码兜底值不一致，现统一从本函数读取。
 QString FileEncryptorLocator::guiVersion() {
-    return QStringLiteral("2.0.0");
+    return QStringLiteral("2.0.1");
 }
 
 QString FileEncryptorLocator::cliDownloadUrl() {
-    return QStringLiteral("https://github.com/Texas-albe/FileEncryptor/releases/tag/GUI2.0.0_CLI2.4.2");
+    return QStringLiteral("https://github.com/Texas-albe/FileEncryptor/releases/tag/GUI2.0.1_CLI2.4.3");
 }
 
 QStringList FileEncryptorLocator::getExpectedNames() {

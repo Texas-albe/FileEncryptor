@@ -170,7 +170,7 @@ static void print_usage() {
         <<"Options:\n"
         <<"  -o <dir>          Output directory (optional, default: source file's directory)\n"
         <<"  -de               Delete source after success: plaintext (encrypt) / .ptd (decrypt)\n"
-        <<"  --wipe-source     Securely wipe (multi-pass overwrite) source after success\n"
+        <<"  --wipe-source     Securely wipe (multi-pass overwrite) source after success (HDD only; SSD wear-leveling may prevent physical overwrite)\n"
         <<"  --recycle-source  Move source to system Recycle Bin after success\n"
         <<"  --rewrap <file>   Rotate key of a v6 container (payload untouched; old password via -k/env/interactive)\n"
         <<"  --new-key-file F  New password key file for --rewrap\n"
@@ -673,11 +673,12 @@ static bool run_derive(const std::string& output_dir,
 // 由身份私钥导出收件人公钥（-Y），等价于 rage-keygen -y。
 static bool run_pubkey(const SecureBuffer& identity) {
     std::string id(identity.cdata(),identity.size());
-    {   // 私钥文件可能带尾随换行 / 空格
+    {   // 私钥文件可能带尾随换行 / 空格；就地 erase 避免 substr 产生无法擦除的临时副本
         size_t a=0,b=id.size();
         while(a<b&&(unsigned char)id[a]<=0x20) ++a;
         while(b>a&&(unsigned char)id[b-1]<=0x20) --b;
-        if(a!=0||b!=id.size()) id=id.substr(a,b-a);
+        if(a!=0) id.erase(0,a);
+        if(b<id.size()) id.erase(b);
     }
     std::string pub;
     AsymOutcome o=fe_identity_to_recipient(id,pub);

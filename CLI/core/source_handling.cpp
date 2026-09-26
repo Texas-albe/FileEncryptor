@@ -43,35 +43,41 @@ bool secure_handle_source(const std::string& path, SourceDisposition disp) {
 #endif
     }
     if(disp==SourceDisposition::Wipe) {
-        // 多遍覆写（0x00 / 0xFF / 随机）后删除，使残留磁介质无法恢复明文
+        // 多遍覆写（0x00 / 0xFF / 随机）后删除；任一遍写入失败即标记 wipe_failed，
+        // 但仍尝试删除文件避免明文残留，返回 false 告知调用者擦除不完整。
+        // 注意：SSD 上软件覆写仅 NIST Clear 级，因磨损均衡无法保证物理块被覆写。
 #ifdef _WIN32
         clear_readonly_attribute(path);
 #endif
         std::fstream f;
         if(!open_stream(f,path,std::ios::in|std::ios::out|std::ios::binary)) {
-            return remove_file_utf8(path);   // 打不开则直接删除兜底
+            return remove_file_utf8(path);
         }
         f.seekg(0,std::ios::end);
         std::streamoff sz=f.tellg();
         f.seekg(0,std::ios::beg);
         std::vector<unsigned char> buf(FE_WIPE_CHUNK);
         const unsigned char pat[2]={0x00,0xFF};
+        bool wipe_failed=false;
         for(int pass=0; pass<3; ++pass) {
             f.seekg(0,std::ios::beg);
+            f.clear();
             unsigned long long remaining=(unsigned long long)(sz>0?sz:0);
             while(remaining>0) {
                 size_t n=(size_t)std::min<unsigned long long>(FE_WIPE_CHUNK, remaining);
                 if(pass==2) randombytes_buf(buf.data(),n);
                 else std::memset(buf.data(), pat[pass&1], n);
                 f.write(reinterpret_cast<const char*>(buf.data()), (std::streamsize)n);
-                if(!f) break;
+                if(!f) { wipe_failed=true; break; }
                 remaining-=n;
             }
             f.flush();
+            if(wipe_failed) break;
         }
         f.close();
         sodium_memzero(buf.data(), buf.size());
-        return remove_file_utf8(path);
+        bool deleted=remove_file_utf8(path);
+        return deleted && !wipe_failed;
     }
     return true;
 }

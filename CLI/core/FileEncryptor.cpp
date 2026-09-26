@@ -505,9 +505,28 @@ bool validate_io_paths(const std::string& in_path,const std::string& out_path,bo
             return (p.length()==root.length()) ||
                    (p[root.length()]=='/'||p[root.length()]=='\\');
         };
+        // 白名单相对路径基于 CWD 解析（缺陷16），而非硬编码绝对前缀
+        auto resolve_root=[&](const std::string& r)->std::string {
+            std::string rnorm = normalize_path_lexical(r);
+            bool is_abs = false;
+#ifdef _WIN32
+            is_abs = (rnorm.size()>=2 && rnorm[1]==':') ||
+                     (!rnorm.empty() && (rnorm[0]=='/'||rnorm[0]=='\\'));
+#else
+            is_abs = !rnorm.empty() && rnorm[0]=='/';
+#endif
+            if(is_abs) return rnorm;
+            char cwd[4096];
+            if(getcwd(cwd,sizeof(cwd))) {
+                std::string base = normalize_path_lexical(cwd);
+                if(!base.empty() && base.back()!='/' && base.back()!='\\') base.push_back('/');
+                return normalize_path_lexical(base + rnorm);
+            }
+            return rnorm;
+        };
         bool in_ok=false,out_ok=false;
         for(const auto& r:cfg.path_whitelist) {
-            const std::string rnorm = normalize_path_lexical(r);
+            const std::string rnorm = resolve_root(r);
             if(!in_ok&&under(in_norm,rnorm))  in_ok=true;
             if(!out_ok&&under(out_norm,rnorm)) out_ok=true;
         }

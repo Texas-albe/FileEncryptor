@@ -65,3 +65,5 @@ third_party/**/*.pdb
 The Next Release/
 scripts/
 fileencryptor.yaml
+# 更新包仓库（本地待应用更新，不纳入版本库）
+Updates/

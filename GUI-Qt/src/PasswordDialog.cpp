@@ -161,9 +161,10 @@ void PasswordDialog::onAccept() {
         MsgBox::error(this, tr("口令无效"), reason);
         return;
     }
-    // 取出口令（UTF-8 字节），随后清掉输入框明文
-    const QByteArray b = m_pw->text().toUtf8();
+    // 取出口令（UTF-8 字节），随后清零临时缓冲并清掉输入框明文
+    QByteArray b = m_pw->text().toUtf8();
     m_secret.assign(b.begin(), b.end());
+    memset(b.data(), 0, b.size());
     m_pw->clear();
     m_confirm->clear();
     accept();
