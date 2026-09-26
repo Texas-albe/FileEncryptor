@@ -13,9 +13,8 @@ inline constexpr unsigned int ARGON2_MEM_LEGACY_KB = (unsigned int)(crypto_pwhas
 inline constexpr unsigned int ARGON2_OPS_DEFAULT   = 4;
 inline constexpr unsigned int ARGON2_MEM_DEFAULT_KB = 128*1024;
 
-// KDF 参数安全上界：文件头里的 opslimit / memlimit_kb 是攻击者可控的，而 header_hmac
-// 在 KDF 之后才能校验。不加界时一个 125 字节的恶意 .ptd 就能让解密方跑数百秒并吃掉
-// 数 GB 内存（批量解密按文件数线性放大）。本程序写出的头恒为 ops=4 / mem=128MB，上界留余量。
+// KDF 参数安全上界：头里 opslimit/memlimit 攻击者可控，而 header_hmac 在 KDF 后才能校验；
+// 不加界时恶意 .ptd 可让解密方跑数百秒并吃数 GB 内存。本程序写头恒为 ops=4/mem=128MB，上界留余量。
 inline constexpr unsigned int KDF_OPS_LIMIT_MAX     = 10;
 inline constexpr size_t       KDF_MEM_LIMIT_MAX_BYTES = size_t(1)<<30;  // 1 GiB
 

@@ -1,5 +1,5 @@
-﻿cmake_minimum_required(VERSION 3.15)
-project(FileEncryptorCLI VERSION 2.4.1 LANGUAGES CXX)
+cmake_minimum_required(VERSION 3.15)
+project(FileEncryptorCLI VERSION 2.4.2 LANGUAGES CXX)
 
 # FileEncryptor CLI - 命令行加密工具（独立项目）
 # 本项目编译产出 FileEncryptorCLI(.exe)；GUI 项目（../GUI）通过 QProcess 调用此程序。
@@ -638,7 +638,7 @@ endif()
 # 静态链接后最终二进制不依赖任何外部 libsodium，安装包内无需再下载依赖库。
 #
 # 规范命名：构建即产出 <原名称>-<版本号>-<平台> 的可执行文件（不保留原名），
-# 例：FileEncryptorCLI-2.4.1-Linux / FileEncryptorCLI-2.4.1-Windows.exe。
+# 例：FileEncryptorCLI-2.4.2-Linux / FileEncryptorCLI-2.4.2-Windows.exe。
 # 版本号取自构建变量 PROJECT_VERSION（随 project(VERSION) 自动同步），
 # 平台取 Linux / Windows，原名称取目标 OUTPUT_NAME（CLI 为 FileEncryptorCLI）。
 # GUI 的 FileEncryptorLocator::getExpectedNames() 已按此命名探测 CLI，无需保留原名。

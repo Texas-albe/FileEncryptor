@@ -1,0 +1,19 @@
+<Solution>
+  <Configurations>
+    <BuildType Name="Debug" />
+    <BuildType Name="Release" />
+    <Platform Name="x64" />
+  </Configurations>
+  <Folder Name="/CLI/" />
+  <Folder Name="/GUI-Qt/" />
+  <Folder Name="/GUI-WinUI/">
+    <Project Path="GUI-WinUI/FileEncryptorGUI.WinUI3.csproj">
+      <BuildType Project="Release" />
+      <Platform Project="x64" />
+    </Project>
+    <Project Path="GUI-WinUI/installer/FileEncryptorGUI.Installer.wixproj" Type="b7dd6f7e-def8-4e67-b5b7-07ef123db6f0">
+      <BuildType Project="Release" />
+      <Platform Project="x64" />
+    </Project>
+  </Folder>
+</Solution>

@@ -8,9 +8,8 @@
 
 namespace {
 
-// 进程级 KDF 内存预算：并发进入 Argon2 前先取信号量许可，避免批量解密时
-// N 线程同时跑大内存 Argon2 导致 OOM。预算 = max_memory_bytes / 128MB；
-// max_memory_bytes==0 表示不限制（由线程数本身约束）。惰性初始化。
+// 进程级 KDF 内存预算：并发进入 Argon2 前取信号量许可，避免批量解密 N 线程同时跑大内存
+// Argon2 导致 OOM。预算 = max_memory_bytes/128MB；为 0 表示不限制。惰性初始化。
 struct KdfSemaphore {
     std::mutex mtx;
     std::condition_variable cv;

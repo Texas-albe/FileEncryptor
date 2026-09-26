@@ -1,0 +1,1402 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Fragment>
+    <DirectoryRef Id="INSTALLFOLDER">
+      <Directory Id="dir_af_ZA" Name="af-ZA" />
+      <Directory Id="dir_am_ET" Name="am-ET" />
+      <Directory Id="dir_ar_SA" Name="ar-SA" />
+      <Directory Id="dir_as_IN" Name="as-IN" />
+      <Directory Id="dir_Assets" Name="Assets" />
+      <Directory Id="dir_az_Latn_AZ" Name="az-Latn-AZ" />
+      <Directory Id="dir_bg_BG" Name="bg-BG" />
+      <Directory Id="dir_bn_IN" Name="bn-IN" />
+      <Directory Id="dir_bs_Latn_BA" Name="bs-Latn-BA" />
+      <Directory Id="dir_ca_ES" Name="ca-ES" />
+      <Directory Id="dir_ca_Es_VALENCIA" Name="ca-Es-VALENCIA" />
+      <Directory Id="dir_cs_CZ" Name="cs-CZ" />
+      <Directory Id="dir_cy_GB" Name="cy-GB" />
+      <Directory Id="dir_da_DK" Name="da-DK" />
+      <Directory Id="dir_de_DE" Name="de-DE" />
+      <Directory Id="dir_el_GR" Name="el-GR" />
+      <Directory Id="dir_en_GB" Name="en-GB" />
+      <Directory Id="dir_en_us" Name="en-us" />
+      <Directory Id="dir_es_ES" Name="es-ES" />
+      <Directory Id="dir_es_MX" Name="es-MX" />
+      <Directory Id="dir_et_EE" Name="et-EE" />
+      <Directory Id="dir_eu_ES" Name="eu-ES" />
+      <Directory Id="dir_fa_IR" Name="fa-IR" />
+      <Directory Id="dir_fi_FI" Name="fi-FI" />
+      <Directory Id="dir_fil_PH" Name="fil-PH" />
+      <Directory Id="dir_fr_CA" Name="fr-CA" />
+      <Directory Id="dir_fr_FR" Name="fr-FR" />
+      <Directory Id="dir_ga_IE" Name="ga-IE" />
+      <Directory Id="dir_gd_gb" Name="gd-gb" />
+      <Directory Id="dir_gl_ES" Name="gl-ES" />
+      <Directory Id="dir_gu_IN" Name="gu-IN" />
+      <Directory Id="dir_he_IL" Name="he-IL" />
+      <Directory Id="dir_hi_IN" Name="hi-IN" />
+      <Directory Id="dir_hr_HR" Name="hr-HR" />
+      <Directory Id="dir_hu_HU" Name="hu-HU" />
+      <Directory Id="dir_hy_AM" Name="hy-AM" />
+      <Directory Id="dir_id_ID" Name="id-ID" />
+      <Directory Id="dir_is_IS" Name="is-IS" />
+      <Directory Id="dir_it_IT" Name="it-IT" />
+      <Directory Id="dir_ja_JP" Name="ja-JP" />
+      <Directory Id="dir_ka_GE" Name="ka-GE" />
+      <Directory Id="dir_kk_KZ" Name="kk-KZ" />
+      <Directory Id="dir_km_KH" Name="km-KH" />
+      <Directory Id="dir_kn_IN" Name="kn-IN" />
+      <Directory Id="dir_kok_IN" Name="kok-IN" />
+      <Directory Id="dir_ko_KR" Name="ko-KR" />
+      <Directory Id="dir_lb_LU" Name="lb-LU" />
+      <Directory Id="dir_lo_LA" Name="lo-LA" />
+      <Directory Id="dir_lt_LT" Name="lt-LT" />
+      <Directory Id="dir_lv_LV" Name="lv-LV" />
+      <Directory Id="dir_Microsoft_UI_Xaml_Assets" Name="Microsoft.UI.Xaml\Assets" />
+      <Directory Id="dir_mi_NZ" Name="mi-NZ" />
+      <Directory Id="dir_mk_MK" Name="mk-MK" />
+      <Directory Id="dir_ml_IN" Name="ml-IN" />
+      <Directory Id="dir_mr_IN" Name="mr-IN" />
+      <Directory Id="dir_ms_MY" Name="ms-MY" />
+      <Directory Id="dir_mt_MT" Name="mt-MT" />
+      <Directory Id="dir_nb_NO" Name="nb-NO" />
+      <Directory Id="dir_ne_NP" Name="ne-NP" />
+      <Directory Id="dir_nl_NL" Name="nl-NL" />
+      <Directory Id="dir_nn_NO" Name="nn-NO" />
+      <Directory Id="dir_or_IN" Name="or-IN" />
+      <Directory Id="dir_pa_IN" Name="pa-IN" />
+      <Directory Id="dir_pl_PL" Name="pl-PL" />
+      <Directory Id="dir_pt_BR" Name="pt-BR" />
+      <Directory Id="dir_pt_PT" Name="pt-PT" />
+      <Directory Id="dir_quz_PE" Name="quz-PE" />
+      <Directory Id="dir_ro_RO" Name="ro-RO" />
+      <Directory Id="dir_ru_RU" Name="ru-RU" />
+      <Directory Id="dir_sk_SK" Name="sk-SK" />
+      <Directory Id="dir_sl_SI" Name="sl-SI" />
+      <Directory Id="dir_sq_AL" Name="sq-AL" />
+      <Directory Id="dir_sr_Cyrl_BA" Name="sr-Cyrl-BA" />
+      <Directory Id="dir_sr_Cyrl_RS" Name="sr-Cyrl-RS" />
+      <Directory Id="dir_sr_Latn_RS" Name="sr-Latn-RS" />
+      <Directory Id="dir_sv_SE" Name="sv-SE" />
+      <Directory Id="dir_ta_IN" Name="ta-IN" />
+      <Directory Id="dir_te_IN" Name="te-IN" />
+      <Directory Id="dir_th_TH" Name="th-TH" />
+      <Directory Id="dir_tr_TR" Name="tr-TR" />
+      <Directory Id="dir_tt_RU" Name="tt-RU" />
+      <Directory Id="dir_ug_CN" Name="ug-CN" />
+      <Directory Id="dir_uk_UA" Name="uk-UA" />
+      <Directory Id="dir_ur_PK" Name="ur-PK" />
+      <Directory Id="dir_uz_Latn_UZ" Name="uz-Latn-UZ" />
+      <Directory Id="dir_vi_VN" Name="vi-VN" />
+      <Directory Id="dir_zh_CN" Name="zh-CN" />
+      <Directory Id="dir_zh_TW" Name="zh-TW" />
+    </DirectoryRef>
+    <ComponentGroup Id="AppFiles">
+      <Component Id="f0" Directory="dir_af_ZA">
+        <File Source="$(var.PublishDir)\af-ZA\Microsoft.ui.xaml.dll.mui" />
+      </Component>
+      <Component Id="f1" Directory="dir_af_ZA">
+        <File Source="$(var.PublishDir)\af-ZA\Microsoft.UI.Xaml.Phone.dll.mui" />
+      </Component>
+      <Component Id="f2" Directory="dir_am_ET">
+        <File Source="$(var.PublishDir)\am-ET\Microsoft.ui.xaml.dll.mui" />
+      </Component>
+      <Component Id="f3" Directory="dir_am_ET">
+        <File Source="$(var.PublishDir)\am-ET\Microsoft.UI.Xaml.Phone.dll.mui" />
+      </Component>
+      <Component Id="f4" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\App.xbf" />
+      </Component>
+      <Component Id="f5" Directory="dir_ar_SA">
+        <File Source="$(var.PublishDir)\ar-SA\Microsoft.ui.xaml.dll.mui" />
+      </Component>
+      <Component Id="f6" Directory="dir_ar_SA">
+        <File Source="$(var.PublishDir)\ar-SA\Microsoft.UI.Xaml.Phone.dll.mui" />
+      </Component>
+      <Component Id="f7" Directory="dir_as_IN">
+        <File Source="$(var.PublishDir)\as-IN\Microsoft.ui.xaml.dll.mui" />
+      </Component>
+      <Component Id="f8" Directory="dir_as_IN">
+        <File Source="$(var.PublishDir)\as-IN\Microsoft.UI.Xaml.Phone.dll.mui" />
+      </Component>
+      <Component Id="f9" Directory="dir_Assets">
+        <File Source="$(var.PublishDir)\Assets\app.ico" />
+      </Component>
+      <Component Id="f10" Directory="dir_az_Latn_AZ">
+        <File Source="$(var.PublishDir)\az-Latn-AZ\Microsoft.ui.xaml.dll.mui" />
+      </Component>
+      <Component Id="f11" Directory="dir_az_Latn_AZ">
+        <File Source="$(var.PublishDir)\az-Latn-AZ\Microsoft.UI.Xaml.Phone.dll.mui" />
+      </Component>
+      <Component Id="f12" Directory="dir_bg_BG">
+        <File Source="$(var.PublishDir)\bg-BG\Microsoft.ui.xaml.dll.mui" />
+      </Component>
+      <Component Id="f13" Directory="dir_bg_BG">
+        <File Source="$(var.PublishDir)\bg-BG\Microsoft.UI.Xaml.Phone.dll.mui" />
+      </Component>
+      <Component Id="f14" Directory="dir_bn_IN">
+        <File Source="$(var.PublishDir)\bn-IN\Microsoft.ui.xaml.dll.mui" />
+      </Component>
+      <Component Id="f15" Directory="dir_bn_IN">
+        <File Source="$(var.PublishDir)\bn-IN\Microsoft.UI.Xaml.Phone.dll.mui" />
+      </Component>
+      <Component Id="f16" Directory="dir_bs_Latn_BA">
+        <File Source="$(var.PublishDir)\bs-Latn-BA\Microsoft.ui.xaml.dll.mui" />
+      </Component>
+      <Component Id="f17" Directory="dir_bs_Latn_BA">
+        <File Source="$(var.PublishDir)\bs-Latn-BA\Microsoft.UI.Xaml.Phone.dll.mui" />
+      </Component>
+      <Component Id="f18" Directory="dir_ca_ES">
+        <File Source="$(var.PublishDir)\ca-ES\Microsoft.ui.xaml.dll.mui" />
+      </Component>
+      <Component Id="f19" Directory="dir_ca_ES">
+        <File Source="$(var.PublishDir)\ca-ES\Microsoft.UI.Xaml.Phone.dll.mui" />
+      </Component>
+      <Component Id="f20" Directory="dir_ca_Es_VALENCIA">
+        <File Source="$(var.PublishDir)\ca-Es-VALENCIA\Microsoft.ui.xaml.dll.mui" />
+      </Component>
+      <Component Id="f21" Directory="dir_ca_Es_VALENCIA">
+        <File Source="$(var.PublishDir)\ca-Es-VALENCIA\Microsoft.UI.Xaml.Phone.dll.mui" />
+      </Component>
+      <Component Id="f22" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\clretwrc.dll" />
+      </Component>
+      <Component Id="f23" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\clrgc.dll" />
+      </Component>
+      <Component Id="f24" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\clrjit.dll" />
+      </Component>
+      <Component Id="f25" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\coreclr.dll" />
+      </Component>
+      <Component Id="f26" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\CoreMessagingXP.dll" />
+      </Component>
+      <Component Id="f27" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\createdump.exe" />
+      </Component>
+      <Component Id="f28" Directory="dir_cs_CZ">
+        <File Source="$(var.PublishDir)\cs-CZ\Microsoft.ui.xaml.dll.mui" />
+      </Component>
+      <Component Id="f29" Directory="dir_cs_CZ">
+        <File Source="$(var.PublishDir)\cs-CZ\Microsoft.UI.Xaml.Phone.dll.mui" />
+      </Component>
+      <Component Id="f30" Directory="dir_cy_GB">
+        <File Source="$(var.PublishDir)\cy-GB\Microsoft.ui.xaml.dll.mui" />
+      </Component>
+      <Component Id="f31" Directory="dir_cy_GB">
+        <File Source="$(var.PublishDir)\cy-GB\Microsoft.UI.Xaml.Phone.dll.mui" />
+      </Component>
+      <Component Id="f32" Directory="dir_da_DK">
+        <File Source="$(var.PublishDir)\da-DK\Microsoft.ui.xaml.dll.mui" />
+      </Component>
+      <Component Id="f33" Directory="dir_da_DK">
+        <File Source="$(var.PublishDir)\da-DK\Microsoft.UI.Xaml.Phone.dll.mui" />
+      </Component>
+      <Component Id="f34" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\dcompi.dll" />
+      </Component>
+      <Component Id="f35" Directory="dir_de_DE">
+        <File Source="$(var.PublishDir)\de-DE\Microsoft.ui.xaml.dll.mui" />
+      </Component>
+      <Component Id="f36" Directory="dir_de_DE">
+        <File Source="$(var.PublishDir)\de-DE\Microsoft.UI.Xaml.Phone.dll.mui" />
+      </Component>
+      <Component Id="f37" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\dwmcorei.dll" />
+      </Component>
+      <Component Id="f38" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\DwmSceneI.dll" />
+      </Component>
+      <Component Id="f39" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\DWriteCore.dll" />
+      </Component>
+      <Component Id="f40" Directory="dir_el_GR">
+        <File Source="$(var.PublishDir)\el-GR\Microsoft.ui.xaml.dll.mui" />
+      </Component>
+      <Component Id="f41" Directory="dir_el_GR">
+        <File Source="$(var.PublishDir)\el-GR\Microsoft.UI.Xaml.Phone.dll.mui" />
+      </Component>
+      <Component Id="f42" Directory="dir_en_GB">
+        <File Source="$(var.PublishDir)\en-GB\Microsoft.ui.xaml.dll.mui" />
+      </Component>
+      <Component Id="f43" Directory="dir_en_GB">
+        <File Source="$(var.PublishDir)\en-GB\Microsoft.UI.Xaml.Phone.dll.mui" />
+      </Component>
+      <Component Id="f44" Directory="dir_en_us">
+        <File Source="$(var.PublishDir)\en-us\Microsoft.ui.xaml.dll.mui" />
+      </Component>
+      <Component Id="f45" Directory="dir_en_us">
+        <File Source="$(var.PublishDir)\en-us\Microsoft.UI.Xaml.Phone.dll.mui" />
+      </Component>
+      <Component Id="f46" Directory="dir_es_ES">
+        <File Source="$(var.PublishDir)\es-ES\Microsoft.ui.xaml.dll.mui" />
+      </Component>
+      <Component Id="f47" Directory="dir_es_ES">
+        <File Source="$(var.PublishDir)\es-ES\Microsoft.UI.Xaml.Phone.dll.mui" />
+      </Component>
+      <Component Id="f48" Directory="dir_es_MX">
+        <File Source="$(var.PublishDir)\es-MX\Microsoft.ui.xaml.dll.mui" />
+      </Component>
+      <Component Id="f49" Directory="dir_es_MX">
+        <File Source="$(var.PublishDir)\es-MX\Microsoft.UI.Xaml.Phone.dll.mui" />
+      </Component>
+      <Component Id="f50" Directory="dir_et_EE">
+        <File Source="$(var.PublishDir)\et-EE\Microsoft.ui.xaml.dll.mui" />
+      </Component>
+      <Component Id="f51" Directory="dir_et_EE">
+        <File Source="$(var.PublishDir)\et-EE\Microsoft.UI.Xaml.Phone.dll.mui" />
+      </Component>
+      <Component Id="f52" Directory="dir_eu_ES">
+        <File Source="$(var.PublishDir)\eu-ES\Microsoft.ui.xaml.dll.mui" />
+      </Component>
+      <Component Id="f53" Directory="dir_eu_ES">
+        <File Source="$(var.PublishDir)\eu-ES\Microsoft.UI.Xaml.Phone.dll.mui" />
+      </Component>
+      <Component Id="f54" Directory="dir_fa_IR">
+        <File Source="$(var.PublishDir)\fa-IR\Microsoft.ui.xaml.dll.mui" />
+      </Component>
+      <Component Id="f55" Directory="dir_fa_IR">
+        <File Source="$(var.PublishDir)\fa-IR\Microsoft.UI.Xaml.Phone.dll.mui" />
+      </Component>
+      <Component Id="f56" Directory="dir_fi_FI">
+        <File Source="$(var.PublishDir)\fi-FI\Microsoft.ui.xaml.dll.mui" />
+      </Component>
+      <Component Id="f57" Directory="dir_fi_FI">
+        <File Source="$(var.PublishDir)\fi-FI\Microsoft.UI.Xaml.Phone.dll.mui" />
+      </Component>
+      <Component Id="f58" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\FileEncryptorGUI.WinUI3.deps.json" />
+      </Component>
+      <Component Id="f59" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\FileEncryptorGUI.WinUI3.dll" />
+      </Component>
+      <Component Id="f60" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\FileEncryptorGUI.WinUI3.runtimeconfig.json" />
+      </Component>
+      <Component Id="f61" Directory="dir_fil_PH">
+        <File Source="$(var.PublishDir)\fil-PH\Microsoft.ui.xaml.dll.mui" />
+      </Component>
+      <Component Id="f62" Directory="dir_fil_PH">
+        <File Source="$(var.PublishDir)\fil-PH\Microsoft.UI.Xaml.Phone.dll.mui" />
+      </Component>
+      <Component Id="f63" Directory="dir_fr_CA">
+        <File Source="$(var.PublishDir)\fr-CA\Microsoft.ui.xaml.dll.mui" />
+      </Component>
+      <Component Id="f64" Directory="dir_fr_CA">
+        <File Source="$(var.PublishDir)\fr-CA\Microsoft.UI.Xaml.Phone.dll.mui" />
+      </Component>
+      <Component Id="f65" Directory="dir_fr_FR">
+        <File Source="$(var.PublishDir)\fr-FR\Microsoft.ui.xaml.dll.mui" />
+      </Component>
+      <Component Id="f66" Directory="dir_fr_FR">
+        <File Source="$(var.PublishDir)\fr-FR\Microsoft.UI.Xaml.Phone.dll.mui" />
+      </Component>
+      <Component Id="f67" Directory="dir_ga_IE">
+        <File Source="$(var.PublishDir)\ga-IE\Microsoft.ui.xaml.dll.mui" />
+      </Component>
+      <Component Id="f68" Directory="dir_ga_IE">
+        <File Source="$(var.PublishDir)\ga-IE\Microsoft.UI.Xaml.Phone.dll.mui" />
+      </Component>
+      <Component Id="f69" Directory="dir_gd_gb">
+        <File Source="$(var.PublishDir)\gd-gb\Microsoft.ui.xaml.dll.mui" />
+      </Component>
+      <Component Id="f70" Directory="dir_gd_gb">
+        <File Source="$(var.PublishDir)\gd-gb\Microsoft.UI.Xaml.Phone.dll.mui" />
+      </Component>
+      <Component Id="f71" Directory="dir_gl_ES">
+        <File Source="$(var.PublishDir)\gl-ES\Microsoft.ui.xaml.dll.mui" />
+      </Component>
+      <Component Id="f72" Directory="dir_gl_ES">
+        <File Source="$(var.PublishDir)\gl-ES\Microsoft.UI.Xaml.Phone.dll.mui" />
+      </Component>
+      <Component Id="f73" Directory="dir_gu_IN">
+        <File Source="$(var.PublishDir)\gu-IN\Microsoft.ui.xaml.dll.mui" />
+      </Component>
+      <Component Id="f74" Directory="dir_gu_IN">
+        <File Source="$(var.PublishDir)\gu-IN\Microsoft.UI.Xaml.Phone.dll.mui" />
+      </Component>
+      <Component Id="f75" Directory="dir_he_IL">
+        <File Source="$(var.PublishDir)\he-IL\Microsoft.ui.xaml.dll.mui" />
+      </Component>
+      <Component Id="f76" Directory="dir_he_IL">
+        <File Source="$(var.PublishDir)\he-IL\Microsoft.UI.Xaml.Phone.dll.mui" />
+      </Component>
+      <Component Id="f77" Directory="dir_hi_IN">
+        <File Source="$(var.PublishDir)\hi-IN\Microsoft.ui.xaml.dll.mui" />
+      </Component>
+      <Component Id="f78" Directory="dir_hi_IN">
+        <File Source="$(var.PublishDir)\hi-IN\Microsoft.UI.Xaml.Phone.dll.mui" />
+      </Component>
+      <Component Id="f79" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\hostfxr.dll" />
+      </Component>
+      <Component Id="f80" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\hostpolicy.dll" />
+      </Component>
+      <Component Id="f81" Directory="dir_hr_HR">
+        <File Source="$(var.PublishDir)\hr-HR\Microsoft.ui.xaml.dll.mui" />
+      </Component>
+      <Component Id="f82" Directory="dir_hr_HR">
+        <File Source="$(var.PublishDir)\hr-HR\Microsoft.UI.Xaml.Phone.dll.mui" />
+      </Component>
+      <Component Id="f83" Directory="dir_hu_HU">
+        <File Source="$(var.PublishDir)\hu-HU\Microsoft.ui.xaml.dll.mui" />
+      </Component>
+      <Component Id="f84" Directory="dir_hu_HU">
+        <File Source="$(var.PublishDir)\hu-HU\Microsoft.UI.Xaml.Phone.dll.mui" />
+      </Component>
+      <Component Id="f85" Directory="dir_hy_AM">
+        <File Source="$(var.PublishDir)\hy-AM\Microsoft.ui.xaml.dll.mui" />
+      </Component>
+      <Component Id="f86" Directory="dir_hy_AM">
+        <File Source="$(var.PublishDir)\hy-AM\Microsoft.UI.Xaml.Phone.dll.mui" />
+      </Component>
+      <Component Id="f87" Directory="dir_id_ID">
+        <File Source="$(var.PublishDir)\id-ID\Microsoft.ui.xaml.dll.mui" />
+      </Component>
+      <Component Id="f88" Directory="dir_id_ID">
+        <File Source="$(var.PublishDir)\id-ID\Microsoft.UI.Xaml.Phone.dll.mui" />
+      </Component>
+      <Component Id="f89" Directory="dir_is_IS">
+        <File Source="$(var.PublishDir)\is-IS\Microsoft.ui.xaml.dll.mui" />
+      </Component>
+      <Component Id="f90" Directory="dir_is_IS">
+        <File Source="$(var.PublishDir)\is-IS\Microsoft.UI.Xaml.Phone.dll.mui" />
+      </Component>
+      <Component Id="f91" Directory="dir_it_IT">
+        <File Source="$(var.PublishDir)\it-IT\Microsoft.ui.xaml.dll.mui" />
+      </Component>
+      <Component Id="f92" Directory="dir_it_IT">
+        <File Source="$(var.PublishDir)\it-IT\Microsoft.UI.Xaml.Phone.dll.mui" />
+      </Component>
+      <Component Id="f93" Directory="dir_ja_JP">
+        <File Source="$(var.PublishDir)\ja-JP\Microsoft.ui.xaml.dll.mui" />
+      </Component>
+      <Component Id="f94" Directory="dir_ja_JP">
+        <File Source="$(var.PublishDir)\ja-JP\Microsoft.UI.Xaml.Phone.dll.mui" />
+      </Component>
+      <Component Id="f95" Directory="dir_ka_GE">
+        <File Source="$(var.PublishDir)\ka-GE\Microsoft.ui.xaml.dll.mui" />
+      </Component>
+      <Component Id="f96" Directory="dir_ka_GE">
+        <File Source="$(var.PublishDir)\ka-GE\Microsoft.UI.Xaml.Phone.dll.mui" />
+      </Component>
+      <Component Id="f97" Directory="dir_kk_KZ">
+        <File Source="$(var.PublishDir)\kk-KZ\Microsoft.ui.xaml.dll.mui" />
+      </Component>
+      <Component Id="f98" Directory="dir_kk_KZ">
+        <File Source="$(var.PublishDir)\kk-KZ\Microsoft.UI.Xaml.Phone.dll.mui" />
+      </Component>
+      <Component Id="f99" Directory="dir_km_KH">
+        <File Source="$(var.PublishDir)\km-KH\Microsoft.ui.xaml.dll.mui" />
+      </Component>
+      <Component Id="f100" Directory="dir_km_KH">
+        <File Source="$(var.PublishDir)\km-KH\Microsoft.UI.Xaml.Phone.dll.mui" />
+      </Component>
+      <Component Id="f101" Directory="dir_kn_IN">
+        <File Source="$(var.PublishDir)\kn-IN\Microsoft.ui.xaml.dll.mui" />
+      </Component>
+      <Component Id="f102" Directory="dir_kn_IN">
+        <File Source="$(var.PublishDir)\kn-IN\Microsoft.UI.Xaml.Phone.dll.mui" />
+      </Component>
+      <Component Id="f103" Directory="dir_kok_IN">
+        <File Source="$(var.PublishDir)\kok-IN\Microsoft.ui.xaml.dll.mui" />
+      </Component>
+      <Component Id="f104" Directory="dir_kok_IN">
+        <File Source="$(var.PublishDir)\kok-IN\Microsoft.UI.Xaml.Phone.dll.mui" />
+      </Component>
+      <Component Id="f105" Directory="dir_ko_KR">
+        <File Source="$(var.PublishDir)\ko-KR\Microsoft.ui.xaml.dll.mui" />
+      </Component>
+      <Component Id="f106" Directory="dir_ko_KR">
+        <File Source="$(var.PublishDir)\ko-KR\Microsoft.UI.Xaml.Phone.dll.mui" />
+      </Component>
+      <Component Id="f107" Directory="dir_lb_LU">
+        <File Source="$(var.PublishDir)\lb-LU\Microsoft.ui.xaml.dll.mui" />
+      </Component>
+      <Component Id="f108" Directory="dir_lb_LU">
+        <File Source="$(var.PublishDir)\lb-LU\Microsoft.UI.Xaml.Phone.dll.mui" />
+      </Component>
+      <Component Id="f109" Directory="dir_lo_LA">
+        <File Source="$(var.PublishDir)\lo-LA\Microsoft.ui.xaml.dll.mui" />
+      </Component>
+      <Component Id="f110" Directory="dir_lo_LA">
+        <File Source="$(var.PublishDir)\lo-LA\Microsoft.UI.Xaml.Phone.dll.mui" />
+      </Component>
+      <Component Id="f111" Directory="dir_lt_LT">
+        <File Source="$(var.PublishDir)\lt-LT\Microsoft.ui.xaml.dll.mui" />
+      </Component>
+      <Component Id="f112" Directory="dir_lt_LT">
+        <File Source="$(var.PublishDir)\lt-LT\Microsoft.UI.Xaml.Phone.dll.mui" />
+      </Component>
+      <Component Id="f113" Directory="dir_lv_LV">
+        <File Source="$(var.PublishDir)\lv-LV\Microsoft.ui.xaml.dll.mui" />
+      </Component>
+      <Component Id="f114" Directory="dir_lv_LV">
+        <File Source="$(var.PublishDir)\lv-LV\Microsoft.UI.Xaml.Phone.dll.mui" />
+      </Component>
+      <Component Id="f115" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\MainWindow.xbf" />
+      </Component>
+      <Component Id="f116" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\marshal.dll" />
+      </Component>
+      <Component Id="f117" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\Microsoft.CSharp.dll" />
+      </Component>
+      <Component Id="f118" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\Microsoft.DiaSymReader.Native.amd64.dll" />
+      </Component>
+      <Component Id="f119" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\Microsoft.DirectManipulation.dll" />
+      </Component>
+      <Component Id="f120" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\Microsoft.Foundation.winmd" />
+      </Component>
+      <Component Id="f121" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\Microsoft.Graphics.Display.dll" />
+      </Component>
+      <Component Id="f122" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\Microsoft.Graphics.winmd" />
+      </Component>
+      <Component Id="f123" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\Microsoft.InputStateManager.dll" />
+      </Component>
+      <Component Id="f124" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\Microsoft.InteractiveExperiences.Projection.dll" />
+      </Component>
+      <Component Id="f125" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\Microsoft.Internal.FrameworkUdk.dll" />
+      </Component>
+      <Component Id="f126" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\Microsoft.UI.Composition.OSSupport.dll" />
+      </Component>
+      <Component Id="f127" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\Microsoft.UI.dll" />
+      </Component>
+      <Component Id="f128" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\Microsoft.UI.Input.dll" />
+      </Component>
+      <Component Id="f129" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\Microsoft.UI.Text.winmd" />
+      </Component>
+      <Component Id="f130" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\Microsoft.UI.Windowing.Core.dll" />
+      </Component>
+      <Component Id="f131" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\Microsoft.UI.Windowing.dll" />
+      </Component>
+      <Component Id="f132" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\Microsoft.UI.winmd" />
+      </Component>
+      <Component Id="f133" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\Microsoft.UI.Xaml.Controls.dll" />
+      </Component>
+      <Component Id="f134" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\Microsoft.UI.Xaml.Controls.pri" />
+      </Component>
+      <Component Id="f135" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\Microsoft.ui.xaml.dll" />
+      </Component>
+      <Component Id="f136" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\Microsoft.UI.Xaml.Internal.dll" />
+      </Component>
+      <Component Id="f137" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\Microsoft.UI.Xaml.Phone.dll" />
+      </Component>
+      <Component Id="f138" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\Microsoft.ui.xaml.resources.19h1.dll" />
+      </Component>
+      <Component Id="f139" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\Microsoft.ui.xaml.resources.common.dll" />
+      </Component>
+      <Component Id="f140" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\Microsoft.UI.Xaml.winmd" />
+      </Component>
+      <Component Id="f141" Directory="dir_Microsoft_UI_Xaml_Assets">
+        <File Source="$(var.PublishDir)\Microsoft.UI.Xaml\Assets\map.html" />
+      </Component>
+      <Component Id="f142" Directory="dir_Microsoft_UI_Xaml_Assets">
+        <File Source="$(var.PublishDir)\Microsoft.UI.Xaml\Assets\NoiseAsset_256x256_PNG.png" />
+      </Component>
+      <Component Id="f143" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\Microsoft.VisualBasic.Core.dll" />
+      </Component>
+      <Component Id="f144" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\Microsoft.VisualBasic.dll" />
+      </Component>
+      <Component Id="f145" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\Microsoft.Web.WebView2.Core.dll" />
+      </Component>
+      <Component Id="f146" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\Microsoft.Web.WebView2.Core.winmd" />
+      </Component>
+      <Component Id="f147" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\Microsoft.Win32.Primitives.dll" />
+      </Component>
+      <Component Id="f148" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\Microsoft.Win32.Registry.dll" />
+      </Component>
+      <Component Id="f149" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\Microsoft.Windows.ApplicationModel.DynamicDependency.Projection.dll" />
+      </Component>
+      <Component Id="f150" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\Microsoft.Windows.ApplicationModel.DynamicDependency.winmd" />
+      </Component>
+      <Component Id="f151" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\Microsoft.Windows.ApplicationModel.Resources.dll" />
+      </Component>
+      <Component Id="f152" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\Microsoft.Windows.ApplicationModel.Resources.Projection.dll" />
+      </Component>
+      <Component Id="f153" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\Microsoft.Windows.ApplicationModel.Resources.winmd" />
+      </Component>
+      <Component Id="f154" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\Microsoft.Windows.ApplicationModel.WindowsAppRuntime.Projection.dll" />
+      </Component>
+      <Component Id="f155" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\Microsoft.Windows.ApplicationModel.WindowsAppRuntime.winmd" />
+      </Component>
+      <Component Id="f156" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\Microsoft.Windows.AppLifecycle.Projection.dll" />
+      </Component>
+      <Component Id="f157" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\Microsoft.Windows.AppLifecycle.winmd" />
+      </Component>
+      <Component Id="f158" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\Microsoft.Windows.AppNotifications.Builder.Projection.dll" />
+      </Component>
+      <Component Id="f159" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\Microsoft.Windows.AppNotifications.Builder.winmd" />
+      </Component>
+      <Component Id="f160" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\Microsoft.Windows.AppNotifications.Projection.dll" />
+      </Component>
+      <Component Id="f161" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\Microsoft.Windows.AppNotifications.winmd" />
+      </Component>
+      <Component Id="f162" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\Microsoft.Windows.Management.Deployment.Projection.dll" />
+      </Component>
+      <Component Id="f163" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\Microsoft.Windows.Management.Deployment.winmd" />
+      </Component>
+      <Component Id="f164" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\Microsoft.Windows.PushNotifications.Projection.dll" />
+      </Component>
+      <Component Id="f165" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\Microsoft.Windows.PushNotifications.winmd" />
+      </Component>
+      <Component Id="f166" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\Microsoft.Windows.SDK.NET.dll" />
+      </Component>
+      <Component Id="f167" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\Microsoft.Windows.Security.AccessControl.Projection.dll" />
+      </Component>
+      <Component Id="f168" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\Microsoft.Windows.Security.AccessControl.winmd" />
+      </Component>
+      <Component Id="f169" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\Microsoft.Windows.System.Power.Projection.dll" />
+      </Component>
+      <Component Id="f170" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\Microsoft.Windows.System.Power.winmd" />
+      </Component>
+      <Component Id="f171" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\Microsoft.Windows.System.Projection.dll" />
+      </Component>
+      <Component Id="f172" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\Microsoft.Windows.System.winmd" />
+      </Component>
+      <Component Id="f173" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\Microsoft.Windows.Widgets.dll" />
+      </Component>
+      <Component Id="f174" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\Microsoft.Windows.Widgets.Projection.dll" />
+      </Component>
+      <Component Id="f175" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\Microsoft.Windows.Widgets.winmd" />
+      </Component>
+      <Component Id="f176" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\Microsoft.WindowsAppRuntime.Bootstrap.dll" />
+      </Component>
+      <Component Id="f177" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\Microsoft.WindowsAppRuntime.Bootstrap.Net.dll" />
+      </Component>
+      <Component Id="f178" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\Microsoft.WindowsAppRuntime.dll" />
+      </Component>
+      <Component Id="f179" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\Microsoft.WindowsAppRuntime.Insights.Resource.dll" />
+      </Component>
+      <Component Id="f180" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\Microsoft.WinUI.dll" />
+      </Component>
+      <Component Id="f181" Directory="dir_mi_NZ">
+        <File Source="$(var.PublishDir)\mi-NZ\Microsoft.ui.xaml.dll.mui" />
+      </Component>
+      <Component Id="f182" Directory="dir_mi_NZ">
+        <File Source="$(var.PublishDir)\mi-NZ\Microsoft.UI.Xaml.Phone.dll.mui" />
+      </Component>
+      <Component Id="f183" Directory="dir_mk_MK">
+        <File Source="$(var.PublishDir)\mk-MK\Microsoft.ui.xaml.dll.mui" />
+      </Component>
+      <Component Id="f184" Directory="dir_mk_MK">
+        <File Source="$(var.PublishDir)\mk-MK\Microsoft.UI.Xaml.Phone.dll.mui" />
+      </Component>
+      <Component Id="f185" Directory="dir_ml_IN">
+        <File Source="$(var.PublishDir)\ml-IN\Microsoft.ui.xaml.dll.mui" />
+      </Component>
+      <Component Id="f186" Directory="dir_ml_IN">
+        <File Source="$(var.PublishDir)\ml-IN\Microsoft.UI.Xaml.Phone.dll.mui" />
+      </Component>
+      <Component Id="f187" Directory="dir_mr_IN">
+        <File Source="$(var.PublishDir)\mr-IN\Microsoft.ui.xaml.dll.mui" />
+      </Component>
+      <Component Id="f188" Directory="dir_mr_IN">
+        <File Source="$(var.PublishDir)\mr-IN\Microsoft.UI.Xaml.Phone.dll.mui" />
+      </Component>
+      <Component Id="f189" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\MRM.dll" />
+      </Component>
+      <Component Id="f190" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\mscordaccore.dll" />
+      </Component>
+      <Component Id="f191" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\mscordaccore_amd64_amd64_8.0.3126.42015.dll" />
+      </Component>
+      <Component Id="f192" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\mscordbi.dll" />
+      </Component>
+      <Component Id="f193" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\mscorlib.dll" />
+      </Component>
+      <Component Id="f194" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\mscorrc.dll" />
+      </Component>
+      <Component Id="f195" Directory="dir_ms_MY">
+        <File Source="$(var.PublishDir)\ms-MY\Microsoft.ui.xaml.dll.mui" />
+      </Component>
+      <Component Id="f196" Directory="dir_ms_MY">
+        <File Source="$(var.PublishDir)\ms-MY\Microsoft.UI.Xaml.Phone.dll.mui" />
+      </Component>
+      <Component Id="f197" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\msquic.dll" />
+      </Component>
+      <Component Id="f198" Directory="dir_mt_MT">
+        <File Source="$(var.PublishDir)\mt-MT\Microsoft.ui.xaml.dll.mui" />
+      </Component>
+      <Component Id="f199" Directory="dir_mt_MT">
+        <File Source="$(var.PublishDir)\mt-MT\Microsoft.UI.Xaml.Phone.dll.mui" />
+      </Component>
+      <Component Id="f200" Directory="dir_nb_NO">
+        <File Source="$(var.PublishDir)\nb-NO\Microsoft.ui.xaml.dll.mui" />
+      </Component>
+      <Component Id="f201" Directory="dir_nb_NO">
+        <File Source="$(var.PublishDir)\nb-NO\Microsoft.UI.Xaml.Phone.dll.mui" />
+      </Component>
+      <Component Id="f202" Directory="dir_ne_NP">
+        <File Source="$(var.PublishDir)\ne-NP\Microsoft.ui.xaml.dll.mui" />
+      </Component>
+      <Component Id="f203" Directory="dir_ne_NP">
+        <File Source="$(var.PublishDir)\ne-NP\Microsoft.UI.Xaml.Phone.dll.mui" />
+      </Component>
+      <Component Id="f204" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\netstandard.dll" />
+      </Component>
+      <Component Id="f205" Directory="dir_nl_NL">
+        <File Source="$(var.PublishDir)\nl-NL\Microsoft.ui.xaml.dll.mui" />
+      </Component>
+      <Component Id="f206" Directory="dir_nl_NL">
+        <File Source="$(var.PublishDir)\nl-NL\Microsoft.UI.Xaml.Phone.dll.mui" />
+      </Component>
+      <Component Id="f207" Directory="dir_nn_NO">
+        <File Source="$(var.PublishDir)\nn-NO\Microsoft.ui.xaml.dll.mui" />
+      </Component>
+      <Component Id="f208" Directory="dir_nn_NO">
+        <File Source="$(var.PublishDir)\nn-NO\Microsoft.UI.Xaml.Phone.dll.mui" />
+      </Component>
+      <Component Id="f209" Directory="dir_or_IN">
+        <File Source="$(var.PublishDir)\or-IN\Microsoft.ui.xaml.dll.mui" />
+      </Component>
+      <Component Id="f210" Directory="dir_or_IN">
+        <File Source="$(var.PublishDir)\or-IN\Microsoft.UI.Xaml.Phone.dll.mui" />
+      </Component>
+      <Component Id="f211" Directory="dir_pa_IN">
+        <File Source="$(var.PublishDir)\pa-IN\Microsoft.ui.xaml.dll.mui" />
+      </Component>
+      <Component Id="f212" Directory="dir_pa_IN">
+        <File Source="$(var.PublishDir)\pa-IN\Microsoft.UI.Xaml.Phone.dll.mui" />
+      </Component>
+      <Component Id="f213" Directory="dir_pl_PL">
+        <File Source="$(var.PublishDir)\pl-PL\Microsoft.ui.xaml.dll.mui" />
+      </Component>
+      <Component Id="f214" Directory="dir_pl_PL">
+        <File Source="$(var.PublishDir)\pl-PL\Microsoft.UI.Xaml.Phone.dll.mui" />
+      </Component>
+      <Component Id="f215" Directory="dir_pt_BR">
+        <File Source="$(var.PublishDir)\pt-BR\Microsoft.ui.xaml.dll.mui" />
+      </Component>
+      <Component Id="f216" Directory="dir_pt_BR">
+        <File Source="$(var.PublishDir)\pt-BR\Microsoft.UI.Xaml.Phone.dll.mui" />
+      </Component>
+      <Component Id="f217" Directory="dir_pt_PT">
+        <File Source="$(var.PublishDir)\pt-PT\Microsoft.ui.xaml.dll.mui" />
+      </Component>
+      <Component Id="f218" Directory="dir_pt_PT">
+        <File Source="$(var.PublishDir)\pt-PT\Microsoft.UI.Xaml.Phone.dll.mui" />
+      </Component>
+      <Component Id="f219" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\PushNotificationsLongRunningTask.ProxyStub.dll" />
+      </Component>
+      <Component Id="f220" Directory="dir_quz_PE">
+        <File Source="$(var.PublishDir)\quz-PE\Microsoft.ui.xaml.dll.mui" />
+      </Component>
+      <Component Id="f221" Directory="dir_quz_PE">
+        <File Source="$(var.PublishDir)\quz-PE\Microsoft.UI.Xaml.Phone.dll.mui" />
+      </Component>
+      <Component Id="f222" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\resources.pri" />
+      </Component>
+      <Component Id="f223" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\RestartAgent.exe" />
+      </Component>
+      <Component Id="f224" Directory="dir_ro_RO">
+        <File Source="$(var.PublishDir)\ro-RO\Microsoft.ui.xaml.dll.mui" />
+      </Component>
+      <Component Id="f225" Directory="dir_ro_RO">
+        <File Source="$(var.PublishDir)\ro-RO\Microsoft.UI.Xaml.Phone.dll.mui" />
+      </Component>
+      <Component Id="f226" Directory="dir_ru_RU">
+        <File Source="$(var.PublishDir)\ru-RU\Microsoft.ui.xaml.dll.mui" />
+      </Component>
+      <Component Id="f227" Directory="dir_ru_RU">
+        <File Source="$(var.PublishDir)\ru-RU\Microsoft.UI.Xaml.Phone.dll.mui" />
+      </Component>
+      <Component Id="f228" Directory="dir_sk_SK">
+        <File Source="$(var.PublishDir)\sk-SK\Microsoft.ui.xaml.dll.mui" />
+      </Component>
+      <Component Id="f229" Directory="dir_sk_SK">
+        <File Source="$(var.PublishDir)\sk-SK\Microsoft.UI.Xaml.Phone.dll.mui" />
+      </Component>
+      <Component Id="f230" Directory="dir_sl_SI">
+        <File Source="$(var.PublishDir)\sl-SI\Microsoft.ui.xaml.dll.mui" />
+      </Component>
+      <Component Id="f231" Directory="dir_sl_SI">
+        <File Source="$(var.PublishDir)\sl-SI\Microsoft.UI.Xaml.Phone.dll.mui" />
+      </Component>
+      <Component Id="f232" Directory="dir_sq_AL">
+        <File Source="$(var.PublishDir)\sq-AL\Microsoft.ui.xaml.dll.mui" />
+      </Component>
+      <Component Id="f233" Directory="dir_sq_AL">
+        <File Source="$(var.PublishDir)\sq-AL\Microsoft.UI.Xaml.Phone.dll.mui" />
+      </Component>
+      <Component Id="f234" Directory="dir_sr_Cyrl_BA">
+        <File Source="$(var.PublishDir)\sr-Cyrl-BA\Microsoft.ui.xaml.dll.mui" />
+      </Component>
+      <Component Id="f235" Directory="dir_sr_Cyrl_BA">
+        <File Source="$(var.PublishDir)\sr-Cyrl-BA\Microsoft.UI.Xaml.Phone.dll.mui" />
+      </Component>
+      <Component Id="f236" Directory="dir_sr_Cyrl_RS">
+        <File Source="$(var.PublishDir)\sr-Cyrl-RS\Microsoft.ui.xaml.dll.mui" />
+      </Component>
+      <Component Id="f237" Directory="dir_sr_Cyrl_RS">
+        <File Source="$(var.PublishDir)\sr-Cyrl-RS\Microsoft.UI.Xaml.Phone.dll.mui" />
+      </Component>
+      <Component Id="f238" Directory="dir_sr_Latn_RS">
+        <File Source="$(var.PublishDir)\sr-Latn-RS\Microsoft.ui.xaml.dll.mui" />
+      </Component>
+      <Component Id="f239" Directory="dir_sr_Latn_RS">
+        <File Source="$(var.PublishDir)\sr-Latn-RS\Microsoft.UI.Xaml.Phone.dll.mui" />
+      </Component>
+      <Component Id="f240" Directory="dir_sv_SE">
+        <File Source="$(var.PublishDir)\sv-SE\Microsoft.ui.xaml.dll.mui" />
+      </Component>
+      <Component Id="f241" Directory="dir_sv_SE">
+        <File Source="$(var.PublishDir)\sv-SE\Microsoft.UI.Xaml.Phone.dll.mui" />
+      </Component>
+      <Component Id="f242" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.AppContext.dll" />
+      </Component>
+      <Component Id="f243" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Buffers.dll" />
+      </Component>
+      <Component Id="f244" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Collections.Concurrent.dll" />
+      </Component>
+      <Component Id="f245" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Collections.dll" />
+      </Component>
+      <Component Id="f246" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Collections.Immutable.dll" />
+      </Component>
+      <Component Id="f247" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Collections.NonGeneric.dll" />
+      </Component>
+      <Component Id="f248" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Collections.Specialized.dll" />
+      </Component>
+      <Component Id="f249" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.ComponentModel.Annotations.dll" />
+      </Component>
+      <Component Id="f250" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.ComponentModel.DataAnnotations.dll" />
+      </Component>
+      <Component Id="f251" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.ComponentModel.dll" />
+      </Component>
+      <Component Id="f252" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.ComponentModel.EventBasedAsync.dll" />
+      </Component>
+      <Component Id="f253" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.ComponentModel.Primitives.dll" />
+      </Component>
+      <Component Id="f254" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.ComponentModel.TypeConverter.dll" />
+      </Component>
+      <Component Id="f255" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Configuration.dll" />
+      </Component>
+      <Component Id="f256" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Console.dll" />
+      </Component>
+      <Component Id="f257" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Core.dll" />
+      </Component>
+      <Component Id="f258" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Data.Common.dll" />
+      </Component>
+      <Component Id="f259" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Data.DataSetExtensions.dll" />
+      </Component>
+      <Component Id="f260" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Data.dll" />
+      </Component>
+      <Component Id="f261" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Diagnostics.Contracts.dll" />
+      </Component>
+      <Component Id="f262" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Diagnostics.Debug.dll" />
+      </Component>
+      <Component Id="f263" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Diagnostics.DiagnosticSource.dll" />
+      </Component>
+      <Component Id="f264" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Diagnostics.FileVersionInfo.dll" />
+      </Component>
+      <Component Id="f265" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Diagnostics.Process.dll" />
+      </Component>
+      <Component Id="f266" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Diagnostics.StackTrace.dll" />
+      </Component>
+      <Component Id="f267" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Diagnostics.TextWriterTraceListener.dll" />
+      </Component>
+      <Component Id="f268" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Diagnostics.Tools.dll" />
+      </Component>
+      <Component Id="f269" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Diagnostics.TraceSource.dll" />
+      </Component>
+      <Component Id="f270" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Diagnostics.Tracing.dll" />
+      </Component>
+      <Component Id="f271" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.dll" />
+      </Component>
+      <Component Id="f272" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Drawing.dll" />
+      </Component>
+      <Component Id="f273" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Drawing.Primitives.dll" />
+      </Component>
+      <Component Id="f274" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Dynamic.Runtime.dll" />
+      </Component>
+      <Component Id="f275" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Formats.Asn1.dll" />
+      </Component>
+      <Component Id="f276" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Formats.Tar.dll" />
+      </Component>
+      <Component Id="f277" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Globalization.Calendars.dll" />
+      </Component>
+      <Component Id="f278" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Globalization.dll" />
+      </Component>
+      <Component Id="f279" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Globalization.Extensions.dll" />
+      </Component>
+      <Component Id="f280" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.IO.Compression.Brotli.dll" />
+      </Component>
+      <Component Id="f281" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.IO.Compression.dll" />
+      </Component>
+      <Component Id="f282" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.IO.Compression.FileSystem.dll" />
+      </Component>
+      <Component Id="f283" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.IO.Compression.Native.dll" />
+      </Component>
+      <Component Id="f284" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.IO.Compression.ZipFile.dll" />
+      </Component>
+      <Component Id="f285" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.IO.dll" />
+      </Component>
+      <Component Id="f286" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.IO.FileSystem.AccessControl.dll" />
+      </Component>
+      <Component Id="f287" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.IO.FileSystem.dll" />
+      </Component>
+      <Component Id="f288" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.IO.FileSystem.DriveInfo.dll" />
+      </Component>
+      <Component Id="f289" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.IO.FileSystem.Primitives.dll" />
+      </Component>
+      <Component Id="f290" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.IO.FileSystem.Watcher.dll" />
+      </Component>
+      <Component Id="f291" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.IO.IsolatedStorage.dll" />
+      </Component>
+      <Component Id="f292" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.IO.MemoryMappedFiles.dll" />
+      </Component>
+      <Component Id="f293" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.IO.Pipes.AccessControl.dll" />
+      </Component>
+      <Component Id="f294" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.IO.Pipes.dll" />
+      </Component>
+      <Component Id="f295" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.IO.UnmanagedMemoryStream.dll" />
+      </Component>
+      <Component Id="f296" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Linq.dll" />
+      </Component>
+      <Component Id="f297" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Linq.Expressions.dll" />
+      </Component>
+      <Component Id="f298" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Linq.Parallel.dll" />
+      </Component>
+      <Component Id="f299" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Linq.Queryable.dll" />
+      </Component>
+      <Component Id="f300" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Memory.dll" />
+      </Component>
+      <Component Id="f301" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Net.dll" />
+      </Component>
+      <Component Id="f302" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Net.Http.dll" />
+      </Component>
+      <Component Id="f303" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Net.Http.Json.dll" />
+      </Component>
+      <Component Id="f304" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Net.HttpListener.dll" />
+      </Component>
+      <Component Id="f305" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Net.Mail.dll" />
+      </Component>
+      <Component Id="f306" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Net.NameResolution.dll" />
+      </Component>
+      <Component Id="f307" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Net.NetworkInformation.dll" />
+      </Component>
+      <Component Id="f308" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Net.Ping.dll" />
+      </Component>
+      <Component Id="f309" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Net.Primitives.dll" />
+      </Component>
+      <Component Id="f310" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Net.Quic.dll" />
+      </Component>
+      <Component Id="f311" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Net.Requests.dll" />
+      </Component>
+      <Component Id="f312" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Net.Security.dll" />
+      </Component>
+      <Component Id="f313" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Net.ServicePoint.dll" />
+      </Component>
+      <Component Id="f314" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Net.Sockets.dll" />
+      </Component>
+      <Component Id="f315" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Net.WebClient.dll" />
+      </Component>
+      <Component Id="f316" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Net.WebHeaderCollection.dll" />
+      </Component>
+      <Component Id="f317" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Net.WebProxy.dll" />
+      </Component>
+      <Component Id="f318" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Net.WebSockets.Client.dll" />
+      </Component>
+      <Component Id="f319" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Net.WebSockets.dll" />
+      </Component>
+      <Component Id="f320" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Numerics.dll" />
+      </Component>
+      <Component Id="f321" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Numerics.Vectors.dll" />
+      </Component>
+      <Component Id="f322" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.ObjectModel.dll" />
+      </Component>
+      <Component Id="f323" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Private.CoreLib.dll" />
+      </Component>
+      <Component Id="f324" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Private.DataContractSerialization.dll" />
+      </Component>
+      <Component Id="f325" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Private.Uri.dll" />
+      </Component>
+      <Component Id="f326" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Private.Xml.dll" />
+      </Component>
+      <Component Id="f327" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Private.Xml.Linq.dll" />
+      </Component>
+      <Component Id="f328" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Reflection.DispatchProxy.dll" />
+      </Component>
+      <Component Id="f329" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Reflection.dll" />
+      </Component>
+      <Component Id="f330" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Reflection.Emit.dll" />
+      </Component>
+      <Component Id="f331" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Reflection.Emit.ILGeneration.dll" />
+      </Component>
+      <Component Id="f332" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Reflection.Emit.Lightweight.dll" />
+      </Component>
+      <Component Id="f333" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Reflection.Extensions.dll" />
+      </Component>
+      <Component Id="f334" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Reflection.Metadata.dll" />
+      </Component>
+      <Component Id="f335" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Reflection.Primitives.dll" />
+      </Component>
+      <Component Id="f336" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Reflection.TypeExtensions.dll" />
+      </Component>
+      <Component Id="f337" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Resources.Reader.dll" />
+      </Component>
+      <Component Id="f338" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Resources.ResourceManager.dll" />
+      </Component>
+      <Component Id="f339" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Resources.Writer.dll" />
+      </Component>
+      <Component Id="f340" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Runtime.CompilerServices.Unsafe.dll" />
+      </Component>
+      <Component Id="f341" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Runtime.CompilerServices.VisualC.dll" />
+      </Component>
+      <Component Id="f342" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Runtime.dll" />
+      </Component>
+      <Component Id="f343" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Runtime.Extensions.dll" />
+      </Component>
+      <Component Id="f344" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Runtime.Handles.dll" />
+      </Component>
+      <Component Id="f345" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Runtime.InteropServices.dll" />
+      </Component>
+      <Component Id="f346" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Runtime.InteropServices.JavaScript.dll" />
+      </Component>
+      <Component Id="f347" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Runtime.InteropServices.RuntimeInformation.dll" />
+      </Component>
+      <Component Id="f348" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Runtime.Intrinsics.dll" />
+      </Component>
+      <Component Id="f349" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Runtime.Loader.dll" />
+      </Component>
+      <Component Id="f350" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Runtime.Numerics.dll" />
+      </Component>
+      <Component Id="f351" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Runtime.Serialization.dll" />
+      </Component>
+      <Component Id="f352" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Runtime.Serialization.Formatters.dll" />
+      </Component>
+      <Component Id="f353" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Runtime.Serialization.Json.dll" />
+      </Component>
+      <Component Id="f354" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Runtime.Serialization.Primitives.dll" />
+      </Component>
+      <Component Id="f355" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Runtime.Serialization.Xml.dll" />
+      </Component>
+      <Component Id="f356" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Security.AccessControl.dll" />
+      </Component>
+      <Component Id="f357" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Security.Claims.dll" />
+      </Component>
+      <Component Id="f358" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Security.Cryptography.Algorithms.dll" />
+      </Component>
+      <Component Id="f359" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Security.Cryptography.Cng.dll" />
+      </Component>
+      <Component Id="f360" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Security.Cryptography.Csp.dll" />
+      </Component>
+      <Component Id="f361" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Security.Cryptography.dll" />
+      </Component>
+      <Component Id="f362" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Security.Cryptography.Encoding.dll" />
+      </Component>
+      <Component Id="f363" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Security.Cryptography.OpenSsl.dll" />
+      </Component>
+      <Component Id="f364" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Security.Cryptography.Primitives.dll" />
+      </Component>
+      <Component Id="f365" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Security.Cryptography.X509Certificates.dll" />
+      </Component>
+      <Component Id="f366" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Security.dll" />
+      </Component>
+      <Component Id="f367" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Security.Principal.dll" />
+      </Component>
+      <Component Id="f368" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Security.Principal.Windows.dll" />
+      </Component>
+      <Component Id="f369" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Security.SecureString.dll" />
+      </Component>
+      <Component Id="f370" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.ServiceModel.Web.dll" />
+      </Component>
+      <Component Id="f371" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.ServiceProcess.dll" />
+      </Component>
+      <Component Id="f372" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Text.Encoding.CodePages.dll" />
+      </Component>
+      <Component Id="f373" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Text.Encoding.dll" />
+      </Component>
+      <Component Id="f374" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Text.Encoding.Extensions.dll" />
+      </Component>
+      <Component Id="f375" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Text.Encodings.Web.dll" />
+      </Component>
+      <Component Id="f376" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Text.Json.dll" />
+      </Component>
+      <Component Id="f377" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Text.RegularExpressions.dll" />
+      </Component>
+      <Component Id="f378" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Threading.Channels.dll" />
+      </Component>
+      <Component Id="f379" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Threading.dll" />
+      </Component>
+      <Component Id="f380" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Threading.Overlapped.dll" />
+      </Component>
+      <Component Id="f381" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Threading.Tasks.Dataflow.dll" />
+      </Component>
+      <Component Id="f382" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Threading.Tasks.dll" />
+      </Component>
+      <Component Id="f383" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Threading.Tasks.Extensions.dll" />
+      </Component>
+      <Component Id="f384" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Threading.Tasks.Parallel.dll" />
+      </Component>
+      <Component Id="f385" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Threading.Thread.dll" />
+      </Component>
+      <Component Id="f386" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Threading.ThreadPool.dll" />
+      </Component>
+      <Component Id="f387" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Threading.Timer.dll" />
+      </Component>
+      <Component Id="f388" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Transactions.dll" />
+      </Component>
+      <Component Id="f389" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Transactions.Local.dll" />
+      </Component>
+      <Component Id="f390" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.ValueTuple.dll" />
+      </Component>
+      <Component Id="f391" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Web.dll" />
+      </Component>
+      <Component Id="f392" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Web.HttpUtility.dll" />
+      </Component>
+      <Component Id="f393" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Windows.dll" />
+      </Component>
+      <Component Id="f394" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Xml.dll" />
+      </Component>
+      <Component Id="f395" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Xml.Linq.dll" />
+      </Component>
+      <Component Id="f396" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Xml.ReaderWriter.dll" />
+      </Component>
+      <Component Id="f397" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Xml.Serialization.dll" />
+      </Component>
+      <Component Id="f398" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Xml.XDocument.dll" />
+      </Component>
+      <Component Id="f399" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Xml.XmlDocument.dll" />
+      </Component>
+      <Component Id="f400" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Xml.XmlSerializer.dll" />
+      </Component>
+      <Component Id="f401" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Xml.XPath.dll" />
+      </Component>
+      <Component Id="f402" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Xml.XPath.XDocument.dll" />
+      </Component>
+      <Component Id="f403" Directory="dir_ta_IN">
+        <File Source="$(var.PublishDir)\ta-IN\Microsoft.ui.xaml.dll.mui" />
+      </Component>
+      <Component Id="f404" Directory="dir_ta_IN">
+        <File Source="$(var.PublishDir)\ta-IN\Microsoft.UI.Xaml.Phone.dll.mui" />
+      </Component>
+      <Component Id="f405" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\TaskNotificationWindow.xbf" />
+      </Component>
+      <Component Id="f406" Directory="dir_te_IN">
+        <File Source="$(var.PublishDir)\te-IN\Microsoft.ui.xaml.dll.mui" />
+      </Component>
+      <Component Id="f407" Directory="dir_te_IN">
+        <File Source="$(var.PublishDir)\te-IN\Microsoft.UI.Xaml.Phone.dll.mui" />
+      </Component>
+      <Component Id="f408" Directory="dir_th_TH">
+        <File Source="$(var.PublishDir)\th-TH\Microsoft.ui.xaml.dll.mui" />
+      </Component>
+      <Component Id="f409" Directory="dir_th_TH">
+        <File Source="$(var.PublishDir)\th-TH\Microsoft.UI.Xaml.Phone.dll.mui" />
+      </Component>
+      <Component Id="f410" Directory="dir_tr_TR">
+        <File Source="$(var.PublishDir)\tr-TR\Microsoft.ui.xaml.dll.mui" />
+      </Component>
+      <Component Id="f411" Directory="dir_tr_TR">
+        <File Source="$(var.PublishDir)\tr-TR\Microsoft.UI.Xaml.Phone.dll.mui" />
+      </Component>
+      <Component Id="f412" Directory="dir_tt_RU">
+        <File Source="$(var.PublishDir)\tt-RU\Microsoft.ui.xaml.dll.mui" />
+      </Component>
+      <Component Id="f413" Directory="dir_tt_RU">
+        <File Source="$(var.PublishDir)\tt-RU\Microsoft.UI.Xaml.Phone.dll.mui" />
+      </Component>
+      <Component Id="f414" Directory="dir_ug_CN">
+        <File Source="$(var.PublishDir)\ug-CN\Microsoft.ui.xaml.dll.mui" />
+      </Component>
+      <Component Id="f415" Directory="dir_ug_CN">
+        <File Source="$(var.PublishDir)\ug-CN\Microsoft.UI.Xaml.Phone.dll.mui" />
+      </Component>
+      <Component Id="f416" Directory="dir_uk_UA">
+        <File Source="$(var.PublishDir)\uk-UA\Microsoft.ui.xaml.dll.mui" />
+      </Component>
+      <Component Id="f417" Directory="dir_uk_UA">
+        <File Source="$(var.PublishDir)\uk-UA\Microsoft.UI.Xaml.Phone.dll.mui" />
+      </Component>
+      <Component Id="f418" Directory="dir_ur_PK">
+        <File Source="$(var.PublishDir)\ur-PK\Microsoft.ui.xaml.dll.mui" />
+      </Component>
+      <Component Id="f419" Directory="dir_ur_PK">
+        <File Source="$(var.PublishDir)\ur-PK\Microsoft.UI.Xaml.Phone.dll.mui" />
+      </Component>
+      <Component Id="f420" Directory="dir_uz_Latn_UZ">
+        <File Source="$(var.PublishDir)\uz-Latn-UZ\Microsoft.ui.xaml.dll.mui" />
+      </Component>
+      <Component Id="f421" Directory="dir_uz_Latn_UZ">
+        <File Source="$(var.PublishDir)\uz-Latn-UZ\Microsoft.UI.Xaml.Phone.dll.mui" />
+      </Component>
+      <Component Id="f422" Directory="dir_vi_VN">
+        <File Source="$(var.PublishDir)\vi-VN\Microsoft.ui.xaml.dll.mui" />
+      </Component>
+      <Component Id="f423" Directory="dir_vi_VN">
+        <File Source="$(var.PublishDir)\vi-VN\Microsoft.UI.Xaml.Phone.dll.mui" />
+      </Component>
+      <Component Id="f424" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\WindowsAppRuntime.png" />
+      </Component>
+      <Component Id="f425" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\WindowsAppSdk.AppxDeploymentExtensions.Desktop.dll" />
+      </Component>
+      <Component Id="f426" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\WindowsAppSdk.AppxDeploymentExtensions.Desktop-EventLog-Instrumentation.dll" />
+      </Component>
+      <Component Id="f427" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\WindowsBase.dll" />
+      </Component>
+      <Component Id="f428" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\WinRT.Runtime.dll" />
+      </Component>
+      <Component Id="f429" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\WinUIEdit.dll" />
+      </Component>
+      <Component Id="f430" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\wuceffectsi.dll" />
+      </Component>
+      <Component Id="f431" Directory="dir_zh_CN">
+        <File Source="$(var.PublishDir)\zh-CN\Microsoft.ui.xaml.dll.mui" />
+      </Component>
+      <Component Id="f432" Directory="dir_zh_CN">
+        <File Source="$(var.PublishDir)\zh-CN\Microsoft.UI.Xaml.Phone.dll.mui" />
+      </Component>
+      <Component Id="f433" Directory="dir_zh_TW">
+        <File Source="$(var.PublishDir)\zh-TW\Microsoft.ui.xaml.dll.mui" />
+      </Component>
+      <Component Id="f434" Directory="dir_zh_TW">
+        <File Source="$(var.PublishDir)\zh-TW\Microsoft.UI.Xaml.Phone.dll.mui" />
+      </Component>
+    </ComponentGroup>
+  </Fragment>
+</Wix>

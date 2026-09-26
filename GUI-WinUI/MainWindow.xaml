@@ -1,0 +1,214 @@
+<Window
+    x:Class="FileEncryptorGUI.MainWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:controls="using:Microsoft.UI.Xaml.Controls"
+    Title="FileEncryptorGUI 2.0.0">
+
+    <Grid x:Name="RootGrid" RowDefinitions="Auto,*,Auto,Auto">
+
+        <!-- 顶部标题栏（自定义，Acrylic 延伸至此） -->
+        <Grid x:Name="TitleBarGrid" Grid.Row="0" ColumnDefinitions="Auto,Auto,*" Height="36">
+            <TextBlock Grid.Column="0" Text="FileEncryptorGUI 2.0.0" VerticalAlignment="Center" Margin="12,0,12,0" FontWeight="SemiBold" />
+            <Border x:Name="DragRegion" Grid.Column="2" Background="Transparent" />
+            <controls:MenuBar Grid.Column="1" x:Name="MenuBar" Height="36" HorizontalAlignment="Left">
+                <controls:MenuBarItem Title="关于">
+                    <MenuFlyoutItem Text="鸣谢..." Click="OnCredits" />
+                    <MenuFlyoutItem Text="README 摘要..." Click="OnReadme" />
+                </controls:MenuBarItem>
+                <controls:MenuBarItem Title="编辑">
+                    <MenuFlyoutItem Text="编辑 CLI 配置" Click="OnEditConfig" />
+                </controls:MenuBarItem>
+                <controls:MenuBarItem Title="工具">
+                    <MenuFlyoutItem Text="重新检测 CLI 程序" Click="OnRetryCliDetection" />
+                </controls:MenuBarItem>
+                <controls:MenuBarItem Title="视图">
+                    <MenuFlyoutItem Text="背景设置..." Click="OnViewSettings" />
+                </controls:MenuBarItem>
+            </controls:MenuBar>
+        </Grid>
+
+        <!-- 主体：左文件列表 + 右功能区 -->
+        <Grid Grid.Row="1" ColumnDefinitions="560,*" Margin="12,8,12,4">
+
+            <!-- 左侧：文件选择 -->
+            <controls:Border Grid.Column="0"
+                             Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                             BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                             BorderThickness="1" CornerRadius="8" Padding="8">
+                <Grid RowDefinitions="Auto,*,Auto">
+                    <TextBlock Grid.Row="0" Text="文件选择" FontWeight="SemiBold" Margin="0,0,0,6" HorizontalAlignment="Center" />
+                    <controls:ListView Grid.Row="1" x:Name="FileList"
+                                       ItemsSource="{x:Bind ViewModel.InputPaths, Mode=OneWay}"
+                                       AllowDrop="True"
+                                       DragOver="OnFileListDragOver" Drop="OnFileListDrop">
+                        <controls:ListView.ItemTemplate>
+                            <DataTemplate>
+                                <CheckBox IsChecked="{Binding IsSelected, Mode=TwoWay}" HorizontalAlignment="Stretch">
+                                    <TextBlock Text="{Binding Path}" TextTrimming="CharacterEllipsis" />
+                                </CheckBox>
+                            </DataTemplate>
+                        </controls:ListView.ItemTemplate>
+                    </controls:ListView>
+                    <StackPanel Grid.Row="2" Margin="0,6,0,0" Spacing="4">
+                        <Grid ColumnDefinitions="*,*">
+                            <Button Grid.Column="0" Content="添加文件..." Click="OnAddFiles" Margin="0,0,2,0" HorizontalAlignment="Stretch" />
+                            <Button Grid.Column="1" Content="添加目录..." Click="OnAddDir" Margin="2,0,0,0" HorizontalAlignment="Stretch" />
+                        </Grid>
+                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                            <Button Content="清空" Click="OnClearFiles" />
+                        </StackPanel>
+                    </StackPanel>
+                </Grid>
+            </controls:Border>
+
+            <!-- 右侧：功能区 -->
+            <controls:Border Grid.Column="1" Margin="12,0,0,0"
+                             Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                             BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                             BorderThickness="1" CornerRadius="8" Padding="12">
+                <ScrollViewer VerticalScrollMode="Auto" VerticalScrollBarVisibility="Auto">
+                    <StackPanel Spacing="8">
+
+                        <!-- 操作 -->
+                        <Grid ColumnDefinitions="80,*">
+                            <TextBlock Grid.Column="0" Text="操作" VerticalAlignment="Center" />
+                            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="16">
+                                <RadioButton x:Name="RbEncrypt" Content="加密" GroupName="Action" Checked="OnActionRadioChecked" />
+                                <RadioButton x:Name="RbDecrypt" Content="解密" GroupName="Action" Checked="OnActionRadioChecked" />
+                                <RadioButton x:Name="RbBatchEncrypt" Content="批量加密" GroupName="Action" Checked="OnActionRadioChecked" />
+                                <RadioButton x:Name="RbBatchDecrypt" Content="批量解密" GroupName="Action" Checked="OnActionRadioChecked" />
+                            </StackPanel>
+                        </Grid>
+
+                        <!-- 密钥管理 -->
+                        <Grid ColumnDefinitions="80,*">
+                            <TextBlock Grid.Column="0" Text="密钥管理" VerticalAlignment="Center" TextWrapping="Wrap" />
+                            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="16">
+                                <RadioButton x:Name="RbKeyGen" Content="生成密钥对" GroupName="KeyMgmt" Checked="OnKeyMgmtRadioChecked" />
+                                <RadioButton x:Name="RbDerive" Content="口令派生密钥对" GroupName="KeyMgmt" Checked="OnKeyMgmtRadioChecked" />
+                                <RadioButton x:Name="RbPubKey" Content="导出公钥" GroupName="KeyMgmt" Checked="OnKeyMgmtRadioChecked" />
+                            </StackPanel>
+                        </Grid>
+
+                        <!-- 加密模式 -->
+                        <Grid ColumnDefinitions="80,*">
+                            <TextBlock Grid.Column="0" Text="加密模式" VerticalAlignment="Center" />
+                            <controls:ComboBox Grid.Column="1" x:Name="ModeCombo" Width="380" SelectionChanged="OnModeChanged">
+                                <controls:ComboBoxItem Content="XChaCha20-Poly1305（默认，兼容性最好）" />
+                                <controls:ComboBoxItem Content="AEGIS-256" />
+                                <controls:ComboBoxItem Content="X25519 + ChaCha20-Poly1305（非对称）" />
+                            </controls:ComboBox>
+                        </Grid>
+
+                        <!-- 压缩 -->
+                        <Grid ColumnDefinitions="80,*">
+                            <TextBlock Grid.Column="0" Text="压缩 (zstd)" VerticalAlignment="Center" />
+                            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                                <CheckBox x:Name="ChkCompress" Content="压缩数据" Checked="OnOptionChanged" Unchecked="OnOptionChanged" VerticalAlignment="Center" />
+                                <TextBlock Text="压缩级别:" VerticalAlignment="Center" />
+                                <controls:NumberBox x:Name="CompressLevel" Value="3" Minimum="-5" Maximum="22" SmallChange="1" Width="60" SpinButtonPlacementMode="Hidden" ValueChanged="OnCompressLevelChanged" Foreground="{ThemeResource TextFillColorPrimaryBrush}" />
+                            </StackPanel>
+                        </Grid>
+
+                        <!-- 输出目录 -->
+                        <Grid ColumnDefinitions="80,*">
+                            <TextBlock Grid.Column="0" Text="输出目录" VerticalAlignment="Center" />
+                            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="4">
+                                <TextBox x:Name="OutDirEdit" PlaceholderText="留空 = 输出到源文件目录" Width="320" TextChanged="OnOutDirChanged" />
+                                <Button Content="浏览..." Click="OnBrowseOutDir" />
+                            </StackPanel>
+                        </Grid>
+
+                        <!-- 密钥文件 -->
+                        <Grid ColumnDefinitions="80,*">
+                            <TextBlock Grid.Column="0" Text="密钥文件" VerticalAlignment="Center" />
+                            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="4">
+                                <TextBox x:Name="KeyfileEdit" PlaceholderText="留空 = 运行弹窗输入" Width="320" TextChanged="OnKeyfileChanged" />
+                                <Button Content="浏览..." Click="OnBrowseKeyfile" />
+                            </StackPanel>
+                        </Grid>
+
+                        <!-- 选项 -->
+                        <Grid ColumnDefinitions="80,*">
+                            <TextBlock Grid.Column="0" Text="选项" VerticalAlignment="Center" />
+                            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="12" VerticalAlignment="Center">
+                                <controls:ComboBox x:Name="SourceCombo" Width="130" SelectionChanged="OnSourceChanged">
+                                    <controls:ComboBoxItem Content="保留源文件" />
+                                    <controls:ComboBoxItem Content="删除源文件" />
+                                    <controls:ComboBoxItem Content="安全擦除" />
+                                    <controls:ComboBoxItem Content="移至回收站" />
+                                </controls:ComboBox>
+                                <CheckBox x:Name="ChkForce" Content="覆盖已存在文件" Checked="OnOptionChanged" Unchecked="OnOptionChanged" VerticalAlignment="Center" />
+                                <CheckBox x:Name="ChkSha256" Content="生成校验单" Checked="OnOptionChanged" Unchecked="OnOptionChanged" VerticalAlignment="Center" />
+                            </StackPanel>
+                        </Grid>
+
+                        <!-- 密钥轮换 + 运行/取消 -->
+                        <Grid ColumnDefinitions="Auto,*,Auto" Margin="0,4,0,0">
+                            <Button Grid.Column="0" x:Name="BtnRewrap" Content="密钥轮换" Click="OnRewrapClicked" />
+                            <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="8">
+                                <Button x:Name="BtnRun" Content="▶ 运行" Click="OnRunClicked"
+                                        Background="#107C10" Foreground="White" MinWidth="80">
+                                    <Button.Resources>
+                                        <SolidColorBrush x:Key="ButtonBackgroundPointerOver" Color="#0E6B0E" />
+                                        <SolidColorBrush x:Key="ButtonBackgroundPressed" Color="#0A5A0A" />
+                                        <SolidColorBrush x:Key="ButtonForegroundPointerOver" Color="White" />
+                                        <SolidColorBrush x:Key="ButtonForegroundPressed" Color="White" />
+                                    </Button.Resources>
+                                </Button>
+                                <Button x:Name="BtnCancel" Content="■ 取消" Click="OnCancelClicked" IsEnabled="False"
+                                        Background="#C42B1C" Foreground="White" MinWidth="80">
+                                    <Button.Resources>
+                                        <SolidColorBrush x:Key="ButtonBackgroundPointerOver" Color="#A32417" />
+                                        <SolidColorBrush x:Key="ButtonBackgroundPressed" Color="#8A1E13" />
+                                        <SolidColorBrush x:Key="ButtonBackgroundDisabled" Color="#555555" />
+                                        <SolidColorBrush x:Key="ButtonForegroundPointerOver" Color="White" />
+                                        <SolidColorBrush x:Key="ButtonForegroundPressed" Color="White" />
+                                        <SolidColorBrush x:Key="ButtonForegroundDisabled" Color="#AAAAAA" />
+                                    </Button.Resources>
+                                </Button>
+                            </StackPanel>
+                        </Grid>
+
+                        <!-- 非对称：收件人 -->
+                        <StackPanel x:Name="RecipientPanel" Orientation="Horizontal" Spacing="4" Visibility="Collapsed">
+                            <TextBlock Text="收件人:" VerticalAlignment="Center" Width="72" />
+                            <TextBox x:Name="RecipientEdit" PlaceholderText="age1... 公钥或公钥文件路径" Width="320" TextChanged="OnRecipientChanged" />
+                            <Button Content="浏览..." Click="OnBrowseRecipient" />
+                        </StackPanel>
+
+                        <!-- 非对称：身份私钥 -->
+                        <StackPanel x:Name="IdentityPanel" Orientation="Horizontal" Spacing="4" Visibility="Collapsed">
+                            <TextBlock Text="身份文件:" VerticalAlignment="Center" Width="72" />
+                            <TextBox x:Name="IdentityEdit" PlaceholderText="私钥文件路径" Width="320" TextChanged="OnIdentityChanged" />
+                            <Button Content="浏览..." Click="OnBrowseIdentity" />
+                        </StackPanel>
+
+                        <!-- 批量解密还原文件名 -->
+                        <CheckBox x:Name="ChkRestoreName" Content="还原完整原始文件名（批量解密，较慢）"
+                                  Visibility="Collapsed" Checked="OnOptionChanged" Unchecked="OnOptionChanged" />
+
+                    </StackPanel>
+                </ScrollViewer>
+            </controls:Border>
+        </Grid>
+
+        <!-- 命令预览行 -->
+        <Grid Grid.Row="2" Margin="12,4,12,4" ColumnDefinitions="Auto,*,Auto">
+            <TextBlock Grid.Column="0" Text="命令预览" FontWeight="SemiBold" VerticalAlignment="Center" Margin="0,0,8,0" />
+            <TextBox Grid.Column="1" x:Name="OutputView" IsReadOnly="True" TextWrapping="NoWrap"
+                     Text="{x:Bind ViewModel.OutputText, Mode=OneWay}"
+                     FontFamily="Consolas" Height="28" Padding="4,2"
+                     ScrollViewer.HorizontalScrollBarVisibility="Auto"
+                     ScrollViewer.VerticalScrollBarVisibility="Disabled" />
+            <Button Grid.Column="2" Content="任务历史..." Click="OnOpenTaskHistory" Height="28" Padding="8,0" Margin="8,0,0,0" VerticalAlignment="Center" />
+        </Grid>
+
+        <!-- 状态栏 -->
+        <Grid Grid.Row="3" ColumnDefinitions="*,Auto" Padding="12,4">
+            <TextBlock x:Name="StatusLabel" Text="{x:Bind ViewModel.StatusText, Mode=OneWay}" VerticalAlignment="Center" />
+            <TextBlock Grid.Column="1" x:Name="ProgressLabel" Text="{x:Bind ViewModel.ProgressLabel, Mode=OneWay}" VerticalAlignment="Center" />
+        </Grid>
+    </Grid>
+</Window>

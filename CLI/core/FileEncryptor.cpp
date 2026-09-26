@@ -104,8 +104,7 @@ static size_t tag_size_for_mode(CryptoMode m) {
 }
 
 // ---------- 认证失败信息泄露防护 ----------
-// 默认（非 -v 且 log_level < DEBUG）下，所有认证失败只输出通用错误，不暴露
-// “密码错误 / 文件头被改 / 哈希不符 / 进度损坏”等可用于枚举或侧信道探测的细节。
+// 非详细模式下认证失败只输出通用错误，不暴露密码错误/头篡改等可枚举或侧信道探测细节。
 static bool g_verbose=false;
 void set_verbose(bool v) { g_verbose=v; }
 
@@ -129,8 +128,7 @@ static void report_auth_error(bool silent, const std::string& detail) {
 }
 
 // ---------- 路径规范化（防别名绕过） ----------
-// 用 lexically_normal 解析掉 . 与 ..（不做文件系统访问，故对尚不存在的输出路径也安全），
-// 再 make_preferred 统一分隔符。配合 path_has_traversal 与白名单，堵住基于路径别名的绕过。
+// lexically_normal 解析 . 与 ..，make_preferred 统一分隔符，堵住路径别名绕过。
 static std::string normalize_path_lexical(const std::string& p) {
     std::string s = p;
     bool had_long_prefix = false, had_unc_prefix = false;
@@ -148,10 +146,8 @@ static std::string normalize_path_lexical(const std::string& p) {
         }
     }
 #endif
-    // 注意：fs::path 的窄字符串构造按 ANSI 代码页（GBK）解释字节，含中文/Emoji 的
-    // UTF-8 路径在 .string() 往返时会抛 "No mapping for the Unicode character"
-    // （未捕获即 fastfail 崩溃）。必须先经 utf8_to_wstring 转宽字符再构造 path，
-    // 规范化后用 wstring_to_utf8 取回，全程无 ACP 往返、编码无损。
+    // 注意：fs::path 窄字符串按 ACP(GBK) 解释，含中文/Emoji 的 UTF-8 路径往返会崩溃；
+    // 须先 utf8_to_wstring 再构造 path，规范化后 wstring_to_utf8 取回，编码无损。
 #ifdef _WIN32
     fs::path np = fs::path(utf8_to_wstring(s)).lexically_normal();
     if(np.empty()) np = fs::path(utf8_to_wstring(s));
@@ -170,17 +166,14 @@ static std::string normalize_path_lexical(const std::string& p) {
 }
 
 // ---------- 续传进度文件绑定标识（防重放） ----------
-// 将"正在处理的源文件"的规范化路径 + 大小 + mtime 纳入 .prs 的 HMAC 输入，
-// 使旧的有效 .prs 无法被重放到不同的文件（路径/mtime/size 任一变化即 HMAC 失配）。
-// 前向声明：compute_progress_binding 依赖下方"文件系统辅助"中的 get_file_size_utf8。
+// 源文件规范化路径+大小+mtime 纳入 .prs 的 HMAC，旧 .prs 无法重放到不同文件。
+// 前向声明：compute_progress_binding 依赖下方 get_file_size_utf8。
 static int64_t get_file_size_utf8(const std::string& path);
 // 前向声明：is_complete_output / decrypt_file 需要提前获知尾部（加密名）长度做文件大小校验。
 static bool peek_name_footer_len(const std::string& ptd_path, uint64_t& footer_len);
 
-// 内容令牌（防重放增强）：对源文件"头部 64KB + 尾部 64KB + 总大小"求 Blake2b，
-// 折叠为一段稳定指纹。攻击者若仅用 `touch -r` 复刻 mtime 并保持大小（不改动内容），
-// 旧 .prs 仍会因内容令牌失配而 HMAC 失败，无法重放到内容不同的文件。
-// 整文件小于 128KB 时直接对全文求哈希；不读取整文件，故对大文件开销恒定。
+// 内容令牌：对源文件头部64KB+尾部64KB+总大小求 Blake2b 作指纹，防 mtime 复刻重放；
+// 小文件(<128KB)直接全文哈希，大文件不读全文，开销恒定。
 static std::string file_content_token(const std::string& path) {
     int64_t sz = get_file_size_utf8(path);
     if(sz < 0) return std::string();
@@ -232,9 +225,7 @@ static std::string compute_progress_binding(const std::string& in_path) {
     if(stat(in_path.c_str(),&st)==0) mt=(int64_t)st.st_mtime;
 #endif
     std::string token = file_content_token(in_path);
-    // 直接用 std::string 拼接，避免“snprintf 返回预期长度 vs 固定缓冲”的越界读：
-    // 路径很长时 snprintf 的返回值会超过缓冲大小，若再按该长度构造 std::string
-    // 会读到缓冲之外的栈内存（未定义行为，且在 LTO 下可能被优化器利用）。
+    // 用 std::string 拼接，避免 snprintf 返回超长时按返回值构造 std::string 的越界读。
     return "|" + norm + "|" + std::to_string(sz) + "|" + std::to_string(mt) + "|" + token;
 }
 
@@ -258,9 +249,7 @@ static bool file_blake2b(const std::string& path, unsigned char out[HASH_SIZE]) 
 }
 
 // ---------- 4 MiB 聚合写出缓冲 ----------
-// 块密文/明文先攒入缓冲，攒满 4 MiB 再一次性写盘，将原本每块 1~2 次 write 的小 syscall
-// 合并，显著降低大批量加解密的系统调用开销（压缩块原为 [4 字节长度前缀]+[密文] 两次 write）。
-// verify_only 模式下不绑定输出流，put/flush 均为空操作。
+// 块密文/明文攒满 4 MiB 再一次性写盘，合并小 syscall；verify_only 下不绑定输出流。
 struct AggWriter {
     std::ostream* os=nullptr;
     std::vector<unsigned char> buf;
@@ -285,10 +274,8 @@ struct AggWriter {
 };
 
 // ---------- 输入侧 4 MiB 页对齐大缓冲 ----------
-// CRT 流默认内部缓冲仅 4 KiB：1 MiB 块读取会拆成约 256 次内核读。把输入流内部缓冲
-// 扩到 4 MiB（与写出侧 AggWriter 同量级），每块读取压缩到约 1 次内核读；缓冲按
-// 4 KiB 页对齐分配。生命周期绑定本结构：setvbuf 要求缓冲在流使用期间保持有效，
-// 故本结构必须先于流声明（析构顺序逆序，保证流先销毁、缓冲后释放）。
+// 把输入流缓冲从 4 KiB 扩到 4 MiB 页对齐，每块读取压到约 1 次内核读；
+// setvbuf 要求缓冲在流存活期有效，故本结构须先于流声明（逆序析构）。
 struct InputBuffer {
     unsigned char* buf=nullptr;
     static constexpr size_t CAP=4*1024*1024;
@@ -313,8 +300,7 @@ struct InputBuffer {
 };
 
 // ---------- SHA-256 校验单（功能10） ----------
-// 加密成功后生成 <file>.sha256，内容为输出密文的 SHA-256（格式：<hex>  <基名>），
-// 便于与外部备份 / 传输工具链配合校验传输完整性。由 --sha256 或 YAML write_sha256 启用。
+// 加密后生成 <file>.sha256（<hex>  <基名>），供外部工具链校验传输完整性。
 static std::atomic<bool> g_write_sha256{false};
 void set_write_sha256(bool b) { g_write_sha256.store(b); }
 bool write_sha256_enabled() { return g_write_sha256.load(); }
@@ -353,9 +339,8 @@ void write_sha256_sidecar(const std::string& file) {
     log_event(LOG_INFO,"sha256_written",{{"path",sidecar}});
 }
 
-// ---------- AEGIS-256 可用性探测（缺 AES-NI 的 CPU 上不可用） ----------
-// 用 C++11 局部 static 初始化（magic static）保证线程安全：并发批量任务首次调用时
-// 不会因"先读后写 cached"产生数据竞争（历史实现 static int cached 非线程安全）。
+// ---------- AEGIS-256 可用性探测（缺 AES-NI 不可用） ----------
+// magic static 局部初始化保证线程安全（历史 static int cached 非线程安全）。
 bool aegis256_supported() {
     static const bool s_supported = []() -> bool {
         unsigned char k[32],npub[32],m[16],c[64],m2[16];
@@ -378,10 +363,8 @@ bool stdin_is_interactive() {
 #endif
 }
 
-// 解析加密模式：AEGIS-256 需要 AES-NI，缺硬件时：
-// - 交互终端：询问用户（默认降级到 XChaCha20-Poly1305），避免"极慢/侧信道"灾难；
-// - 非交互（GUI 管道 / --key-stdin / cron 调度）：禁止自动降级。refuse=true，
-//   调用方应中止并以非零码退出（CLI）/ 弹窗警告（GUI），两端行为完全一致。
+// 解析加密模式：AEGIS-256 需 AES-NI。交互终端询问后默认降级 XChaCha20；
+// 非交互禁止自动降级（refuse=true），由调用方中止/告警。
 CryptoMode resolve_encrypt_mode(CryptoMode requested, bool interactive,
     bool& refuse, std::string& message) {
     refuse=false;
@@ -492,14 +475,12 @@ bool path_has_traversal(const std::string& p) {
     return false;
 }
 
-// 依据全局 YAML 配置校验输入输出路径（长度上限 / 白名单根目录）。
-// 返回 true 表示允许；false 表示被策略拒绝（并打印原因）。
-// v2.1.2：去掉 static —— 非对称（rage）分支此前完全绕过路径策略，现由 run_asym 调用。
+// 依据 YAML 配置校验输入输出路径（长度上限/白名单根目录）；true 允许，false 拒绝。
+// v2.1.2 去掉 static，供非对称（rage）分支复用。
 bool validate_io_paths(const std::string& in_path,const std::string& out_path,bool silent) {
     const Config& cfg=global_config();
-    // 1.5.2 安全加固：任何 ".." 组件一律拒绝，堵住白名单前缀比较被
-    // "C:/allowed/../../outside/x" 绕过。必须在规范化之前检查原始路径——
-    // lexically_normal 会把 ".." 折叠掉，若先规范化再做后续校验反而可能漏掉穿越。
+    // 1.5.2：原始路径含 ".." 组件一律拒绝（须在规范化前检查，否则 lexically_normal
+    // 会折叠 ".." 而漏掉 "C:/allowed/../../outside/x" 类绕过）。
     if(path_has_traversal(in_path)||path_has_traversal(out_path)) {
         if(!silent) fprintf(stderr,"Path contains directory traversal (..): in=%s out=%s\n",
             in_path.c_str(),out_path.c_str());
@@ -562,10 +543,7 @@ static bool process_alive_pid(int pid) {
 
 enum class LockResult { OK, LOCKED, CANNOT_CREATE };
 
-// 返回获取锁的结果：
-//   OK            成功获得锁
-//   LOCKED        锁文件存在且持有进程仍存活（真被其它进程占用）
-//   CANNOT_CREATE 无法创建锁文件（权限不足 / 路径过长或非法等）
+// 锁结果：OK 成功；LOCKED 被存活进程持有；CANNOT_CREATE 无法创建（权限/路径问题）。
 static LockResult acquire_output_lock(const std::string& out_path,std::string& lock_path) {
     lock_path=out_path+".lock";
 #ifdef _WIN32
@@ -668,9 +646,8 @@ void clear_readonly_attribute(const std::string& path) {
 #endif
 }
 
-// 收紧密钥文件权限（仅拥有者可读）。Windows 写入真正的 DACL：只保留当前用户
-// + SYSTEM，且 PROTECTED_DACL 阻断继承，达到 0600 语义（v2.1.2 前的
-// _chmod(_S_IREAD) 只是"只读"属性位，并非访问控制）。ACL 失败时静默回退。
+// 收紧密钥文件权限（0600）。Windows 写真正 DACL（当前用户+SYSTEM，PROTECTED_DACL
+// 阻断继承）；旧 _chmod 只读位并非访问控制。ACL 失败静默回退。
 void tighten_file_permissions(const std::string& path) {
 #ifdef _WIN32
     clear_readonly_attribute(path);
@@ -720,9 +697,8 @@ void tighten_file_permissions(const std::string& path) {
 }
 
 // ---------- 反调试 ----------
-// 重要（缺陷修复约束）：本函数在检测到调试器时会直接 exit(1)，因此【只能】在 main() 启动期、
-// 任何工作线程创建之前调用。切勿移入 process_files 的并发 worker —— 否则 worker 中 exit(1)
-// 会终止整个批量任务，而非仅中止单文件。
+// 检测到调试器会 exit(1)，只能在 main() 启动期、工作线程创建前调用；
+// 切勿移入并发 worker（否则会终止整个批量任务）。
 void anti_debug_check() {
 #ifdef _WIN32
     if(IsDebuggerPresent()) {
@@ -775,9 +751,8 @@ bool create_directory_recursive(const std::string& path) {
     size_t pos=path.find_last_of("/\\");
     if(pos!=std::string::npos) {
         std::string parent=path.substr(0,pos);
-        // 盘符根（"H:"）：其 stat 依赖进程级"盘符当前目录"（CWD 在其他盘时失败），
-        // 且 _wmkdir("H:") 恒失败——两者都不可靠。改用绝对根 "H:/" 探测：
-        // 根目录存在（盘可访问）则继续创建剩余分量，否则失败。
+        // 盘符根("H:")的 stat/_wmkdir 不可靠，改用绝对根 "H:/" 探测：
+        // 盘可访问则继续创建剩余分量，否则失败。
         if(parent.size()==2 && parent[1]==':') {
             struct _stat64 rst;
             if(_wstat64(utf8_to_wstring(parent+"/").c_str(),&rst)!=0 ||
@@ -807,13 +782,13 @@ bool create_directory_recursive(const std::string& path) {
 static bool is_file_valid(const std::string& path) {
     std::ifstream f;
     if(!open_stream(f,path,std::ios::binary)) return false;
-    unsigned char hbuf[HEADER_SIZE_V4];
-    f.read(reinterpret_cast<char*>(hbuf),HEADER_SIZE_V4);
+    unsigned char hbuf[HEADER_SIZE_V6];
+    f.read(reinterpret_cast<char*>(hbuf),HEADER_SIZE_V6);
     if(f.gcount()<5) return false;
     unsigned char ver=hbuf[4];
     uint64_t need=header_size_for_version(ver);
     if((uint64_t)f.gcount()<need) return false;
-    return (memcmp(hbuf,MAGIC,4)==0&&(ver==1||ver==2||ver==3||ver==VERSION));
+    return (memcmp(hbuf,MAGIC,4)==0&&(ver==1||ver==2||ver==3||ver==5||ver==VERSION));
 }
 
 // 判断已存在的输出是否“完整且有效”，可安全跳过
@@ -922,10 +897,8 @@ static bool save_progress(const std::string& out_path,
         return false;
     }
     f.close();
-    // 关键修复：Windows 下 std::rename 在目标已存在时会失败（EEXIST，与 POSIX 语义不同），
-    // 导致从第 2 个块起进度文件永远写不进去、断点续传退化为从头重做。
-    // 改用 replace_file_utf8()（Windows 用 MoveFileExW(MOVEFILE_REPLACE_EXISTING)、
-    // Linux 用 std::remove+std::rename 等价实现），保证每次块处理后都能覆盖更新进度文件。
+    // 关键修复：Windows std::rename 目标已存在即失败(EEXIST)，改用 replace_file_utf8()
+    // (MoveFileExW 替换写) 保证每块后都能覆盖更新进度文件。
     if(!replace_file_utf8(temp_prog,prog_path)) {
         remove_file_utf8(temp_prog);
         return false;
@@ -939,8 +912,7 @@ static void remove_progress(const std::string& out_path) {
 }
 
 // ---------- 进程级限速器（令牌桶，v1.7.2） ----------
-// 由 init_rate_limiter() 在加载配置后初始化一次；加/解密主循环按已处理字节数记账，
-// 超出 max_bytes_per_sec 则休眠，实现进程级总吞吐上限（覆盖批处理的全部并发线程）。
+// 主循环按已处理字节数记账，超 max_bytes_per_sec 则休眠，覆盖全部并发线程。
 static uint64_t g_rl_max_bps = 0;          // 0 = 不限速
 static std::mutex g_rl_mutex;
 static int64_t  g_rl_allowance = 0;        // 当前窗口允许的剩余字节
@@ -1025,9 +997,8 @@ static void print_progress(size_t processed,size_t total,
 }
 
 // ---------- 文件名 / 扩展名混淆（v1.7.0） ----------
-// 输出形如 "<16 位十六进制>.<混淆扩展名>.ptd"：.ptd 恒在末尾，批量解密仍可据此筛选。
-// 混淆名 = Blake2b(key=Blake2b(口令), msg=输入路径)，确定性（同口令 + 同输入 -> 同名字），
-// 因此中断后续传仍能命中同一输出文件与 .prs，同时不泄露原始文件名。
+// 输出 <16hex>.<混淆扩展名>.ptd；混淆名=Blake2b(Blake2b(口令),路径) 确定性，
+// 续传命中同一文件，且不泄露原始文件名。
 static const char* const OBFUSCATED_EXTS[] = {
     "png","jpg","jpeg","apng","mp4","mp3","aac","avi","bmp","txt","yaml",
     "json","js","cpp","hpp","c","md","pdf","doc","docx","ppt","pptx","xls",
@@ -1036,12 +1007,9 @@ static const char* const OBFUSCATED_EXTS[] = {
 static constexpr size_t OBFUSCATED_EXT_COUNT=sizeof(OBFUSCATED_EXTS)/sizeof(OBFUSCATED_EXTS[0]);
 
 // ---------- 原始文件名（混淆前）加密存储（v1.7.1） ----------
-// 原始文件名以"加密信封"形式追加在密文末尾：与主密文使用相同配置
-// （XChaCha20-Poly1305，同一派生主密钥，nonce 由文件 salt 派生），故文件名
-// 不再以明文暴露；UTF-8 多字节文件名天然兼容。尾部布局（文件最末）：
-//   [加密名 n+16 字节][magic "FENX"][name_len 4 字节]
-// magic 与长度固定在文件最末 8 字节，读取时无需回扫即可定位；保留对早期
-// 明文尾部（magic "FENM"）的兼容读取，但新写入一律加密。
+// 原始文件名以加密信封（XChaCha20-Poly1305）追加在密文末尾；尾部布局：
+//   [加密名 n+16B][magic "FENX"][name_len 4B]，最末 8 字节固定可直接定位。
+// 兼容旧明文尾部(FENM)读取，新写入一律加密。
 static constexpr char NAME_FOOTER_MAGIC[4]     = {'F','E','N','M'}; // 旧版明文尾部（仅兼容读取）
 static constexpr char NAME_FOOTER_MAGIC_ENC[4] = {'F','E','N','X'}; // 新版加密尾部
 static constexpr size_t NAME_FOOTER_HDR = 8;                 // magic(4) + name_len(4)
@@ -1126,9 +1094,8 @@ static bool append_encrypted_name_footer(std::fstream& fout,
     return fout.good();
 }
 
-// 尾部元数据未做认证，还原前必须严格净化，防止构造出 "../x" 之类的越权输出路径。
-// Windows 保留设备名（忽略扩展名比较基名）：CON PRN AUX NUL COM1..COM9 LPT1..LPT9。
-// 还原出的文件名若命中这些，会在打开/创建时指向设备而非文件，造成越权或异常。
+// 尾部元数据未认证，还原前须净化防越权路径；Windows 保留设备名
+// (CON/PRN/AUX/NUL/COMx/LPTx) 命中即拒绝，避免指向设备。
 static bool is_windows_reserved_name(const std::string& name) {
 #ifdef _WIN32
     // 取基名（去目录），再剥扩展名得到待比较的"名"
@@ -1266,15 +1233,16 @@ bool read_original_name(const std::string& ptd_path, std::string& out_name,
     if(ver!=1&&ver!=2&&ver!=3&&ver!=VERSION&&ver!=5&&ver!=6) return false;
     size_t hdr_size=header_size_for_version(ver);
     if(!f.read(reinterpret_cast<char*>(hdrbuf+5),(std::streamoff)(hdr_size-5))) return false;
+    unsigned char salt_buf[ARGON2_SALT_LEN];
     const unsigned char* salt_ptr=nullptr;
     unsigned int kdf_ops=ARGON2_OPS_LEGACY;
     size_t kdf_mem=(size_t)ARGON2_MEM_LEGACY_KB*1024;
-    if(ver==1)      { FileHeaderV1 h=load_header<FileHeaderV1>(hdrbuf); salt_ptr=h.salt; }
-    else if(ver==2) { FileHeaderV2 h=load_header<FileHeaderV2>(hdrbuf);  salt_ptr=h.salt; kdf_ops=h.opslimit; kdf_mem=(size_t)h.memlimit_kb*1024; }
-    else if(ver==3) { FileHeaderV3 h=load_header<FileHeaderV3>(hdrbuf); salt_ptr=h.salt; kdf_ops=h.opslimit; kdf_mem=(size_t)h.memlimit_kb*1024; }
-    else if(ver==5) { FileHeaderV5 h=load_header<FileHeaderV5>(hdrbuf); salt_ptr=h.salt; kdf_ops=h.opslimit; kdf_mem=(size_t)h.memlimit_kb*1024; }
-    else if(ver==6) { FileHeaderV6 h=load_header<FileHeaderV6>(hdrbuf); salt_ptr=h.salt; kdf_ops=h.opslimit; kdf_mem=(size_t)h.memlimit_kb*1024; }
-    else            { FileHeaderV4 h=load_header<FileHeaderV4>(hdrbuf); salt_ptr=h.salt; kdf_ops=h.opslimit; kdf_mem=(size_t)h.memlimit_kb*1024; }
+    if(ver==1)      { FileHeaderV1 h=load_header<FileHeaderV1>(hdrbuf); memcpy(salt_buf,h.salt,ARGON2_SALT_LEN); salt_ptr=salt_buf; }
+    else if(ver==2) { FileHeaderV2 h=load_header<FileHeaderV2>(hdrbuf);  memcpy(salt_buf,h.salt,ARGON2_SALT_LEN); salt_ptr=salt_buf; kdf_ops=h.opslimit; kdf_mem=(size_t)h.memlimit_kb*1024; }
+    else if(ver==3) { FileHeaderV3 h=load_header<FileHeaderV3>(hdrbuf); memcpy(salt_buf,h.salt,ARGON2_SALT_LEN); salt_ptr=salt_buf; kdf_ops=h.opslimit; kdf_mem=(size_t)h.memlimit_kb*1024; }
+    else if(ver==5) { FileHeaderV5 h=load_header<FileHeaderV5>(hdrbuf); memcpy(salt_buf,h.salt,ARGON2_SALT_LEN); salt_ptr=salt_buf; kdf_ops=h.opslimit; kdf_mem=(size_t)h.memlimit_kb*1024; }
+    else if(ver==6) { FileHeaderV6 h=load_header<FileHeaderV6>(hdrbuf); memcpy(salt_buf,h.salt,ARGON2_SALT_LEN); salt_ptr=salt_buf; kdf_ops=h.opslimit; kdf_mem=(size_t)h.memlimit_kb*1024; }
+    else            { FileHeaderV4 h=load_header<FileHeaderV4>(hdrbuf); memcpy(salt_buf,h.salt,ARGON2_SALT_LEN); salt_ptr=salt_buf; kdf_ops=h.opslimit; kdf_mem=(size_t)h.memlimit_kb*1024; }
     SecureBuffer kek(ARGON2_OUTPUT_LEN);
     if(pre_kek && pre_kek_len >= ARGON2_OUTPUT_LEN) {
         std::memcpy(kek.data(), pre_kek, ARGON2_OUTPUT_LEN);
@@ -1311,26 +1279,27 @@ bool read_ptd_metadata(const std::string& ptd_path, PtdMeta& meta) {
     meta.valid=true;
     size_t need=header_size_for_version(ver);
     if(!f.read(reinterpret_cast<char*>(hdr+5),(std::streamoff)(need-5))) return false;
+    unsigned char salt_buf[ARGON2_SALT_LEN];
     const unsigned char* salt_ptr=nullptr;
     size_t iv_len=0;
-    if(ver==1)      { FileHeaderV1 h=load_header<FileHeaderV1>(hdr); salt_ptr=h.salt; meta.mode=static_cast<CryptoMode>(h.mode); iv_len=h.iv_len;
+    if(ver==1)      { FileHeaderV1 h=load_header<FileHeaderV1>(hdr); memcpy(salt_buf,h.salt,ARGON2_SALT_LEN); salt_ptr=salt_buf; meta.mode=static_cast<CryptoMode>(h.mode); iv_len=h.iv_len;
                      char hex[65]; sodium_bin2hex(hex,sizeof(hex),h.iv,std::min<size_t>(h.iv_len,24)); meta.iv_hex=hex; }
-    else if(ver==2) { FileHeaderV2 h=load_header<FileHeaderV2>(hdr);  salt_ptr=h.salt; meta.mode=static_cast<CryptoMode>(h.mode); meta.opslimit=h.opslimit; meta.memlimit_kb=h.memlimit_kb; iv_len=h.iv_len;
+    else if(ver==2) { FileHeaderV2 h=load_header<FileHeaderV2>(hdr);  memcpy(salt_buf,h.salt,ARGON2_SALT_LEN); salt_ptr=salt_buf; meta.mode=static_cast<CryptoMode>(h.mode); meta.opslimit=h.opslimit; meta.memlimit_kb=h.memlimit_kb; iv_len=h.iv_len;
                      char hex[65]; sodium_bin2hex(hex,sizeof(hex),h.iv,std::min<size_t>(h.iv_len,24)); meta.iv_hex=hex; }
-    else if(ver==3) { FileHeaderV3 h=load_header<FileHeaderV3>(hdr); salt_ptr=h.salt; meta.mode=static_cast<CryptoMode>(h.mode); meta.opslimit=h.opslimit; meta.memlimit_kb=h.memlimit_kb; iv_len=h.iv_len;
+    else if(ver==3) { FileHeaderV3 h=load_header<FileHeaderV3>(hdr); memcpy(salt_buf,h.salt,ARGON2_SALT_LEN); salt_ptr=salt_buf; meta.mode=static_cast<CryptoMode>(h.mode); meta.opslimit=h.opslimit; meta.memlimit_kb=h.memlimit_kb; iv_len=h.iv_len;
                      char hex[65]; sodium_bin2hex(hex,sizeof(hex),h.iv,std::min<size_t>(h.iv_len,32)); meta.iv_hex=hex;
                      char hx2[65]; sodium_bin2hex(hx2,sizeof(hx2),h.plaintext_hash,HASH_SIZE); meta.plaintext_hash_hex=hx2;
                      int64_t sz=get_file_size_utf8(ptd_path); (void)sz; }
-    else if(ver==5) { FileHeaderV5 h=load_header<FileHeaderV5>(hdr); salt_ptr=h.salt; meta.mode=static_cast<CryptoMode>(h.mode); meta.opslimit=h.opslimit; meta.memlimit_kb=h.memlimit_kb; iv_len=h.iv_len;
+    else if(ver==5) { FileHeaderV5 h=load_header<FileHeaderV5>(hdr); memcpy(salt_buf,h.salt,ARGON2_SALT_LEN); salt_ptr=salt_buf; meta.mode=static_cast<CryptoMode>(h.mode); meta.opslimit=h.opslimit; meta.memlimit_kb=h.memlimit_kb; iv_len=h.iv_len;
                      meta.compression=h.compression; meta.comp_level=h.comp_level;
                      char hex[65]; sodium_bin2hex(hex,sizeof(hex),h.iv,32); meta.iv_hex=hex;
                      char hx2[65]; sodium_bin2hex(hx2,sizeof(hx2),h.plaintext_hash,HASH_SIZE); meta.plaintext_hash_hex=hx2; }
-    else if(ver==6) { FileHeaderV6 h=load_header<FileHeaderV6>(hdr); salt_ptr=h.salt; meta.mode=static_cast<CryptoMode>(h.mode); meta.opslimit=h.opslimit; meta.memlimit_kb=h.memlimit_kb; iv_len=h.iv_len;
+    else if(ver==6) { FileHeaderV6 h=load_header<FileHeaderV6>(hdr); memcpy(salt_buf,h.salt,ARGON2_SALT_LEN); salt_ptr=salt_buf; meta.mode=static_cast<CryptoMode>(h.mode); meta.opslimit=h.opslimit; meta.memlimit_kb=h.memlimit_kb; iv_len=h.iv_len;
                      meta.compression=h.compression; meta.comp_level=h.comp_level;
                      meta.dek_wrapped=true; meta.key_version=get_be32(reinterpret_cast<const unsigned char*>(&h.key_version));
                      char hex[65]; sodium_bin2hex(hex,sizeof(hex),h.iv,32); meta.iv_hex=hex;
                      char hx2[65]; sodium_bin2hex(hx2,sizeof(hx2),h.plaintext_hash,HASH_SIZE); meta.plaintext_hash_hex=hx2; }
-    else            { FileHeaderV4 h=load_header<FileHeaderV4>(hdr); salt_ptr=h.salt; meta.mode=static_cast<CryptoMode>(h.mode); meta.opslimit=h.opslimit; meta.memlimit_kb=h.memlimit_kb; iv_len=h.iv_len;
+    else            { FileHeaderV4 h=load_header<FileHeaderV4>(hdr); memcpy(salt_buf,h.salt,ARGON2_SALT_LEN); salt_ptr=salt_buf; meta.mode=static_cast<CryptoMode>(h.mode); meta.opslimit=h.opslimit; meta.memlimit_kb=h.memlimit_kb; iv_len=h.iv_len;
                      char hex[65]; sodium_bin2hex(hex,sizeof(hex),h.iv,32); meta.iv_hex=hex;
                      char hx2[65]; sodium_bin2hex(hx2,sizeof(hx2),h.plaintext_hash,HASH_SIZE); meta.plaintext_hash_hex=hx2; }
     // 头部之后紧随 16 字节块元数据：chunk_size(4) + total_chunks(4) + orig_size(8)
@@ -1361,10 +1330,9 @@ bool verify_ptd(const std::string& ptd_path, const SecureBuffer& password) {
         nullptr, false, false, nullptr, nullptr, 0, true);
 }
 
-// ---------- 密钥轮换 / rewrap（可扩展加密容器 v6） ----------
-// 用 old_password 解开 v6 容器中的 wrapped DEK，再以 new_password 派生的新 KEK 重裹
-// DEK（key_version 自增），重写头部容器区与 header_hmac；载荷密文原样不动。
-// 仅对 v6 及以上容器有效；旧格式返回 false。
+// ---------- 密钥轮换 / rewrap（v6 容器） ----------
+// old_password 解出 wrapped DEK，new_password 派生新 KEK 重裹（key_version 自增），
+// 重写头部容器区与 header_hmac；载荷密文不动。仅 v6+ 有效。
 bool rewrap_file(const std::string& ptd_path,
     const SecureBuffer& old_password,
     const std::string& new_key_path,
@@ -1647,15 +1615,12 @@ bool encrypt_file(const std::string& in_path,
                 sodium_memzero(kek.data(),kek.size());
             }
         }
-        // 注意：此处不能 key.clear()。key 由 SecureBuffer 持有，函数返回时析构已安全清零+解锁；
-        // 若提前 clear，后续续传分支（!header_written 或 else）再次 derive_key(..., key.data(), ...)
-        // 会写入已释放（nullptr）的缓冲，触发段错误。保留 key 的有效 32 字节缓冲即可。
+        // 注意：此处不能 key.clear()——提前 clear 会使后续 derive_key 写入已释放缓冲。
+        // 保留 key 的有效 32 字节缓冲，函数返回时 SecureBuffer 析构自动清零。
     }
 
-    // 进度文件存在但无法认证（HMAC 失败 / 格式损坏 / 旧格式）：
-    // 原输出已存在时禁止从头重写覆盖——否则正确密码加密的密文会被错误密码的产物
-    // 静默抹掉，且 .prs 随后被删，造成数据永久丢失（批量 -be 无交互确认即触发）。
-    // 仅当原输出不存在（孤立 .prs）时才安全从头重做。
+    // .prs 无法认证时，若原输出已存在则禁止从头覆盖（否则会静默抹掉正确密文、
+    // 造成数据永久丢失）；仅当输出不存在（孤立 .prs）才安全重做。
     if(resume && prog_present && !has_progress) {
         if(out_exists) {
             fprintf(stderr,"Refusing to overwrite existing output '%s': progress authentication failed "
@@ -1686,9 +1651,8 @@ bool encrypt_file(const std::string& in_path,
     do_compress = false;
     (void)compress_level;
 #endif
-    // v6 容器：新加密默认写入 v6（DEK 随机生成，KEK 包裹）。AAD / 文件头 HMAC 覆盖区随之调整。
-    // 注意区分两个覆盖区：header_hmac 覆盖整段前缀（含容器区，rewrap 后重算）；
-    // 载荷 AAD 只覆盖稳定前缀（不含容器区），保证密钥轮换零重加密可行。
+    // v6：默认写 v6（随机 DEK，KEK 包裹）。header_hmac 覆盖整段前缀（含容器，rewrap 后重算）；
+    // 载荷 AAD 只覆盖稳定前缀（不含容器），保证密钥轮换零重加密。
     const bool use_v6 = true;
     const size_t hdr_cover = use_v6 ? HEADER_HMAC_COVER_V6
                           : (do_compress ? HEADER_HMAC_COVER_V5 : HEADER_HMAC_COVER);
@@ -1740,9 +1704,8 @@ bool encrypt_file(const std::string& in_path,
         return false;
     }
 
-    // 续传前先做一致性校验，且必须在 truncate_file 之前完成。
-    // 否则校验失败时输出已被截断，随后的 cleanup 会删除 .ptd 与 .prs，
-    // 用户可用正确的 -m 重新运行，断点不丢失。
+    // 续传一致性校验必须在 truncate_file 之前完成：否则失败时输出已截断，
+    // cleanup 会删 .ptd/.prs，用户可用正确 -m 重跑、断点不丢。
     if(has_progress&&start_chunk>0) {
         if(existing_mode!=static_cast<unsigned char>(mode)) {
             fprintf(stderr,"Output file was created with a different encryption mode "
@@ -1859,9 +1822,8 @@ bool encrypt_file(const std::string& in_path,
         aad=build_aad_with_metadata(reinterpret_cast<unsigned char*>(&header),
             aad_cover, chunk_size,total_chunks,orig_size);
 
-        // 文件头 HMAC 在写头瞬间即计算并随头落盘：覆盖对应前缀（v6 含容器区），不含
-        // plaintext_hash/header_hmac 自身。被中断的半成品 .ptd 也已携带合法 header_hmac，
-        // 续传时“文件头篡改校验”可正常通过；同时防攻击者替换 salt/iv/mode 后重放旧 .prs。
+        // 文件头 HMAC 写头时即计算落盘（覆盖对应前缀，不含 plaintext_hash/hmac 自身）：
+        // 半成品 .ptd 也带合法 hmac 供续传校验，并防替换 salt/iv/mode 后重放旧 .prs。
         {
             unsigned char hdr_auth[HEADER_HMAC_SIZE];
             derive_header_auth_key(key.data(),hdr_auth);
@@ -2009,9 +1971,8 @@ bool encrypt_file(const std::string& in_path,
 
         processed_bytes+=chunk_len;
         throttle_consume(chunk_len);
-        // 逐块 flush + save_progress（每块 4 次元数据操作 + 写穿 rename）曾把大批量
-        // 吞吐拖到个位数 MB/s。改为按时间节流：保存前先 flush 密文，保持
-        // 「磁盘 .prt 内容 ≥ .prs 记账」不变式；被强杀时 .prt 截断到记账处，多算的块重算。
+        // 逐块 save_progress 曾拖垮吞吐，改为按 500ms 节流：先 flush 密文再记账，
+        // 保持「磁盘 .prt ≥ .prs 记账」不变式；强杀时截断到记账处重算。
         auto prs_now=std::chrono::steady_clock::now();
         if(persistent_progress && prs_now-last_prs_save>=std::chrono::milliseconds(500)) {
             outbuf.flush();   // 先落盘密文再记账进度（带 HMAC），保持「磁盘 .prt ≥ .prs」不变式
@@ -2341,9 +2302,8 @@ bool decrypt_file(const std::string& in_path,
     // 派生密钥（提前到空文件短路之前，以便 v4 文件头 HMAC 校验对空文件也生效）。
     // 同时计算源文件绑定标识，供 .prs 防重放校验使用。
     std::string prog_binding = compute_progress_binding(in_path);
-    // ext_kek：外部已派生的 KEK（批量解密每文件复用，跳过昂贵 Argon2id）。
-    //   非 v6 时该密钥即载荷密钥；v6 时需解裹 DEK 得到载荷密钥。
-    // ext_key：外部已派生的最终密钥（自校验用），直接复用、跳过 KDF 与解裹。
+    // ext_kek：外部已派生 KEK（批量复用，跳过 Argon2id）；非 v6 即载荷密钥，v6 需解裹 DEK。
+    // ext_key：外部最终密钥（自校验用），直接复用跳过 KDF 与解裹。
     const bool have_kek = (ext_kek && ext_kek_len >= ARGON2_OUTPUT_LEN);
     if(is_v6) {
         // v6 容器：KEK 解裹 DEK（同时校验口令正确性），DEK 即载荷密钥。
@@ -2386,9 +2346,8 @@ bool decrypt_file(const std::string& in_path,
         derive_progress_auth_key(key.data(), auth_key.data());
     }
 
-    // v4/v5/v6 文件头 HMAC 校验：独立于 AEAD，防止文件头被篡改（如替换 salt/iv/mode 后重放）。
-    // v6 的 HMAC 由 DEK 派生密钥计算，覆盖至 reserved 区（含容器），须在解裹 DEK 之后、
-    // 任何明文输出之前完成；校验失败只给通用错误（防侧信道）。
+    // v4/v5/v6 文件头 HMAC 校验：独立于 AEAD，防文件头被篡改（替换 salt/iv/mode 后重放）。
+    // v6 由 DEK 派生密钥、覆盖至 reserved 区，须在解裹 DEK 后、明文输出前完成（失败只给通用错误）。
     if(is_v4 || is_v5 || is_v6) {
         unsigned char hdr_auth[HEADER_HMAC_SIZE];
         derive_header_auth_key(key.data(), hdr_auth);
@@ -2531,9 +2490,8 @@ bool decrypt_file(const std::string& in_path,
 
     // 密钥已在前面（空文件短路之前）派生到 key / auth_key，此处无需重复派生。
 
-    // AAD 必须严格复刻加密时的构造：v5 覆盖前 79 字节（含压缩标记），v4/v3 覆盖前 77 字节。
-    // 载荷 AAD 覆盖区：v4/v3 复刻加密端（v5 到压缩标记，v4/v3 到 iv）；
-    // v6 只到稳定前缀（不含容器区——rewrap 会改写容器，但载荷 AAD 不能随之失效）
+    // AAD 须严格复刻加密端构造：v5 覆盖到压缩标记，v4/v3 到 iv；
+    // v6 只到稳定前缀（不含容器区，rewrap 改写容器不使载荷 AAD 失效）。
     size_t aad_hdr_len=(ver==6) ? HEADER_AAD_COVER_V6 : header_hmac_cover(ver);
     std::vector<unsigned char> aad=build_aad_with_metadata(hdrbuf,aad_hdr_len,chunk_size,total_chunks,orig_size);
 
@@ -2713,11 +2671,8 @@ bool decrypt_file(const std::string& in_path,
 
         processed_bytes+=out_len;
         throttle_consume(out_len);
-        // 逐块 flush + save_progress（每块 4 次元数据操作 + 写穿 rename）曾把大批量
-        // 吞吐拖到个位数 MB/s（磁盘读仅 ~7MB/s 的直接来源）。改为按时间节流：
-        // 保存前先 flush 明文，保持「磁盘 .prt 内容 ≥ .prs 记账」不变式；
-        // 被强杀时 .prt 截断到记账处重算，正确性不变。
-        // 自校验模式（verify_only）不落盘、不写进度文件。
+        // 逐块 save_progress 曾拖垮吞吐，改为 500ms 节流：先 flush 明文再记账，
+        // 保持「磁盘 .prt ≥ .prs」不变式；verify_only 不落盘不写进度。
         if(!verify_only && persistent_progress) {
             auto prs_now=std::chrono::steady_clock::now();
             if(prs_now-last_prs_save>=std::chrono::milliseconds(500)) {
@@ -2874,9 +2829,8 @@ static std::string build_batch_out_path(const std::string& in_path,
     std::string out_path=out_dir_clean+"/";
     std::string best_root;
     for(const auto& root:input_paths) {
-        // 前缀匹配需带边界检查：root 必须是 in_path 的目录前缀，
-        // 即 root 之后紧跟路径分隔符，或与 in_path 完全相同，
-        // 否则 "D:\data" 会误匹配 "D:\database\x"（Issue N-C）。
+        // 前缀匹配需带边界：root 后须紧跟分隔符或与 in_path 相同，
+        // 否则 "D:\data" 会误匹配 "D:\database\x"。
         if(is_directory(root)&&in_path.length()>=root.length()&&
            in_path.compare(0,root.length(),root)==0&&
            (in_path.length()==root.length()||
@@ -2887,9 +2841,8 @@ static std::string build_batch_out_path(const std::string& in_path,
     if(!best_root.empty()) {
         std::string suffix=in_path.substr(best_root.length());
         if(!suffix.empty()&&(suffix[0]=='/'||suffix[0]=='\\')) suffix.erase(0,1);
-        // 加密：保留输入根目录名作为顶层目录（避免多 -i 同名冲突，且还原后保持源目录名）；
-        // 解密：默认不附加输入根目录名，使还原结构为 <输出目录>/<源目录>/...（与 v1.1.1 一致）。
-        // 但当存在多个输入根目录时（input_paths.size()>1），即使是解密也附加根目录名前缀
+        // 加密保留输入根目录名作顶层；解密默认不附加（多输入根时即使解密也附加），
+        // 避免多 -i 同名冲突。
         bool need_root_name=include_root_name||input_paths.size()>1;
         if(need_root_name) {
             size_t root_pos=best_root.find_last_of("/\\");
@@ -2917,10 +2870,8 @@ bool process_files(const std::vector<std::string>& input_paths,
     int num_threads,
     bool restore_name,
     int compress_level) {
-    // 批量入口防御性兜底：正常流程下 main.cpp 已提前解析模式（非交互拒绝退出 /
-    // 交互终端已询问降级），此处不应再见到「AEGIS-256 且缺 AES-NI」。若仍有直达调用
-    // 传入该组合，严格遵循非交互策略——不自动降级，仅给出警告，保留 AEGIS-256 交由
-    // 调用方显式决定（避免自动化任务中静默的行为变更）。
+    // 批量入口兜底：main.cpp 已处理 AEGIS-256 缺 AES-NI 的降级；若仍直达传入，
+    // 不自动降级仅警告，交由调用方显式决定（避免自动化任务静默行为变更）。
     if(encrypt&&mode==CryptoMode::AEGIS256&&!aegis256_supported()) {
         fprintf(stderr,"Warning: AEGIS-256 unavailable on this CPU (AES-NI required); "
                        "proceeding as requested (will be very slow / side-channel weak). "
@@ -3081,9 +3032,8 @@ bool process_files(const std::vector<std::string>& input_paths,
                 fprintf(stderr,"Existing file %s has unfinished progress, will resume.\n",out_path.c_str());
             }
             else if(is_complete_output(out_path,encrypt,in_path)) {
-                // 头部有效、无 .prs、且尺寸完整，确属已完成成品，安全跳过。
-                // 但"跳过"不等于"忽略"：解密方向若带了源文件处置（-de / --wipe-source /
-                // --recycle-source），该 .ptd 已完成使命，仍须按约定移除，否则重跑永远清不掉。
+                // 头部有效、无 .prs、尺寸完整即已完成，安全跳过；
+                // 但解密若带源处置(-de/--wipe-source/--recycle-source)仍须移除源 .ptd。
                 skip=true;
                 printf("Skipped: %s (already done)\n",in_path.c_str());
                 if(!encrypt && source_action!=0) {
@@ -3229,9 +3179,8 @@ bool process_files(const std::vector<std::string>& input_paths,
                 }
             }
             else {
-                // 伪 .ptd 快速预检：magic 不匹配直接按跳过处理（计入 SKIP）。
-                // 混合目录里普通文件被冠以 .ptd 后缀时，避免白跑一次 128MB Argon2id
-                // 再报 Failed——既省每文件 ~百毫秒的 KDF，也不让批任务被误标失败。
+                // 伪 .ptd 预检：magic 不匹配直接按 SKIP 跳过，
+                // 避免普通文件误冠 .ptd 后白跑一次 Argon2id 再误报 Failed。
                 {
                     unsigned char m5[5];
                     std::ifstream mf;
@@ -3349,5 +3298,21 @@ bool process_files(const std::vector<std::string>& input_paths,
     // 清空中缓存的派生密钥，避免明文残留于进程内存
     for(auto& kv:kek_cache) sodium_memzero(kv.second.data(), kv.second.size());
     kek_cache.clear();
+
+    // 宿主（GUI）可通过环境变量指定统计文件，批量结束时写入 JSON 供宿主解析
+    if(const char* stats_path=std::getenv("FILEENCRYPTOR_STATS_FILE")) {
+        FILE* sf=fopen(stats_path,"wb");
+        if(sf) {
+            fprintf(sf,"{\"total_bytes\":%llu,\"files_done\":%llu,\"files_failed\":%llu,"
+                      "\"files_skipped\":%llu,\"total_files\":%llu}\n",
+                (unsigned long long)total_bytes,
+                (unsigned long long)files_done.load(),
+                (unsigned long long)files_failed.load(),
+                (unsigned long long)(files_skipped+skipped_not_ptd.load()),
+                (unsigned long long)all_files.size());
+            fclose(sf);
+        }
+    }
+
     return all_ok.load();
 }

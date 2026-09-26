@@ -1,0 +1,22 @@
+<Project Sdk="WixToolset.Sdk/4.0.5">
+  <PropertyGroup>
+    <OutputType>Package</OutputType>
+    <OutputName>FileEncryptorGUI-2.0.0-WinUI-Windows</OutputName>
+    <Platform>x64</Platform>
+    <DefineConstants>PublishDir=..\bin\x64\Release\net8.0-windows10.0.19041.0\win-x64\publish</DefineConstants>
+    <SuppressIces>ICE03</SuppressIces>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="WixToolset.UI.wixext" Version="4.0.5" />
+    <PackageReference Include="WixToolset.Util.wixext" Version="4.0.5" />
+  </ItemGroup>
+
+  <!-- 构建 MSI 前自动 publish GUI-WinUI 自包含部署，并复制 .xbf 文件（WinUI3 publish 已知问题） -->
+  <Target Name="PublishGuiBeforeBuild" BeforeTargets="BeforeBuild">
+    <MSBuild Projects="..\FileEncryptorGUI.WinUI3.csproj"
+             Targets="Publish"
+             Properties="Configuration=$(Configuration);Platform=x64;RuntimeIdentifier=win-x64;SelfContained=true" />
+    <Copy SourceFiles="..\bin\x64\$(Configuration)\net8.0-windows10.0.19041.0\win-x64\App.xbf;..\bin\x64\$(Configuration)\net8.0-windows10.0.19041.0\win-x64\MainWindow.xbf;..\bin\x64\$(Configuration)\net8.0-windows10.0.19041.0\win-x64\TaskNotificationWindow.xbf"
+          DestinationFolder="..\bin\x64\$(Configuration)\net8.0-windows10.0.19041.0\win-x64\publish" />
+  </Target>
+</Project>

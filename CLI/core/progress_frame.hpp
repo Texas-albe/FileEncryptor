@@ -1,19 +1,5 @@
-// progress_frame - 批量模式的「帧式」进度显示（CLI v2.3.0）
-//
-// 设计要点：
-//   1) 帧刷新：批量模式按帧原地刷新（不换行堆叠），避免刷屏。帧内布局固定为
-//       第 1 行   汇总行：总大小 | 已处理大小 | 总速率 | ETA
-//       第 2..n+1 行：文件路径 | 进度条 | 速率 | ETA   （n = 并发线程数）
-//   2) 自适应：体积/速率按 B/KB/MB/GB… 自适应单位 + 自适应精度；
-//      进度条宽度随终端宽度伸缩；空闲线程行按同样列宽渲染占位，布局不跳动。
-//   3) 双通道：
-//        - 终端（tty）：用 ANSI 光标上移 + \r 原地重绘（Windows 自动开启 VT）。
-//        - 非 tty 且宿主显式开启（环境变量 FILEENCRYPTOR_PROGRESS_FRAME=1）：
-//          每帧以哨兵行包裹，供 GUI 等宿主整帧解析后自己原地渲染（见 GUI BatchProgressPanel）。
-//        - 其它（重定向到文件等）：回退旧的「单行 \r 进度条」，不产生任何帧/哨兵。
-//      这样 GUI 与 CLI 看到的是同一份文本（字段顺序、分隔符、单位格式完全一致）。
-//
-// 本文件只负责「显示」，不参与任何加密逻辑；列宽策略集中在此，便于 GUI 侧对齐。
+// progress_frame - 批量模式帧式进度显示（CLI v2.3.0）。按帧原地刷新不刷屏：第 1 行汇总，
+// 其后每线程一行（路径|进度条|速率|ETA）。tty 用 ANSI 重绘；非 tty 由环境变量开启哨兵帧供 GUI 解析。
 #pragma once
 #include <cstdint>
 #include <string>
@@ -70,9 +56,8 @@ public:
     // 更新全局已处理字节数（汇总行用）
     void setProcessed(uint64_t bytes) { m_processed = bytes; }
 
-    // 文件级计数（末行 FILES ...）：done/total 为本次实际处理的文件，skipped 为
-    // 开始前就排除的（已完成 / 非 .ptd），failed 为处理失败被跳过的。宿主据此实时
-    // 展示「完成 / 跳过 / 失败」，无需为每文件额外打印一行。
+    // 文件级计数（末行 FILES ...）：done/total 为本次实际处理文件，skipped 为开始前排除的
+    // （已完成/非 .ptd），failed 为处理失败跳过的。宿主据此实时展示完成/跳过/失败。
     void setFileStats(uint64_t done,uint64_t failed,uint64_t skipped,uint64_t total);
 
     // 渲染一帧（内部按 80ms 节流，避免高频回调刷爆终端）

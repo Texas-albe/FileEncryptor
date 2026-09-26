@@ -4,9 +4,8 @@
 #include <utility>
 #include <cstdint>
 
-// ---------- 全局运行配置（仅由 YAML 配置文件提供，CLI 不可覆盖） ----------
-// 参见 Issue.md 一.1~一.4、二.3~二.5 的可选建议：日志位置/级别、核心调用数量（并发线程）、
-// 路径长度/白名单、进度文件轮转等运维参数统一走 YAML，避免 CLI 暴露实现细节。
+// 全局运行配置（仅由 YAML 配置文件提供，CLI 不可覆盖）：日志位置/级别、并发线程、
+// 路径白名单、进度文件轮转等运维参数统一走 YAML，避免 CLI 暴露实现细节。
 struct Config {
     // ---- 结构化日志 ----
     std::string log_file;   // 日志文件；空字符串 = 不写日志文件（仍可有 stdout 进度）
@@ -25,21 +24,19 @@ struct Config {
     std::vector<std::string> path_whitelist; // 允许的输入/输出根目录（非空且启用时强制校验）
 
     // ---- 输出文件名混淆（v1.7.0 引入，v1.7.1 起语义收窄）----
-    // 仅控制"可见输出文件名"是否混淆为 "<16 位十六进制>.<混淆扩展名>.ptd"。
-    // 混淆前的原始名一律以加密信封存入密文尾部，与本项无关（不受配置开关影响）。
+    // 仅控制"可见输出文件名"是否混淆为 "<16 位十六进制>.<混淆扩展名>.ptd"；
+    // 原始名一律以加密信封存入密文尾部，不受此开关影响。
     bool        obfuscate_names = true;
 
-    // ---- 口令强度策略（功能7：CLI 与 GUI 共用同一套校验，避免两端不一致） ----
-    // min_password_length：最小口令长度；0 = 使用内置默认（8）。
-    // min_password_classes：要求至少包含的字符类别数（lower/upper/digit/symbol）；
-    //   0 = 不强制类别（仅按长度）；默认 2（与 GUI PasswordStrength 对齐）。
-    // 非 ASCII（多字节）口令视为高熵，直接放行。
+    // ---- 口令强度策略（功能7：CLI 与 GUI 共用同一套校验） ----
+    // min_password_length：0=用内置默认(8)；min_password_classes：要求字符类别数
+    // (lower/upper/digit/symbol)，0=不强制，默认 2。非 ASCII 口令视为高熵直接放行。
     int         min_password_length = 0;
     int         min_password_classes = 2;
 
-    // ---- 加密强度预设（功能14：快速 / 标准 / 加固） ----
-    // 0=fast (ops=3, mem=64MB，兼容旧文件)；1=standard (ops=4, mem=128MB，默认)；
-    // 2=strong (ops=6, mem=512MB)。写入文件头，解密端自适应（v2+ 已支持参数化）。
+    // ---- 加密强度预设（功能14） ----
+    // 0=fast(ops3/64MB) 1=standard(ops4/128MB,默认) 2=strong(ops6/512MB)。
+    // 写入文件头，解密端自适应（v2+ 支持参数化）。
     int         kdf_preset = 1;
 
     // ---- 校验单（功能10）：加密成功后生成 <out>.ptd.sha256 ----
@@ -51,29 +48,20 @@ struct Config {
 // 配置文件来源（v2.1.2：用于判定信任级别）
 enum class ConfigSource { None = 0, Env, Cwd, ExeDir, UserConfig };
 
-// 定位配置文件（优先级从高到低）：
-//   $FILEENCRYPTOR_CONFIG（显式指定，完全信任）
-//   <运行目录 CWD>/fileencryptor.yaml（**低信任**：任何可写目录都能预置）
-//   <可执行文件目录>/fileencryptor.yaml
-//   用户配置目录（Win %APPDATA%/FileEncryptor，Linux $XDG_CONFIG_HOME/fileencryptor 或 ~/.config/fileencryptor）
-// 都不存在则返回空串。src 非空时回填命中的来源。
+// 定位配置文件（优先级从高到低）：$FILEENCRYPTOR_CONFIG > CWD/fileencryptor.yaml（低信任）>
+// 可执行文件目录 > 用户配置目录。都不存在返回空串；src 非空时回填命中来源。
 std::string find_config_file(ConfigSource* src = nullptr);
 
-// 用户配置目录（Win %APPDATA%/FileEncryptor；Linux $XDG_CONFIG_HOME/fileencryptor
-// 或 ~/.config/fileencryptor）。定位失败（无 HOME/APPDATA）返回空串。
-// 密钥库（keylib）复用同一目录：<用户配置目录>/keys/。
+// 用户配置目录（Win %APPDATA%/FileEncryptor；Linux $XDG_CONFIG_HOME/fileencryptor 或
+// ~/.config/fileencryptor）。定位失败返回空串。密钥库复用同一目录下 keys/。
 std::string user_config_dir();
 
-// 路径分隔符归一化：Windows 下把 '/' 统一为系统原生 '\\'（POSIX 平台原样返回）。
-// 用于用户可见/落盘的配置与密钥库路径：APPDATA 本身是反斜杠，若代码再用 '/' 拼接，
-// 会出现 "AppData/Roaming/FileEncryptor\keys" 这类混合分隔符（显示混乱，个别
-// 环境变量/账户组合下还可能干扰外部工具对路径的解析）。
+// 路径分隔符归一化：Windows 下把 '/' 统一为原生 '\\'（POSIX 原样返回）。
+// 用于用户可见/落盘路径，避免 "AppData/Roaming\keys" 这类混合分隔符。
 std::string to_native_path(const std::string& p);
 
-// 解析极简 YAML（支持顶层标量键与单层序列 `- item`）到 Config。
-// 出错时返回 false 并在 err 写入原因（解析错误不致命：回退默认配置并继续）。
-// warn（可空）收集非致命的类型/单位解析告警，由调用方统一输出（避免用户
-// 写错类型时完全无反馈）。
+// 解析极简 YAML（顶层标量键与单层序列）到 Config。出错返回 false 并写 err（不致命，
+// 回退默认）；warn（可空）收集非致命类型/单位告警，由调用方统一输出。
 bool parse_yaml_config(const std::string& text, Config& cfg, std::string& err, std::string* warn = nullptr);
 
 // 解析带单位的字节数：KB / MB / GB（1024 进制），可带 "/s" 后缀；"0"/空/缺省 = 0（不限）。
@@ -100,7 +88,6 @@ void log_event(int level, const std::string& msg,
                const std::vector<std::pair<std::string, std::string>>& fields);
 
 // ---------- 全局配置（启动期设置一次，之后只读，线程安全） ----------
-// 注意：参数为值拷贝，内部以 shared_ptr<const Config> 持有，避免调用方传入临时/局部
-// Config 的引用导致悬空指针（历史实现曾存裸 const Config*，调用方传 load_config() 临时值即悬空）。
+// 参数为值拷贝，内部以 shared_ptr<const Config> 持有，避免传入临时 Config 产生悬空指针。
 void    set_global_config(Config cfg);
 const Config& global_config();

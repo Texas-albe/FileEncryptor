@@ -2,13 +2,8 @@
 #include <string>
 #include <vector>
 
-// ---------- 密钥库（功能1） ----------
-// 本机 age 身份与收件人公钥的统一管理：
-//   <用户配置目录>/keys/library.yaml   索引（元数据：名称/类型/别名/备注/创建时间/缓存公钥）
-//   <用户配置目录>/keys/<name>.key     密钥材料文件（索引只存文件名，不存材料本身）
-//
-// GUI 与 CLI 共用同一目录与索引格式，任一端导入的密钥对另一端立即可见。
-// 索引文件由本模块生成，格式为扁平 YAML（每键一行标量），便于两端以简单解析器读写。
+// 密钥库（功能1）：本机 age 身份与收件人公钥统一管理。索引 <配置目录>/keys/library.yaml
+// 存元数据（扁平 YAML），材料存 <name>.key；GUI/CLI 共用同一目录与索引格式。
 
 struct KeyLibEntry {
     std::string name;        // 唯一名称，[A-Za-z0-9._-]，1..64 字符（同时用作 .key 文件名）
@@ -53,9 +48,8 @@ bool keylib_set_public(const std::string& name, const std::string& pub, std::str
 // 解析条目对应的密钥材料文件完整路径（文件必须存在）。
 bool keylib_key_path(const std::string& name, std::string& path, std::string& err);
 
-// 把一批库名解析为收件人公钥列表（用于 -K 加密）：
-//   recipient 条目 -> 读 .key 文件内容（一行 age1...）
-//   identity  条目 -> 使用缓存公钥；缓存为空则报错（先 -L pub <name> 生成）
+// 把一批库名解析为收件人公钥列表（用于 -K 加密）：recipient 读 .key 内容；
+// identity 用缓存公钥，缓存为空则报错（先 -L pub <name> 生成）。
 bool keylib_recipients(const std::vector<std::string>& names,
                        std::vector<std::string>& pubs, std::string& err);
 

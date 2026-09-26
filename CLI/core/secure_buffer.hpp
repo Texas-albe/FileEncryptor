@@ -3,11 +3,8 @@
 #include <cstring>
 #include <sodium.h>
 
-// SecureBuffer：敏感数据（密码 / 密钥 / 派生中间密钥）的 RAII 安全容器。
-// - 构造时尝试 sodium_mlock（锁定内存页，防换出到磁盘 / core dump）；
-// - 析构时无论正常返回还是异常展开，都先 sodium_memzero 清零再 sodium_munlock；
-// - 禁止拷贝，允许移动（所有权转移，原容器置空，避免双清零）。
-// 这样任何退出路径（return / 异常）都不会遗留明文密钥在堆内存中。
+// SecureBuffer：敏感数据（密码/密钥/派生中间密钥）的 RAII 容器。构造时 mlock 防换出，
+// 析构时 memzero 清零并 munlock；禁拷贝允许移动。任何退出路径都不遗留明文密钥。
 
 // mlock 失败告警钩子（由 FileEncryptor.cpp 提供定义，避免本头文件耦合日志模块）。
 // 仅在首次失败时提示一次，不刷屏。

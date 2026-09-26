@@ -90,10 +90,8 @@ struct FileHeaderV5 {
 };
 #pragma pack(pop)
 
-// v6 容器：v5 前缀（magic..comp_level，字节布局完全一致）之后追加固定大小的容器扩展区。
-// 载荷由随机"数据加密密钥（DEK）"加密，DEK 再用口令派生的"密钥加密密钥（KEK，
-// Argon2id(password,salt)）"包裹写入。该结构解耦口令与密文，是密钥轮换（rewrap）
-// 零重加密的基础；plaintext_hash 与 header_hmac 置于结构末尾，使 HMAC 覆盖整段容器区。
+// v6 容器：v5 前缀之后追加固定容器扩展区。载荷由随机 DEK 加密，DEK 再用口令派生的
+// KEK（Argon2id）包裹；解耦口令与密文，是密钥轮换（rewrap）零重加密的基础。
 #pragma pack(push, 1)
 struct FileHeaderV6 {
     unsigned char magic[4];
@@ -123,18 +121,15 @@ inline constexpr size_t HEADER_SIZE_V4 = sizeof(FileHeaderV4); // 141
 inline constexpr size_t HEADER_SIZE_V5 = sizeof(FileHeaderV5); // 143
 inline constexpr size_t HEADER_SIZE_V6 = sizeof(FileHeaderV6); // 256
 
-// header_hmac 覆盖区域：头部前缀（不含 plaintext_hash 与 header_hmac 自身）。
-// 刻意排除 plaintext_hash——它在加密结束、明文哈希算出后才可知；排除后写头瞬间即可算出
-// 合法 HMAC，被中断的半成品 .ptd 也能通过续传时的"文件头篡改校验"。
+// header_hmac 覆盖头部前缀（不含 plaintext_hash 与 header_hmac 自身）。刻意排除
+// plaintext_hash——它在加密结束后才可知；排除后写头瞬间即可算出合法 HMAC。
 inline constexpr size_t HEADER_HMAC_COVER    = HEADER_SIZE_V4 - HASH_SIZE - HEADER_HMAC_SIZE; // 61
 inline constexpr size_t HEADER_HMAC_COVER_V5 = HEADER_SIZE_V5 - HASH_SIZE - HEADER_HMAC_SIZE; // 63
 inline constexpr size_t HEADER_HMAC_COVER_V6 = HEADER_SIZE_V6 - HASH_SIZE - HEADER_HMAC_SIZE; // 192
 inline constexpr size_t V6_CONTAINER_LEN = 24 + 64 + 4 + 33; // dek_nonce+dek_box+key_version+reserved
 
-// v6 载荷 AEAD 的 AAD 只覆盖稳定前缀（magic..comp_level，即 v5 的 HMAC 覆盖区）：
-// 容器区（dek_nonce/dek_box/key_version）会被 rewrap 改写，若纳入载荷 AAD，
-// 密钥轮换后即使 DEK 不变，载荷 AEAD 校验也会失败（零重加密即失效）。
-// header_hmac 仍覆盖整段前缀（含容器区），rewrap 时随容器一并重算。
+// v6 载荷 AEAD 的 AAD 只覆盖稳定前缀（magic..comp_level）：容器区会被 rewrap 改写，
+// 若纳入载荷 AAD，密钥轮换后即使 DEK 不变 AEAD 也会失败。header_hmac 仍覆盖整段前缀。
 inline constexpr size_t HEADER_AAD_COVER_V6 = HEADER_HMAC_COVER_V5; // 63
 
 static_assert(HEADER_SIZE_V4 == 125 && HEADER_SIZE_V5 == 127, "v4/v5 header sizes");
@@ -174,11 +169,8 @@ inline uint32_t get_be32(const unsigned char* p) {
     return ((uint32_t)p[0]<<24) | ((uint32_t)p[1]<<16) | ((uint32_t)p[2]<<8) | (uint32_t)p[3];
 }
 
-// 从字节缓冲装载磁盘头结构（strict-aliasing 安全）。
-// 禁止把 char[] 缓冲直接 reinterpret_cast 成 FileHeaderV* 读取——GCC/Clang
-// -fstrict-aliasing 下这是未定义行为（MSVC /GL 不 exploiting 此 UB 才未出错，
-// 属审计记录的 GCC/Clang 移植加固项）。memcpy 到本地 POD 结构后再读字段，
-// 布局与值完全一致。调用方须保证 buf 至少含 sizeof(T) 字节且已读入完整头部。
+// 从字节缓冲装载磁盘头结构（strict-aliasing 安全）：禁止直接 reinterpret_cast
+// char[] 为 FileHeaderV*（GCC/Clang -fstrict-aliasing 下是 UB），memcpy 到本地 POD 后再读。
 template<typename T>
 inline T load_header(const unsigned char* buf) {
     T h;

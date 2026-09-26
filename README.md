@@ -14,39 +14,58 @@
 
 ```
 FileEncryptor/
-├── CLI/    # 命令行程序（独立子项目，产出 FileEncryptorCLI）
-│   ├── core/    # 加密核心：FileEncryptor、config(yaml-cpp)、SecureBuffer
-│   ├── cli/     # main.cpp 参数解析与 FileEncryptorCLI.rc 图标
-│   ├── cmake/   # CheckStaticSodium 等校验脚本
-│   └── scripts/ # 发布构建/签名脚本
-├── GUI/    # Qt6 图形界面（独立子项目，产出 FileEncryptorGUI）
-│   ├── src/     # MainWindow、QProcess 调 CLI、主题/字体引导、视图设置
-│   └── fonts/   # 嵌入的中文字体（仅非 Windows 构建打入 exe）
+├── CLI/                # 命令行程序（CMake，产出 FileEncryptorCLI）
+│   ├── core/           # 加密核心
+│   ├── cli/            # main.cpp 参数解析
+│   └── cmake/          # 校验脚本
+├── GUI-Qt/             # Linux 图形界面（Qt6 Widgets，C++，CMake）
+│   ├── src/            # MainWindow、QProcess 调 CLI
+│   └── fonts/          # 嵌入中文字体
+├── GUI-WinUI/          # Windows 图形界面（WinUI 3 / .NET 8，C#）— 独立项目
+│   ├── FileEncryptorGUI.WinUI3.csproj
+│   ├── MainWindow.xaml / .cs
+│   ├── Services/       # CLI 调用、主题、历史、定位等
+│   ├── ViewModels/
+│   ├── installer/      # WiX v4 MSI 安装包
+│   └── build.cmd
+├── FileEncryptor.slnx  # VS 解决方案（GUI-WinUI + installer）
 └── README.md
 ```
 
-两个子项目相互独立构建：CLI 不依赖 GUI；GUI 不链接加密代码，通过 QProcess 子进程调用 CLI，
-二者置于同一目录（或设 `FILEENCRYPTOR_EXE` 环境变量）即可协同运行。
+CLI 与 GUI 相互独立构建。GUI 不链接加密代码，通过子进程调用 CLI（Windows: `System.Diagnostics.Process`；Linux: `QProcess`），二者置于同一目录即可协同运行。
 
 ## 快速上手
 
-```bash
-# CLI
-cd CLI && cmake --preset windows-vs2026-release && cmake --build --preset windows-vs2026-release
-# Linux: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build
+### Windows（Visual Studio 2026）
 
-# GUI
-cd GUI && cmake --preset windows-vs2026-release && cmake --build --preset windows-vs2026-release
+1. 双击 `FileEncryptor.slnx` 打开解决方案（含 GUI-WinUI + MSI 安装包两个项目）
+2. 顶部配置选 **Release x64**
+3. F5 运行 GUI，或右键 installer 项目 → 生成，自动产出 MSI
+4. CLI 为 CMake 项目：VS「打开文件夹」选择 `CLI/` 目录，选 `windows-vs2026-release` 配置
+
+命令行等价方式：
+```powershell
+# GUI + MSI 一键构建（installer 会自动 publish GUI）
+& "E:\Microsoft Visual Studio\MSBuild\Current\Bin\MSBuild.exe" FileEncryptor.slnx /p:Configuration=Release /p:Platform=x64
+
+# 仅 CLI
+cd CLI && cmake --preset windows-vs2026-release && cmake --build --preset windows-vs2026-release
 ```
 
-详细用法见各子项目 README（`CLI/README.md`、`GUI/README.md`）。
+```bash
+# Linux (WSL):
+cd CLI && cmake -S . -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build
+cd ../GUI-Qt && cmake -S . -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build
+```
+
+详细用法见各子项目 README（`CLI/README.md`、`GUI-WinUI/README.md`、`GUI-Qt/README.md`）。
 
 ## 跨平台要点
 
-- Windows：静态链接 libsodium + yaml-cpp（/MT）；GUI 用 smelibs 静态 Qt，零 Qt DLL 依赖（需自行下载）。
-- Linux：系统 Qt + 发行版 libsodium；GUI 内嵌 Noto Sans SC 兜底中文字体（防方块）。
+- Windows：CLI 静态链接 libsodium + yaml-cpp（/MT）；GUI-WinUI 使用 WinUI 3（Windows App SDK，自包含部署），MSI 安装到 `%ProgramFiles%\FileEncryptor\`。
+- Linux：CLI 系统 libsodium；GUI-Qt 使用 Qt6（静态或动态），内嵌 Noto Sans SC 兜底中文字体。
 - 源码 UTF-8，平台分支一律 `#ifdef _WIN32` / `#else` 成对出现。
 
 ## 许可
 
-GPLv3（见 `CLI/LICENSE`、`GUI/LICENSE`）。Noto Sans SC 字体为 SIL OFL。
+GPLv3（见 `CLI/LICENSE`、`GUI-Qt/LICENSE`、`GUI-WinUI/LICENSE`）。Noto Sans SC 字体为 SIL OFL。

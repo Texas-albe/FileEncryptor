@@ -77,13 +77,8 @@ AsymOutcome fe_asym_decrypt(const std::string&, const std::string&, const std::s
 
 #endif
 
-// ===========================================================================
-// 以下为纯本地实现（不依赖 fe_age）：Bech32 编解码 + X25519 + Argon2id。
-// ---------------------------------------------------------------------------
-// Bech32（BIP-173，const = 1），与 rage/age 使用的编码一致：
-//   收件人公钥 : hrp = "age"              -> "age1<小写数据+6位校验>"
-//   身份私钥   : hrp = "AGE-SECRET-KEY-"  -> 编码后整体转成大写
-// ---------------------------------------------------------------------------
+// 以下为纯本地实现（不依赖 fe_age）：Bech32（BIP-173）编解码 + X25519 + Argon2id。
+// 收件人公钥 hrp="age"；身份私钥 hrp="AGE-SECRET-KEY-"，编码后整体转大写。
 namespace {
 
 const char kBech32Charset[] = "qpzry9x8gf2tvdw0s3jn54khce6mua7l";
@@ -137,9 +132,8 @@ bool bech32_convert_bits(std::vector<unsigned char>& out,
     return true;
 }
 
-// 校验和必须按**小写** HRP 展开计算（Bech32 规范：HRP 大小写不敏感，参与运算时取小写）。
-// rage/age 的私钥串是 bech32_encode(HRP="AGE-SECRET-KEY-") 之后整体 to_uppercase()，
-// 其校验和正是按小写 HRP 算的；若按大写 HRP 展开，age 会拒绝该串。
+// 校验和须按小写 HRP 展开计算（Bech32 规范）；rage 私钥编码后整体转大写，
+// 但其校验和仍按小写 HRP 计算，按大写展开会被 age 拒绝。
 std::string bech32_lower(const std::string& s) {
     std::string r = s;
     for(char& c: r) {

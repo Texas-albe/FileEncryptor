@@ -1,4 +1,4 @@
-﻿# ChangeLog - FileEncryptor CLI
+# ChangeLog - FileEncryptor CLI
 
 本文件记录 **FileEncryptor CLI** 子项目的所有重要变更（命令行加密工具 `FileEncryptorCLI(.exe)`）。
 图形界面项目的变更记录请见 `../GUI/CHANGELOG.md`。
@@ -11,6 +11,24 @@
 > 不压缩且未启用容器扩展时仍写 v4 头以最大限度兼容；v6 与 v4 / v5 共用同一套 AEAD 载荷格式，
 > 2.4.0 可读取并解密 v1 ~ v6 全部格式，旧产物无需重加密即可解密。
 > CLI 主版本号历史上与合并项目同步；自 2.1.0 起 CLI/GUI 拆分独立发版。
+
+## [2.4.2] - 2026-09-26
+
+修了两个潜伏较久的内存与逻辑问题。第一个是头部解析里的悬垂指针——ead_original_name
+和 ead_ptd_metadata 在各版本分支里把局部头结构体的 salt 字段地址赋给外层指针，
+分支结束后结构体销毁，后续派生密钥或输出十六进制时读到的是已释放的栈内存。
+ASan 实锤后改为把 salt 拷贝到函数作用域的固定缓冲区，指针指向稳定存储。
+第二个是 is_file_valid 只用 v4 头大小（125 字节）的缓冲读文件，v6 头需要 256 字节，
+导致 v6 文件恒被判为 corrupted，批量加密时已存在的有效输出不会被跳过、每次都重加密。
+缓冲扩到 v6 大小后，重复运行 -be 能正确跳过完整产物。
+
+### Fixed
+- **R1 · 悬垂指针（use-after-scope）**：ead_original_name / ead_ptd_metadata
+  中 salt_ptr 指向分支内局部变量，分支结束后失效。改为 memcpy 到函数级
+  salt_buf[ARGON2_SALT_LEN]，salt_ptr 指向该缓冲区。ASan 验证无残留。
+- **R2 · v6 文件恒判 corrupted**：is_file_valid 缓冲区 HEADER_SIZE_V4（125B）
+  小于 v6 所需 256B，.gcount() < need 恒成立。缓冲区扩为 HEADER_SIZE_V6，
+  版本校验补 er==5。批量加密重复运行时已存在的完整 v6 输出现在正确跳过。
 
 ## [2.4.1] - 2026-09-25
 

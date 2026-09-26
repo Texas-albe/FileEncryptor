@@ -171,11 +171,8 @@ static std::string head_by_width(const std::string& s, size_t keep) {
     return out;
 }
 
-// 按显示宽度缩写路径。规则：
-//   1. 能放下 → 原样返回；
-//   2. 超宽 → 只缩目录部分（"...\" + 完整文件名）；
-//   3. 文件名本身也放不下（极端情况）→ 缩文件名主部但保留扩展名（"...\he…txt"）；
-//   4. 连扩展名方案都放不下 → 整体头部截断加 "..."。
+// 按显示宽度缩写路径：能放下原样返回；超宽先缩目录部分（"...\"+文件名），文件名仍放不下
+// 则缩主部保留扩展名；连扩展名方案都放不下就整体头部截断加 "..."。
 static std::string truncate_path(const std::string& s, size_t max_w) {
     if (display_width(s) <= max_w) return s;
     if (max_w <= 3) return std::string(max_w, '.');
@@ -213,9 +210,8 @@ static std::string pad_left(const std::string& s, size_t w) {
 }
 
 // ---------- 帧布局 ----------
-// 四列：<路径列> | <进度条列> | <速率列> | <ETA列>
-// 路径列与进度条列按终端宽度分配（进度条约占可用宽度的 40%，并夹紧到合理区间），
-// 速率/ETA 为固定宽，保证任何情况下各行列对齐、不跳动。
+// 四列：路径 | 进度条 | 速率 | ETA。路径/进度条按终端宽度分配（进度条约 40%），
+// 速率/ETA 固定宽，保证各行列对齐不跳动。
 namespace {
 constexpr int kRateW = 12;   // "123.45 MB/s"
 constexpr int kEtaW  = 11;   // "ETA 1:02:03"
