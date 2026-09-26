@@ -1,12 +1,5 @@
-// CliArgBuilder - GUI 参数 → FileEncryptor argv
-// 严格 1:1 映射 main.cpp 的参数解析（见 FileEncryptor/main.cpp L188-262）：
-//   模式：-e / -d / -be / -bd
-//   选项：-o <dir> / -de / -m xchacha20|aegis256|rage / -i <path>(批) / -y / -k <keyfile>
-//        / -r <pub|file> (asymmetric encrypt) / -k <private key file> (asymmetric decrypt)
-//   输入：单模式用位置参数；批模式用 -i
-// 密钥/身份私钥不经 argv（避免出现在命令行/进程列表被 ps 窥探），也不经环境变量，
-//   改由子进程 stdin 管道注入（对应 main.cpp --key-stdin：读取整段 stdin 作为密钥材料），
-//   更加安全（stdin 管道不被其它进程通过 /proc 或环境窥探）。
+// CliArgBuilder - GUI 参数 → FileEncryptor argv，严格 1:1 映射 main.cpp 的参数解析（模式 -e/-d/-be/-bd，选项 -o/-de/-m/-i/-y/-k/-r 等）。
+// 密钥/身份私钥不经 argv 与环境变量，改由子进程 stdin 管道注入（--key-stdin），避免被 ps / 环境窥探。
 #pragma once
 #include <QString>
 #include <QStringList>

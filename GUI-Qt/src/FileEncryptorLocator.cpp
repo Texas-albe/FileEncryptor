@@ -70,7 +70,7 @@ QStringList FileEncryptorLocator::getExpectedNames() {
     const QString ver=version();
 #ifdef Q_OS_WIN
     return {
-        QStringLiteral("FileEncryptorCLI-%1-Windows.exe").arg(ver),
+        QStringLiteral("FileEncryptorCLI-%1-cmd-Windows.exe").arg(ver),
         QStringLiteral("FileEncryptorCLI.exe"),
         QStringLiteral("FileEncryptor.exe"),
         QStringLiteral("file-encryptor-cli.exe"),
@@ -78,7 +78,7 @@ QStringList FileEncryptorLocator::getExpectedNames() {
     };
 #else
     return {
-        QStringLiteral("FileEncryptorCLI-%1-Linux").arg(ver),
+        QStringLiteral("FileEncryptorCLI-%1-cmd-Linux").arg(ver),
         QStringLiteral("FileEncryptorCLI"),
         QStringLiteral("FileEncryptor"),
         QStringLiteral("file-encryptor-cli"),

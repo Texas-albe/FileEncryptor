@@ -1,6 +1,4 @@
-// ICommandExecutor - 命令执行抽象接口
-// 外壳层通过此接口调用 FileEncryptor 命令行程序，壳层与业务代码低耦合。
-// 具体实现（ProcessCommandExecutor）用 QProcess 启动子进程；测试时可注入 Mock。
+// ICommandExecutor - 命令执行抽象接口：壳层经此调用 FileEncryptor CLI 以低耦合业务；具体实现 ProcessCommandExecutor 用 QProcess 启动子进程，测试可注入 Mock。
 #pragma once
 #include <QObject>
 #include <QStringList>
@@ -17,9 +15,7 @@ struct OutputLine {
     bool isFrame = false;
 };
 
-// 批量进度帧的哨兵行（与 CLI core/progress_frame.cpp 中的 FE_FRAME_BEGIN/END 一致）。
-// CLI 仅在宿主显式开启帧模式（环境变量 FILEENCRYPTOR_PROGRESS_FRAME=1）时输出，
-// 普通重定向/管道场景不会出现，故旧宿主无需处理。
+// 批量进度帧的哨兵行（与 CLI core/progress_frame.cpp 中 FE_FRAME_BEGIN/END 一致）；CLI 仅在 FILEENCRYPTOR_PROGRESS_FRAME=1 时输出，普通重定向/管道不出现，故旧宿主无需处理。
 inline const char* feFrameBeginMarker() { return "\x1b[FEPRG+"; }
 inline const char* feFrameEndMarker()   { return "\x1b[FEPRG-"; }
 

@@ -18,7 +18,7 @@ public static class FileEncryptorLocator
         var ver = ExpectedCliVersion;
         return new[]
         {
-            $"FileEncryptorCLI-{ver}-Windows.exe",
+            $"FileEncryptorCLI-{ver}-cmd-Windows.exe",
             "FileEncryptorCLI.exe",
             "FileEncryptor.exe",
             "file-encryptor-cli.exe",

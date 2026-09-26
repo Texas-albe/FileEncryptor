@@ -165,9 +165,8 @@ static std::string normalize_path_lexical(const std::string& p) {
     return out;
 }
 
-// ---------- 续传进度文件绑定标识（防重放） ----------
-// 源文件规范化路径+大小+mtime 纳入 .prs 的 HMAC，旧 .prs 无法重放到不同文件。
-// 前向声明：compute_progress_binding 依赖下方 get_file_size_utf8。
+// ---------- 续传进度绑定（防重放） ----------
+// 源路径+大小+mtime 纳入 .prs 的 HMAC，旧 .prs 无法重放到不同文件。
 static int64_t get_file_size_utf8(const std::string& path);
 // 前向声明：is_complete_output / decrypt_file 需要提前获知尾部（加密名）长度做文件大小校验。
 static bool peek_name_footer_len(const std::string& ptd_path, uint64_t& footer_len);
@@ -274,8 +273,7 @@ struct AggWriter {
 };
 
 // ---------- 输入侧 4 MiB 页对齐大缓冲 ----------
-// 把输入流缓冲从 4 KiB 扩到 4 MiB 页对齐，每块读取压到约 1 次内核读；
-// setvbuf 要求缓冲在流存活期有效，故本结构须先于流声明（逆序析构）。
+// 缓冲从 4 KiB 扩到 4 MiB 页对齐，每块读取压到约 1 次内核读；须先于流声明（逆序析构）。
 struct InputBuffer {
     unsigned char* buf=nullptr;
     static constexpr size_t CAP=4*1024*1024;
@@ -697,8 +695,7 @@ void tighten_file_permissions(const std::string& path) {
 }
 
 // ---------- 反调试 ----------
-// 检测到调试器会 exit(1)，只能在 main() 启动期、工作线程创建前调用；
-// 切勿移入并发 worker（否则会终止整个批量任务）。
+// 检测到调试器会 exit(1)，只能在 main() 启动期、工作线程创建前调用，切勿移入并发 worker。
 void anti_debug_check() {
 #ifdef _WIN32
     if(IsDebuggerPresent()) {
@@ -997,8 +994,7 @@ static void print_progress(size_t processed,size_t total,
 }
 
 // ---------- 文件名 / 扩展名混淆（v1.7.0） ----------
-// 输出 <16hex>.<混淆扩展名>.ptd；混淆名=Blake2b(Blake2b(口令),路径) 确定性，
-// 续传命中同一文件，且不泄露原始文件名。
+// 输出 <16hex>.<混淆扩展名>.ptd；混淆名=Blake2b(Blake2b(口令),路径) 确定性，续传命中同一文件且不泄露原名。
 static const char* const OBFUSCATED_EXTS[] = {
     "png","jpg","jpeg","apng","mp4","mp3","aac","avi","bmp","txt","yaml",
     "json","js","cpp","hpp","c","md","pdf","doc","docx","ppt","pptx","xls",
@@ -1006,10 +1002,8 @@ static const char* const OBFUSCATED_EXTS[] = {
 };
 static constexpr size_t OBFUSCATED_EXT_COUNT=sizeof(OBFUSCATED_EXTS)/sizeof(OBFUSCATED_EXTS[0]);
 
-// ---------- 原始文件名（混淆前）加密存储（v1.7.1） ----------
-// 原始文件名以加密信封（XChaCha20-Poly1305）追加在密文末尾；尾部布局：
-//   [加密名 n+16B][magic "FENX"][name_len 4B]，最末 8 字节固定可直接定位。
-// 兼容旧明文尾部(FENM)读取，新写入一律加密。
+// ---------- 原始文件名加密存储（v1.7.1） ----------
+// 原名以 XChaCha20-Poly1305 信封追加密文末尾；尾部 [加密名 n+16B][magic "FENX"][len 4B]，最末 8 字节可直接定位；兼容旧 FENM 读取。
 static constexpr char NAME_FOOTER_MAGIC[4]     = {'F','E','N','M'}; // 旧版明文尾部（仅兼容读取）
 static constexpr char NAME_FOOTER_MAGIC_ENC[4] = {'F','E','N','X'}; // 新版加密尾部
 static constexpr size_t NAME_FOOTER_HDR = 8;                 // magic(4) + name_len(4)
@@ -1331,8 +1325,7 @@ bool verify_ptd(const std::string& ptd_path, const SecureBuffer& password) {
 }
 
 // ---------- 密钥轮换 / rewrap（v6 容器） ----------
-// old_password 解出 wrapped DEK，new_password 派生新 KEK 重裹（key_version 自增），
-// 重写头部容器区与 header_hmac；载荷密文不动。仅 v6+ 有效。
+// old_password 解出 wrapped DEK，new_password 派生新 KEK 重裹（key_version 自增），重写头部容器区与 hmac，载荷不动；仅 v6+。
 bool rewrap_file(const std::string& ptd_path,
     const SecureBuffer& old_password,
     const std::string& new_key_path,

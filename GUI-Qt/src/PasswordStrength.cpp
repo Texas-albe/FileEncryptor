@@ -36,10 +36,7 @@ StrengthResult PasswordStrength::evaluate(const QString& pw) {
     }
     r.entropyBits = entropy;
 
-    // 分级（综合熵 + 长度 + 种类）：
-    //   弱：长度<6（不满足子进程最低要求）或熵<28
-    //   中：长度6-9 且 熵28-47
-    //   强：长度>=10 且 熵>=48，或长度>=12
+    // 分级（综合熵 + 长度 + 种类）：弱：长度<6 或熵<28；中：长度6-9 且熵28-47；强：长度>=10 且熵>=48，或长度>=12
     if (len < 6 || entropy < 28) {
         r.level = StrengthLevel::Weak;
         r.label = QStringLiteral("弱");

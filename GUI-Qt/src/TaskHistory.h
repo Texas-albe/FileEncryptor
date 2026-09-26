@@ -1,9 +1,5 @@
-// TaskHistory - 任务历史持久化（功能5）
-// 存储布局（与 CLI/GUI 其余用户数据同根，路径统一经 QDir::toNativeSeparators 归一化）：
-//   <用户配置目录>/history/tasks.log
-// 每行一条 JSON 记录（JSONL：追加写、顺序读，单条损坏不影响其余条目）。
-// 记录一次运行的动作/模式/输入规模/耗时/结果，供历史面板回放，并为功能6（批量 ETA）
-// 提供速率样本。
+// TaskHistory - 任务历史持久化（功能5）：每行一条 JSON 记录存于 <用户配置目录>/history/tasks.log（JSONL，追加写、单条损坏不影响其余）。
+// 记录动作/模式/输入规模/耗时/结果，供历史面板回放，并为批量 ETA（功能6）提供速率样本。
 #pragma once
 #include <QString>
 #include <QStringList>

@@ -1,13 +1,5 @@
-// PasswordDialog - 口令输入弹窗
-//
-// 交互：
-//   - 标准密码掩码（QLineEdit::Password，掩码字符随系统主题）；
-//   - 密码框右侧「小眼睛」动作（QLineEdit::TrailingPosition），点击在显示/隐藏间切换。
-// 其它安全/策略：
-//   - 可选「确认密码」二次输入（加密 / 口令派生场景开启），两次不一致则拒绝；
-//   - 前端按 PasswordStrength::meetsPolicy 校验口令策略，不合规拒绝运行；
-//   - 口令不长期驻留 QString：accept 时取出 UTF-8 字节进 m_secret（std::vector），
-//     立即清空输入框明文；takePassword() 移动出缓冲，调用方用完即擦除（见 MainWindow）。
+// PasswordDialog - 口令输入弹窗：标准密码掩码 + 右侧「小眼睛」动作切换显隐；可选二次确认，按 PasswordStrength 策略校验。
+// 口令不长期驻留 QString：accept 时取 UTF-8 字节进 m_secret 并清空输入框，takePassword() 移动出缓冲由调用方擦除。
 #pragma once
 #include <QDialog>
 #include <vector>

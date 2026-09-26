@@ -74,7 +74,7 @@ rm -rf out/build/linux-release
 cmake --preset linux-release
 cmake --build --preset linux-release
 # 构建完成后自动：
-#   - 拷到 out/Ubuntu-26.04/build/linux-release/bin/FileEncryptorCLI-2.4.2-Linux
+#   - 拷到 out/Ubuntu-26.04/build/linux-release/bin/FileEncryptorCLI-2.4.2-cmd-Linux
 #   - cpack 生成 out/packages/file-encryptor-cli-2.4.2-Linux.deb 和 .rpm
 ```
 

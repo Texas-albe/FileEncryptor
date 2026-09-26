@@ -52,10 +52,8 @@ void ProcessCommandExecutor::execute(const CommandRequest& request) {
 
     // 启动子进程。
     m_process->start();
-    // 安全通道：若请求携带 stdin 数据（密钥 / 身份私钥），写入子进程后关闭写通道，
-    // 子进程据此从 stdin 读取密钥材料（CLI 侧 --key-stdin）。密钥不进环境变量、不进命令行，
-    // 避免被进程列表 / 环境窥探泄露。即使无数据也关闭写通道，保持“stdin 已关闭”语义，
-    // 防止子进程在交互式读取上阻塞。
+    // 安全通道：若请求携带 stdin 数据（密钥/身份私钥），写入后关闭写通道，子进程据此从 stdin 读取密钥材料（--key-stdin）。
+    // 密钥不进环境变量/命令行；即使无数据也关闭写通道，保持"stdin 已关闭"语义，防止子进程交互式读取阻塞。
     if (!request.stdinData.isEmpty()) {
         m_process->write(request.stdinData);
     }
@@ -78,9 +76,7 @@ bool ProcessCommandExecutor::isRunning() const {
 
 void ProcessCommandExecutor::onReadyReadStandardOutput() {
     if (!m_process) return;
-    // CLI 全程以 UTF-8 输出（Windows 侧已 SetConsoleOutputCP(CP_UTF8)）。
-    // 这里必须用 fromUtf8 而非 fromLocal8Bit：后者在 Windows 按系统代码页（GBK）
-    // 解析、在 Linux 按 locale 解析，会把 UTF-8 中文解成乱码。
+    // CLI 全程以 UTF-8 输出（Windows 已 SetConsoleOutputCP(CP_UTF8)）；必须用 fromUtf8 而非 fromLocal8Bit，否则 Windows 按 GBK、Linux 按 locale 解析会把中文解成乱码。
     m_outBuffer.append(QString::fromUtf8(m_process->readAllStandardOutput()));
     flushLines(m_outBuffer, false);
 }
@@ -92,10 +88,7 @@ void ProcessCommandExecutor::onReadyReadStandardError() {
 }
 
 void ProcessCommandExecutor::flushLines(QString& buffer, bool isError) {
-    // 切分策略（顺序重要）：
-    //   1) 先按 \n 切出完整行交给 handleLine —— 帧哨兵是整行，必须按行识别；
-    //   2) 再处理缓冲区里"最后一个 \r 之前"的残留：CLI 的单行进度条以 \r 原地刷新
-    //      且不带换行，若等到 \n 才处理，进度就会在结束时才一次性刷出。
+    // 切分策略（顺序重要）：先按 \n 切出完整行（帧哨兵是整行，必须按行识别）；再处理缓冲区里"最后一个 \r 之前"的残留——CLI 单行进度条以 \r 原地刷新不带换行，若等 \n 才处理会在结束时才一次性刷出。
     int nl;
     while ((nl = buffer.indexOf(QLatin1Char('\n'))) != -1) {
         QString line = buffer.left(nl);
@@ -206,10 +199,8 @@ void ProcessCommandExecutor::onErrorOccurred(QProcess::ProcessError error) {
 }
 
 void ProcessCommandExecutor::emitFinished(const CommandResult& r) {
-    // finished 保证每次 execute() 至多发一次。崩溃等场景下
-    // errorOccurred 与 finished 可能先后到达（或 errorOccurred 自身多次触发），
-    // 此前两条路径都会走 emitFinished，导致上层把一次任务当成两次结束
-    // （进度条提前归零、取消按钮状态错乱、输出窗口被重置两次）。
+    // finished 保证每次 execute() 至多发一次：崩溃等场景 errorOccurred 与 finished 可能先后到达或 errorOccurred 多次触发，
+    // 此前两条路径都走 emitFinished 会导致上层把一次任务当成两次结束（进度条提前归零、取消按钮错乱、输出窗口重置两次）。
     if (m_finishedEmitted) {
         return;
     }

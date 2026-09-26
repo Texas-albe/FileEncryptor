@@ -19,15 +19,7 @@
 // 安全擦除：见 secure_zero.h（MainWindow 与 PasswordDialog 共用）。
 #include "secure_zero.h"
 
-// 不再使用自绘的 EyeLineEdit。
-//   缺陷9（自绘）：完全接管 paintEvent 会绕开 QLineEdit 内置的输入法预编辑（IME）、
-//   选区高亮、长文本滚动与 RTL 布局，深色主题下还需自配文字颜色，极易与平台行为漂移；
-//  掩码字符随系统用标准圆点显示（QLineEdit 未公开 setPasswordCharacter，自绘仅为换 *），
-//   权衡后放弃 * 掩码，回归标准回显。
-//   缺陷8（布局）：此前把 QHBoxLayout 直接塞进 QLineEdit 并手工 setTextMargins 预留
-//   眼睛按钮位置，与 QLineEdit 内部几何管理相互干扰，主题/字体变化时文字可能被按钮
-//   遮挡。改用 QLineEdit 自带的 addAction(TrailingPosition)，由控件自行排布尾部动作并
-//   自动处理文本避让。
+// 不再使用自绘 EyeLineEdit：自绘 paintEvent 会绕开 IME 预编辑、选区高亮、滚动与 RTL 布局，且手工 setTextMargins 与内部几何冲突易致文字被眼睛按钮遮挡。改用 QLineEdit 自带 addAction(TrailingPosition)，由控件自行排布尾部动作并避让文本。
 
 // 小眼睛图标：visible=true 睁眼，false 闭眼（叠加斜杠）。颜色与文本框文字一致。
 static QIcon makeEyeIcon(bool visible, const QColor& color) {

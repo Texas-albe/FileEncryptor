@@ -1,13 +1,5 @@
-// MsgBox - 统一弹窗模块（警告 / 提示 / 错误 / 确认）
-//
-// 设计目标：
-//   1) 项目内所有交互弹窗统一经由本模块，避免散落 QMessageBox::warning/...
-//      导致标题/风格/调用方式不一致。
-//   2) 提供 title + content + 可选回调（callback）的可复用调用方法：
-//      - 同步：show() / confirm() 直接返回用户选择（会阻塞，适合校验失败后的拦截）。
-//      - 异步：info()/warn()/error() 的 cb 在用户关闭后回调（不阻塞调用方）。
-//   3) 视觉风格与 ThemeManager 一致：QMessageBox 继承 QApplication 调色板
-//      （ThemeManager 已按浅色/深色统一设置），此处仅统一最小宽度与窗口模态。
+// MsgBox - 统一弹窗模块（警告/提示/错误/确认）：项目内弹窗统一走本模块以保证标题/风格/调用方式一致。
+// 提供同步 show()/confirm()（阻塞返回用户选择）与异步 info/warn/error（关闭后回调）；视觉随 ThemeManager 调色板，仅统一最小宽度与窗口模态。
 #pragma once
 #include <QMessageBox>
 #include <QString>

@@ -86,10 +86,8 @@ TaskRecord fromJson(const QJsonObject& o) {
 }
 } // namespace
 
-// 用户配置目录（与 CLI user_config_dir() 同源：Windows %APPDATA%/FileEncryptor、
-// Linux $XDG_CONFIG_HOME/fileencryptor 或 ~/.config/fileencryptor）。
-// 注意：不能用 QDir::cdUp()——目录尚不存在时它会返回 false；QFileInfo::dir() 纯字符串
-// 取父路径，不检查存在性，故首次使用也能正确解析历史目录。
+// 用户配置目录（与 CLI user_config_dir() 同源：Windows %APPDATA%/FileEncryptor、Linux $XDG_CONFIG_HOME/fileencryptor 或 ~/.config/fileencryptor）。
+// 用 QFileInfo::dir() 纯字符串取父路径而非 QDir::cdUp()——后者在目录尚不存在时返回 false，首次使用也能正确解析历史目录。
 static QString userConfigDir() {
 #ifdef Q_OS_WIN
     QString base = qEnvironmentVariable("APPDATA");

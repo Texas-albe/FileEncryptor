@@ -24,11 +24,8 @@
 #include <sys/stat.h>
 #endif
 
-// =====================================================================
-//  YAML 配置解析（依赖 yaml-cpp）
-//  支持 fileencryptor.yaml 的全部顶层标量键与单层序列（path_whitelist）。
-//  未知键静默忽略；解析失败（含 YAML 语法错误）不致命，由调用方回退默认配置。
-// =====================================================================
+// YAML 配置解析（依赖 yaml-cpp）：支持 fileencryptor.yaml 的顶层标量键与单层序列
+// (path_whitelist)。未知键静默忽略；解析失败不致命，由调用方回退默认配置。
 
 static std::string trim(const std::string& s) {
     size_t a = 0, b = s.size();
@@ -346,9 +343,8 @@ static bool read_file_utf8(const std::string& path, std::string& out) {
 #endif
 }
 
-// YAML 别名炸弹（Billion Laughs）防护。配置文件通常由上层注入
-//（FILEENCRYPTOR_CONFIG），yaml-cpp 默认不限制别名展开，极小输入可膨胀成 GB 级内存。
-// 硬性限制配置文件大小：超过 1 MB 直接拒绝，回退默认配置（运维参数无需如此之大）。
+// YAML 别名炸弹（Billion Laughs）防护：yaml-cpp 默认不限制别名展开，极小输入可膨胀成
+// GB 级内存。硬性限制配置文件 1 MB，超过直接拒绝回退默认（运维参数无需如此之大）。
 static constexpr int64_t kMaxConfigBytes = 1 << 20;
 
 // 取文件大小（字节），不存在/不可访问返回 -1
@@ -399,7 +395,7 @@ static std::string get_exe_dir() {
 
 static std::string get_user_config_dir() {
 #ifdef _WIN32
-    // 用 APPDATA 环境变量定位用户配置根（等价于 SHGetFolderPathW(CSIDL_APPDATA)，
+    // 用 APPDATA 环境变量定位用户配置根（等价 SHGetFolderPathW(CSIDL_APPDATA)，
     // 但无需引入 shlobj.h / shell32 依赖）。APPDATA 在 Windows 用户会话中始终设置。
     const char* appdata = std::getenv("APPDATA");
     if (appdata && *appdata) {
@@ -431,9 +427,8 @@ std::string to_native_path(const std::string& p) {
 #endif
 }
 
-// 配置文件名：fileencryptor.yaml（v2.3.1 起按用户要求统一回归标准 .yaml 后缀；
-// v2.3.0 曾短暂使用 .yml）。旧名 fileencryptor.yml 仅在读取时回退（同目录找不到
-// .yaml 才试），新写入一律 .yaml。
+// 配置文件名 fileencryptor.yaml（v2.3.1 起统一 .yaml；v2.3.0 曾短暂用 .yml）。
+// 旧名 .yml 仅读取时回退，新写入一律 .yaml。
 static const char* const kConfigName       = "fileencryptor.yaml";
 static const char* const kConfigNameLegacy = "fileencryptor.yml";
 
@@ -471,8 +466,7 @@ Config load_config() {
     ConfigSource src = ConfigSource::None;
     std::string path = find_config_file(&src);
     if (path.empty()) {
-        // 运行目录（CWD）下生成默认配置文件，便于用户查看/修改（best-effort）。
-        // CWD 不可写（只读介质 / 无写权限）时回退到用户配置目录，
+        // CWD 下生成默认配置文件便于查看/修改（best-effort）；CWD 不可写时回退用户配置目录，
         // 否则模板静默丢失、用户误以为配置从未生成。
         std::string cwd = get_cwd();
         bool wrote = false;
@@ -526,9 +520,8 @@ Config load_config() {
         std::cerr << "Warning: config at " << path << " has ignored values: " << warn << "\n";
         log_event(LOG_WARN, "config_ignored_values", {{"detail", warn}});
     }
-    // v2.1.2：CWD 配置不可信——任何对目录有写权限的人都能预置 fileencryptor.yaml，
-    // 从而劫持 log_file（向任意可写路径追加内容）或关闭 / 改写路径白名单。
-    // 因此来自 CWD 的配置只接受"便利性"键，安全敏感键一律回退默认值并告警。
+    // v2.1.2：CWD 配置不可信——任何可写目录都能预置 fileencryptor.yaml 劫持 log_file
+    // 或关闭白名单。故 CWD 来源只接受便利性键，安全敏感键回退默认并告警。
     if (src == ConfigSource::Cwd) {
         const Config def;
         bool clamped = false;
@@ -548,9 +541,7 @@ Config load_config() {
     return cfg;
 }
 
-// =====================================================================
-//  结构化 JSON 日志
-// =====================================================================
+// ---------- 结构化 JSON 日志 ----------
 
 // v2.1.2：Windows 上 std::ofstream 按 ANSI 代码页解析路径，中文路径会打开失败。
 // 统一走 UTF-8 → 宽字符打开（与 FileEncryptor 的 open_stream 同策略）。
@@ -656,9 +647,8 @@ static void write_log(int level, const std::string& msg,
     if (g_log_stream.is_open()) {
         g_log_stream << line.str();
         g_log_stream.flush();
-        // 防御：磁盘满 / 权限变化 / 文件被删会让流进入 badbit/failbit，
-        // 若不处理后续所有日志都会静默丢失，运维排障时极具误导性。
-        // 检测到异常时复位状态并尝试以 append 重新打开；仍失败则降级为 stderr 告警（仅提示一次，避免刷屏）。
+        // 磁盘满/权限变化/文件被删会让流进入 badbit，不处理则后续日志静默丢失。
+        // 检测到时复位并重开；仍失败则降级 stderr 告警（仅一次，避免刷屏）。
         if (!g_log_stream.good()) {
             g_log_stream.clear();
             open_log_stream_utf8(g_log_stream, g_log_file, std::ios::out | std::ios::app);
@@ -683,9 +673,7 @@ void log_event(int level, const std::string& msg,
     write_log(level, msg, &fields);
 }
 
-// =====================================================================
-//  全局配置访问
-// =====================================================================
+// ---------- 全局配置访问 ----------
 
 static std::shared_ptr<const Config> g_cfg;
 
