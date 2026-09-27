@@ -89,6 +89,15 @@ public static class CliArgBuilder
             }
         }
 
+        // 密钥经 stdin 注入（对称模式且无密钥文件时）。放在位置参数分隔符 -- 之前，
+        // 避免 -- 之后被误判为位置参数
+        bool needsStdinKey = options.Mode != CryptoMode.Asymmetric &&
+                             string.IsNullOrEmpty(options.KeyfilePath) &&
+                             options.Action is CryptoAction.Encrypt or CryptoAction.Decrypt
+                                 or CryptoAction.BatchEncrypt or CryptoAction.BatchDecrypt
+                                 or CryptoAction.Derive;
+        if (needsStdinKey) args.Add("--key-stdin");
+
         // 批量模式：-i 输入
         if (options.Action is CryptoAction.BatchEncrypt or CryptoAction.BatchDecrypt)
         {
@@ -96,16 +105,9 @@ public static class CliArgBuilder
         }
         else if (options.Action is CryptoAction.Encrypt or CryptoAction.Decrypt or CryptoAction.PubKey)
         {
-            if (options.InputPaths.Count > 0) args.Add(options.InputPaths[0]);
+            // 以 -- 终止选项解析，避免以 - 开头的文件名被 CLI 误认为开关
+            if (options.InputPaths.Count > 0) { args.Add("--"); args.Add(options.InputPaths[0]); }
         }
-
-        // 密钥经 stdin 注入（对称模式且无密钥文件时）
-        bool needsStdinKey = options.Mode != CryptoMode.Asymmetric &&
-                             string.IsNullOrEmpty(options.KeyfilePath) &&
-                             options.Action is CryptoAction.Encrypt or CryptoAction.Decrypt
-                                 or CryptoAction.BatchEncrypt or CryptoAction.BatchDecrypt
-                                 or CryptoAction.Derive;
-        if (needsStdinKey) args.Add("--key-stdin");
 
         return args;
     }

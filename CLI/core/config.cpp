@@ -319,6 +319,11 @@ static const char* DEFAULT_CONFIG_YAML =
 "#   - C:/Data/In\n"
 "obfuscate_names: true     # 混淆输出文件名（<名>.<伪扩展名>.ptd）\n";
 
+// YAML 别名炸弹（Billion Laughs）防护：yaml-cpp 默认不限制别名展开，极小输入可膨胀成
+// GB 级内存。硬性限制配置文件 1 MB，超过直接拒绝回退默认（运维参数无需如此之大）。
+// read_file_utf8 在流式读取时同步累计字节，即使大小预检后文件被增长（TOCTOU）也不超限。
+static constexpr int64_t kMaxConfigBytes = 1 << 20;
+
 static bool read_file_utf8(const std::string& path, std::string& out) {
     out.clear();
 #ifdef _WIN32
@@ -330,22 +335,32 @@ static bool read_file_utf8(const std::string& path, std::string& out) {
     if (!f) return false;
     char buf[1 << 16];
     size_t n;
-    while ((n = fread(buf, 1, sizeof(buf), f)) > 0) out.append(buf, n);
+    int64_t total = 0;
+    while ((n = fread(buf, 1, sizeof(buf), f)) > 0) {
+        total += (int64_t)n;
+        if (total > kMaxConfigBytes) { fclose(f); return false; }
+        out.append(buf, n);
+    }
     fclose(f);
     return true;
 #else
     std::ifstream f(path, std::ios::binary);
     if (!f) return false;
     std::ostringstream ss;
-    ss << f.rdbuf();
+    char chunk[1 << 16];
+    int64_t total = 0;
+    while (f.read(chunk, sizeof(chunk)) || f.gcount() > 0) {
+        std::streamsize got = f.gcount();
+        if (got > 0) {
+            total += (int64_t)got;
+            if (total > kMaxConfigBytes) { f.close(); return false; }
+            ss.write(chunk, got);
+        }
+    }
     out = ss.str();
     return true;
 #endif
 }
-
-// YAML 别名炸弹（Billion Laughs）防护：yaml-cpp 默认不限制别名展开，极小输入可膨胀成
-// GB 级内存。硬性限制配置文件 1 MB，超过直接拒绝回退默认（运维参数无需如此之大）。
-static constexpr int64_t kMaxConfigBytes = 1 << 20;
 
 // 取文件大小（字节），不存在/不可访问返回 -1
 static int64_t get_file_size_raw(const std::string& path) {
@@ -532,9 +547,22 @@ Config load_config() {
             cfg.path_whitelist = def.path_whitelist;
             clamped = true;
         }
+        // 加密强度/口令策略/文件名混淆同样属安全敏感键：CWD 可被预置文件弱化 KDF、放松口令
+        // 长度要求或关闭名称混淆，一并回退默认，与 log_file/path_whitelist 同等待遇。
+        if (cfg.kdf_preset != def.kdf_preset ||
+            cfg.min_password_length != def.min_password_length ||
+            cfg.min_password_classes != def.min_password_classes ||
+            cfg.obfuscate_names != def.obfuscate_names) {
+            cfg.kdf_preset = def.kdf_preset;
+            cfg.min_password_length = def.min_password_length;
+            cfg.min_password_classes = def.min_password_classes;
+            cfg.obfuscate_names = def.obfuscate_names;
+            clamped = true;
+        }
         if (clamped) {
             std::cerr << "Warning: config from the current directory (" << path << ") is not trusted; "
-                      << "log_file / path_whitelist from it were ignored. "
+                      << "security-sensitive keys (log_file / path_whitelist / kdf_preset / "
+                      << "min_password_* / obfuscate_names) from it were ignored. "
                       << "Put them in the exe directory or user config dir instead.\n";
         }
     }

@@ -2,6 +2,7 @@
 #include "config.hpp"
 #include "asym_crypto.hpp"
 #include "keylib.hpp"
+#include "password_policy.hpp"
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -30,9 +31,8 @@
 #endif
 
 #ifdef _WIN32
-// 交互控制台：逐键读取密码并回显 '*'，退格按 UTF-8 码点删除，而非按字节
-// 当 stdin 被重定向（管道 / 文件 / winpty PTY）时，_getch() 会读控制台输入
-// 缓冲区而挂起，故先检测 stdin 是否为控制台：不是则退化为从 std::cin 读一行
+// 交互控制台：逐键读取密码并回显 '*'，退格按 UTF-8 码点删除，而非按字节 当 stdin 被重定向（管道 / 文件 / winpty PTY）时，_getch()
+// 会读控制台输入 缓冲区而挂起，故先检测 stdin 是否为控制台：不是则退化为从 std::cin 读一行
 static std::vector<char> get_password_win() {
     bool is_console=false;
     HANDLE hIn=GetStdHandle(STD_INPUT_HANDLE);
@@ -119,38 +119,6 @@ static bool file_exists_path(const std::string& p) {
     return true;
 }
 
-// 口令强策略（功能7：与 GUI PasswordStrength::meetsPolicy 共用同一套规则，避免两端不一致）：
-//   最小长度来自 YAML min_password_length（默认 8）；至少包含 min_password_classes 类字符
-//   （小写/大写/数字/符号），或长度 >= 16。非 ASCII（多字节）口令熵足够，直接放行。
-static bool password_meets_policy(const std::string& pw, std::string& reason) {
-    const Config& cfg = global_config();
-    const size_t min_len = (cfg.min_password_length > 0)
-        ? (size_t)cfg.min_password_length : 8;
-    const int min_classes = (cfg.min_password_classes > 0) ? cfg.min_password_classes : 2;
-    if (pw.size() < min_len) {
-        reason = "Password too short (min " + std::to_string(min_len) + " characters).";
-        return false;
-    }
-    bool lower = false, upper = false, digit = false, symbol = false, non_ascii = false;
-    for (unsigned char c : pw) {
-        if (c <= 0x7F) {
-            if (islower(c))       lower = true;
-            else if (isupper(c))  upper = true;
-            else if (isdigit(c))  digit = true;
-            else if (ispunct(c))  symbol = true;
-        } else {
-            non_ascii = true;     // 多字节字符（如 UTF-8 中文）熵足够
-        }
-    }
-    if (non_ascii) return true;
-    const int kinds = (lower ? 1 : 0) + (upper ? 1 : 0) +
-                      (digit ? 1 : 0) + (symbol ? 1 : 0);
-    if (kinds >= min_classes || pw.size() >= 16) return true;
-    reason = "Password too weak: use at least " + std::to_string(min_classes) +
-             " character classes (lower/upper/digit/symbol) or length >= 16.";
-    return false;
-}
-
 static void print_usage() {
     std::cout<<"FileEncryptor v"<<FE_VERSION_STRING<<"\n\n"
         <<"Modes (file encryption / decryption):\n"
@@ -179,6 +147,8 @@ static void print_usage() {
         <<"                      rage = asymmetric hybrid encryption: a random file key\n"
   <<"                             is wrapped to X25519 recipients (rage/age format)\n"
         <<"  -y, --force       Overwrite existing output files without asking\n"
+        <<"  --force-decrypt   Decrypt corrupted files: skip failed chunks (zero-filled) and\n"
+        <<"                    ignore final integrity hash. WARNING: output may be incomplete.\n"
         <<"  -k <keyfile>      Read key material from file (non-interactive; alt: ENCRYPTOR_KEY env / --key-stdin)\n"
         <<"                      -m rage decrypt: this is the private key file (AGE-SECRET-KEY-...)\n"
         <<"  -K <name>[,...]   Resolve keys from the local key library (功能1):\n"
@@ -245,10 +215,8 @@ static std::vector<std::string> get_utf8_argv() {
 }
 #endif
 
-// Resolve -r into a list of recipient public keys.
-// The value is either a literal public key ("age1...", optionally prefixed with
-// "publickey:") or a path to a file holding one public key per line ('#' comments
-// and a "publickey:" prefix are tolerated).
+// Resolve -r into a list of recipient public keys. The value is either a literal public key ("age1...", optionally prefixed with "publickey:") or
+// a path to a file holding one public key per line ('#' comments and a "publickey:" prefix are tolerated).
 static bool collect_recipients(const std::string& spec,
                                std::vector<std::string>& out,
                                std::string& err) {
@@ -299,16 +267,8 @@ static bool collect_recipients(const std::string& spec,
     return true;
 }
 
-// Asymmetric (hybrid) dispatch built on rage/age (X25519 + ChaCha20-Poly1305).
-//   encrypt : wrap the file key to the public key given by -r (an "age1..." string,
-//             or a file holding public keys) -> <name>.age
-//   decrypt : unwrap with the private key file given by -k ("AGE-SECRET-KEY-...")
-//
-// v2.1.2 加固（对应安全审计 1 / 5 / 6）：
-//   - 此前本函数完全绕过 validate_io_paths()，即绕过路径白名单与 max_path_length；
-//   - 输出无符号链接守卫、无 .prt 原子落盘（对称路径三处守卫 + 原子替换全无）；
-//   - 输出文件名恒为明文（对称模式默认混淆）。现加 --obfuscate-name 显式开启，
-//     未开启时打印元数据泄露提示。
+// Asymmetric (hybrid) dispatch built on rage/age (X25519 + ChaCha20-Poly1305). encrypt : wrap the file key to the public key given by -r (an "age1..." string, or a file holding public keys) -> <name>.age decrypt : unwrap with the private key file given by -k
+// ("AGE-SECRET-KEY-...") v2.1.2 加固（对应安全审计 1 / 5 / 6）： - 此前本函数完全绕过 validate_io_paths()，即绕过路径白名单与 max_path_length； - 输出无符号链接守卫、无 .prt 原子落盘（对称路径三处守卫 + 原子替换全无）； - 输出文件名恒为明文（对称模式默认混淆）。现加 --obfuscate-name 显式开启， 未开启时打印元数据泄露提示。
 static bool run_asym(const std::vector<std::string>& input_paths,
                      const std::string& output_dir,
                      bool is_encrypt,
@@ -360,9 +320,8 @@ static bool run_asym(const std::vector<std::string>& input_paths,
             std::string base=in_path;
             size_t pos=base.find_last_of("/\\");
             std::string fname=(pos!=std::string::npos)?base.substr(pos+1):base;
-            // v2.1.2：rage 模式没有"加密文件名信封"（对称模式的文件名存在密文尾部，
-            // 可无损还原），一旦混淆就**永久丢失**文件名。因此不跟随 obfuscate_names
-            // 默认值直接启用，必须由 --obfuscate-name 显式开启。
+            // v2.1.2：rage 模式没有"加密文件名信封"（对称模式的文件名存在密文尾部， 可无损还原），一旦混淆就**永久丢失**文件名。因此不跟随
+            // obfuscate_names 默认值直接启用，必须由 --obfuscate-name 显式开启。
             if(obfuscate_name) {
                 fname=make_obfuscated_basename(in_path,key_material);
             } else {
@@ -483,10 +442,8 @@ static bool run_asym(const std::vector<std::string>& input_paths,
     return all_ok;
 }
 
-// Generate an X25519 keypair (rage/age).
-//   stdout                     -> recipient public key "age1..." only (safe to pipe/redirect)
-//   <output_dir>/rage_private.txt -> identity "AGE-SECRET-KEY-..." (keep secret)
-// Everything informational goes to stderr so stdout stays a clean public key.
+// Generate an X25519 keypair (rage/age). stdout                     -> recipient public key "age1..." only (safe to pipe/redirect) <output_dir>/rage_private.txt
+// -> identity "AGE-SECRET-KEY-..." (keep secret) Everything informational goes to stderr so stdout stays a clean public key.
 static bool run_keygen(const std::string& output_dir,bool force_overwrite) {
     std::string pub, priv;
     AsymOutcome o=fe_generate_keypair(pub,priv);
@@ -584,11 +541,8 @@ static bool parse_salt(const std::string& spec,std::vector<unsigned char>& out) 
     return true;
 }
 
-// 由口令确定性派生 X25519 密钥对（-G）。
-//   stdout                     -> 公钥 "age1..."（可直接重定向 / 管道）
-//   <dir>/rage_private.txt     -> 私钥 "AGE-SECRET-KEY-..."
-//   <dir>/rage_derive_salt.txt -> 16 字节随机盐（hex）；复现同一密钥对必需
-// 同口令 + 同盐 ⇒ 完全相同的密钥对，因此不保存私钥也能靠口令找回。
+// 由口令确定性派生 X25519 密钥对（-G）。 stdout                     -> 公钥 "age1..."（可直接重定向 / 管道） <dir>/rage_private.txt     -> 私钥
+// "AGE-SECRET-KEY-..." <dir>/rage_derive_salt.txt -> 16 字节随机盐（hex）；复现同一密钥对必需 同口令 + 同盐 ⇒ 完全相同的密钥对，因此不保存私钥也能靠口令找回。
 static bool run_derive(const std::string& output_dir,
                        const SecureBuffer& password,
                        const std::string& salt_spec,
@@ -744,6 +698,18 @@ static bool run_recover(const std::string& path, const SecureBuffer& pw, bool do
     }
     std::cout<<"Original name: "<<orig<<"\n";
     if(do_rename) {
+        // orig 来自密文尾部文件名信封（数据可控）：拼接前必须拒绝任何目录成分/绝对路径，
+        // 否则 "<..\..\evil>.ptd" 会把 .ptd 重命名逃逸出原目录。
+        bool bad = orig.empty() || orig.find_first_of("/\\") != std::string::npos
+                || orig.find("..") != std::string::npos
+                || orig.front() == '/' || orig.front() == '\\';
+#ifdef _WIN32
+        if(!bad && orig.size() >= 2 && orig[1] == ':') bad = true;   // 盘符 X: 绝对路径
+#endif
+        if(bad) {
+            std::cerr<<"Refusing to rename: original name contains path elements: "<<orig<<"\n";
+            return false;
+        }
         // 重命名 .ptd 本身（不触碰内容）：<原始名>.ptd，置于同目录
         std::string dir=path;
         size_t bs=dir.find_last_of("/\\");
@@ -862,7 +828,22 @@ static bool run_keylib(const std::vector<std::string>& words,
             if(!open_stream(f,path,std::ios::in|std::ios::binary)) {
                 err="Cannot open key file: "+path; return false;
             }
-            std::string buf((std::istreambuf_iterator<char>(f)),std::istreambuf_iterator<char>());
+            // 流式读取身份材料并封顶 256 KB，与 keylib 侧上限一致，避免大文件全量入内存
+            std::string buf;
+            {
+                char chunk[4096];
+                while(f.read(chunk,sizeof(chunk))||f.gcount()>0) {
+                    std::streamsize got=f.gcount();
+                    if(got>0) {
+                        buf.append(chunk,(size_t)got);
+                        if(buf.size()>size_t(256*1024)) {
+                            f.close();
+                            err="Key file too large (>256 KB): "+path;
+                            return false;
+                        }
+                    }
+                }
+            }
             f.close();
             size_t a=0,b=buf.size();
             while(a<b&&(unsigned char)buf[a]<=0x20) ++a;
@@ -966,6 +947,7 @@ int main(int argc,char* argv[]) {
     CryptoMode mode=CryptoMode::XCHACHA20;
     int source_action=0;          // 0=保留 1=删除(-de) 2=安全擦除(--wipe-source) 3=回收站(--recycle-source)
     bool force_overwrite=false;
+    bool force_decrypt=false;
     int num_threads=0;
     bool restore_name=false;     // 批量解密是否还原完整原始文件名（默认 false：仅保留扩展名，省去每文件 KDF）
     bool obfuscate_name=false;   // -m rage：是否混淆输出文件名（原始名不可恢复，故需显式开启）
@@ -1095,6 +1077,9 @@ int main(int argc,char* argv[]) {
         }
         else if(arg=="-y"||arg=="--force") {
             force_overwrite=true;
+        }
+        else if(arg=="--force-decrypt") {
+            force_decrypt=true;
         }
         else if(arg=="-v"||arg=="--verbose") {
             set_verbose(true);
@@ -1267,9 +1252,8 @@ int main(int argc,char* argv[]) {
         }
     }
 
-    // AEGIS-256 可用性：缺 AES-NI 时，交互终端询问是否降级（默认降级）；
-    // 非交互（GUI 管道 / --key-stdin / cron）明确拒绝并以非零码退出，绝不自动降级。
-    // 同时覆盖单文件与批量两种入口，process_files 内部仅作防御性兜底。
+    // AEGIS-256 可用性：缺 AES-NI 时，交互终端询问是否降级（默认降级）； 非交互（GUI 管道 / --key-stdin /
+    // cron）明确拒绝并以非零码退出，绝不自动降级。 同时覆盖单文件与批量两种入口，process_files 内部仅作防御性兜底。
     if(is_encrypt&&mode==CryptoMode::AEGIS256) {
         bool interactive = stdin_is_interactive() && !key_from_stdin;
         bool refuse=false;
@@ -1292,8 +1276,23 @@ int main(int argc,char* argv[]) {
             std::cerr<<"Cannot open key file: "<<keyfile_path<<"\n";
             return 1;
         }
-        std::vector<char> kbuf((std::istreambuf_iterator<char>(kf)),
-                               std::istreambuf_iterator<char>());
+        // 流式读取密钥文件并封顶 1 MB，防止超大文件/管道耗尽内存
+        std::vector<char> kbuf;
+        {
+            const size_t kMaxKeyBytes = size_t(1) << 20;
+            char chunk[4096];
+            while(kf.read(chunk,sizeof(chunk))||kf.gcount()>0) {
+                std::streamsize got=kf.gcount();
+                if(got>0) {
+                    kbuf.insert(kbuf.end(),chunk,chunk+got);
+                    if(kbuf.size()>kMaxKeyBytes) {
+                        kf.close();
+                        std::cerr<<"Key file too large (>1 MB): "<<keyfile_path<<"\n";
+                        return 1;
+                    }
+                }
+            }
+        }
         kf.close();
         if(kbuf.empty()) {
             std::cerr<<"Key file is empty: "<<keyfile_path<<"\n";
@@ -1305,11 +1304,24 @@ int main(int argc,char* argv[]) {
         log_event(LOG_INFO,"key_source",{{"type","keyfile"},{"path",keyfile_path}});
     }
     else if(key_from_stdin) {
-        // Secure channel: read entire stdin (binary-safe, until EOF) as key material.
-        // Symmetric mode -> password; asymmetric decrypt -> age identity. GUI pipes via this
-        // channel to avoid leaking through env vars / command line.
-        std::vector<char> sbuf((std::istreambuf_iterator<char>(std::cin)),
-                               std::istreambuf_iterator<char>());
+        // Secure channel: read entire stdin (binary-safe, until EOF) as key material. Symmetric mode -> password; asymmetric decrypt ->
+        // age identity. GUI pipes via this channel to avoid leaking through env vars / command line.
+        // 流式读取并封顶 1 MB，防止恶意大管道撑爆内存。
+        std::vector<char> sbuf;
+        {
+            const size_t kMaxStdinKeyBytes = size_t(1) << 20;
+            char chunk[4096];
+            while(std::cin.read(chunk,sizeof(chunk))||std::cin.gcount()>0) {
+                std::streamsize got=std::cin.gcount();
+                if(got>0) {
+                    sbuf.insert(sbuf.end(),chunk,chunk+got);
+                    if(sbuf.size()>kMaxStdinKeyBytes) {
+                        std::cerr<<"Key material from stdin too large (>1 MB).\n";
+                        return 1;
+                    }
+                }
+            }
+        }
         if(sbuf.empty()) {
             std::cerr<<"No key material received from stdin (--key-stdin).\n";
             return 1;
@@ -1325,6 +1337,13 @@ int main(int argc,char* argv[]) {
             password = SecureBuffer(ek, std::strlen(ek));
             used_key_source=true;
             log_event(LOG_INFO,"key_source",{{"type","env"}});
+            // 已拷入 SecureBuffer：立即从进程环境块擦除原串，缩短明文残留窗口
+            // （env 方式本就不如 --key-stdin，仅作兼容保留）。
+#ifdef _WIN32
+            _putenv("ENCRYPTOR_KEY=");
+#else
+            unsetenv("ENCRYPTOR_KEY");
+#endif
         }
     }
 
@@ -1346,7 +1365,11 @@ int main(int argc,char* argv[]) {
         if(action==ACTION_DERIVE) {
             {
                 std::string preason;
-                if(!password_meets_policy(std::string(password.cdata(),password.size()),preason)) {
+                const Config& cfg = global_config();
+                size_t min_len = (cfg.min_password_length > 0)
+                    ? (size_t)cfg.min_password_length : 8;
+                int min_classes = (cfg.min_password_classes > 0) ? cfg.min_password_classes : 2;
+                if(!fe::password_policy::meets_policy(std::string(password.cdata(),password.size()), min_len, min_classes, preason)) {
                     std::cerr<<preason<<"\n";
                     return 1;
                 }
@@ -1382,7 +1405,11 @@ int main(int argc,char* argv[]) {
             std::vector<char> pw1=get_password();
             {
                 std::string preason;
-                if(!password_meets_policy(std::string(pw1.data(),pw1.size()),preason)) {
+                const Config& cfg = global_config();
+                size_t min_len = (cfg.min_password_length > 0)
+                    ? (size_t)cfg.min_password_length : 8;
+                int min_classes = (cfg.min_password_classes > 0) ? cfg.min_password_classes : 2;
+                if(!fe::password_policy::meets_policy(std::string(pw1.data(),pw1.size()), min_len, min_classes, preason)) {
                     std::cerr<<preason<<"\n";
                     sodium_memzero(pw1.data(),pw1.size()); pw1.clear();
                     return 1;
@@ -1430,6 +1457,8 @@ int main(int argc,char* argv[]) {
         }
         return all?0:1;
     }
+
+    g_force_decrypt=force_decrypt;
 
     if(asym_mode) {
         all_ok=run_asym(input_paths,output_dir,is_encrypt,source_action,force_overwrite,recipient_spec,keyfile_path,password,obfuscate_name,lib_recipients);

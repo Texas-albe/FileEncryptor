@@ -6,7 +6,7 @@ namespace FileEncryptorGUI.Services;
 /// <summary>探测 FileEncryptor CLI 路径：环境变量→同目录→ProgramFiles→PATH，优先匹配同版本号 CLI。</summary>
 public static class FileEncryptorLocator
 {
-    public const string GuiVersion = "2.0.1";
+    public const string GuiVersion = "2.0.2";
     public const string CliDownloadUrl =
         "https://github.com/Texas-albe/FileEncryptor/releases/tag/GUI2.0.1_CLI2.4.3";
 

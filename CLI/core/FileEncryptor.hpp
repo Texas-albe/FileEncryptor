@@ -16,7 +16,10 @@
 #define FE_VERSION_MAJOR 2
 #define FE_VERSION_MINOR 4
 #define FE_VERSION_PATCH 3
-#define FE_VERSION_STRING "2.4.3"
+#define FE_VERSION_STRING "2.4.4"
+
+// --force-decrypt：解密时容忍块校验失败与明文哈希不匹配（强制恢复损坏数据）
+extern bool g_force_decrypt;
 
 enum class CryptoMode: unsigned char {
     AES_GCM=0,   // 仅用于解密旧格式（v1/v2）文件；新加密不再使用
@@ -28,9 +31,7 @@ enum class CryptoMode: unsigned char {
 // 用 YAML max_speed（字节/秒，支持 KB/MB/GB）初始化，0=不限速；主循环按字节记账超限休眠。
 void init_rate_limiter(uint64_t max_bytes_per_sec);
 
-// ---------- 文件名 / 扩展名混淆（v1.7.0） ----------
-// 生成 "<16 位十六进制>.<混淆扩展名>" 基名（不含 .ptd），由口令与输入路径确定性派生，
-// 故续传仍能命中原输出文件。
+// ---------- 文件名 / 扩展名混淆（v1.7.0） ---------- 生成 "<16 位十六进制>.<混淆扩展名>" 基名（不含 .ptd），由口令与输入路径确定性派生， 故续传仍能命中原输出文件。
 std::string make_obfuscated_basename(const std::string& in_path,const SecureBuffer& password);
 
 // 从密文末尾加密信封恢复原始文件名（需口令派生密钥）；无尾部/密钥错返回 false。
@@ -156,9 +157,8 @@ bool stdin_is_interactive();
 CryptoMode resolve_encrypt_mode(CryptoMode requested, bool interactive,
     bool& refuse, std::string& message);
 
-// ---------- 密钥轮换 / rewrap（v6 容器） ----------
-// 用 old_password 解开 v6 的 wrapped DEK，再以 new_password 派生的新 KEK 重新包裹
-// （key_version 自增），重写头部容器区与 header_hmac；载荷密文不变。旧格式返回 false。
+// ---------- 密钥轮换 / rewrap（v6 容器） ---------- 用 old_password 解开 v6 的 wrapped DEK，再以 new_password 派生的新
+// KEK 重新包裹 （key_version 自增），重写头部容器区与 header_hmac；载荷密文不变。旧格式返回 false。
 bool rewrap_file(const std::string& ptd_path,
     const SecureBuffer& old_password,
     const std::string& new_key_path,

@@ -161,11 +161,18 @@ public class MainViewModel : ObservableObject
         if (string.IsNullOrEmpty(workDir))
             workDir = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
 
+        // 直接拼出"口令字节 + 换行"，避免 password + "\n" 额外产生不可回收的字符串副本
+        var pwdBytes = Encoding.UTF8.GetBytes(password);
+        var stdinBytes = new byte[pwdBytes.Length + 1];
+        Array.Copy(pwdBytes, stdinBytes, pwdBytes.Length);
+        stdinBytes[pwdBytes.Length] = 0x0A;
+        Array.Clear(pwdBytes, 0, pwdBytes.Length);
+
         var req = new CommandRequest
         {
             ProgramPath = _cliPath,
             Arguments = args,
-            StdinData = Encoding.UTF8.GetBytes(password + "\n"),
+            StdinData = stdinBytes,
             WorkingDirectory = workDir
         };
 
@@ -282,23 +289,33 @@ public class MainViewModel : ObservableObject
                 summary.AvgSpeed = EtaEstimatorService.FormatRate(bps);
             }
             else summary.AvgSpeed = "-";
-            // 加密后大小：扫描输出目录 .ptd 文件
-            try
-            {
-                if (!string.IsNullOrEmpty(OutputDir) && Directory.Exists(OutputDir))
-                {
-                    long encBytes = Directory.EnumerateFiles(OutputDir, "*.ptd", SearchOption.AllDirectories)
-                        .Sum(f => new FileInfo(f).Length);
-                    summary.EncryptedSize = EtaEstimatorService.FormatBytes(encBytes);
-                }
-                else summary.EncryptedSize = "-";
-            }
-            catch { summary.EncryptedSize = "-"; }
+            // 加密后大小默认占位，实际统计放到后台线程执行
+            summary.EncryptedSize = "-";
 
             TaskCompleted?.Invoke(StatusText);
-            TaskSummary?.Invoke(summary);
-            // 完成后恢复命令预览
-            RefreshCommandPreview();
+
+            // 输出目录递归扫描可能很大/在网络盘上，移到后台线程，完成后再封送回 UI 刷新汇总
+            var outDir = OutputDir;
+            _ = Task.Run(() =>
+            {
+                string sizeText = "-";
+                try
+                {
+                    if (!string.IsNullOrEmpty(outDir) && Directory.Exists(outDir))
+                    {
+                        long encBytes = Directory.EnumerateFiles(outDir, "*.ptd", SearchOption.AllDirectories)
+                            .Sum(f => { try { return new FileInfo(f).Length; } catch { return 0; } });
+                        sizeText = EtaEstimatorService.FormatBytes(encBytes);
+                    }
+                }
+                catch { }
+                _dispatcher.TryEnqueue(() =>
+                {
+                    summary.EncryptedSize = sizeText;
+                    TaskSummary?.Invoke(summary);
+                    RefreshCommandPreview();
+                });
+            });
         });
     }
 
@@ -308,7 +325,7 @@ public class MainViewModel : ObservableObject
         if (line.Contains("skipped"))
         {
             var m = System.Text.RegularExpressions.Regex.Match(line, @"skipped\s+(\d+)");
-            if (m.Success) _skipFiles = int.Parse(m.Groups[1].Value);
+            if (m.Success && int.TryParse(m.Groups[1].Value, out var n)) _skipFiles = n;
         }
         UpdateProgressLabel();
     }

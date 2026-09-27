@@ -161,10 +161,14 @@ void PasswordDialog::onAccept() {
         MsgBox::error(this, tr("口令无效"), reason);
         return;
     }
-    // 取出口令（UTF-8 字节），随后清零临时缓冲并清掉输入框明文
+    // 取出口令（UTF-8 字节），随后清零临时缓冲并清掉输入框明文。
+    // 注意：m_pw->text() 返回的 QString 副本由 Qt 内部管理、不提供安全擦除接口，
+    // 这是 Qt GUI 层的固有限制——口令在转为 QByteArray 之前会在堆上短暂驻留，
+    // 无法通过应用层手段彻底清零；本函数已在拷贝进 m_secret 后立即清零这份 UTF-8 字节副本。
     QByteArray b = m_pw->text().toUtf8();
     m_secret.assign(b.begin(), b.end());
-    memset(b.data(), 0, b.size());
+    // 裸 memset 可能被编译器判定为 dead store 优化掉，改用 secure_zero 逐字节写零。
+    secure_zero(b.data(), size_t(b.size()));
     m_pw->clear();
     m_confirm->clear();
     accept();

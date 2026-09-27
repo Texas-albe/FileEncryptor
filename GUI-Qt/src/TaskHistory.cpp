@@ -141,12 +141,16 @@ bool TaskHistory::append(const TaskRecord& r,QString& err) {
     if(path.isEmpty()) { err=QStringLiteral("无法确定用户配置目录"); return false; }
     QDir d;
     if(!d.mkpath(dir())) { err=QStringLiteral("无法创建历史目录"); return false; }
+    // 历史记录含私钥/输入文件路径等敏感元数据，类 Unix 下把目录收紧为 0700，仅本用户可进入
+    QFile::setPermissions(dir(),QFileDevice::ReadOwner|QFileDevice::WriteOwner|QFileDevice::ExeOwner);
 
     QFile f(path);
     if(!f.open(QIODevice::Append|QIODevice::Text)) {
         err=f.errorString();
         return false;
     }
+    // 文件权限收紧为 0600，避免同机其他用户读取敏感路径元数据
+    f.setPermissions(QFile::ReadOwner|QFile::WriteOwner);
     QTextStream ts(&f);
     ts.setEncoding(QStringConverter::Utf8);
     ts << QJsonDocument(toJson(r)).toJson(QJsonDocument::Compact) << '\n';
@@ -203,11 +207,13 @@ bool TaskHistory::save(const QVector<TaskRecord>& records,QString& err) {
     if(path.isEmpty()) { err=QStringLiteral("无法确定用户配置目录"); return false; }
     QDir d;
     if(!d.mkpath(dir())) { err=QStringLiteral("无法创建历史目录"); return false; }
+    QFile::setPermissions(dir(),QFileDevice::ReadOwner|QFileDevice::WriteOwner|QFileDevice::ExeOwner);
     QFile f(path);
     if(!f.open(QIODevice::WriteOnly|QIODevice::Text|QIODevice::Truncate)) {
         err=f.errorString();
         return false;
     }
+    f.setPermissions(QFile::ReadOwner|QFile::WriteOwner);
     QTextStream ts(&f);
     ts.setEncoding(QStringConverter::Utf8);
     // records 是最新在前，写回时按时间正序
@@ -229,8 +235,9 @@ bool TaskHistory::prune(int keepLatest,QString& err) {
     }
     QTextStream ts(&f);
     ts.setEncoding(QStringConverter::Utf8);
-    // all 已是最新在前，需按时间正序写回
-    for(int i=all.size()-1;i>=all.size()-keepLatest;--i)
+    // all 已是最新在前（all[0] 为最新一条），保留前 keepLatest 条并按时间正序写回；
+    // 旧实现写成了尾部区间，裁掉的恰是刚追加的最新记录。
+    for(int i=keepLatest-1;i>=0;--i)
         ts << QJsonDocument(toJson(all[i])).toJson(QJsonDocument::Compact) << '\n';
     return true;
 }

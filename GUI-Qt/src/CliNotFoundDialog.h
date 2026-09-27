@@ -7,6 +7,7 @@ class QPushButton;
 class QProgressBar;
 class QNetworkAccessManager;
 class QNetworkReply;
+class QUrl;
 
 class CliNotFoundDialog: public QDialog {
     Q_OBJECT
@@ -25,10 +26,15 @@ private slots:
     void onReleaseFinished();
     void onDownloadProgress(qint64 received, qint64 total);
     void onDownloadFinished();
+    void onShaDownloaded();
 
 private:
     void startDownload(const QString& url, const QString& savePath);
+    void startShaCheck();
+    void installFromTemp();
+    void failDownload(const QString& msg);
     QString pickCliAsset(const QJsonArray& assets) const;
+    bool isAllowedDownloadHost(const QUrl& url) const;
 
     bool m_retry=false;
     QNetworkAccessManager* m_net=nullptr;
@@ -38,4 +44,8 @@ private:
     QProgressBar* m_progress=nullptr;
     QLabel* m_statusLabel=nullptr;
     QString m_savePath;
+    QString m_assetUrl;        // 待校验的 CLI 资产下载地址
+    QString m_tempPath;         // 资产先写入与目标同目录的临时文件，校验通过后原子改名
+    QByteArray m_assetData;     // 已下载资产字节（用于 SHA256 校验）
+    bool m_shaWarned=false;     // .sha256 缺失时跳过校验并在结果中提示
 };

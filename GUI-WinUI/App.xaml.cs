@@ -30,11 +30,15 @@ public partial class App : Application
         InitializeComponent();
         AppDomain.CurrentDomain.UnhandledException += (s, e) =>
         {
-            WriteCrashLog($"UnhandledException: {e.ExceptionObject}");
+            // 只记录异常类型与消息，不写完整 ToString()/堆栈，避免将来携带缓冲区内容的异常把敏感材料落盘
+            if (e.ExceptionObject is Exception ex)
+                WriteCrashLog($"UnhandledException: {ex.GetType().Name}: {ex.Message}");
+            else
+                WriteCrashLog("UnhandledException: non-Exception payload");
         };
         UnhandledException += (s, e) =>
         {
-            WriteCrashLog($"XamlUnhandledException: {e.Exception}\nMessage: {e.Message}");
+            WriteCrashLog($"XamlUnhandledException: {e.Exception.GetType().Name}: {e.Message}");
             e.Handled = true;
         };
     }
@@ -50,7 +54,7 @@ public partial class App : Application
         }
         catch (Exception ex)
         {
-            WriteCrashLog($"OnLaunched Exception: {ex}");
+            WriteCrashLog($"OnLaunched Exception: {ex.GetType().Name}: {ex.Message}");
             throw;
         }
     }

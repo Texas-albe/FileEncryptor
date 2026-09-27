@@ -1,10 +1,9 @@
 #pragma once
 #include <vector>
 #include <mutex>
-#include <cstring>
+#include "secure_zero.hpp"
 
-// BufferPool：固定大小缓冲区的线程安全复用池，减少加解密期的重复分配/释放。
-// 适用于 1 MiB 读写缓冲等高频分配场景。acquire 从池取（或新建），release 归还清零。
+// 固定大小缓冲区的线程安全复用池。acquire 从池取（或新建），release 归还并清零。
 class BufferPool {
     std::vector<std::vector<unsigned char>> pool_;
     size_t buf_size_;
@@ -24,8 +23,8 @@ public:
     }
 
     void release(std::vector<unsigned char>& buf) {
+        secure_zero(buf.data(), buf.size());
         if (buf.size() != buf_size_) return;
-        std::memset(buf.data(), 0, buf.size());
         std::lock_guard<std::mutex> lock(mutex_);
         pool_.push_back(std::move(buf));
     }

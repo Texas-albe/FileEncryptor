@@ -23,20 +23,15 @@ struct Config {
     bool        path_whitelist_enabled = false; // 仅当 path_whitelist 显式列出至少一项时为 true；空列表（仅写键名）不启用，所有路径均放行
     std::vector<std::string> path_whitelist; // 允许的输入/输出根目录（非空且启用时强制校验）
 
-    // ---- 输出文件名混淆（v1.7.0 引入，v1.7.1 起语义收窄）----
-    // 仅控制"可见输出文件名"是否混淆为 "<16 位十六进制>.<混淆扩展名>.ptd"；
-    // 原始名一律以加密信封存入密文尾部，不受此开关影响。
+    // ---- 输出文件名混淆（v1.7.0 引入，v1.7.1 起语义收窄）---- 仅控制"可见输出文件名"是否混淆为 "<16 位十六进制>.<混淆扩展名>.ptd"； 原始名一律以加密信封存入密文尾部，不受此开关影响。
     bool        obfuscate_names = true;
 
     // ---- 口令强度策略（功能7：CLI 与 GUI 共用同一套校验） ----
-    // min_password_length：0=用内置默认(8)；min_password_classes：要求字符类别数
-    // (lower/upper/digit/symbol)，0=不强制，默认 2。非 ASCII 口令视为高熵直接放行。
+    // min_password_length：0=用内置默认(8)；min_password_classes：要求字符类别数 (lower/upper/digit/symbol)，0=不强制，默认 2。非 ASCII 口令视为高熵直接放行。
     int         min_password_length = 0;
     int         min_password_classes = 2;
 
-    // ---- 加密强度预设（功能14） ----
-    // 0=fast(ops3/64MB) 1=standard(ops4/128MB,默认) 2=strong(ops6/512MB)。
-    // 写入文件头，解密端自适应（v2+ 支持参数化）。
+    // ---- 加密强度预设（功能14） ---- 0=fast(ops3/64MB) 1=standard(ops4/128MB,默认) 2=strong(ops6/512MB)。 写入文件头，解密端自适应（v2+ 支持参数化）。
     int         kdf_preset = 1;
 
     // ---- 校验单（功能10）：加密成功后生成 <out>.ptd.sha256 ----

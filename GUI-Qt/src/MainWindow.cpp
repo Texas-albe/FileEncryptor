@@ -76,6 +76,7 @@
 #include <QDesktopServices>
 #include <QUrl>
 #include <QFile>
+#include <QTemporaryFile>
 #include <QThread>    // 批量线程数参考（CLI 侧同策略）
 #include <QTimer>
 #include <QtConcurrent/QtConcurrentRun>
@@ -1259,15 +1260,15 @@ QString MainWindow::resolveRecipients(const QString& raw) const {
         [](const QString& s){ return s.startsWith(QLatin1String("age1"))
                                   ||s.startsWith(QLatin1String("publickey:")); });
     if(!allKeys) return raw.trimmed();
-    if(!m_recipientTempFile.isEmpty()) QFile::remove(m_recipientTempFile);
-    const QString tmp=QDir::tempPath()+QStringLiteral("/fileencryptor_recipients_%1.txt")
-        .arg(QCoreApplication::applicationPid());
-    QSaveFile f(tmp);
-    if(!f.open(QIODevice::WriteOnly|QIODevice::Text)) return raw.trimmed(); // 写失败回退
-    for(const QString& k:parts) f.write((k+QLatin1Char('\n')).toUtf8());
-    if(!f.commit()) return raw.trimmed();
-    m_recipientTempFile=tmp;
-    return tmp;
+    if(!m_recipientTempFile.isEmpty()) { QFile::remove(m_recipientTempFile); m_recipientTempFile.clear(); }
+    // 用 QTemporaryFile 独占创建随机文件名，替代固定 <名>_<pid> 模板（共享 /tmp 下避免符号链接抢占）
+    QTemporaryFile recTmp(QDir::tempPath()+QStringLiteral("/fileencryptor_recipients_XXXXXX"));
+    recTmp.setAutoRemove(false);
+    if(!recTmp.open()) return raw.trimmed(); // 写失败回退
+    for(const QString& k:parts) recTmp.write((k+QLatin1Char('\n')).toUtf8());
+    recTmp.close();
+    m_recipientTempFile=recTmp.fileName();
+    return m_recipientTempFile;
 }
 
 // ---------- 运行 ----------
@@ -1378,7 +1379,15 @@ void MainWindow::onRunClicked() {
     req.arguments=CliArgBuilder::buildArguments(o);
     req.extraEnv=CliArgBuilder::buildEnvironment(o);
     // CLI 统计文件：批量结束时写 JSON（total_bytes/files_done/files_failed/files_skipped/total_files）
-    m_statsFile=QDir::tempPath()+QStringLiteral("/fe_stats_%1.json").arg(QCoreApplication::applicationPid());
+    // 统计文件路径：用 QTemporaryFile 独占创建随机名（关闭后保留空文件，由 CLI 写入、GUI 读取后删除）
+    {
+        QTemporaryFile statsTmp(QDir::tempPath()+QStringLiteral("/fe_stats_XXXXXX"));
+        statsTmp.setAutoRemove(false);
+        if(statsTmp.open()) {
+            m_statsFile=statsTmp.fileName();
+            statsTmp.close();
+        }
+    }
     req.extraEnv.insert(QStringLiteral("FILEENCRYPTOR_STATS_FILE"),m_statsFile);
     // 功能6：批量模式让 CLI 输出「帧式进度」（1 行汇总 + 每线程 1 行），
     // GUI 解析整帧后在拟 cmd 输出区原地刷新，字段与 CLI 终端显示完全一致。
@@ -1479,25 +1488,30 @@ void MainWindow::onRewrapClicked() {
         }
     }
 
-    // 新口令经临时密钥文件注入（CLI --new-key-file），结束后删除
-    const QString tmp=QDir::tempPath()+QStringLiteral("/fileencryptor_rewrap_%1.key")
-        .arg(QCoreApplication::applicationPid());
-    QFile::remove(tmp);
-    {
-        QSaveFile f(tmp);
-        if(!f.open(QIODevice::WriteOnly)) {
-            MsgBox::error(this,tr("密钥轮换"),tr("无法写入临时新口令文件。"));
-            secure_zero(oldPw.data(),oldPw.size()); oldPw.clear();
-            secure_zero(newPw.data(),newPw.size()); newPw.clear();
-            return;
-        }
-        f.write(reinterpret_cast<const char*>(newPw.data()),(qint64)newPw.size());
-        if(!f.commit()) {
-            MsgBox::error(this,tr("密钥轮换"),tr("无法落盘临时新口令文件。"));
-            secure_zero(oldPw.data(),oldPw.size()); oldPw.clear();
-            secure_zero(newPw.data(),newPw.size()); newPw.clear();
-            return;
-        }
+    // 新口令经临时密钥文件注入（CLI --new-key-file），结束后删除。
+    // 用 QTemporaryFile 独占创建不可预测文件名，消除 /tmp 下固定命名的符号链接抢占窗口；
+    // 显式收紧为 0600 权限，避免新口令明文被同机其他用户读取。关闭后不自动删除——子进程需经
+    // --new-key-file 路径读取，任务结束（成功/失败/取消）在 onCommandFinished、窗口关闭在 closeEvent 中立即 unlink。
+    QTemporaryFile rewTmp(QDir::tempPath()+QStringLiteral("/fileencryptor_rewrap_XXXXXX"));
+    rewTmp.setAutoRemove(false);
+    if(!rewTmp.open()) {
+        MsgBox::error(this,tr("密钥轮换"),tr("无法写入临时新口令文件。"));
+        secure_zero(oldPw.data(),oldPw.size()); oldPw.clear();
+        secure_zero(newPw.data(),newPw.size()); newPw.clear();
+        return;
+    }
+    rewTmp.setPermissions(QFileDevice::ReadOwner|QFileDevice::WriteOwner);
+    rewTmp.write(reinterpret_cast<const char*>(newPw.data()),(qint64)newPw.size());
+    rewTmp.flush();
+    const bool rewOk=(rewTmp.error()==QFile::NoError);
+    const QString tmp=rewTmp.fileName();
+    rewTmp.close();   // autoRemove=false：磁盘文件保留，交 m_rewrapTempKey 管理
+    if(!rewOk) {
+        QFile::remove(tmp);
+        MsgBox::error(this,tr("密钥轮换"),tr("无法落盘临时新口令文件。"));
+        secure_zero(oldPw.data(),oldPw.size()); oldPw.clear();
+        secure_zero(newPw.data(),newPw.size()); newPw.clear();
+        return;
     }
     secure_zero(newPw.data(),newPw.size()); newPw.clear();
 

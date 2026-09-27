@@ -59,7 +59,7 @@ QString FileEncryptorLocator::version() {
 
 // GUI 自身版本（与 GUI/CMakeLists.txt project VERSION 同步）；此前 main/MainWindow/AboutDialogs 三处硬编码兜底值不一致，现统一从本函数读取。
 QString FileEncryptorLocator::guiVersion() {
-    return QStringLiteral("2.0.1");
+    return QStringLiteral("2.0.2");
 }
 
 QString FileEncryptorLocator::cliDownloadUrl() {

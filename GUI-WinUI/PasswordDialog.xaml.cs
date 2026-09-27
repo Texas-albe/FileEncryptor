@@ -65,20 +65,48 @@ public sealed partial class PasswordDialog : ContentDialog
         var result = PasswordStrengthService.Evaluate(PwdBox.Password);
         if (result.Level == StrengthLevel.Empty) { StrengthText.Text = ""; return; }
         StrengthText.Text = $"强度：{result.Label}";
-        StrengthText.Foreground = new SolidColorBrush(
-            ColorHelper.FromArgb(0xFF,
-                byte.Parse(result.ColorHex.Substring(1, 2), System.Globalization.NumberStyles.HexNumber),
-                byte.Parse(result.ColorHex.Substring(3, 2), System.Globalization.NumberStyles.HexNumber),
-                byte.Parse(result.ColorHex.Substring(5, 2), System.Globalization.NumberStyles.HexNumber)));
+        StrengthText.Foreground = new SolidColorBrush(ParseColor(result.ColorHex));
+    }
+
+    // 仅接受 #RGB / #RRGGBB / #AARRGGBB，非法格式回退灰色，避免 Substring/Parse 越界
+    private static Windows.UI.Color ParseColor(string hex)
+    {
+        if (string.IsNullOrEmpty(hex) || hex[0] != '#') return Colors.Gray;
+        var d = hex.Substring(1);
+        if (d.Length == 6)
+        {
+            if (byte.TryParse(d.Substring(0, 2), System.Globalization.NumberStyles.HexNumber, null, out var r) &&
+                byte.TryParse(d.Substring(2, 2), System.Globalization.NumberStyles.HexNumber, null, out var g) &&
+                byte.TryParse(d.Substring(4, 2), System.Globalization.NumberStyles.HexNumber, null, out var b))
+                return Windows.UI.Color.FromArgb(0xFF, r, g, b);
+            return Colors.Gray;
+        }
+        if (d.Length == 8)
+        {
+            if (byte.TryParse(d.Substring(0, 2), System.Globalization.NumberStyles.HexNumber, null, out var a) &&
+                byte.TryParse(d.Substring(2, 2), System.Globalization.NumberStyles.HexNumber, null, out var r) &&
+                byte.TryParse(d.Substring(4, 2), System.Globalization.NumberStyles.HexNumber, null, out var g) &&
+                byte.TryParse(d.Substring(6, 2), System.Globalization.NumberStyles.HexNumber, null, out var b))
+                return Windows.UI.Color.FromArgb(a, r, g, b);
+            return Colors.Gray;
+        }
+        return Colors.Gray;
     }
 
     private void ValidateMatch()
     {
-        bool hasPwd = PwdBox.Password.Length >= 6;
-        bool match = PwdBox.Password == ConfirmBox.Password;
-        if (!hasPwd) { MatchText.Text = ""; IsPrimaryButtonEnabled = false; }
-        else if (string.IsNullOrEmpty(ConfirmBox.Password)) { MatchText.Text = ""; IsPrimaryButtonEnabled = false; }
-        else if (!match) { MatchText.Text = "两次输入的口令不一致"; IsPrimaryButtonEnabled = false; }
-        else { MatchText.Text = ""; IsPrimaryButtonEnabled = true; }
+        var pwd = PwdBox.Password;
+        if (pwd.Length < 6) { MatchText.Text = ""; IsPrimaryButtonEnabled = false; return; }
+        if (string.IsNullOrEmpty(ConfirmBox.Password)) { MatchText.Text = ""; IsPrimaryButtonEnabled = false; return; }
+        if (pwd != ConfirmBox.Password) { MatchText.Text = "两次输入的口令不一致"; IsPrimaryButtonEnabled = false; return; }
+        // 确认口令时同样走策略校验，避免 GUI 提前放行弱口令
+        if (!PasswordStrengthService.MeetsPolicy(pwd, out var reason))
+        {
+            MatchText.Text = reason;
+            IsPrimaryButtonEnabled = false;
+            return;
+        }
+        MatchText.Text = "";
+        IsPrimaryButtonEnabled = true;
     }
 }

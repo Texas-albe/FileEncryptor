@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstring>
 #include <sodium.h>
+#include "util/byte_io.hpp"
 
 // 格式级长度常量（libsodium 定值）
 inline constexpr size_t ARGON2_SALT_LEN  = crypto_pwhash_SALTBYTES;  // 16
@@ -149,25 +150,11 @@ bool wrap_dek(const unsigned char* dek, const unsigned char* kek,
 bool unwrap_dek(const unsigned char* box, const unsigned char* kek,
                 const unsigned char* nonce, unsigned char dek[32]);
 
-// 32 位整数的小端 / 大端字节序原语（压缩块长度前缀用小端，容器字段用大端）
-inline void put_le32(unsigned char* p, uint32_t v) {
-    p[0]=(unsigned char)(v&0xFF);
-    p[1]=(unsigned char)((v>>8)&0xFF);
-    p[2]=(unsigned char)((v>>16)&0xFF);
-    p[3]=(unsigned char)((v>>24)&0xFF);
-}
-inline uint32_t get_le32(const unsigned char* p) {
-    return (uint32_t)p[0] | ((uint32_t)p[1]<<8) | ((uint32_t)p[2]<<16) | ((uint32_t)p[3]<<24);
-}
-inline void put_be32(unsigned char* p, uint32_t v) {
-    p[0]=(unsigned char)((v>>24)&0xFF);
-    p[1]=(unsigned char)((v>>16)&0xFF);
-    p[2]=(unsigned char)((v>>8)&0xFF);
-    p[3]=(unsigned char)(v&0xFF);
-}
-inline uint32_t get_be32(const unsigned char* p) {
-    return ((uint32_t)p[0]<<24) | ((uint32_t)p[1]<<16) | ((uint32_t)p[2]<<8) | (uint32_t)p[3];
-}
+// 字节序原语统一由 util/byte_io.hpp 提供，此处转发保持调用方兼容。
+using fe::util::put_le32;
+using fe::util::get_le32;
+using fe::util::put_be32;
+using fe::util::get_be32;
 
 // 从字节缓冲装载磁盘头结构（strict-aliasing 安全）：禁止直接 reinterpret_cast
 // char[] 为 FileHeaderV*（GCC/Clang -fstrict-aliasing 下是 UB），memcpy 到本地 POD 后再读。

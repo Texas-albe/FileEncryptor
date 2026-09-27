@@ -43,9 +43,8 @@ bool secure_handle_source(const std::string& path, SourceDisposition disp) {
 #endif
     }
     if(disp==SourceDisposition::Wipe) {
-        // 多遍覆写（0x00 / 0xFF / 随机）后删除；任一遍写入失败即标记 wipe_failed，
-        // 但仍尝试删除文件避免明文残留，返回 false 告知调用者擦除不完整。
-        // 注意：SSD 上软件覆写仅 NIST Clear 级，因磨损均衡无法保证物理块被覆写。
+        // 多遍覆写（0x00 / 0xFF / 随机）后删除；任一遍写入失败即标记 wipe_failed， 但仍尝试删除文件避免明文残留，返回 false
+        // 告知调用者擦除不完整。 注意：SSD 上软件覆写仅 NIST Clear 级，因磨损均衡无法保证物理块被覆写。
 #ifdef _WIN32
         clear_readonly_attribute(path);
 #endif

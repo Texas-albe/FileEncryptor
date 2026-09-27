@@ -95,6 +95,8 @@ void derive_progress_auth_key(const unsigned char* master_key,
     std::vector<unsigned char> in(tag, tag+sizeof(tag)-1);
     in.insert(in.end(), master_key, master_key+ARGON2_OUTPUT_LEN);
     crypto_generichash(auth_key, crypto_auth_KEYBYTES, in.data(), in.size(), nullptr, 0);
+    // in 内含主密钥副本（普通堆 vector，未锁页、析构不清零）：散列后立即擦除，避免残留。
+    sodium_memzero(in.data(), in.size());
 }
 
 void derive_header_auth_key(const unsigned char* master_key,
@@ -103,4 +105,5 @@ void derive_header_auth_key(const unsigned char* master_key,
     std::vector<unsigned char> in(tag, tag+sizeof(tag)-1);
     in.insert(in.end(), master_key, master_key+ARGON2_OUTPUT_LEN);
     crypto_generichash(auth_key, HEADER_HMAC_SIZE, in.data(), in.size(), nullptr, 0);
+    sodium_memzero(in.data(), in.size());
 }

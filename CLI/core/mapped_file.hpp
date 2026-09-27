@@ -2,9 +2,8 @@
 #include <cstddef>
 #include <string>
 
-// MappedFile：跨平台内存映射文件，替代大文件全量读入。
-// Windows 用 CreateFileMapping/MapViewOfFile，Linux 用 mmap。
-// 映射整个文件为只读，data() 返回首地址，size() 返回文件大小。
+// MappedFile：跨平台内存映射文件，替代大文件全量读入。 Windows 用 CreateFileMapping/MapViewOfFile，Linux 用
+// mmap。 映射整个文件为只读，data() 返回首地址，size() 返回文件大小。
 class MappedFile {
 public:
     MappedFile() = default;

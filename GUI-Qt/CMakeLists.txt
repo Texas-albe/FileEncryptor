@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.16)
 
-project(FileEncryptorGUI VERSION 2.0.1 LANGUAGES CXX)
+project(FileEncryptorGUI VERSION 2.0.2 LANGUAGES CXX)
 
 # FileEncryptor GUI - Qt6 图形界面（Windows + Linux 双平台；Windows 另有 WinUI3 版本）
 

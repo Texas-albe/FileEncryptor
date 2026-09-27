@@ -1,5 +1,7 @@
 #include "mapped_file.hpp"
 #include <system_error>
+#include <cstdint>
+#include <climits>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -59,6 +61,10 @@ bool MappedFile::open(const std::string& path) {
     }
     LARGE_INTEGER sz;
     if (!GetFileSizeEx(file_handle_, &sz)) { error_ = "cannot get file size"; close(); return false; }
+    // 32 位构建下 size_t 仅 32 位：超过 SIZE_MAX 的文件直接拒绝映射，避免强转截断
+    if (sizeof(size_t) < sizeof(sz.QuadPart) && (uint64_t)sz.QuadPart > (uint64_t)SIZE_MAX) {
+        error_ = "file too large for memory mapping on this architecture"; close(); return false;
+    }
     size_ = (size_t)sz.QuadPart;
     if (size_ == 0) { error_ = "empty file"; close(); return false; }
 
@@ -72,6 +78,10 @@ bool MappedFile::open(const std::string& path) {
     if (fd_ < 0) { error_ = "cannot open file"; return false; }
     struct stat st;
     if (fstat(fd_, &st) != 0) { error_ = "cannot stat file"; close(); return false; }
+    // 32 位构建下拒绝超过 SIZE_MAX 的文件，避免 st_size 强转 size_t 截断
+    if (sizeof(size_t) < sizeof(st.st_size) && (uint64_t)st.st_size > (uint64_t)SIZE_MAX) {
+        error_ = "file too large for memory mapping on this architecture"; close(); return false;
+    }
     size_ = (size_t)st.st_size;
     if (size_ == 0) { error_ = "empty file"; close(); return false; }
     void* p = mmap(nullptr, size_, PROT_READ, MAP_PRIVATE, fd_, 0);

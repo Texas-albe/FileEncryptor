@@ -22,6 +22,9 @@
 #include "progress_frame.hpp"
 #include "ptd_format.hpp"
 #include "kdf.hpp"
+#include "util/byte_io.hpp"
+#include "util/hex.hpp"
+#include "secure_zero.hpp"
 #include <atomic>
 #include <thread>
 #include <mutex>
@@ -400,9 +403,9 @@ static std::vector<unsigned char> build_aad_with_metadata(
     std::vector<unsigned char> aad;
     aad.insert(aad.end(),hdr_ptr,hdr_ptr+hdr_len);
 
-    for(int i=0; i<4; ++i) aad.push_back((chunk_size>>(i*8))&0xFF);
-    for(int i=0; i<4; ++i) aad.push_back((total_chunks>>(i*8))&0xFF);
-    for(int i=0; i<8; ++i) aad.push_back((orig_size>>(i*8))&0xFF);
+    fe::util::write_u32_le(aad, chunk_size);
+    fe::util::write_u32_le(aad, total_chunks);
+    fe::util::write_u64_le(aad, orig_size);
     return aad;
 }
 
@@ -536,12 +539,82 @@ bool validate_io_paths(const std::string& in_path,const std::string& out_path,bo
     return true;
 }
 
-// 收紧新建输出文件的权限（避免半截明文被其他用户读取）；
+// 收紧新建输出文件的权限（避免半截明文被其他用户读取）。
+// Windows 复用密钥文件的 PROTECTED_DACL 实现（仅当前用户+SYSTEM），收紧半成品 .prt/输出文件 DACL。
 static void restrict_permissions(const std::string& path) {
-#ifndef _WIN32
+#ifdef _WIN32
+    tighten_file_permissions(path);
+#else
     chmod(path.c_str(),0600);
 #endif
 }
+
+// 删除前覆写文件内容（至少一遍零覆写），避免含明文的半成品被取证恢复。
+// SSD 磨损均衡使覆写不具密码学保证，此处为与源文件 Wipe 理念一致的尽力擦除。
+static void secure_wipe_and_remove(const std::string& path) {
+#ifdef _WIN32
+    const std::wstring w=utf8_to_wstring(path);
+    HANDLE h=CreateFileW(w.c_str(),GENERIC_WRITE,0,NULL,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,NULL);
+    if(h!=INVALID_HANDLE_VALUE) {
+        LARGE_INTEGER sz;
+        if(GetFileSizeEx(h,&sz)&&sz.QuadPart>0) {
+            unsigned char zbuf[64*1024];
+            memset(zbuf,0,sizeof(zbuf));
+            LARGE_INTEGER remain=sz;
+            while(remain.QuadPart>0) {
+                DWORD want=(DWORD)(remain.QuadPart<(LONGLONG)sizeof(zbuf)?remain.QuadPart:(LONGLONG)sizeof(zbuf));
+                DWORD wr=0;
+                if(!WriteFile(h,zbuf,want,&wr,NULL)||wr==0) break;
+                remain.QuadPart-=wr;
+            }
+            FlushFileBuffers(h);
+        }
+        CloseHandle(h);
+    }
+#else
+    int fd=::open(path.c_str(),O_WRONLY);
+    if(fd>=0) {
+        off_t sz=lseek(fd,0,SEEK_END);
+        if(sz>0) {
+            lseek(fd,0,SEEK_SET);
+            char zbuf[64*1024];
+            memset(zbuf,0,sizeof(zbuf));
+            off_t remain=sz;
+            while(remain>0) {
+                size_t want=(size_t)(remain<(off_t)sizeof(zbuf)?remain:(off_t)sizeof(zbuf));
+                ssize_t wr=::write(fd,zbuf,want);
+                if(wr<=0) break;
+                remain-=wr;
+            }
+            fsync(fd);
+        }
+        ::close(fd);
+    }
+#endif
+    remove_file_utf8(path);
+}
+
+// POSIX：创建输出文件前把进程 umask 收紧到 0077，使新建文件直接落 0600，
+// 消除"先 0644 再 chmod"的短暂可读窗口；作用域结束恢复原 umask。
+#ifndef _WIN32
+struct ScopedUmask {
+    mode_t old;
+    explicit ScopedUmask(mode_t m){ old=umask(m); }
+    ~ScopedUmask(){ umask(old); }
+};
+
+// POSIX：一次 open 同时完成"拒绝符号链接"与"0600 创建/截断"，消除 check 与 open 间的 TOCTOU。
+// 成功返回 true（文件已创建并截断为空）；最终分量为符号链接时 ELOOP 返回 false。
+static bool create_output_no_follow(const std::string& path) {
+    int fd=::open(path.c_str(),O_WRONLY|O_CREAT|O_NOFOLLOW|O_TRUNC,0600);
+    if(fd<0) {
+        if(errno==ELOOP) fprintf(stderr,"Refusing to write through existing symlink: %s\n",path.c_str());
+        return false;
+    }
+    ::close(fd);
+    return true;
+}
+#endif
 
 // ---------- 跨进程输出锁 ----------
 static bool process_alive_pid(int pid) {
@@ -588,8 +661,15 @@ static LockResult acquire_output_lock(const std::string& out_path,std::string& l
                 CloseHandle(h);
                 return LockResult::OK;
             }
-            // 回收后仍无法创建：权限 / 路径问题
-            return LockResult::CANNOT_CREATE;
+            // 回收与另一进程竞争重建：再试一次，仍失败视为被他人接管（LOCKED），而非误报无法创建
+            h=CreateFileW(w.c_str(),GENERIC_WRITE,0,NULL,CREATE_NEW,FILE_ATTRIBUTE_NORMAL,NULL);
+            if(h!=INVALID_HANDLE_VALUE) {
+                DWORD p2=GetCurrentProcessId(),wr;
+                WriteFile(h,&p2,sizeof(p2),&wr,NULL);
+                CloseHandle(h);
+                return LockResult::OK;
+            }
+            return LockResult::LOCKED;
         }
         // 锁仍被存活进程持有
         return LockResult::LOCKED;
@@ -611,6 +691,9 @@ static LockResult acquire_output_lock(const std::string& out_path,std::string& l
             close(fd);
             unlink(lock_path.c_str());
             fd=open(lock_path.c_str(),O_WRONLY|O_CREAT|O_EXCL,0600);
+            if(fd<0) {
+                fd=open(lock_path.c_str(),O_WRONLY|O_CREAT|O_EXCL,0600);
+            }
             if(fd>=0) {
                 int p2=getpid();
                 if(write(fd,&p2,sizeof(p2))<0) { /* best-effort lock write */ }
@@ -731,6 +814,8 @@ void anti_debug_check() {
     }
 #endif
 }
+
+bool g_force_decrypt = false;
 
 static void disable_core_dump() {
 #ifdef _WIN32
@@ -1037,6 +1122,8 @@ static void derive_name_key(const unsigned char* master_key,
     in.insert(in.end(), master_key, master_key+ARGON2_OUTPUT_LEN);
     crypto_generichash(name_key, crypto_aead_xchacha20poly1305_ietf_KEYBYTES,
         in.data(), in.size(), nullptr, 0);
+    // in 内含主密钥堆副本，散列后立即擦除
+    sodium_memzero(in.data(), in.size());
 }
 
 // 由文件 salt 派生"文件名加密"nonce（每文件唯一，杜绝 nonce 复用）
@@ -1066,14 +1153,11 @@ std::string make_obfuscated_basename(const std::string& in_path,const SecureBuff
     crypto_generichash(seed,sizeof(seed),
         reinterpret_cast<const unsigned char*>(in_path.data()),in_path.size(),
         key,sizeof(key));
-    static const char hexd[]="0123456789abcdef";
-    char name[17];
-    for(int i=0; i<8; ++i) {
-        name[i*2]=hexd[seed[i]>>4];
-        name[i*2+1]=hexd[seed[i]&0x0F];
-    }
-    name[16]='\0';
-    return std::string(name)+"."+OBFUSCATED_EXTS[seed[8]%OBFUSCATED_EXT_COUNT];
+    std::string result=fe::util::to_hex(seed, 8) + "." + OBFUSCATED_EXTS[seed[8] % OBFUSCATED_EXT_COUNT];
+    // key 为口令派生密钥材料、seed 由其派生：用毕清零栈上残留
+    sodium_memzero(key,sizeof(key));
+    sodium_memzero(seed,sizeof(seed));
+    return result;
 }
 
 // 用与主密文相同的 XChaCha20-Poly1305 加密原始文件名，写入文件末尾加密信封。
@@ -1099,7 +1183,7 @@ static bool append_encrypted_name_footer(std::fstream& fout,
     unsigned char tail[NAME_FOOTER_HDR];
     memcpy(tail,NAME_FOOTER_MAGIC_ENC,4);
     uint32_t n=(uint32_t)base.size();
-    for(int i=0; i<4; ++i) tail[4+i]=(unsigned char)((n>>(i*8))&0xFF);
+    put_le32(tail + 4, n);
     fout.seekp(0,std::ios::end);
     fout.write(reinterpret_cast<const char*>(env.data()), (std::streamsize)envlen);
     fout.write(reinterpret_cast<const char*>(tail),NAME_FOOTER_HDR);
@@ -1440,6 +1524,7 @@ bool rewrap_file(const std::string& ptd_path,
         unsigned char hdr_auth[HEADER_HMAC_SIZE];
         derive_header_auth_key(dek.data(), hdr_auth);
         crypto_auth(hdr + (HEADER_SIZE_V6 - HEADER_HMAC_SIZE), hdr, HEADER_HMAC_COVER_V6, hdr_auth);
+        sodium_memzero(hdr_auth,sizeof(hdr_auth));
     }
 
     // 落盘：从头写回完整 256 字节头部（plaintext_hash 保持原值不变）
@@ -1591,6 +1676,7 @@ bool encrypt_file(const std::string& in_path,
                     size_t cover = existing_is_v5 ? HEADER_HMAC_COVER_V5 : HEADER_HMAC_COVER;
                     hdr_ok=(crypto_auth_verify(existing_hdr_hmac,
                         reinterpret_cast<const unsigned char*>(&existing_v3),cover,hdr_auth)==0);
+                    sodium_memzero(hdr_auth,sizeof(hdr_auth));
                 }
                 if(hdr_ok && verify_progress_hmac(prog_info,auth_key.data(),prog_binding)
                     && prog_info.processed_chunks<=total_chunks
@@ -1616,6 +1702,7 @@ bool encrypt_file(const std::string& in_path,
                     derive_header_auth_key(key.data(),hdr_auth);
                     bool hdr_ok=(crypto_auth_verify(existing_hdr_hmac,
                         reinterpret_cast<const unsigned char*>(h),HEADER_HMAC_COVER_V6,hdr_auth)==0);
+                    sodium_memzero(hdr_auth,sizeof(hdr_auth));
                     if(hdr_ok && verify_progress_hmac(prog_info,auth_key.data(),prog_binding)
                         && prog_info.processed_chunks<=total_chunks
                         && prog_info.processed_bytes<=total_size) {
@@ -1758,6 +1845,13 @@ bool encrypt_file(const std::string& in_path,
         fout.seekp((std::streamoff)trunc_pos,std::ios::beg);
     }
     else {
+#ifndef _WIN32
+        ScopedUmask su(0077);
+        if(!create_output_no_follow(out_path)) {
+            fprintf(stderr,"Cannot create output file: %s\n",out_path.c_str());
+            return false;
+        }
+#endif
         if(!open_stream(fout,out_path,std::ios::out|std::ios::binary|std::ios::trunc)) {
             fprintf(stderr,"Cannot create output file: %s\n",out_path.c_str());
             return false;
@@ -1841,6 +1935,7 @@ bool encrypt_file(const std::string& in_path,
             derive_header_auth_key(key.data(),hdr_auth);
             crypto_auth(header.header_hmac,
                 reinterpret_cast<const unsigned char*>(&header),hdr_cover,hdr_auth);
+            sodium_memzero(hdr_auth,sizeof(hdr_auth));
         }
 
         if(!fout.write(reinterpret_cast<const char*>(&header),
@@ -2008,6 +2103,7 @@ bool encrypt_file(const std::string& in_path,
         derive_header_auth_key(key.data(),hdr_auth);
         crypto_auth(header.header_hmac,
             reinterpret_cast<const unsigned char*>(&header),hdr_cover,hdr_auth);
+        sodium_memzero(hdr_auth,sizeof(hdr_auth));
         outbuf.flush();   // 先把缓冲的密文落盘，再回头写头部哈希 / HMAC
         size_t hdr_size = use_v6 ? HEADER_SIZE_V6
                         : (do_compress?HEADER_SIZE_V5:HEADER_SIZE_V4);
@@ -2067,6 +2163,7 @@ bool decrypt_file(const std::string& in_path,
     const unsigned char* ext_key,
     const unsigned char* ext_kek, size_t ext_kek_len,
     bool verify_only) {
+    size_t force_skipped_chunks=0;
     disable_core_dump();
 
     // 依据 YAML 配置校验输入/输出路径（长度上限 / 白名单）
@@ -2367,6 +2464,7 @@ bool decrypt_file(const std::string& in_path,
             report_auth_error(silent, "Header authentication failed (file tampered or wrong key).");
             return false;
         }
+        sodium_memzero(hdr_auth,sizeof(hdr_auth));
     }
 
     // 跨进程锁 + 临时文件：解密先将明文写入 <out>.prt，全部校验通过后再原子重命名
@@ -2413,6 +2511,13 @@ bool decrypt_file(const std::string& in_path,
             return true;
         }
         std::ofstream fout;
+#ifndef _WIN32
+        ScopedUmask su_empty(0077);
+        if(!create_output_no_follow(part_path)) {
+            if(!silent) fprintf(stderr,"Cannot create output file: %s\n",out_path.c_str());
+            return false;
+        }
+#endif
         if(!open_stream(fout,part_path,std::ios::binary)) {
             if(!silent) fprintf(stderr,"Cannot create output file: %s\n",out_path.c_str());
             return false;
@@ -2488,6 +2593,13 @@ bool decrypt_file(const std::string& in_path,
         fout.seekp((std::streamoff)start_bytes,std::ios::beg);
     }
     else {
+#ifndef _WIN32
+        ScopedUmask su_prt(0077);
+        if(!create_output_no_follow(part_path)) {
+            if(!silent) fprintf(stderr,"Cannot create output file: %s\n",out_path.c_str());
+            return false;
+        }
+#endif
         if(!open_stream(fout,part_path,std::ios::out|std::ios::binary|std::ios::trunc)) {
             if(!silent) fprintf(stderr,"Cannot create output file: %s\n",out_path.c_str());
             return false;
@@ -2596,7 +2708,7 @@ bool decrypt_file(const std::string& in_path,
     }
     else {
         uint64_t idx=start_chunk;
-        for(int j=0; j<8&&j<(int)iv_len; ++j) nonce[iv_len-1-j]^=(unsigned char)((idx>>(j*8))&0xFF);
+        fe::util::xor_le64_tail(nonce, iv_len, idx);
     }
 
     for(uint32_t i=static_cast<uint32_t>(start_chunk); i<total_chunks; ++i) {
@@ -2630,7 +2742,7 @@ bool decrypt_file(const std::string& in_path,
             // 旧格式：每块重算 nonce = iv XOR i
             memcpy(nonce,iv_ptr,iv_len);
             uint64_t idx=i;
-            for(int j=0; j<8&&j<(int)iv_len; ++j) nonce[iv_len-1-j]^=(unsigned char)((idx>>(j*8))&0xFF);
+            fe::util::xor_le64_tail(nonce, iv_len, idx);
         }
 
         unsigned long long frame_len=0;   // AEAD 输出长度（压缩帧或未压缩明文）
@@ -2650,7 +2762,13 @@ bool decrypt_file(const std::string& in_path,
                 ciphertext_chunk.data(),expected_cipher_len,aad.data(),aad.size(),nonce,key.data());
             if(rc!=0) report_auth_error(silent, "XChaCha20 decryption failed at chunk " + std::to_string(i) + " (invalid key or corrupted data).");
         }
-        if(rc!=0) { ok=false; break; }
+        if(rc!=0) {
+            if(!g_force_decrypt) { ok=false; break; }
+            if(!silent) fprintf(stderr,"[force] chunk %u failed, zero-filled\n",i);
+            secure_zero(plaintext_chunk.data(), chunk_len);
+            frame_len=(unsigned long long)chunk_len;
+            ++force_skipped_chunks;
+        }
 
         // 解压（仅压缩块）：zstd 解压后的长度应等于本块明文长度 chunk_len
         const unsigned char* out_ptr=plaintext_chunk.data();
@@ -2659,15 +2777,19 @@ bool decrypt_file(const std::string& in_path,
 #ifdef FE_WITH_ZSTD
             unsigned long long dl=ZSTD_decompress(dec_chunk.data(),chunk_len,plaintext_chunk.data(),frame_len);
             if(ZSTD_isError(dl)) {
-                report_auth_error(silent, "zstd decompression failed at chunk " + std::to_string(i) + ".");
-                ok=false; break;
+                if(!g_force_decrypt) { report_auth_error(silent, "zstd decompression failed at chunk " + std::to_string(i) + "."); ok=false; break; }
+                if(!silent) fprintf(stderr,"[force] zstd failed at chunk %u, zero-filled\n",i);
+                out_ptr=plaintext_chunk.data();
+                out_len=chunk_len;
+                ++force_skipped_chunks;
+            } else {
+                if((size_t)dl!=chunk_len) {
+                    report_auth_error(silent, "Decompressed size mismatch at chunk " + std::to_string(i) + ".");
+                    ok=false; break;
+                }
+                out_ptr=dec_chunk.data();
+                out_len=chunk_len;
             }
-            if((size_t)dl!=chunk_len) {
-                report_auth_error(silent, "Decompressed size mismatch at chunk " + std::to_string(i) + ".");
-                ok=false; break;
-            }
-            out_ptr=dec_chunk.data();
-            out_len=chunk_len;
 #else
             report_auth_error(silent, "This file uses zstd compression but the binary was built without zstd.");
             ok=false; break;
@@ -2713,8 +2835,12 @@ bool decrypt_file(const std::string& in_path,
         unsigned char final_hash[HASH_SIZE];
         crypto_generichash_final(&hstate,final_hash,HASH_SIZE);
         if(ok && have_hash && sodium_memcmp(final_hash,stored_hash,HASH_SIZE)!=0) {
-            report_auth_error(silent, "Plaintext integrity check failed: recovered data does not match original.");
-            ok=false;
+            if(!g_force_decrypt) {
+                report_auth_error(silent, "Plaintext integrity check failed: recovered data does not match original.");
+                ok=false;
+            } else if(!silent) {
+                fprintf(stderr,"[force] integrity hash mismatch ignored (%zu chunk(s) recovered)\n",force_skipped_chunks);
+            }
         }
         // 自校验模式：无存储哈希可比对（理论上恒为 have_hash）时，至少核对总长度
         if(ok && verify_only && (uint64_t)processed_bytes!=(uint64_t)total_size) {
@@ -2743,7 +2869,7 @@ dec_cleanup:
         if(path_is_symlink(out_path)) {
             if(!silent) fprintf(stderr,"Refusing to overwrite existing symlink: %s\n",out_path.c_str());
             ok=false;
-            remove_file_utf8(part_path);
+            secure_wipe_and_remove(part_path);
         }
         else if(!replace_file_utf8(part_path,out_path)) {
             ok=false;
@@ -2754,8 +2880,8 @@ dec_cleanup:
         }
     }
     if(!ok) {
-        // 失败时只删除半成品（.prt），最终输出路径不写入任何明文
-        remove_file_utf8(part_path);
+        // 失败时覆写并删除半成品（.prt），最终输出路径不写入任何明文
+        secure_wipe_and_remove(part_path);
         remove_progress(out_path);
         if(!silent) {
             fprintf(stderr,"Decryption failed, partial output removed.\n");

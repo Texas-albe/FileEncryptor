@@ -80,12 +80,21 @@ bool read_key_material(const std::string& path, std::string& content, std::strin
         err = "Cannot open key file: " + path;
         return false;
     }
-    std::string buf((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
-    f.close();
-    if (buf.size() > 256 * 1024) {
-        err = "Key file too large (>256 KB): " + path;
-        return false;
+    // 流式分块读取：累计超过 256 KB 立即中断，避免大文件被完整读入内存后才拒绝
+    std::string buf;
+    char chunk[4096];
+    while (f.read(chunk, sizeof(chunk)) || f.gcount() > 0) {
+        std::streamsize got = f.gcount();
+        if (got > 0) {
+            buf.append(chunk, (size_t)got);
+            if (buf.size() > size_t(256 * 1024)) {
+                err = "Key file too large (>256 KB): " + path;
+                break;
+            }
+        }
     }
+    f.close();
+    if (buf.size() > size_t(256 * 1024)) return false;
     // 修剪首尾空白（含 CR/LF）；就地 erase + move 避免 substr 产生无法擦除的临时副本
     size_t a = 0, b = buf.size();
     while (a < b && (unsigned char)buf[a] <= 0x20) ++a;
@@ -160,6 +169,16 @@ bool keylib_valid_name(const std::string& name) {
     return true;
 }
 
+// 索引 file 字段复核：仅允许库内裸文件名——无目录分隔符、不含 ".."、以 .key 结尾。
+// 反序列化已落盘的 library.yaml 时重跑，防止被篡改的索引把材料路径指向库目录之外。
+static bool keylib_safe_file(const std::string& file) {
+    if (file.empty() || file.size() > 64) return false;
+    if (file.find('/') != std::string::npos || file.find('\\') != std::string::npos) return false;
+    if (file.find("..") != std::string::npos) return false;
+    if (file.size() < 4 || file.compare(file.size() - 4, 4, ".key") != 0) return false;
+    return true;
+}
+
 bool keylib_load(std::vector<KeyLibEntry>& out, std::string& err) {
     out.clear();
     const std::string path = keylib_index_path();
@@ -167,6 +186,20 @@ bool keylib_load(std::vector<KeyLibEntry>& out, std::string& err) {
     if (!file_exists(path)) return true;   // 空库
 
     try {
+        // YAML 别名炸弹防护：解析前预检索引大小 1 MB（与配置侧阈值一致），超限直接拒绝
+        {
+            std::ifstream chk;
+            open_stream(chk, path, std::ios::in | std::ios::binary);
+            if (chk) {
+                chk.seekg(0, std::ios::end);
+                const std::streampos sz = chk.tellg();
+                chk.close();
+                if (sz > std::streampos(1 << 20)) {
+                    err = "Key library index too large (>1 MB): " + path;
+                    return false;
+                }
+            }
+        }
         YAML::Node root = YAML::LoadFile(path);
         const YAML::Node keys = root["keys"];
         if (!keys || !keys.IsSequence()) return true;
@@ -181,6 +214,8 @@ bool keylib_load(std::vector<KeyLibEntry>& out, std::string& err) {
             e.created    = n["created"] ? n["created"].as<std::string>() : "";
             e.public_key = n["public"]  ? n["public"].as<std::string>() : "";
             if (e.name.empty() || e.file.empty() || e.kind.empty()) continue;   // 跳过残缺行
+            // 反序列化时重跑写入期校验：name/file 不合法的条目直接丢弃，不采信落盘索引
+            if (!keylib_valid_name(e.name) || !keylib_safe_file(e.file)) continue;
             if (!seen.insert(e.name).second) continue;                          // 重名取首条
             out.push_back(std::move(e));
         }

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.15)
-project(FileEncryptorCLI VERSION 2.4.3 LANGUAGES CXX)
+project(FileEncryptorCLI VERSION 2.4.4 LANGUAGES CXX)
 
 # FileEncryptor CLI - 命令行加密工具（独立项目），产出 FileEncryptorCLI(.exe)，GUI 经 QProcess 调用。
 # 静态链接 libsodium + yaml-cpp，二进制零外部依赖，可直接打包 DEB/RPM。
@@ -16,6 +16,24 @@ set(CMAKE_INTERPROCEDURAL_OPTIMIZATION_RELEASE ON)
 # 故强制以 UTF-8 读取源文件。
 if(MSVC)
   add_compile_options(/utf-8)
+endif()
+
+# ---------- 工程化开关 ----------
+# FE_ENABLE_ASAN：AddressSanitizer 构建（CI Linux 常态化跑往返）。
+#   GCC/Clang：-fsanitize=address；MSVC：/fsanitize=address。
+#   注意：MSVC 的 ASan 与静态 CRT (/MT) 不兼容，且本工程静态链接 libsodium(/MT)，
+#   因此 Windows 侧启用时会 WARNING 提示改用 Debug+动态依赖；CI 的 ASan job 只在 Linux。
+option(FE_ENABLE_ASAN "Build with AddressSanitizer" OFF)
+if(FE_ENABLE_ASAN)
+  if(MSVC)
+    message(WARNING "FE_ENABLE_ASAN: MSVC 下需与动态 CRT(/MD) 配合，且 libsodium 静态库为 /MT，"
+                    "Windows ASan 构建可能 LNK2038。CI 的 ASan 任务在 Linux 上运行。")
+    add_compile_options(/fsanitize=address)
+    add_link_options(/fsanitize=address)
+  else()
+    add_compile_options(-fsanitize=address -fno-omit-frame-pointer)
+    add_link_options(-fsanitize=address)
+  endif()
 endif()
 
 # 让 MSVC_RUNTIME_LIBRARY 目标属性生效（用于 Windows 静态链接时切换 /MT）
@@ -273,6 +291,7 @@ set(SOURCES
   core/progress_frame.cpp
   core/asym_crypto.cpp
   core/mapped_file.cpp
+  core/password_policy.cpp
   cli/main.cpp)
 
 # Windows 图标资源（嵌入 exe；Linux/macOS 无 .rc）
@@ -673,6 +692,34 @@ set(CPACK_RPM_PACKAGE_GROUP "Applications/System")
 set(CPACK_RPM_PACKAGE_AUTOREQ OFF)
 # 同时关闭自动 Provides/Requires，确保 RPM 不声明任何依赖
 set(CPACK_RPM_PACKAGE_AUTOREQPROV OFF)
+
+# ---------- 模糊测试 harness（可选） ----------
+# FE_BUILD_FUZZ=ON 构建 FileEncryptorFuzz：驱动 CLI/fuzz/fuzz_ptd_header.cpp。
+#   clang：直接加 -fsanitize=fuzzer,address，产出可喂给 libFuzzer 的二进制；
+#   其他编译器：编译出"读文件当输入"的独立驱动，可手工喂样本回归。
+# 只依赖 ptd_format + libsodium，不牵连 yaml-cpp/zstd/age，保持 harness 轻量。
+option(FE_BUILD_FUZZ "Build the fuzz harness (CLI/fuzz)" OFF)
+if(FE_BUILD_FUZZ)
+  add_executable(FileEncryptorFuzz
+    fuzz/fuzz_ptd_header.cpp
+    core/ptd_format.cpp)
+  target_include_directories(FileEncryptorFuzz PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/core ${SODIUM_INCLUDE_DIRS})
+  if(SODIUM_LINK_LIBRARY)
+    target_link_libraries(FileEncryptorFuzz PRIVATE ${SODIUM_LINK_LIBRARY})
+  else()
+    target_link_libraries(FileEncryptorFuzz PRIVATE ${SODIUM_LIBRARIES})
+  endif()
+  target_compile_definitions(FileEncryptorFuzz PRIVATE SODIUM_STATIC)
+  if(MSVC)
+    set_target_properties(FileEncryptorFuzz PROPERTIES
+      MSVC_RUNTIME_LIBRARY "MultiThreaded")
+  endif()
+  if(CMAKE_CXX_COMPILER_ID MATCHES "Clang" AND NOT MSVC)
+    target_compile_options(FileEncryptorFuzz PRIVATE -fsanitize=fuzzer,address)
+    target_link_options(FileEncryptorFuzz PRIVATE -fsanitize=fuzzer,address)
+  endif()
+endif()
 
 # 打包阶段剥离调试符号，减小包体积（仅作用于打包副本，不影响构建树中的二进制）
 set(CPACK_STRIP_FILES ON)

@@ -153,6 +153,7 @@ public sealed partial class MainWindow : Window
 
     private async System.Threading.Tasks.Task DownloadCliFromGithub(TextBlock statusText, ProgressBar progress)
     {
+        string? tempPath = null;
         try
         {
             statusText.Text = "正在从 GitHub 检索可用版本…";
@@ -184,15 +185,58 @@ public sealed partial class MainWindow : Window
                 { downloadUrl = a.GetProperty("browser_download_url").GetString(); fileName = an; break; }
             }
             if (downloadUrl == null) { statusText.Text = "未找到当前平台的 CLI 包"; return; }
+
+            // 下载域名白名单：防止 release 数据被篡改后指向任意地址
+            if (!IsAllowedDownloadHost(downloadUrl))
+            {
+                statusText.Text = "下载链接域名不在白名单内，已中止";
+                return;
+            }
+            // 文件名净化：只取基名，拒绝路径分隔符/目录穿越
+            fileName = Path.GetFileName(fileName.Trim());
+            if (string.IsNullOrEmpty(fileName) || fileName.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0)
+            {
+                statusText.Text = "下载文件名非法，已中止";
+                return;
+            }
+
             statusText.Text = $"下载中：{fileName}";
             progress.Visibility = Visibility.Visible;
+
+            // 先下载到临时文件，校验通过后再原子移动到目标位置
+            tempPath = Path.Combine(Path.GetTempPath(), $"fe_cli_{Guid.NewGuid():N}.tmp");
             var bytes = await http.GetByteArrayAsync(downloadUrl);
+            progress.Value = 60;
+
+            // 尝试同名 .sha256 校验；不存在则跳过校验并记录警告
+            var expectedHash = await TryFetchSha256(http, downloadUrl);
+            if (expectedHash != null)
+            {
+                using var sha = System.Security.Cryptography.SHA256.Create();
+                var actualHash = Convert.ToHexString(sha.ComputeHash(bytes)).ToLowerInvariant();
+                if (!string.Equals(actualHash, expectedHash, StringComparison.OrdinalIgnoreCase))
+                {
+                    statusText.Text = "SHA256 校验失败，下载内容已被丢弃";
+                    return;
+                }
+            }
+            else
+            {
+                System.Diagnostics.Debug.WriteLine("CLI release 未提供 .sha256 清单，跳过完整性校验");
+            }
+
+            await File.WriteAllBytesAsync(tempPath, bytes);
+            var savePath = Path.Combine(AppContext.BaseDirectory, fileName);
+            File.Move(tempPath, savePath, overwrite: true);
+            tempPath = null;
             progress.Value = 100;
-            var savePath = System.IO.Path.Combine(AppContext.BaseDirectory, fileName);
-            System.IO.File.WriteAllBytes(savePath, bytes);
             statusText.Text = $"下载完成：{fileName}";
         }
         catch (Exception ex) { statusText.Text = $"下载失败：{ex.Message}"; }
+        finally
+        {
+            try { if (tempPath != null && File.Exists(tempPath)) File.Delete(tempPath); } catch { }
+        }
     }
 
     // ===== 密码请求 =====
@@ -557,13 +601,45 @@ public sealed partial class MainWindow : Window
         if (string.IsNullOrEmpty(path) || !File.Exists(path)) return;
         try
         {
+            var uri = new Uri(path);
+            // 仅允许本地文件，拒绝 http/https 等远程 scheme 触发额外出网请求
+            if (!uri.IsFile) return;
             var bitmap = new BitmapImage();
-            bitmap.UriSource = new Uri(path);
+            bitmap.UriSource = uri;
             _backgroundBrush.ImageSource = bitmap;
             _backgroundBrush.Stretch = Stretch.UniformToFill;
             _backgroundBrush.Opacity = 1.0;
         }
         catch { /* ignore */ }
     }
-}
 
+    // 下载域名白名单：仅 GitHub 官方 release/CDN 地址
+    private static bool IsAllowedDownloadHost(string url)
+    {
+        try
+        {
+            var host = new Uri(url).Host;
+            return host.Equals("github.com", StringComparison.OrdinalIgnoreCase)
+                || host.EndsWith(".github.com", StringComparison.OrdinalIgnoreCase)
+                || host.Equals("objects.githubusercontent.com", StringComparison.OrdinalIgnoreCase)
+                || host.EndsWith(".objects.githubusercontent.com", StringComparison.OrdinalIgnoreCase);
+        }
+        catch { return false; }
+    }
+
+    // 尝试拉取同名 .sha256 清单；不存在或不可信时返回 null
+    private static async System.Threading.Tasks.Task<string?> TryFetchSha256(System.Net.Http.HttpClient http, string assetUrl)
+    {
+        try
+        {
+            var shaUrl = assetUrl + ".sha256";
+            if (!IsAllowedDownloadHost(shaUrl)) return null;
+            var text = await http.GetStringAsync(shaUrl);
+            // 清单可能是 "<hash>  filename" 形式，取首个 token
+            var token = text.Trim().Split(new[] { ' ', '\t', '\r', '\n' }, 2)[0];
+            if (token.Length == 64) return token.ToLowerInvariant();
+            return null;
+        }
+        catch { return null; }
+    }
+}

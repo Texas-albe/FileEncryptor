@@ -209,9 +209,7 @@ static std::string pad_left(const std::string& s, size_t w) {
     return std::string(w - cur, ' ') + s;
 }
 
-// ---------- 帧布局 ----------
-// 四列：路径 | 进度条 | 速率 | ETA。路径/进度条按终端宽度分配（进度条约 40%），
-// 速率/ETA 固定宽，保证各行列对齐不跳动。
+// ---------- 帧布局 ---------- 四列：路径 | 进度条 | 速率 | ETA。路径/进度条按终端宽度分配（进度条约 40%）， 速率/ETA 固定宽，保证各行列对齐不跳动。
 namespace {
 constexpr int kRateW = 12;   // "123.45 MB/s"
 constexpr int kEtaW  = 11;   // "ETA 1:02:03"
