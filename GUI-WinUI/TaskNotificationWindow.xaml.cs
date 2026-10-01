@@ -20,7 +20,7 @@ public sealed partial class TaskNotificationWindow : Window
         // Acrylic 背景
         SystemBackdrop = new DesktopAcrylicBackdrop();
 
-        // 完全移除标题栏和边框（无系统按钮、无边框）
+        // 无边框无标题栏
         if (AppWindow.Presenter is OverlappedPresenter presenter)
         {
             presenter.SetBorderAndTitleBar(hasBorder: false, hasTitleBar: false);
@@ -30,14 +30,14 @@ public sealed partial class TaskNotificationWindow : Window
             presenter.IsResizable = false;
         }
 
-        // 定位到屏幕右下角；多显示器/远程会话等异常配置下 GetFromWindowId 可能返回 null，回退到默认工作区尺寸
+        // 定位到屏幕右下角
         var displayArea = DisplayArea.GetFromWindowId(AppWindow.Id, DisplayAreaFallback.Nearest);
         var work = displayArea?.WorkArea ?? new Windows.Graphics.RectInt32(0, 0, 1920, 1080);
         int x = work.X + work.Width - 300 - Margin;
         int y = work.Y + work.Height - 75 - Margin;
         AppWindow.MoveAndResize(new Windows.Graphics.RectInt32(x, y, 300, 75));
 
-        // 退出动画结束后关闭
+        // 退出动画后关闭
         ExitStoryboard.Completed += (_, _) => Close();
 
         // 进入动画

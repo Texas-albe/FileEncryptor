@@ -12,6 +12,7 @@
 #include <fstream>
 #include <set>
 #include <cctype>
+#include <functional>
 
 namespace {
 
@@ -169,7 +170,7 @@ bool keylib_valid_name(const std::string& name) {
     return true;
 }
 
-// 索引 file 字段复核：仅允许库内裸文件名——无目录分隔符、不含 ".."、以 .key 结尾。
+// 索引 file 字段复核：仅允许库内裸文件名 无目录分隔符、不含 ".."、以 .key 结尾。
 // 反序列化已落盘的 library.yaml 时重跑，防止被篡改的索引把材料路径指向库目录之外。
 static bool keylib_safe_file(const std::string& file) {
     if (file.empty() || file.size() > 64) return false;
@@ -201,6 +202,29 @@ bool keylib_load(std::vector<KeyLibEntry>& out, std::string& err) {
             }
         }
         YAML::Node root = YAML::LoadFile(path);
+        // 纵深防御：1MiB 预检不挡 YAML 别名炸弹（指针/锚点可把小文件膨胀成巨树）。
+        // 解析后遍历计数节点总数，超限直接拒绝，限制别名展开造成的内存膨胀。
+        {
+            const size_t MAX_YAML_NODES = 10000;
+            size_t count = 0;
+            std::function<void(const YAML::Node&)> walk = [&](const YAML::Node& n) {
+                if (count > MAX_YAML_NODES) return;
+                ++count;
+                if (n.IsSequence() || n.IsMap()) {
+                    for (const auto& child : n) {
+                        // Map 节点的 key 也作为独立子节点计数
+                        if (n.IsMap()) walk(child.first);
+                        walk(child.second);
+                        if (count > MAX_YAML_NODES) return;
+                    }
+                }
+            };
+            walk(root);
+            if (count > MAX_YAML_NODES) {
+                err = "Key library index has too many YAML nodes (possible alias explosion): " + path;
+                return false;
+            }
+        }
         const YAML::Node keys = root["keys"];
         if (!keys || !keys.IsSequence()) return true;
         std::set<std::string> seen;

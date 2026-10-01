@@ -1,4 +1,3 @@
-// ProcessCommandExecutor 实现
 #include "ProcessCommandExecutor.h"
 #include <QTextStream>
 #include <QByteArray>
@@ -11,7 +10,6 @@ ProcessCommandExecutor::~ProcessCommandExecutor() {
 }
 
 void ProcessCommandExecutor::execute(const CommandRequest& request) {
-    // 若已有进程在跑，先清理（不应发生，防御性）
     if (m_process) {
         cleanup();
     }
@@ -25,7 +23,7 @@ void ProcessCommandExecutor::execute(const CommandRequest& request) {
 
     m_process = new QProcess(this);
 
-    // 合并环境变量：继承父进程环境 + 注入 extraEnv（GUI 已不再经环境变量传递密钥）
+    // 合并环境变量
     QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
     const QStringList keys = request.extraEnv.keys();
     for (const QString& k : keys) {
@@ -38,7 +36,7 @@ void ProcessCommandExecutor::execute(const CommandRequest& request) {
         m_process->setWorkingDirectory(request.workingDirectory);
     }
 
-    // 异步读取 stdout/stderr（分开处理：stdout 默认色，stderr 红色）
+    // 异步读取 stdout/stderr
     m_process->setProcessChannelMode(QProcess::SeparateChannels);
 
     connect(m_process, &QProcess::readyReadStandardOutput,
@@ -50,15 +48,12 @@ void ProcessCommandExecutor::execute(const CommandRequest& request) {
     connect(m_process, &QProcess::errorOccurred,
             this, &ProcessCommandExecutor::onErrorOccurred);
 
-    // 启动子进程。
     m_process->start();
-    // 安全通道：若请求携带 stdin 数据（密钥/身份私钥），写入后关闭写通道，子进程据此从 stdin 读取密钥材料（--key-stdin）。
-    // 密钥不进环境变量/命令行；即使无数据也关闭写通道，保持"stdin 已关闭"语义，防止子进程交互式读取阻塞。
+    // 写入 stdin 后关闭写通道
     if (!request.stdinData.isEmpty()) {
         m_process->write(request.stdinData);
     }
     m_process->closeWriteChannel();
-    // 启动是异步的；路径错误等失败经 errorOccurred -> Finished 处理
 }
 
 void ProcessCommandExecutor::cancel() {
@@ -66,7 +61,7 @@ void ProcessCommandExecutor::cancel() {
         return;
     }
     m_cancelled = true;
-    // kill 进程树（跨平台：Linux kill 子进程，Windows taskkill /T 或 TerminateProcess）
+    // kill 进程树
     m_process->kill();
 }
 
@@ -76,7 +71,7 @@ bool ProcessCommandExecutor::isRunning() const {
 
 void ProcessCommandExecutor::onReadyReadStandardOutput() {
     if (!m_process) return;
-    // CLI 全程以 UTF-8 输出（Windows 已 SetConsoleOutputCP(CP_UTF8)）；必须用 fromUtf8 而非 fromLocal8Bit，否则 Windows 按 GBK、Linux 按 locale 解析会把中文解成乱码。
+    // CLI 输出按 UTF-8 解码
     m_outBuffer.append(QString::fromUtf8(m_process->readAllStandardOutput()));
     flushLines(m_outBuffer, false);
 }
@@ -88,12 +83,12 @@ void ProcessCommandExecutor::onReadyReadStandardError() {
 }
 
 void ProcessCommandExecutor::flushLines(QString& buffer, bool isError) {
-    // 切分策略（顺序重要）：先按 \n 切出完整行（帧哨兵是整行，必须按行识别）；再处理缓冲区里"最后一个 \r 之前"的残留——CLI 单行进度条以 \r 原地刷新不带换行，若等 \n 才处理会在结束时才一次性刷出。
+    // 按行切分进度帧
     int nl;
     while ((nl = buffer.indexOf(QLatin1Char('\n'))) != -1) {
         QString line = buffer.left(nl);
         buffer.remove(0, nl + 1);
-        if (line.endsWith(QLatin1Char('\r'))) line.chop(1);   // 兼容 CRLF
+        if (line.endsWith(QLatin1Char('\r'))) line.chop(1);
         handleLine(line, isError);
     }
     const int lastCr = buffer.lastIndexOf(QLatin1Char('\r'));
@@ -113,7 +108,7 @@ void ProcessCommandExecutor::flushLines(QString& buffer, bool isError) {
 }
 
 void ProcessCommandExecutor::handleLine(const QString& line, bool isError) {
-    // 帧哨兵：BEGIN 与 END 之间的行即一帧（汇总行 + 每线程行），整帧一次性发出
+    // 收集帧内行
     if (line == QLatin1String(feFrameBeginMarker())) {
         m_frameLines.clear();
         m_inFrame = true;
@@ -130,7 +125,7 @@ void ProcessCommandExecutor::handleLine(const QString& line, bool isError) {
         m_frameLines << line;
         return;
     }
-    // 普通行：行内的 \r 段按旧语义处理（原地刷新单行进度条）
+    // 普通行按 \r 刷新
     int start = 0;
     int cr;
     while ((cr = line.indexOf(QLatin1Char('\r'), start)) != -1) {
@@ -144,7 +139,7 @@ void ProcessCommandExecutor::handleLine(const QString& line, bool isError) {
 
 void ProcessCommandExecutor::onFinished(int exitCode, QProcess::ExitStatus exitStatus) {
     Q_UNUSED(exitStatus);
-    // 刷出残余半行（同样按 \r / \n 切分，保证末尾进度行正确刷新而非重复堆积）
+    // 刷出残余半行
     if (!m_outBuffer.isEmpty()) {
         flushLines(m_outBuffer, false);
         if (!m_outBuffer.isEmpty()) {
@@ -154,7 +149,7 @@ void ProcessCommandExecutor::onFinished(int exitCode, QProcess::ExitStatus exitS
             m_outBuffer.clear();
         }
     }
-    // 进程被中断（取消/崩溃）时可能有未闭合的帧：把已收到的半帧补发出去
+    // 补发未闭合的半帧
     if (m_inFrame && !m_frameLines.isEmpty()) {
         m_inFrame = false;
         emit outputLine(OutputLine{m_frameLines.join(QLatin1Char('\n')), false, false, true});
@@ -177,7 +172,7 @@ void ProcessCommandExecutor::onFinished(int exitCode, QProcess::ExitStatus exitS
 }
 
 void ProcessCommandExecutor::onErrorOccurred(QProcess::ProcessError error) {
-    // 启动失败 / 崩溃等。被取消时 kill 会触发 Crashed，但 m_cancelled 已置位，按取消处理。
+    // 启动失败处理
     if (m_cancelled) {
         return;
     }
@@ -199,8 +194,7 @@ void ProcessCommandExecutor::onErrorOccurred(QProcess::ProcessError error) {
 }
 
 void ProcessCommandExecutor::emitFinished(const CommandResult& r) {
-    // finished 保证每次 execute() 至多发一次：崩溃等场景 errorOccurred 与 finished 可能先后到达或 errorOccurred 多次触发，
-    // 此前两条路径都走 emitFinished 会导致上层把一次任务当成两次结束（进度条提前归零、取消按钮错乱、输出窗口重置两次）。
+    // finished 至多发一次
     if (m_finishedEmitted) {
         return;
     }
@@ -211,12 +205,10 @@ void ProcessCommandExecutor::emitFinished(const CommandResult& r) {
 
 void ProcessCommandExecutor::cleanup() {
     if (m_process) {
-        // 断开信号，防止 cleanup 过程中触发
         m_process->disconnect(this);
         if (m_process->state() != QProcess::NotRunning) {
             m_process->kill();
-            // 仅短暂等待子进程退出，避免阻塞调用线程（取消/析构路径）过久。
-            // 200ms 足够正常终止；超时则由后续 deleteLater 兜底回收。
+            // 短暂等待后兜底回收
             m_process->waitForFinished(200);
         }
         m_process->deleteLater();

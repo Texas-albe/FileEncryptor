@@ -1,4 +1,4 @@
-// EtaEstimator 实现（功能6）
+// EtaEstimator 实现
 #include "EtaEstimator.h"
 
 #include <QObject>
@@ -6,16 +6,15 @@
 #include <cmath>
 
 namespace {
-// 最近样本上限：越多越平滑，但过旧样本可能来自完全不同的硬件/场景
 const int kMaxSamples=10;
 
-// 一条记录是否可作为速率样本：必须完整成功、有字节量与耗时
+// 筛选可用速率样本
 bool usableSample(const TaskRecord& r) {
     return r.status==QStringLiteral("success") && !r.cancelled
            && r.totalBytes>0 && r.durationMs>0;
 }
 
-// 取吞吐中位数（比均值抗离群：一次异常慢的任务不会拖垮后续所有预估）
+// 取吞吐中位数抗离群
 double medianRate(const QVector<TaskRecord>& recs,int limit) {
     QVector<double> rates;
     rates.reserve(limit);
@@ -30,7 +29,7 @@ double medianRate(const QVector<TaskRecord>& recs,int limit) {
     return (n%2) ? rates[n/2] : (rates[n/2-1]+rates[n/2])/2.0;
 }
 
-// 分层取样：先 action+mode，再 action，最后全体
+// 分层取样
 double pickRate(const QString& action,const QString& mode,
                 const QVector<TaskRecord>& history,int* sampleCount) {
     QVector<TaskRecord> exact,byAction;
@@ -56,7 +55,7 @@ double pickRate(const QString& action,const QString& mode,
     if(sampleCount) *sampleCount=used;
     return rate;
 }
-} // namespace
+}
 
 EtaEstimator::Estimate EtaEstimator::estimate(qint64 bytes,const QString& action,
                                               const QString& mode,
@@ -64,7 +63,7 @@ EtaEstimator::Estimate EtaEstimator::estimate(qint64 bytes,const QString& action
     Estimate e;
     if(bytes<=0) return e;
     const double rate=pickRate(action,mode,history,&e.sampleCount);
-    if(rate<=0.0) return e;      // 无样本 → 无法预估
+    if(rate<=0.0) return e;
     e.bytesPerSec=rate;
     e.totalMs=static_cast<qint64>(std::llround(static_cast<double>(bytes)/rate*1000.0));
     e.remainingMs=e.totalMs;
@@ -75,14 +74,14 @@ EtaEstimator::Estimate EtaEstimator::estimate(qint64 bytes,const QString& action
 EtaEstimator::Estimate EtaEstimator::fromProgress(int done,int total,qint64 elapsedMs,
                                                   const Estimate& hist) {
     Estimate e=hist;
-    if(done<=0||total<=0||elapsedMs<=0) return e;   // 尚无进度 → 沿用历史预估
+    if(done<=0||total<=0||elapsedMs<=0) return e;
     if(done>=total) { e.remainingMs=0; e.totalMs=elapsedMs; e.valid=true; e.fromProgress=true; return e; }
 
-    // 按完成比例外推总耗时；再与历史预估做加权（进度越多越信任实时值）
+    // 按完成比例外推并加权
     const double frac=static_cast<double>(done)/static_cast<double>(total);
     const qint64 liveTotal=static_cast<qint64>(std::llround(static_cast<double>(elapsedMs)/frac));
     if(hist.valid) {
-        const double w=frac;    // 进度权重
+        const double w=frac;
         e.totalMs=static_cast<qint64>(std::llround(liveTotal*w+hist.totalMs*(1.0-w)));
     } else {
         e.totalMs=liveTotal;

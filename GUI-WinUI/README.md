@@ -4,7 +4,7 @@ Windows 平台的 FileEncryptor 图形界面，基于 **WinUI 3 (Windows App SDK
 
 Linux 平台的 Qt6 版本见 [`../GUI-Qt/`](../GUI-Qt/)。
 
-- 程序版本 **2.0.0**（配套 CLI 2.4.2）。
+- 程序版本 **2.0.3**（配套 CLI 2.4.5）。
 
 ## 项目定位
 
@@ -13,8 +13,8 @@ Linux 平台的 Qt6 版本见 [`../GUI-Qt/`](../GUI-Qt/)。
 | 项目 | 产物 | 技术栈 |
 |---|---|---|
 | `../CLI/` | `FileEncryptorCLI.exe` | C++17 / CMake / libsodium |
-| **本项目** | `FileEncryptorGUI-2.0.0-WinUI-Windows.exe` | C# / .NET 8 / WinUI 3 |
-| `../GUI-Qt/` | `FileEncryptorGUI-2.0.0-Qt-Linux` | C++ / Qt6 |
+| **本项目** | `FileEncryptorGUI-2.0.3-WinUI-Windows.msi` | C# / .NET 8 / WinUI 3 |
+| `../GUI-Qt/` | `FileEncryptorGUI-2.0.3-Qt-Linux` | C++ / Qt6 |
 
 ## 功能
 
@@ -27,11 +27,12 @@ Linux 平台的 Qt6 版本见 [`../GUI-Qt/`](../GUI-Qt/)。
 - 磨砂玻璃背景（Acrylic），支持自定义背景图
 - 默认深色主题
 - 文件列表勾选：仅勾选的条目参与执行
-- 命令预览实时显示当前参数，运行时输出首行为完整命令
+- 命令预览实时显示当前参数
+- 在系统控制台窗口中运行 CLI：进度、结果与提示实时可见，任务结束后窗口保留 3 秒再关闭
+- 界面语言 简体中文 / English，切换即时生效，无需重启
 - 任务历史：清空全部、右键删除、双击回放全部参数
 - 任务完成汇总弹窗（用时、平均速度、加密后大小、完成/跳过/失败）
 - 密码强度评估、确认密码、内置显示密码按钮
-- 进度实时回显（直接控制台执行）
 - 拖放文件、SHA256 校验单
 
 ## 构建

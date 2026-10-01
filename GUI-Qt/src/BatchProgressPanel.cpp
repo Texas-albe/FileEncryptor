@@ -1,5 +1,4 @@
-// BatchProgressPanel 实现（GUI 1.3.0）
-// 格式化与列宽算法与 CLI core/progress_frame.cpp 一一对应，改一处必须同步另一处。
+// BatchProgressPanel 实现
 #include "BatchProgressPanel.h"
 #include "FontBootstrap.h"
 
@@ -8,7 +7,6 @@
 #include <QLabel>
 #include <QVBoxLayout>
 
-// 与 CLI progress_frame.cpp 中的常量保持一致
 namespace {
 constexpr int kRateW = 12;
 constexpr int kEtaW  = 11;
@@ -39,7 +37,7 @@ BatchProgressPanel::BatchProgressPanel(QWidget* parent) : QWidget(parent) {
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
 }
 
-// ---------- 格式化（镜像 CLI fmt_bytes / fmt_rate / fmt_eta）----------
+// 格式化
 static QString fmtValue(double v, const QString& unit) {
     if (v < 10.0)       return QString::number(v, 'f', 2) + QStringLiteral(" ") + unit;
     else if (v < 100.0) return QString::number(v, 'f', 1) + QStringLiteral(" ") + unit;
@@ -77,7 +75,7 @@ QString BatchProgressPanel::fmtEta(double seconds) {
     return QString::asprintf("%02lld:%02lld", m, s);
 }
 
-// ---------- 列宽（镜像 CLI build_lines 的分配规则）----------
+// 列宽
 BatchProgressPanel::Layout BatchProgressPanel::layoutFor(int columns) {
     Layout L;
     int avail = columns - kRateW - kEtaW - 3 * kSepW;
@@ -126,7 +124,7 @@ QString BatchProgressPanel::idleLine(int columns) {
          + padLeft(QStringLiteral("ETA --:--"), kEtaW);
 }
 
-// ---------- 行管理 ----------
+// 行管理
 void BatchProgressPanel::ensureRows(int n) {
     while (m_rows.size() > n) {
         QLabel* l = m_rows.takeLast();
@@ -171,7 +169,6 @@ void BatchProgressPanel::setColumns(int columns) {
     if (columns < kMinColumns) columns = kMinColumns;
     if (columns > kMaxColumns) columns = kMaxColumns;
     m_columns = columns;
-    // 已存在的空闲行按新列宽重排，避免运行中改宽度时列错位
     const QString idle = idleLine(m_columns);
     for (QLabel* l : m_rows) l->setText(idle);
 }

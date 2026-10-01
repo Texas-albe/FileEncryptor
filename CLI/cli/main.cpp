@@ -15,6 +15,7 @@
 #include <iterator>
 #include <sodium.h>
 #include <stdexcept>
+#include <ctime>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -151,7 +152,7 @@ static void print_usage() {
         <<"                    ignore final integrity hash. WARNING: output may be incomplete.\n"
         <<"  -k <keyfile>      Read key material from file (non-interactive; alt: ENCRYPTOR_KEY env / --key-stdin)\n"
         <<"                      -m rage decrypt: this is the private key file (AGE-SECRET-KEY-...)\n"
-        <<"  -K <name>[,...]   Resolve keys from the local key library (功能1):\n"
+        <<"  -K <name>[,...]   Resolve keys from the local key library:\n"
         <<"                      -m rage encrypt: recipient/identity names, comma-separated\n"
         <<"                      -m rage decrypt: one identity name (same as -k <library key>)\n"
         <<"  -r <pub|file>     Public key for -m rage encrypt: an \"age1...\" string, or a file\n"
@@ -372,17 +373,17 @@ static bool run_asym(const std::vector<std::string>& input_paths,
         }
 
         // v2.1.2：路径策略校验 + 符号链接守卫（此前 rage 分支完全没有，可整体绕过白名单）
-        //  1) 输入路径的 ".." 穿越（此前仅 -o 在参数解析处查过，in_path 从未查）
+        // 1) 输入路径的 ".." 穿越（此前仅 -o 在参数解析处查过，in_path 从未查）
         if(path_has_traversal(in_path)) {
             std::cerr<<"Path contains directory traversal (..): "<<in_path<<"\n";
             all_ok=false; continue;
         }
-        //  2) 白名单 / max_path_length（与对称路径同一套 validate_io_paths）
+        // 2) 白名单 / max_path_length（与对称路径同一套 validate_io_paths）
         if(!validate_io_paths(in_path,out_path,false)) {
             std::cerr<<"Path validation failed (config policy)\n";
             all_ok=false; continue;
         }
-        //  3) 拒绝写入既有的符号链接 / 重解析点（否则明文会被重定向到攻击者指定路径）
+        // 3) 拒绝写入既有的符号链接 / 重解析点（否则明文会被重定向到攻击者指定路径）
         if(path_is_symlink(out_path)) {
             std::cerr<<"Refusing to write through existing symlink: "<<out_path<<"\n";
             all_ok=false; continue;
@@ -399,16 +400,21 @@ static bool run_asym(const std::vector<std::string>& input_paths,
             }
         }
 
-        // v2.1.2：先写 .prt 再原子替换——避免中断时留下半截（明文）输出被误认为成品。
+        // v2.1.2：先写 .prt 再原子替换 避免中断时留下半截（明文）输出被误认为成品。
         const std::string part_path=out_path+".prt";
+        // 与对称路径一致：.prt 半成品若为符号链接/重解析点则拒绝写入，避免明文被重定向
+        if(path_is_symlink(part_path)) {
+            std::cerr<<"Refusing to write through existing symlink: "<<part_path<<"\n";
+            all_ok=false; continue;
+        }
         remove_file_utf8(part_path);   // 清掉上次残留
 
         AsymOutcome o;
         if(is_encrypt) {
-            printf("Asymmetric encrypting: %s -> %s\n",in_path.c_str(),out_path.c_str());
+            std::cout<<"Asymmetric encrypting: "<<in_path<<" -> "<<out_path<<"\n";
             o=fe_asym_encrypt(recipients,in_path,part_path);
         } else {
-            printf("Asymmetric decrypting: %s -> %s\n",in_path.c_str(),out_path.c_str());
+            std::cout<<"Asymmetric decrypting: "<<in_path<<" -> "<<out_path<<"\n";
             std::string identity(key_material.cdata(), key_material.size());
             {   // the private key file may carry a trailing newline / spaces
                 // 就地 erase（而非 substr）：substr 会另开缓冲，原缓冲里的完整私钥
@@ -420,6 +426,8 @@ static bool run_asym(const std::vector<std::string>& input_paths,
                 if(a>0)               identity.erase(0,a);
             }
             o=fe_asym_decrypt(identity,in_path,part_path);
+            // resize 到 capacity() 再清零，覆盖字符串容量尾部的私钥残留
+            identity.resize(identity.capacity());
             sodium_memzero(identity.data(),identity.size());
         }
         if(!o.ok) {
@@ -478,7 +486,7 @@ static bool run_keygen(const std::string& output_dir,bool force_overwrite) {
 
     const std::string priv_path=dir+"rage_private.txt";
 
-    // v2.1.2：补上与 run_derive 一致的覆盖保护——私钥一旦被静默覆盖，用它加密的
+    // v2.1.2：补上与 run_derive 一致的覆盖保护 私钥一旦被静默覆盖，用它加密的
     // 所有 .age 文件将永久不可解密。
     if(!force_overwrite&&file_exists_path(priv_path)) {
         std::cerr<<"Refusing to overwrite existing private key file: "<<priv_path
@@ -894,6 +902,63 @@ static bool run_keylib(const std::vector<std::string>& words,
     return false;
 }
 
+// 国庆节祝福（每年 10/1–10/7 自动追加到 stdout 输出末尾）
+// 为什么用 RAII 替换 std::cout 的 streambuf：main 有数十个提前 return 的出口，
+// 逐出口补打印既繁琐又易漏；替换缓冲区可统一捕获「本进程是否真的向 stdout
+// 写过内容」，进程退出时仅在确有输出的情况下追加一行祝福。
+// 祝福只进 stdout：stderr 的错误信息不属于「有输出的文本」。
+static std::tm local_now() {
+    std::time_t t = std::time(nullptr);
+    std::tm lt{};
+#ifdef _WIN32
+    localtime_s(&lt, &t);
+#else
+    localtime_r(&t, &lt);
+#endif
+    return lt;
+}
+
+static bool is_national_day_week() {
+    std::tm lt = local_now();
+    return lt.tm_mon == 9 /* 10 月（0 基）*/ && lt.tm_mday >= 1 && lt.tm_mday <= 7;
+}
+
+// 中华人民共和国 1949-10-01 成立；国庆周内的祖国年龄 = 当前年份 − 1949
+static int motherland_age() {
+    return local_now().tm_year + 1900 - 1949;
+}
+
+struct NationalDaySuffix {
+    std::streambuf* old_ = nullptr;
+    struct TrackingBuf : std::streambuf {
+        std::streambuf* real_ = nullptr;
+        bool any_ = false;
+        int overflow(int c) override {
+            if (c != EOF) { any_ = true; return real_->sputc(static_cast<char>(c)); }
+            return 0;
+        }
+        std::streamsize xsputn(const char* s, std::streamsize n) override {
+            if (n > 0) any_ = true;
+            return real_->sputn(s, n);
+        }
+        int sync() override { return real_ ? real_->pubsync() : 0; }
+    } buf_;
+    NationalDaySuffix() {
+        old_ = std::cout.rdbuf();
+        buf_.real_ = old_;
+        std::cout.rdbuf(&buf_);
+    }
+    ~NationalDaySuffix() {
+        std::cout.rdbuf(old_);   // 先恢复真实缓冲区，再追加祝福行
+        if (buf_.any_ && is_national_day_week()) {
+            // 空行隔开，避免与前面的业务输出粘连
+            std::cout << "\nHappy " << motherland_age()
+                      << "th Birthday to the People's Republic of China!\n";
+            std::cout.flush();
+        }
+    }
+};
+
 int main(int argc,char* argv[]) {
 #ifdef _WIN32
     // 让控制台以 UTF-8 输出，确保中文提示正确显示
@@ -910,6 +975,8 @@ int main(int argc,char* argv[]) {
 #endif
 
     anti_debug_check();
+
+    NationalDaySuffix nds;   // 进程退出时按需追加国庆节祝福（机制见 struct 注释）
 
     if(sodium_init()<0) {
         std::cerr<<"libsodium initialization failed.\n";
@@ -965,9 +1032,12 @@ int main(int argc,char* argv[]) {
     int compress_level=0;       // -z/--compress 或 --compression-level N：zstd 级别；0=不压缩
     std::string new_keyfile_path; // --new-key-file <file>：rewrap 的新口令密钥文件
     bool new_key_from_stdin=false;// --new-key-stdin：rewrap 的新口令从 stdin 读取
+    bool end_of_options=false;    // "--"：其后的参数一律作为输入路径
 
     for(int i=1; i<argc; ++i) {
         std::string arg=argv[i];
+        if(end_of_options) { input_paths.push_back(arg); continue; }
+        if(arg=="--") { end_of_options=true; continue; }
         if(arg=="-e") {
             if(action!=ACTION_NONE) { std::cerr<<"Multiple modes specified.\n"; return 1; }
             action=ACTION_ENCRYPT;
@@ -1265,7 +1335,7 @@ int main(int argc,char* argv[]) {
         }
     }
 
-    // ---------- 密码输入（RAII SecureBuffer 持有，析构自动清零 + 解锁） ----------
+    // 密码输入（RAII SecureBuffer 持有，析构自动清零 + 解锁）
     // 密钥来源优先级：-k <keyfile> > ENCRYPTOR_KEY 环境变量 > 交互式输入
     SecureBuffer password;
     bool used_key_source=false; // 非交互密钥源（密钥文件或环境变量）
@@ -1566,7 +1636,7 @@ int main(int argc,char* argv[]) {
 
             bool ok;
             if(is_encrypt) {
-                printf("Encrypting: %s -> %s\n",in_path.c_str(),out_path.c_str());
+                std::cout<<"Encrypting: "<<in_path<<" -> "<<out_path<<"\n";
                 // 防御性兜底：任何未预期异常（如编码转换失败）都以干净错误退出，
                 // 而非未捕获导致 std::terminate/fastfail（GUI 侧表现为"进程崩溃"）。
                 try {
@@ -1587,7 +1657,7 @@ int main(int argc,char* argv[]) {
                 if(ok && write_sha256_enabled()) write_sha256_sidecar(out_path); // 功能10：校验单
             }
             else {
-                printf("Decrypting: %s -> %s\n",in_path.c_str(),out_path.c_str());
+                std::cout<<"Decrypting: "<<in_path<<" -> "<<out_path<<"\n";
                 try {
                     ok=decrypt_file(in_path,out_path,password,nullptr,false,true);
                 } catch(const std::exception& e) {

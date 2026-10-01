@@ -27,6 +27,8 @@ struct FileHeaderV1 {
 #pragma pack(pop)
 
 // v2 头部：Argon2 参数写入文件头，iv 缓冲扩到 24 字节
+// 磁盘实际占 69 字节：前 53 字节为已用字段，尾部 16 字节为历史保留区（v2 写入时的预留填充，读取不访问）。
+// reserved 凑入结构体使 sizeof 与 HEADER_SIZE_V2 一致，避免按 sizeof 误算。
 #pragma pack(push, 1)
 struct FileHeaderV2 {
     unsigned char magic[4];
@@ -37,6 +39,7 @@ struct FileHeaderV2 {
     unsigned char salt[ARGON2_SALT_LEN];
     unsigned char iv_len;
     unsigned char iv[24];
+    unsigned char reserved[16];
 };
 #pragma pack(pop)
 
@@ -118,12 +121,12 @@ struct FileHeaderV6 {
 inline constexpr size_t HEADER_SIZE_V1 = sizeof(FileHeaderV1);
 inline constexpr size_t HEADER_SIZE_V2 = 69;  // 历史盘面常量（v2 兼容读取，勿按 sizeof 改写）
 inline constexpr size_t HEADER_SIZE_V3 = sizeof(FileHeaderV3);
-inline constexpr size_t HEADER_SIZE_V4 = sizeof(FileHeaderV4); // 141
+inline constexpr size_t HEADER_SIZE_V4 = sizeof(FileHeaderV4); // 125
 inline constexpr size_t HEADER_SIZE_V5 = sizeof(FileHeaderV5); // 143
 inline constexpr size_t HEADER_SIZE_V6 = sizeof(FileHeaderV6); // 256
 
 // header_hmac 覆盖头部前缀（不含 plaintext_hash 与 header_hmac 自身）。刻意排除
-// plaintext_hash——它在加密结束后才可知；排除后写头瞬间即可算出合法 HMAC。
+// plaintext_hash 它在加密结束后才可知；排除后写头瞬间即可算出合法 HMAC。
 inline constexpr size_t HEADER_HMAC_COVER    = HEADER_SIZE_V4 - HASH_SIZE - HEADER_HMAC_SIZE; // 61
 inline constexpr size_t HEADER_HMAC_COVER_V5 = HEADER_SIZE_V5 - HASH_SIZE - HEADER_HMAC_SIZE; // 63
 inline constexpr size_t HEADER_HMAC_COVER_V6 = HEADER_SIZE_V6 - HASH_SIZE - HEADER_HMAC_SIZE; // 192
@@ -133,11 +136,15 @@ inline constexpr size_t V6_CONTAINER_LEN = 24 + 64 + 4 + 33; // dek_nonce+dek_bo
 // 若纳入载荷 AAD，密钥轮换后即使 DEK 不变 AEAD 也会失败。header_hmac 仍覆盖整段前缀。
 inline constexpr size_t HEADER_AAD_COVER_V6 = HEADER_HMAC_COVER_V5; // 63
 
+static_assert(HEADER_SIZE_V2 == sizeof(FileHeaderV2), "v2 struct must match on-disk 69B layout");
 static_assert(HEADER_SIZE_V4 == 125 && HEADER_SIZE_V5 == 127, "v4/v5 header sizes");
 static_assert(HEADER_SIZE_V6 == 256, "v6 header size must be 256");
 static_assert(HEADER_HMAC_COVER == 61 && HEADER_HMAC_COVER_V5 == 63, "hmac cover sizes");
 
-// 按版本返回头部大小；未知版本按 v4 处理（调用方须先校验版本合法性）
+// 校验缓冲区前 4 字节是否为 FENC magic；调用方在按版本解析头部前先调此函数
+bool verify_magic(const unsigned char* buf);
+
+// 按版本返回头部大小；未知版本返回 size_t(-1) 哨兵（调用方须先校验版本合法性）
 size_t header_size_for_version(unsigned char ver);
 
 // 按版本返回 header_hmac 覆盖字节数

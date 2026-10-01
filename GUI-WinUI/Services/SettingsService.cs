@@ -26,6 +26,8 @@ public class AppSettings
     public string? LastCliPath { get; set; }
     public int WindowWidth { get; set; } = 1100;
     public int WindowHeight { get; set; } = 720;
+    // 界面语言："zh" | "en"
+    public string? Language { get; set; } = "";
 }
 
 public class SettingsService
@@ -53,7 +55,7 @@ public class SettingsService
                 if (s != null) Current = s;
             }
         }
-        catch { /* 损坏配置回退默认 */ }
+        catch {  }
     }
 
     public void Save()
@@ -64,6 +66,6 @@ public class SettingsService
             var json = JsonSerializer.Serialize(Current, new JsonSerializerOptions { WriteIndented = true });
             File.WriteAllText(ConfigPath, json);
         }
-        catch { /* 保存失败不阻塞 */ }
+        catch {  }
     }
 }

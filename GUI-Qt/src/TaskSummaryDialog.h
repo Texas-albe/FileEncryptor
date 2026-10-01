@@ -1,4 +1,4 @@
-// TaskSummaryDialog - 任务完成汇总弹窗
+// 任务完成汇总弹窗
 #pragma once
 #include <QDialog>
 

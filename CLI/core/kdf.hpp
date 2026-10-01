@@ -21,7 +21,7 @@ inline constexpr size_t       KDF_MEM_LIMIT_MAX_BYTES = size_t(1)<<30;  // 1 GiB
 // 加密强度预设：0=fast(ops3/64MB) 1=standard(ops4/128MB,默认) 2=strong(ops6/512MB)
 void kdf_preset_params(int preset, unsigned int& ops, unsigned int& mem_kb);
 
-// 主密钥派生（唯一入口）。校验攻击者可控的 KDF 参数：超界直接拒绝而非降级——
+// 主密钥派生（唯一入口）。校验攻击者可控的 KDF 参数：超界直接拒绝而非降级
 // 降级仍会白跑一次大内存 Argon2，拒绝则零资源消耗。
 bool derive_key(const unsigned char* password, size_t pwd_len,
     const unsigned char* salt,

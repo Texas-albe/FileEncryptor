@@ -14,6 +14,10 @@ int strength_score(const std::string& pw);
 bool meets_policy(const std::string& pw, size_t min_len, int min_classes,
                   std::string& reason);
 
+// 零拷贝重载：直接以 (指针, 长度) 判定，避免在调用点构造未清零的临时 std::string 副本
+bool meets_policy(const char* pw, size_t len, size_t min_len, int min_classes,
+                  std::string& reason);
+
 // 便捷重载：默认策略 min_len=8, min_classes=2。
 bool meets_policy(const std::string& pw, std::string& reason);
 

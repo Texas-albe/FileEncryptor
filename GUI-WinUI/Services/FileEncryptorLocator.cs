@@ -3,15 +3,15 @@ using System.Diagnostics;
 
 namespace FileEncryptorGUI.Services;
 
-/// <summary>探测 FileEncryptor CLI 路径：环境变量→同目录→ProgramFiles→PATH，优先匹配同版本号 CLI。</summary>
+// 探测 CLI 路径
 public static class FileEncryptorLocator
 {
-    public const string GuiVersion = "2.0.2";
-    public const string CliDownloadUrl =
-        "https://github.com/Texas-albe/FileEncryptor/releases/tag/GUI2.0.1_CLI2.4.3";
+    public const string GuiVersion = "2.0.3";
+    public static string CliDownloadUrl =>
+        $"https://github.com/Texas-albe/FileEncryptor/releases/tag/GUI{GuiVersion}_CLI{ExpectedCliVersion}";
 
-    // 期望的 CLI 版本（与 GUI 配套发布的版本）
-    public static string ExpectedCliVersion => "2.4.3";
+    // 配套 CLI 版本
+    public static string ExpectedCliVersion => "2.4.5";
 
     public static string[] GetExpectedNames()
     {
@@ -56,7 +56,7 @@ public static class FileEncryptorLocator
         var found = FindInDir(selfDir, names);
         if (found != null) return found;
 
-        // 3) 安装目录 %ProgramFiles%\FileEncryptor\
+        // 3) 安装目录
         var installDir = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
             "FileEncryptor");

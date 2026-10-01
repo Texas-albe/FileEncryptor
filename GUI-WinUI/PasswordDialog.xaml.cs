@@ -28,7 +28,7 @@ public sealed partial class PasswordDialog : ContentDialog
 
         PwdBox = new PasswordBox
         {
-            PlaceholderText = "口令",
+            PlaceholderText = L10n.T("口令"),
             PasswordChar = "●",
             PasswordRevealMode = PasswordRevealMode.Peek,
             Width = 320
@@ -36,7 +36,7 @@ public sealed partial class PasswordDialog : ContentDialog
 
         ConfirmBox = new PasswordBox
         {
-            PlaceholderText = "确认口令",
+            PlaceholderText = L10n.T("确认口令"),
             PasswordChar = "●",
             PasswordRevealMode = PasswordRevealMode.Peek,
             Width = 320
@@ -51,9 +51,9 @@ public sealed partial class PasswordDialog : ContentDialog
         panel.Children.Add(MatchText);
 
         Content = panel;
-        Title = "输入口令";
-        PrimaryButtonText = "确定";
-        SecondaryButtonText = "取消";
+        Title = L10n.T("输入口令");
+        PrimaryButtonText = L10n.T("确定");
+        SecondaryButtonText = L10n.T("取消");
         IsPrimaryButtonEnabled = false;
 
         PwdBox.PasswordChanged += (_, _) => { UpdateStrength(); ValidateMatch(); };
@@ -64,11 +64,11 @@ public sealed partial class PasswordDialog : ContentDialog
     {
         var result = PasswordStrengthService.Evaluate(PwdBox.Password);
         if (result.Level == StrengthLevel.Empty) { StrengthText.Text = ""; return; }
-        StrengthText.Text = $"强度：{result.Label}";
+        StrengthText.Text = L10n.F("强度：{0}", result.Label);
         StrengthText.Foreground = new SolidColorBrush(ParseColor(result.ColorHex));
     }
 
-    // 仅接受 #RGB / #RRGGBB / #AARRGGBB，非法格式回退灰色，避免 Substring/Parse 越界
+    // 颜色格式校验，非法回退灰色
     private static Windows.UI.Color ParseColor(string hex)
     {
         if (string.IsNullOrEmpty(hex) || hex[0] != '#') return Colors.Gray;
@@ -98,8 +98,8 @@ public sealed partial class PasswordDialog : ContentDialog
         var pwd = PwdBox.Password;
         if (pwd.Length < 6) { MatchText.Text = ""; IsPrimaryButtonEnabled = false; return; }
         if (string.IsNullOrEmpty(ConfirmBox.Password)) { MatchText.Text = ""; IsPrimaryButtonEnabled = false; return; }
-        if (pwd != ConfirmBox.Password) { MatchText.Text = "两次输入的口令不一致"; IsPrimaryButtonEnabled = false; return; }
-        // 确认口令时同样走策略校验，避免 GUI 提前放行弱口令
+        if (pwd != ConfirmBox.Password) { MatchText.Text = L10n.T("两次输入的口令不一致"); IsPrimaryButtonEnabled = false; return; }
+        // 确认口令同走策略校验
         if (!PasswordStrengthService.MeetsPolicy(pwd, out var reason))
         {
             MatchText.Text = reason;

@@ -1,0 +1,9 @@
+<!DOCTYPE RCC>
+<RCC version="1.0">
+    <!-- Updates/007 i18n：en-US 译文 .qm 嵌入二进制，避免外置文件被篡改。
+         重新生成流程：lupdate src -ts translations/gui_en_US.ts → 补译文 → lrelease。 -->
+    <qresource prefix="/i18n">
+        <file alias="gui_en_US.qm">translations/gui_en_US.qm</file>
+        <file alias="gui_ru_RU.qm">translations/gui_ru_RU.qm</file>
+    </qresource>
+</RCC>

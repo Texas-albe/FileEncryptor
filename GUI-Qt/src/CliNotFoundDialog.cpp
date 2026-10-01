@@ -1,6 +1,7 @@
-// CliNotFoundDialog.cpp - CLI 未找到对话框（含 GitHub 自动检索下载）
+// CLI 未找到对话框实现
 #include "CliNotFoundDialog.h"
 #include "FileEncryptorLocator.h"
+#include "ThemeManager.h"
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QLabel>
@@ -26,6 +27,12 @@
 
 static const char* kGithubApi = "https://api.github.com/repos/Texas-albe/FileEncryptor";
 
+// 更新源白名单，与 Updater/src/updater.cpp 的 kGitHubHosts 保持一致
+static const char* const kAllowedHosts[] = {
+    "github.com", "api.github.com",
+    "objects.githubusercontent.com", "codeload.github.com"
+};
+
 CliNotFoundDialog::CliNotFoundDialog(const QString& detailMessage, QWidget* parent)
     : QDialog(parent) {
     setWindowTitle(tr("FileEncryptor CLI 未找到"));
@@ -48,13 +55,14 @@ CliNotFoundDialog::CliNotFoundDialog(const QString& detailMessage, QWidget* pare
         detail += QStringLiteral("&nbsp;&nbsp;• %1<br/>").arg(name);
     detail += tr("<br/>当前程序目录：%1").arg(FileEncryptorLocator::selfDir());
     if (!detailMessage.isEmpty()) detail += tr("<br/>详细信息：%1").arg(detailMessage);
+    const QString muted=QLatin1String(ThemeManager::mutedTextHex());
     auto* detailLabel = new QLabel(detail);
     detailLabel->setWordWrap(true);
-    detailLabel->setStyleSheet("QLabel{font-size:10pt;color:#888;}");
+    detailLabel->setStyleSheet(QStringLiteral("QLabel{font-size:10pt;color:%1;}").arg(muted));
     root->addWidget(detailLabel);
     m_statusLabel = new QLabel;
     m_statusLabel->setWordWrap(true);
-    m_statusLabel->setStyleSheet("QLabel{font-size:9pt;color:#aaa;}");
+    m_statusLabel->setStyleSheet(QStringLiteral("QLabel{font-size:9pt;color:%1;}").arg(muted));
     root->addWidget(m_statusLabel);
     m_progress = new QProgressBar;
     m_progress->setVisible(false);
@@ -100,19 +108,17 @@ void CliNotFoundDialog::onTagsFinished() {
     QJsonDocument doc = QJsonDocument::fromJson(data, &pe);
     if (pe.error != QJsonParseError::NoError || !doc.isArray()) { m_statusLabel->setText(tr("解析失败")); m_downloadBtn->setEnabled(true); m_retryBtn->setEnabled(true); return; }
     const QString guiVer = FileEncryptorLocator::guiVersion();
-    QString bestTag; QVersionNumber bestCliVer;
-    QRegularExpression re(QStringLiteral("^GUI%1_CLI([\\d.]+)$").arg(QRegularExpression::escape(guiVer)));
-    for (const QJsonValue& v : doc.array()) {
-        QString tag = v.toObject().value("name").toString();
-        QRegularExpressionMatch m = re.match(tag);
-        if (m.hasMatch()) {
-            QVersionNumber cliVer = QVersionNumber::fromString(m.captured(1));
-            if (bestTag.isEmpty() || cliVer > bestCliVer) { bestTag = tag; bestCliVer = cliVer; }
-        }
+    const QString cliVer = FileEncryptorLocator::version();
+    // 只接受精确配套的 tag
+    const QString want = QStringLiteral("GUI%1_CLI%2").arg(guiVer, cliVer);
+    const QJsonArray arr = doc.array();
+    int idx = -1;
+    for (int i = 0; i < arr.size(); ++i) {
+        if (arr.at(i).toObject().value(QStringLiteral("name")).toString() == want) { idx = i; break; }
     }
-    if (bestTag.isEmpty()) { m_statusLabel->setText(tr("未找到匹配 GUI %1 的 release").arg(guiVer)); m_downloadBtn->setEnabled(true); m_retryBtn->setEnabled(true); return; }
-    m_statusLabel->setText(tr("找到 %1，正在获取下载链接…").arg(bestTag));
-    QUrl relUrl(QStringLiteral("%1/releases/tags/%2").arg(kGithubApi, bestTag)); QNetworkRequest req(relUrl);
+    if (idx < 0) { m_statusLabel->setText(tr("未找到预期的 CLI %1（要求 tag GUI%2_CLI%1），已中止下载").arg(cliVer, guiVer)); m_downloadBtn->setEnabled(true); m_retryBtn->setEnabled(true); return; }
+    m_statusLabel->setText(tr("找到 %1，正在获取下载链接…").arg(want));
+    QUrl relUrl(QStringLiteral("%1/releases/tags/%2").arg(kGithubApi, want)); QNetworkRequest req(relUrl);
     req.setHeader(QNetworkRequest::UserAgentHeader, "FileEncryptorGUI");
     m_currentReply = m_net->get(req);
     connect(m_currentReply, &QNetworkReply::finished, this, &CliNotFoundDialog::onReleaseFinished);
@@ -128,7 +134,7 @@ void CliNotFoundDialog::onReleaseFinished() {
     QJsonArray assets = doc.object().value("assets").toArray();
     QString downloadUrl = pickCliAsset(assets);
     if (downloadUrl.isEmpty()) { m_statusLabel->setText(tr("未找到当前平台的 CLI 包")); m_downloadBtn->setEnabled(true); m_retryBtn->setEnabled(true); return; }
-    // 供应链防护：只允许从 GitHub 官方下载域取二进制，其余域名直接拒绝
+    // 仅允许 GitHub 官方域名
     if (!isAllowedDownloadHost(QUrl(downloadUrl))) {
         m_statusLabel->setText(tr("下载地址不在允许的域名白名单内"));
         m_downloadBtn->setEnabled(true); m_retryBtn->setEnabled(true); return;
@@ -158,9 +164,10 @@ QString CliNotFoundDialog::pickCliAsset(const QJsonArray& assets) const {
 }
 
 bool CliNotFoundDialog::isAllowedDownloadHost(const QUrl& url) const {
-    const QString host = url.host();
-    return host == QLatin1String("github.com")
-        || host == QLatin1String("objects.githubusercontent.com");
+    const QString host = url.host().toLower();
+    for (const char* h : kAllowedHosts)
+        if (host == QLatin1String(h)) return true;
+    return false;
 }
 
 void CliNotFoundDialog::startDownload(const QString& url, const QString& savePath) {
@@ -183,8 +190,7 @@ void CliNotFoundDialog::onDownloadFinished() {
     m_currentReply = nullptr;
     if (err != QNetworkReply::NoError) { failDownload(tr("下载失败")); return; }
     m_assetData = data;
-    // 先写到与目标同目录的临时文件（保证 rename 在同一文件系统内原子完成），
-    // 完整性校验通过前绝不把半成品二进制落到目标可执行路径。
+    // 先写临时文件再原子改名
     QTemporaryFile tmp(QDir(FileEncryptorLocator::selfDir())
         .filePath(QStringLiteral(".fileencryptor_dl_XXXXXX")));
     tmp.setAutoRemove(false);
@@ -196,8 +202,7 @@ void CliNotFoundDialog::onDownloadFinished() {
 }
 
 void CliNotFoundDialog::startShaCheck() {
-    // 尝试拉取随发布附带的 <asset_url>.sha256 校验文件做完整性比对；
-    // 该文件不存在时跳过校验但记录警告（见 onShaDownloaded）。
+    // 拉取 .sha256 做完整性比对
     QUrl shaUrl(m_assetUrl + QStringLiteral(".sha256"));
     if (!isAllowedDownloadHost(shaUrl)) { failDownload(tr("校验文件地址不在白名单内")); return; }
     m_statusLabel->setText(tr("正在校验文件完整性…"));
@@ -214,17 +219,17 @@ void CliNotFoundDialog::onShaDownloaded() {
     m_currentReply->deleteLater();
     m_currentReply = nullptr;
 
-    // .sha256 不存在（404）或拉取异常：不阻塞安装，但标记为「未校验」
+    // 无校验文件则跳过校验
     if (err != QNetworkReply::NoError) {
         m_shaWarned = true;
         installFromTemp();
         return;
     }
-    // .sha256 形如 "<hex64>  <filename>"，从中提取 64 位十六进制摘要
+    // 解析 64 位十六进制摘要
     const QRegularExpression re(QStringLiteral("([0-9a-fA-F]{64})"));
     const QRegularExpressionMatch m = re.match(QString::fromLatin1(shaBody));
     if (!m.hasMatch()) {
-        m_shaWarned = true;   // 校验文件格式无法识别，按未校验处理
+        m_shaWarned = true;
         installFromTemp();
         return;
     }
@@ -243,9 +248,9 @@ void CliNotFoundDialog::onShaDownloaded() {
 }
 
 void CliNotFoundDialog::installFromTemp() {
-    QFile::remove(m_savePath);   // 目标若残留旧版本，先清掉以保证原子覆盖
+    QFile::remove(m_savePath);
     if (!QFile::rename(m_tempPath, m_savePath)) {
-        // 同目录 rename 失败（偶发占用）时退化为复制后删除临时文件
+        // rename 失败退化为复制
         if (!QFile::copy(m_tempPath, m_savePath)) {
             QFile::remove(m_tempPath);
             m_tempPath.clear(); m_assetData.clear();

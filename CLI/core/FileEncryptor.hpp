@@ -15,8 +15,8 @@
 
 #define FE_VERSION_MAJOR 2
 #define FE_VERSION_MINOR 4
-#define FE_VERSION_PATCH 3
-#define FE_VERSION_STRING "2.4.4"
+#define FE_VERSION_PATCH 5
+#define FE_VERSION_STRING "2.4.5"
 
 // --force-decrypt：解密时容忍块校验失败与明文哈希不匹配（强制恢复损坏数据）
 extern bool g_force_decrypt;
@@ -27,11 +27,11 @@ enum class CryptoMode: unsigned char {
     AEGIS256=2   // 取代 AES-GCM 的新选项（AEAD，32 字节 nonce / 32 字节 tag）
 };
 
-// ---------- 进程级限速器（v1.7.2） ----------
+// 进程级限速器（v1.7.2）
 // 用 YAML max_speed（字节/秒，支持 KB/MB/GB）初始化，0=不限速；主循环按字节记账超限休眠。
 void init_rate_limiter(uint64_t max_bytes_per_sec);
 
-// ---------- 文件名 / 扩展名混淆（v1.7.0） ---------- 生成 "<16 位十六进制>.<混淆扩展名>" 基名（不含 .ptd），由口令与输入路径确定性派生， 故续传仍能命中原输出文件。
+// 文件名 / 扩展名混淆（v1.7.0） 生成 "<16 位十六进制>.<混淆扩展名>" 基名（不含 .ptd），由口令与输入路径确定性派生， 故续传仍能命中原输出文件。
 std::string make_obfuscated_basename(const std::string& in_path,const SecureBuffer& password);
 
 // 从密文末尾加密信封恢复原始文件名（需口令派生密钥）；无尾部/密钥错返回 false。
@@ -95,7 +95,7 @@ bool decrypt_file(const std::string& in_path,
     const unsigned char* ext_kek=nullptr, size_t ext_kek_len=0,
     bool verify_only=false);
 
-// ---------- 只读元数据 / 校验（功能2 / 功能3） ----------
+// 只读元数据 / 校验（功能2 / 功能3）
 // 不解密、不校验密钥，纯元数据预览（功能2 文件头信息查看器）。
 struct PtdMeta {
     unsigned char version=0;
@@ -126,7 +126,7 @@ void set_write_sha256(bool b);
 bool write_sha256_enabled();
 void write_sha256_sidecar(const std::string& file);
 
-// 批量处理（支持并行）。restore_name：批量解密是否还原完整原始文件名。默认 false——
+// 批量处理（支持并行）。restore_name：批量解密是否还原完整原始文件名。默认 false
 // 为省去每文件昂贵的 Argon2id（仅还原名用），仅保留扩展名；置 true 时还原全名（性能较差）。
 bool process_files(const std::vector<std::string>& input_paths,
     const std::string& out_dir,
@@ -157,14 +157,14 @@ bool stdin_is_interactive();
 CryptoMode resolve_encrypt_mode(CryptoMode requested, bool interactive,
     bool& refuse, std::string& message);
 
-// ---------- 密钥轮换 / rewrap（v6 容器） ---------- 用 old_password 解开 v6 的 wrapped DEK，再以 new_password 派生的新
+// 密钥轮换 / rewrap（v6 容器） 用 old_password 解开 v6 的 wrapped DEK，再以 new_password 派生的新
 // KEK 重新包裹 （key_version 自增），重写头部容器区与 header_hmac；载荷密文不变。旧格式返回 false。
 bool rewrap_file(const std::string& ptd_path,
     const SecureBuffer& old_password,
     const std::string& new_key_path,
     bool new_key_from_stdin);
 
-// ---------- 跨平台路径打开辅助 ----------
+// 跨平台路径打开辅助
 #ifdef _WIN32
 static inline std::wstring utf8_to_wstring(const std::string& str) {
     if(str.empty()) return std::wstring();

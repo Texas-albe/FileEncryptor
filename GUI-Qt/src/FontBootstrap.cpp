@@ -1,4 +1,3 @@
-// FontBootstrap.cpp
 
 #include "FontBootstrap.h"
 
@@ -20,7 +19,7 @@ bool    FontBootstrap::s_cjk=false;
 
 namespace {
 
-    // 探针字符：'中'（U+4E2D）。能画它就是一款覆盖简中的字体。
+    // 探针字符：中
     constexpr ushort kProbeChar=0x4E2D;
 
     bool hasCjkGlyph(const QFont& f) {
@@ -28,7 +27,7 @@ namespace {
         return fm.inFont(QChar(kProbeChar));
     }
 
-    // 候选字体族：按"简中桌面常见度"排序，跨平台都列全
+    // 候选字体族按常见度排序
     QStringList cjkCandidates() {
         return {
             QStringLiteral("Noto Sans CJK SC"),
@@ -52,7 +51,6 @@ namespace {
         };
     }
 
-    // 等宽候选（命令输出窗口）：先要等宽，其次要有中文
     QStringList monoCjkCandidates() {
         return {
             QStringLiteral("Noto Sans Mono CJK SC"),
@@ -70,7 +68,7 @@ namespace {
             .value(QStringLiteral("FILEENCRYPTOR_FONT_DEBUG"))==QStringLiteral("1");
     }
 
-    // 从构建期嵌入的资源字体里挑一款含中文的
+    // 从嵌入资源字体挑选
     QString loadBundledFont() {
         QDir d(QStringLiteral(":/fonts"));
         if(!d.exists()) return {};
@@ -95,11 +93,10 @@ namespace {
         return {};
     }
 
-    // 把嵌入字体导出到 fontconfig 用户字体目录并刷新缓存：系统无 CJK 字体时，界面内文字由 Qt 用嵌入字体渲染正常，
-    // 但窗口标题栏由 WM（fontconfig/Pango）绘制拿不到字形会显示方块，导出后 WM 即可找到（通常重启应用生效）。
+    // 导出嵌入字体给 fontconfig
     void exportBundledFontForSystem() {
         QFile src(QStringLiteral(":/fonts/NotoSansSC-Regular.otf"));
-        if(!src.exists()) return; // Windows 构建不嵌入字体，无需导出
+        if(!src.exists()) return;
 
         const QString dir=QStandardPaths::writableLocation(
             QStandardPaths::GenericDataLocation)+QStringLiteral("/fonts/FileEncryptor");
@@ -113,12 +110,10 @@ namespace {
             }
             if(debugEnabled()) qWarning()<<"[font] 已导出嵌入字体供系统使用:"<<dst;
         }
-        // 已导出过或刚导出：刷新缓存（fc-cache 不存在则静默忽略，
-        // 部分 fontconfig 实现会自动扫描用户目录）
         QProcess::startDetached(QStringLiteral("fc-cache"),{QStringLiteral("-f"),dir});
     }
 
-} // namespace
+}
 
 void FontBootstrap::initialize() {
     if(s_initialized) return;
@@ -138,25 +133,24 @@ void FontBootstrap::initialize() {
 
     QString chosen;
 
-    // 1) 显式覆盖（排障 / 用户偏好）
+    // 1) 显式覆盖
     const QString override=QProcessEnvironment::systemEnvironment()
         .value(QStringLiteral("FILEENCRYPTOR_UI_FONT")).trimmed();
     if(!override.isEmpty()) {
         chosen=override;
     }
-    // 2) 默认字体本身就有中文 → 不动（Windows / macOS 常规路径）
+    // 2) 默认字体已含中文
     else if(hasCjkGlyph(appFont)) {
         chosen=appFont.family();
     }
-    // 3) 系统字体里挑一款含中文的
+    // 3) 挑选系统含中文字体
     else {
         for(const QString& fam:cjkCandidates()) {
             if(!available.contains(fam,Qt::CaseInsensitive)) continue;
             QFont f(fam);
             if(hasCjkGlyph(f)) { chosen=fam; break; }
         }
-        // 4) 兜底：构建期嵌入的字体（系统侧也没有 CJK 字体时，
-        //    顺手把字体导出给 fontconfig，修复标题栏方块）
+        // 4) 兜底嵌入字体
         if(chosen.isEmpty()) {
             chosen=loadBundledFont();
             if(!chosen.isEmpty()) exportBundledFontForSystem();
@@ -164,7 +158,7 @@ void FontBootstrap::initialize() {
     }
 
     if(chosen.isEmpty()) {
-        // 5) 都没有：不阻塞启动，仅告警
+        // 5) 都没有则告警放行
         qWarning()<<"[font] 未找到含中文的字体，界面中文可能显示为方块。"
             <<"请安装中文字体（Debian/Ubuntu: sudo apt install fonts-noto-cjk）"
             <<"或用 FILEENCRYPTOR_UI_FONT=<字体族名> 指定。";
@@ -190,7 +184,6 @@ QFont FontBootstrap::monoFont() {
     QFont mono=QFontDatabase::systemFont(QFontDatabase::FixedFont);
     if(hasCjkGlyph(mono)) return mono;
 
-    // 系统等宽字体没有中文：先试含中文的等宽候选，再退回界面字体
     const QStringList available=QFontDatabase::families();
     for(const QString& fam:monoCjkCandidates()) {
         if(!available.contains(fam,Qt::CaseInsensitive)) continue;

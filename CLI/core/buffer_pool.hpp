@@ -30,5 +30,9 @@ public:
     }
 
     size_t buffer_size() const { return buf_size_; }
-    size_t pooled_count() const { return pool_.size(); }
+    // 与 acquire/release 共用 mutex_，避免无锁读 pool_.size() 构成数据竞争
+    size_t pooled_count() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return pool_.size();
+    }
 };

@@ -63,11 +63,11 @@ bool parse_yaml_config(const std::string& text, Config& cfg, std::string& err, s
     try {
         root = YAML::Load(text);
     } catch (const YAML::Exception& e) {
-        err = std::string("YAML 解析错误: ") + e.what();
+        err = std::string("YAML parse error: ") + e.what();
         return false;
     }
     if (!root || root.IsNull()) return true; // 空文档 → 默认配置
-    if (!root.IsMap()) { err = "配置顶层必须是映射(map)"; return false; }
+    if (!root.IsMap()) { err = "Config root must be a mapping (map)"; return false; }
 
     // 非致命告警累加（用户写错类型时给出明确键名，而非静默忽略）
     auto note = [&](const char* key, const char* why) {
@@ -209,7 +209,7 @@ bool parse_yaml_config(const std::string& text, Config& cfg, std::string& err, s
     return true;
 }
 
-// ---------- 单位解析 / 格式化（统一 1024 进制：KB/MB/GB） ----------
+// 单位解析 / 格式化（统一 1024 进制：KB/MB/GB）
 bool parse_size(const std::string& s, uint64_t& out_bytes) {
     out_bytes = 0;
     std::string t = s;
@@ -251,7 +251,7 @@ std::string format_size(uint64_t bytes) {
     return std::string(buf);
 }
 
-// ---------- 文件读取（UTF-8 安全） ----------
+// 文件读取（UTF-8 安全）
 static bool file_exists_utf8(const std::string& path) {
 #ifdef _WIN32
     int wn = MultiByteToWideChar(CP_UTF8, 0, path.c_str(), (int)path.size(), NULL, 0);
@@ -506,7 +506,7 @@ Config load_config() {
         }
         return cfg; // 默认配置（与生成的模板一致）
     }
-    // YAML 别名炸弹防护——配置文件超过 1 MB 直接拒绝。
+    // YAML 别名炸弹防护 配置文件超过 1 MB 直接拒绝。
     if (get_file_size_raw(path) > kMaxConfigBytes) {
         std::cerr << "Warning: config file too large (" << path << "); refusing to load (> "
                   << (kMaxConfigBytes >> 20) << " MB). Using defaults.\n";
@@ -535,7 +535,7 @@ Config load_config() {
         std::cerr << "Warning: config at " << path << " has ignored values: " << warn << "\n";
         log_event(LOG_WARN, "config_ignored_values", {{"detail", warn}});
     }
-    // v2.1.2：CWD 配置不可信——任何可写目录都能预置 fileencryptor.yaml 劫持 log_file
+    // v2.1.2：CWD 配置不可信 任何可写目录都能预置 fileencryptor.yaml 劫持 log_file
     // 或关闭白名单。故 CWD 来源只接受便利性键，安全敏感键回退默认并告警。
     if (src == ConfigSource::Cwd) {
         const Config def;
@@ -569,7 +569,7 @@ Config load_config() {
     return cfg;
 }
 
-// ---------- 结构化 JSON 日志 ----------
+// 结构化 JSON 日志
 
 // v2.1.2：Windows 上 std::ofstream 按 ANSI 代码页解析路径，中文路径会打开失败。
 // 统一走 UTF-8 → 宽字符打开（与 FileEncryptor 的 open_stream 同策略）。
@@ -701,7 +701,7 @@ void log_event(int level, const std::string& msg,
     write_log(level, msg, &fields);
 }
 
-// ---------- 全局配置访问 ----------
+// 全局配置访问
 
 static std::shared_ptr<const Config> g_cfg;
 

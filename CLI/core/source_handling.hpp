@@ -10,5 +10,5 @@ enum class SourceDisposition : int {
 };
 
 // 按 disposition 处理已成功加密的源文件；返回是否成功
-// （Recycle/Wipe 失败时仍保证不残留明文于原路径——回退为直接删除）。
+// （Recycle/Wipe 失败时仍保证不残留明文于原路径 回退为直接删除）。
 bool secure_handle_source(const std::string& path, SourceDisposition disp);

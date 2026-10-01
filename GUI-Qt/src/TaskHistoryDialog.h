@@ -1,5 +1,4 @@
-// TaskHistoryDialog - 任务历史面板（功能5）：列出每次运行的动作/模式/规模/耗时/结果，支持清空与「回放」（双击回填参数到主窗口）。
-// v1.3.0 起批量 ETA 已剥离到拟命令行上部的批量进度面板（仅批量模式可见），本面板只负责历史记录本身。
+// 任务历史面板
 #pragma once
 #include <QDialog>
 #include <QVector>
@@ -14,7 +13,7 @@ class TaskHistoryDialog : public QDialog {
 public:
     explicit TaskHistoryDialog(QWidget* parent=nullptr);
 
-    // 双击（或选中后确定）返回的记录，用于回放；无效时 id 为空
+    // 回放返回的记录
     TaskRecord selectedRecord() const;
 
 private slots:

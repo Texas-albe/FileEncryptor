@@ -1,7 +1,7 @@
-// AboutDialogs 实现
 #include "AboutDialogs.h"
 #include "ThemeManager.h"
 #include "FileEncryptorLocator.h"
+#include "I18n.h"
 #include <QVBoxLayout>
 #include <QTextBrowser>
 #include <QDialogButtonBox>
@@ -23,26 +23,37 @@ static QString renderHtml(const QString& tpl, const ThemeManager::HtmlPalette& p
     return h;
 }
 
-// 版本号优先取应用元数据；未设置时回退到定位器报告的实际 GUI 版本，避免硬编码漂移。
 static QString resolvedVersion() {
     return qApp->applicationVersion().isEmpty()
         ? FileEncryptorLocator::guiVersion()
         : qApp->applicationVersion();
 }
 
-CreditsDialog::CreditsDialog(QWidget* parent): QDialog(parent) {
-    setWindowTitle(tr("鸣谢"));
-    setMinimumSize(560,320);
+// 鸣谢正文：随当前语言整段切换
+static QString creditsBodyHtml() {
+    if (I18n::instance().currentLanguage() == QStringLiteral("en"))
+        return QStringLiteral(
+            "<p>Thanks to these contributors:</p>"
+            "<table cellspacing='8' cellpadding='2'>"
+            "<tr><td><b>Development</b></td>"
+            "<td>瑶璎珞</td>"
+            "<td><a href='https://space.bilibili.com/3546692557212318' style='color:%{linkColor};'>Homepage</a></td>"
+            "<td><a href='https://afdian.com/a/yaoyingluo' style='color:%{linkColor};'>Sponsor</a></td></tr>"
+            "<tr><td><b>Testing</b></td>"
+            "<td>就不错了我</td>"
+            "<td><a href='https://space.bilibili.com/1705671238' style='color:%{linkColor};'>Homepage</a></td>"
+            "<td></td></tr>"
+            "<tr><td><b>Promotion</b></td>"
+            "<td>Twilight飞友</td>"
+            "<td><a href='https://space.bilibili.com/3546728261224829' style='color:%{linkColor};'>Homepage</a></td>"
+            "<td></td></tr>"
+            "</table>"
+            "<hr/>"
+            "<p style='color:%{mutedFg}; font-size:small;'>"
+            "File encryption is built on libsodium (XChaCha20-Poly1305 / AEGIS-256), "
+            "written in C++17, running cross-platform on Windows / Linux / macOS.</p>");
 
-    const auto& p=ThemeManager::htmlPalette();
-    auto* browser=new QTextBrowser(this);
-    browser->setOpenExternalLinks(true);
-    browser->setStyleSheet(QStringLiteral("QTextBrowser{background:%1;color:%2;}")
-        .arg(QLatin1String(p.bodyBg)).arg(QLatin1String(p.bodyFg)));
-    browser->setHtml(renderHtml(QStringLiteral(
-        "<html><body style='font-family: \"Microsoft YaHei\", \"Noto Sans CJK SC\", "
-        "line-height: 1.7; color:%{bodyFg}; background:%{bodyBg};'>"
-        "<h2 style='color:%{headingGreen};'>FileEncryptor v%{ver} — 鸣谢</h2>"
+    return QStringLiteral(
         "<p>感谢以下贡献者的付出：</p>"
         "<table cellspacing='8' cellpadding='2'>"
         "<tr><td><b>代码开发</b></td>"
@@ -61,8 +72,39 @@ CreditsDialog::CreditsDialog(QWidget* parent): QDialog(parent) {
         "<hr/>"
         "<p style='color:%{mutedFg}; font-size:small;'>"
         "本项目基于 libsodium 实现文件加密（XChaCha20-Poly1305 / AEGIS-256），"
-        "采用 C++17 编写，跨平台运行于 Windows / Linux / macOS。</p>"
-        "</body></html>"), p, resolvedVersion()));
+        "采用 C++17 编写，跨平台运行于 Windows / Linux / macOS。</p>");
+}
+
+CreditsDialog::CreditsDialog(QWidget* parent): QDialog(parent) {
+    setWindowTitle(tr("鸣谢"));
+    setMinimumSize(560,320);
+
+    const auto& p=ThemeManager::htmlPalette();
+    auto* browser=new QTextBrowser(this);
+    browser->setOpenExternalLinks(true);
+    browser->setStyleSheet(QStringLiteral("QTextBrowser{background:%1;color:%2;}")
+        .arg(QLatin1String(p.bodyBg)).arg(QLatin1String(p.bodyFg)));
+    const bool en = I18n::instance().currentLanguage() == QStringLiteral("en");
+    browser->setHtml(renderHtml(QStringLiteral(
+        "<html><body style='font-family: \"Microsoft YaHei\", \"Noto Sans CJK SC\", "
+        "line-height: 1.7; color:%{bodyFg}; background:%{bodyBg};'>"
+        "<h2 style='color:%{headingGreen};'>FileEncryptor v%{ver} — %1</h2>"
+        "%2"
+        "</body></html>")
+        .arg(en ? QStringLiteral("Credits") : QStringLiteral("鸣谢"))
+        .arg(creditsBodyHtml()),
+        p, resolvedVersion()));
+    // 国庆节窗口内追加祝福语
+    if (ThemeManager::isNationalDay()) {
+        const QString extra = QStringLiteral(
+            "<p style='color:%1; font-weight:bold; font-size:15px; margin-top:12px;'>%2</p>")
+            .arg(QLatin1String(ThemeManager::chinaRedHex()))
+            .arg(ThemeManager::birthdayMessage());
+        QString cur = browser->toHtml();
+        const int pos = cur.indexOf(QStringLiteral("</body>"));
+        if (pos >= 0) cur.insert(pos, extra); else cur += extra;
+        browser->setHtml(cur);
+    }
 
     auto* btns=new QDialogButtonBox(QDialogButtonBox::Close,this);
     connect(btns,&QDialogButtonBox::rejected,this,&QDialog::accept);
@@ -72,19 +114,40 @@ CreditsDialog::CreditsDialog(QWidget* parent): QDialog(parent) {
     lay->addWidget(btns);
 }
 
-ReadmeDialog::ReadmeDialog(QWidget* parent): QDialog(parent) {
-    setWindowTitle(tr("README 摘要"));
-    setMinimumSize(600,420);
+// README 摘要正文：随当前语言整段切换，避免中英混排
+static QString readmeBodyHtml() {
+    if (I18n::instance().currentLanguage() == QStringLiteral("en"))
+        return QStringLiteral(
+            "<p><b>Summary</b>: a cross-platform (Windows / Linux / macOS) file "
+            "encryption tool built on libsodium with XChaCha20-Poly1305 and AEGIS-256.</p>"
+            "<h3>Key features</h3>"
+            "<ul>"
+            "<li><b>Ciphers</b>: XChaCha20-Poly1305 (default) / AEGIS-256, keys derived "
+            "via Argon2id</li>"
+            "<li><b>Single &amp; batch</b>: single-file encrypt/decrypt plus recursive "
+            "folder batch encrypt/decrypt</li>"
+            "<li><b>Resumable</b>: interrupted encryption resumes from the last "
+            "checkpoint, preventing silent data loss</li>"
+            "<li><b>Path safety</b>: directory traversal (..) is rejected, allowlist "
+            "prefix checks are enforced</li>"
+            "<li><b>Rate limiting</b>: process-level token bucket (YAML max_speed)</li>"
+            "<li><b>Configurable</b>: logging/concurrency/path policy via YAML</li>"
+            "</ul>"
+            "<h3>Command-line usage</h3>"
+            "<pre style='background:%{preBg}; color:%{preFg}; padding:8px; border-radius:4px;'>"
+            "FileEncryptor -e/-d &lt;FileName&gt; [-o &lt;Path&gt;] [-de] [-m xchacha20|aegis256] [-y]\n"
+            "FileEncryptor -be/-bd &lt;Path&gt; [-o &lt;Path&gt;] [-de] [-m xchacha20|aegis256] [-y]"
+            "</pre>"
+            "<h3>Key source priority</h3>"
+            "<p><code>-k &lt;keyfile&gt;</code> (key file) &gt; <code>--key-stdin</code> (stdin pipe) "
+            "&gt; <code>ENCRYPTOR_KEY</code> (environment variable) &gt; interactive input; "
+            "asymmetric mode uses an X25519 identity private key &gt; interactive input</p>"
+            "<h3>License: GPLv3</h3>"
+            "<hr/>"
+            "<p style='color:%{mutedFg}; font-size:small;'>This is a README summary; see "
+            "README.md in the project root for full documentation.</p>");
 
-    const auto& p=ThemeManager::htmlPalette();
-    auto* browser=new QTextBrowser(this);
-    browser->setOpenExternalLinks(true);
-    browser->setStyleSheet(QStringLiteral("QTextBrowser{background:%1;color:%2;}")
-        .arg(QLatin1String(p.bodyBg)).arg(QLatin1String(p.bodyFg)));
-    browser->setHtml(renderHtml(QStringLiteral(
-        "<html><body style='font-family: \"Microsoft YaHei\", \"Noto Sans CJK SC\", "
-        "line-height: 1.7; color:%{bodyFg}; background:%{bodyBg};'>"
-        "<h2 style='color:%{headingBlue};'>FileEncryptor v%{ver} — 项目摘要</h2>"
+    return QStringLiteral(
         "<p><b>简介</b>：跨平台（Windows / Linux / macOS）文件加密工具，"
         "基于 libsodium 实现 XChaCha20-Poly1305 与 AEGIS-256 加密。</p>"
         "<h3>核心特性</h3>"
@@ -107,8 +170,28 @@ ReadmeDialog::ReadmeDialog(QWidget* parent): QDialog(parent) {
         "<h3>许可证</h3>"
         "<p>GPLv3</p>"
         "<hr/>"
-        "<p style='color:%{mutedFg}; font-size:small;'>本窗口为 README 摘要，完整文档请见项目根目录 README.md</p>"
-        "</body></html>"), p, resolvedVersion()));
+        "<p style='color:%{mutedFg}; font-size:small;'>本窗口为 README 摘要，完整文档请见项目根目录 README.md</p>");
+}
+
+ReadmeDialog::ReadmeDialog(QWidget* parent): QDialog(parent) {
+    setWindowTitle(tr("README 摘要"));
+    setMinimumSize(600,420);
+
+    const auto& p=ThemeManager::htmlPalette();
+    auto* browser=new QTextBrowser(this);
+    browser->setOpenExternalLinks(true);
+    browser->setStyleSheet(QStringLiteral("QTextBrowser{background:%1;color:%2;}")
+        .arg(QLatin1String(p.bodyBg)).arg(QLatin1String(p.bodyFg)));
+    const bool en = I18n::instance().currentLanguage() == QStringLiteral("en");
+    browser->setHtml(renderHtml(QStringLiteral(
+        "<html><body style='font-family: \"Microsoft YaHei\", \"Noto Sans CJK SC\", "
+        "line-height: 1.7; color:%{bodyFg}; background:%{bodyBg};'>"
+        "<h2 style='color:%{headingBlue};'>FileEncryptor v%{ver} — %1</h2>"
+        "%2"
+        "</body></html>")
+        .arg(en ? QStringLiteral("Project summary") : QStringLiteral("项目摘要"))
+        .arg(readmeBodyHtml()),
+        p, resolvedVersion()));
 
     auto* btns=new QDialogButtonBox(QDialogButtonBox::Close,this);
     connect(btns,&QDialogButtonBox::rejected,this,&QDialog::accept);

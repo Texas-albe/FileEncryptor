@@ -15,6 +15,8 @@ public class CommandRequest
     public string WorkingDirectory { get; set; } = "";
     public byte[] StdinData { get; set; } = Array.Empty<byte>();
     public Dictionary<string, string> ExtraEnv { get; set; } = new();
+    // 用系统控制台窗口运行：进度直接显示在控制台
+    public bool ShowConsole { get; set; }
 }
 
 public class CommandResult

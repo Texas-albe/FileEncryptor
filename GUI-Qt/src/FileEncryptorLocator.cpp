@@ -1,12 +1,9 @@
-// FileEncryptorLocator 实现
 #include "FileEncryptorLocator.h"
 #include <QCoreApplication>
 #include <QDir>
 #include <QFileInfo>
 #include <QProcessEnvironment>
 
-// 候选文件名不各自硬编码版本号，统一由 getExpectedNames() 从 version() 派生，
-// 使「期望的 CLI 版本」只有一处定义（getExpectedNames 与 locate 共用同一份列表）。
 
 static bool isExecutable(const QString& path) {
     QFileInfo fi(path);
@@ -17,7 +14,7 @@ QString FileEncryptorLocator::selfDir() {
     return QCoreApplication::applicationDirPath();
 }
 
-// 在指定目录中按候选名依次探测
+// 按候选名探测目录
 static QString findInDir(const QString& dir) {
     QDir d(dir);
     if(!d.exists()) return {};
@@ -50,20 +47,19 @@ QString FileEncryptorLocator::locate() {
     return {};
 }
 
-// ====== 新增函数实现 ======
 
-// 期望的配套 CLI 版本（发布包文件名随之变化）。升级 CLI 时只需改这一处。
+// 配套 CLI 版本
 QString FileEncryptorLocator::version() {
-    return QStringLiteral("2.4.3");
+    return QStringLiteral("2.4.5");
 }
 
-// GUI 自身版本（与 GUI/CMakeLists.txt project VERSION 同步）；此前 main/MainWindow/AboutDialogs 三处硬编码兜底值不一致，现统一从本函数读取。
+// GUI 自身版本
 QString FileEncryptorLocator::guiVersion() {
-    return QStringLiteral("2.0.2");
+    return QStringLiteral("2.0.3");
 }
 
 QString FileEncryptorLocator::cliDownloadUrl() {
-    return QStringLiteral("https://github.com/Texas-albe/FileEncryptor/releases/tag/GUI2.0.1_CLI2.4.3");
+    return QStringLiteral("https://github.com/Texas-albe/FileEncryptor/releases/tag/GUI2.0.3_CLI2.4.5");
 }
 
 QStringList FileEncryptorLocator::getExpectedNames() {
@@ -100,21 +96,18 @@ static QString findInDirWithNames(const QString& dir,const QStringList& names) {
 bool FileEncryptorLocator::existsWithVersion(QString* foundPath) {
     const QStringList names=getExpectedNames();
 
-    // 1) 环境变量
     const QString envPath=qEnvironmentVariable("FILEENCRYPTOR_EXE");
     if(!envPath.isEmpty()&&isExecutable(envPath)) {
         if(foundPath) *foundPath=envPath;
         return true;
     }
 
-    // 2) 同目录
     QString found=findInDirWithNames(selfDir(),names);
     if(!found.isEmpty()) {
         if(foundPath) *foundPath=found;
         return true;
     }
 
-    // 3) PATH
     const QProcessEnvironment env=QProcessEnvironment::systemEnvironment();
     for(const QString& p:env.value("PATH").split(QDir::listSeparator(),Qt::SkipEmptyParts)) {
         found=findInDirWithNames(p,names);

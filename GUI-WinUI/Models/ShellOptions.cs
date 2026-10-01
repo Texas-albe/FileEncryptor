@@ -42,4 +42,6 @@ public class ShellOptions
     public bool WriteSha256 { get; set; } = false;
     public bool Compress { get; set; } = false;
     public int CompressionLevel { get; set; } = 0;
+    // 控制台模式：口令由 CLI 在控制台交互读取，不经 stdin 管道
+    public bool ConsoleMode { get; set; } = false;
 }

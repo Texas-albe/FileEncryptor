@@ -19,7 +19,7 @@ public static class EtaEstimatorService
         var est = new EtaEstimate();
         if (bytes <= 0) return est;
 
-        // 分层取样：同 action+mode → 同 action → 全体
+        // 分层取样
         var samples = history
             .Where(r => r.Status == "success" && r.TotalBytes > 0 && r.DurationMs > 0)
             .ToList();

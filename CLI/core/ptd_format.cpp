@@ -6,18 +6,26 @@ const unsigned char MAGIC[4]={'F','E','N','C'};
 static const unsigned char DEK_MARKER[16] = {
     'F','E','D','E','K','W','R','A','P','0','0','0','0','0','1','\0' };
 
+bool verify_magic(const unsigned char* buf) {
+    return std::memcmp(buf, MAGIC, 4) == 0;
+}
+
 size_t header_size_for_version(unsigned char ver) {
     if(ver==1) return HEADER_SIZE_V1;
     if(ver==2) return HEADER_SIZE_V2;
     if(ver==3) return HEADER_SIZE_V3;
     if(ver==5) return HEADER_SIZE_V5;
     if(ver==6) return HEADER_SIZE_V6;
-    return HEADER_SIZE_V4;
+    if(ver==4) return HEADER_SIZE_V4;
+    // 未知版本返回哨兵而非静默回退 V4，避免把损坏/伪造文件误判为合法 v4 解析
+    return size_t(-1);
 }
 
 size_t header_hmac_cover(unsigned char ver) {
     if(ver==6) return HEADER_HMAC_COVER_V6;
-    return (ver==5) ? HEADER_HMAC_COVER_V5 : HEADER_HMAC_COVER;
+    if(ver==5) return HEADER_HMAC_COVER_V5;
+    if(ver==4) return HEADER_HMAC_COVER;
+    return size_t(-1);
 }
 
 bool wrap_dek(const unsigned char* dek, const unsigned char* kek,

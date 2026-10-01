@@ -1,4 +1,4 @@
-// CliNotFoundDialog.h - CLI 程序未找到时的错误提示对话框（含自动下载）
+// CLI 未找到对话框（含自动下载）
 #pragma once
 #include <QDialog>
 
@@ -44,8 +44,8 @@ private:
     QProgressBar* m_progress=nullptr;
     QLabel* m_statusLabel=nullptr;
     QString m_savePath;
-    QString m_assetUrl;        // 待校验的 CLI 资产下载地址
-    QString m_tempPath;         // 资产先写入与目标同目录的临时文件，校验通过后原子改名
-    QByteArray m_assetData;     // 已下载资产字节（用于 SHA256 校验）
-    bool m_shaWarned=false;     // .sha256 缺失时跳过校验并在结果中提示
+    QString m_assetUrl;
+    QString m_tempPath;
+    QByteArray m_assetData;
+    bool m_shaWarned=false;
 };

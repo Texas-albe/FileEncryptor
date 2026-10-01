@@ -4,7 +4,7 @@
 
 FileEncryptor **图形界面**。Windows 侧使用 **WinUI 3**（Windows App SDK，C#），Linux 侧使用 **Qt 6**（Widgets，C++，静态链接）。两个平台共享同一份 CLI 后端，界面各自独立实现。
 
-- 程序版本 **2.0.0**（配套 CLI 2.4.2）。
+- 程序版本 **2.0.3**（配套 CLI 2.4.5）。
 
 ---
 
@@ -64,8 +64,8 @@ sudo apt install qt6-base-dev
 cmake --preset linux-release
 cmake --build --preset linux-release
 # 构建完成后自动：
-#   - 拷到 out/Ubuntu-26.04/build/linux-release/bin/FileEncryptorGUI-2.0.0-Qt-Linux
-#   - cpack 生成 out/packages/file-encryptor-gui-qt-2.0.0-Linux.deb 和 .rpm
+#   - 拷到 out/Ubuntu-26.04/build/linux-release/bin/FileEncryptorGUI-2.0.3-Qt-Linux
+#   - cpack 生成 out/packages/file-encryptor-gui-qt-2.0.3-Linux.deb 和 .rpm
 ```
 
 > **Linux 中文字体（豆腐块修复）**：最小化 / 服务器环境常无 CJK 字体，界面中文会渲染成方块（□）。
@@ -123,7 +123,7 @@ FileEncryptor/
 
 直接运行 `FileEncryptorGUI(.exe)`：
 
-- **顶栏（菜单栏）**：关于菜单（鸣谢 + README 摘要 + 关于 Qt）、编辑菜单（“编辑 YAML 配置...”用系统默认编辑器打开 CLI 的 fileencryptor.yaml）；右上角为主题下拉框（浅色 / 深色）与 `视图设置` 按钮（自定义背景图），与“关于”同一行
+- **顶栏（菜单栏）**：与 WinUI 版一致，顺序为 编辑 → 视图 → 工具 → 关于。编辑菜单（“编辑 YAML 配置...”用系统默认编辑器打开 CLI 的 fileencryptor.yaml）；视图菜单（“视图设置...”自定义背景图）；工具菜单（任务历史 / 重新检测 CLI 程序 / 语言）；关于菜单（检查更新 + 鸣谢 + README 摘要 + 关于 Qt）。右上角为主题下拉框（浅色 / 深色）与 `视图设置` 按钮，与菜单栏同一行
 - **左侧**：文件选择面板（添加文件 / 添加目录 / 清空；支持从资源管理器拖放文件 / 目录）
 - **中部**：动作按钮（加密 / 解密 / 批量加密 / 批量解密）+ 模式选择（XChaCha20-Poly1305 / AEGIS-256）。密钥库管理已整体下线 GUI——改由 CLI 的 `-L` 子命令（list/add/remove/show/pub/export）与 `-K` 按名解析收件人 / 身份承担，两端共用 `<用户配置目录>/keys/`。
 - **右侧**：密码输入框（星号遮挡 + 强度提示）
@@ -134,7 +134,7 @@ FileEncryptor/
 - **存储**：`<用户配置目录>/history/tasks.log`（JSONL，每行一条记录，追加写；单条损坏不影响其余条目；扩展名统一为 3 字符）。路径与密钥库同根，统一经 `QDir::toNativeSeparators()` 归一化，不含混用分隔符。
 - **记录内容**：任务 id、起止时间、耗时、动作（`-e/-d/-be/-bd/-g/-G/-Y`）、加密模式、输入路径数、输入字节总量（目录递归统计）、已完成文件数、输出目录、退出码、是否取消、错误、结果（成功 / 失败 / 已取消）。
 - **ETA 算法（仅用于批量面板空闲预估）**：取历史中「完整成功」记录的吞吐中位数（抗单次异常值），按 `动作+模式 → 动作 → 全体` 三级分层取样，最多取最近 10 条；运行中改用 CLI 实时进度帧外推。样本不足时批量面板明示「暂无历史样本」而不给出臆测数字。
-- **入口**：输出区标题行右侧「任务历史...」按钮（工具菜单仅保留「任务历史」一项）。
+- **入口**：输出区标题行右侧「任务历史...」按钮（工具菜单内为「任务历史... / 重新检测 CLI 程序 / 语言」）。
 
 详细交互说明见源文件注释与 `src/MainWindow.cpp`。
 

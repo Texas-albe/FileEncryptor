@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.15)
-project(FileEncryptorCLI VERSION 2.4.4 LANGUAGES CXX)
+project(FileEncryptorCLI VERSION 2.4.5 LANGUAGES CXX)
 
 # FileEncryptor CLI - 命令行加密工具（独立项目），产出 FileEncryptorCLI(.exe)，GUI 经 QProcess 调用。
 # 静态链接 libsodium + yaml-cpp，二进制零外部依赖，可直接打包 DEB/RPM。

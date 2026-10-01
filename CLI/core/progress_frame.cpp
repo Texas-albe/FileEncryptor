@@ -1,4 +1,4 @@
-// progress_frame 实现（CLI v2.3.0）—— 批量模式帧式进度显示
+// progress_frame 实现（CLI v2.3.0） 批量模式帧式进度显示
 // 详见 progress_frame.hpp 顶部设计说明。
 #include "progress_frame.hpp"
 
@@ -22,7 +22,7 @@ const char* const FE_FRAME_ENV   = "FILEENCRYPTOR_PROGRESS_FRAME";
 
 namespace feui {
 
-// ---------- 环境探测 ----------
+// 环境探测
 static bool stdout_is_tty() {
 #ifdef _WIN32
     return _isatty(_fileno(stdout)) != 0;
@@ -76,7 +76,7 @@ bool frame_mode_enabled() {
     return cached == 1;
 }
 
-// ---------- 格式化 ----------
+// 格式化
 // 数值精度自适应：<10 两位小数、<100 一位、其余取整；单位按 1024 进制递进。
 static std::string fmt_value(double v, const char* unit) {
     char buf[64];
@@ -209,7 +209,7 @@ static std::string pad_left(const std::string& s, size_t w) {
     return std::string(w - cur, ' ') + s;
 }
 
-// ---------- 帧布局 ---------- 四列：路径 | 进度条 | 速率 | ETA。路径/进度条按终端宽度分配（进度条约 40%）， 速率/ETA 固定宽，保证各行列对齐不跳动。
+// 帧布局 四列：路径 | 进度条 | 速率 | ETA。路径/进度条按终端宽度分配（进度条约 40%）， 速率/ETA 固定宽，保证各行列对齐不跳动。
 namespace {
 constexpr int kRateW = 12;   // "123.45 MB/s"
 constexpr int kEtaW  = 11;   // "ETA 1:02:03"
@@ -248,7 +248,7 @@ void BatchProgress::setFileStats(uint64_t done,uint64_t failed,uint64_t skipped,
 }
 
 std::vector<std::string> BatchProgress::build_lines(int width) const {
-    // ---- 列宽 ----
+    // 列宽
     int avail = width - kRateW - kEtaW - 3 * kSepW;
     if (avail < 30) avail = 30;
     int bar_w = avail * 40 / 100;
@@ -262,7 +262,7 @@ std::vector<std::string> BatchProgress::build_lines(int width) const {
     const auto now = std::chrono::steady_clock::now();
     const double elapsed = std::chrono::duration<double>(now - m_started).count();
 
-    // ---- 第 1 行：汇总（总大小 | 已处理大小 | 总速率 | ETA）----
+    // 第 1 行：汇总（总大小 | 已处理大小 | 总速率 | ETA）
     const uint64_t done_bytes = m_processed.load();
     const uint64_t total_bytes = m_total;
     const double overall_rate = (elapsed > 0.0) ? (double)done_bytes / elapsed : 0.0;
@@ -287,7 +287,7 @@ std::vector<std::string> BatchProgress::build_lines(int width) const {
     std::vector<std::string> lines;
     lines.push_back(line1);
 
-    // ---- 第 2..n+1 行：每线程一行（文件路径 | 进度条 | 速率 | ETA）----
+    // 第 2..n+1 行：每线程一行（文件路径 | 进度条 | 速率 | ETA）
     for (const ProgressSlot& s : m_slots) {
         std::string col1, col2, col3, col4;
         if (s.active && s.total > 0) {

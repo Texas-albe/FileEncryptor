@@ -1,4 +1,3 @@
-// MainWindow 实现
 
 #include "MainWindow.h"
 #include "AboutDialogs.h"
@@ -14,10 +13,10 @@
 #include "TaskSummaryDialog.h"
 #include "TaskHistoryDialog.h"
 #include "EtaEstimator.h"
+#include "I18n.h"
 #include <vector>
 #include <cstring>
 
-// 安全擦除：见 secure_zero.h（MainWindow 与 PasswordDialog 共用）
 #include "secure_zero.h"
 
 #include <QMenuBar>
@@ -38,6 +37,12 @@
 #include <QSpinBox>
 #include <QProcess>
 #include <QJsonDocument>
+#include <QJsonObject>
+#include <QMessageBox>
+#include <QProgressDialog>
+#include <QFile>
+#include <QDir>
+#include <QCoreApplication>
 #include <QJsonObject>
 #include <QPushButton>
 #include <QButtonGroup>
@@ -77,7 +82,7 @@
 #include <QUrl>
 #include <QFile>
 #include <QTemporaryFile>
-#include <QThread>    // 批量线程数参考（CLI 侧同策略）
+#include <QThread>
 #include <QTimer>
 #include <QtConcurrent/QtConcurrentRun>
 #include <QFutureWatcher>
@@ -86,28 +91,23 @@
 #include <memory>
 
 MainWindow::MainWindow(QWidget* parent): QMainWindow(parent) {
-    // 标题含版本号（兜底值统一取 FileEncryptorLocator::guiVersion()，不再各自硬编码）
     setWindowTitle(QStringLiteral("FileEncryptorGUI %1").arg(
         qApp->applicationVersion().isEmpty() ? FileEncryptorLocator::guiVersion()
         : qApp->applicationVersion()));
-    resize(1200,760);
+    // 默认窗口 16:9
+    resize(1351,760);
 
-    // 系统托盘：后台任务完成时发桌面通知
     m_trayIcon=new QSystemTrayIcon(this);
     m_trayIcon->setIcon(QIcon::fromTheme(QStringLiteral("fileencryptor"),
         QApplication::style()->standardIcon(QStyle::SP_ComputerIcon)));
     m_trayIcon->setToolTip(windowTitle());
     m_trayIcon->show();
 
-    // 功能4：允许把文件 / 目录拖进主窗口加入输入列表
     setAcceptDrops(true);
 
-    // 命令执行器（手写极简构造注入，不引 DI 容器）
     m_executor=new ProcessCommandExecutor(this);
 
-    // 启动时检测 CLI 是否存在
     if(!FileEncryptorLocator::existsWithVersion(&m_fileEncryptorPath)) {
-        // 延迟显示错误对话框，避免阻塞主窗口初始化
         QTimer::singleShot(500,this,[this]() {
             showCliNotFoundError(tr("启动时检测"));
             });
@@ -116,7 +116,6 @@ MainWindow::MainWindow(QWidget* parent): QMainWindow(parent) {
     buildMenu();
     buildNavControls();
 
-    // 中央布局：左 | 中 | 下（口令输入移至运行期 PasswordDialog 弹窗，主页面不留独立口令区）
     auto* centralSplitter=new QSplitter(Qt::Horizontal);
 
     auto* left=buildLeftPanel();
@@ -134,25 +133,21 @@ MainWindow::MainWindow(QWidget* parent): QMainWindow(parent) {
     outerSplitter->addWidget(bottom);
     outerSplitter->setStretchFactor(0,6);
     outerSplitter->setStretchFactor(1,1);
-    outerSplitter->setSizes({520, 380});   // 拟 cmd 输出区加高（批量帧行数多）
+    outerSplitter->setSizes({520, 380});
 
     setCentralWidget(outerSplitter);
     m_outerSplitter=outerSplitter;
 
-    // 背景图：面板透明，透出主窗口底图
     applyPanelTransparency();
-    // 启动期恢复已保存的背景图（不强制按比例缩放窗口，几何由下方 restoreGeometry 决定）
     QSettings s(QStringLiteral("FileEncryptor"),QStringLiteral("FileEncryptorGUI"));
     m_bgPath=s.value(QStringLiteral("backgroundImage")).toString();
-    applyBackground(m_bgPath, /*resizeToRatio=*/false);
-    // 恢复窗口几何（含背景图设置后的窗口大小，重启后保持生效）
+    applyBackground(m_bgPath, false);
+    applyFlagRedTheme();
     if(s.contains(QStringLiteral("geometry")))
         restoreGeometry(s.value(QStringLiteral("geometry")).toByteArray());
 
-    // 状态栏
     m_statusLabel=new QLabel(this);
     statusBar()->addWidget(m_statusLabel,1);
-    // 右侧常驻计数条：运行中实时显示「当前文件 / 完成 / 跳过 / 失败」，空闲时显示待处理规模
     m_progressLabel=new QLabel(this);
     m_progressLabel->setTextInteractionFlags(Qt::NoTextInteraction);
     statusBar()->addPermanentWidget(m_progressLabel);
@@ -160,7 +155,6 @@ MainWindow::MainWindow(QWidget* parent): QMainWindow(parent) {
         ? tr("未找到 FileEncryptor 可执行文件 — 请设置环境变量 FILEENCRYPTOR_EXE 或将其置于本程序同目录")
         : tr("就绪 | FileEncryptor: %1").arg(m_fileEncryptorPath));
 
-    // 目录扫描异步化：防抖（180ms）+ 工作线程执行，界面不再被递归遍历阻塞
     m_pendingTimer=new QTimer(this);
     m_pendingTimer->setSingleShot(true);
     m_pendingTimer->setInterval(180);
@@ -168,31 +162,26 @@ MainWindow::MainWindow(QWidget* parent): QMainWindow(parent) {
     m_scanWatcher=new QFutureWatcher<ScanResult>(this);
     connect(m_scanWatcher,&QFutureWatcher<ScanResult>::finished,
         this,&MainWindow::onPendingScanFinished);
-    // 进度帧节流渲染
     m_frameTimer=new QTimer(this);
     m_frameTimer->setSingleShot(true);
     m_frameTimer->setInterval(120);
     connect(m_frameTimer,&QTimer::timeout,this,&MainWindow::flushPendingFrame);
 
     connectSignals();
-    // zstd 能力探测（同步 QProcess，--features 秒回），随后按结果裁决压缩控件初始状态
     probeZstdSupport();
     updateAsymVisibility();
     refreshCommandPreview();
     updateProgressLabel();
-    recomputePending();   // 异步统计初始待处理规模（大目录也不阻塞界面）
+    recomputePending();
 }
 
 MainWindow::~MainWindow() {
-    // 扫描线程可能在窗口关闭时仍在跑：先置取消标志再等其退出，
-    // 避免工作线程继续访问已析构的窗口（lambda 只按值捕获，等待本身是安全的）。
     if(m_pendingTimer) m_pendingTimer->stop();
     if(m_scanCancel) m_scanCancel->store(true,std::memory_order_relaxed);
     if(m_scanWatcher&&m_scanWatcher->isRunning()) m_scanWatcher->waitForFinished();
 }
 
 void MainWindow::closeEvent(QCloseEvent* e) {
-    // 运行中弹确认
     if(m_executor&&m_executor->isRunning()) {
         if(!MsgBox::confirm(this,tr("确认退出"),
             tr("有命令正在运行，退出将终止它。确定退出？"))) {
@@ -201,29 +190,59 @@ void MainWindow::closeEvent(QCloseEvent* e) {
         }
         m_executor->cancel();
     }
-    // 功能8：清理多收件人临时公钥文件（仅含公钥，仍保持不留残留文件的整洁性）
     if(!m_recipientTempFile.isEmpty()) {
         QFile::remove(m_recipientTempFile);
         m_recipientTempFile.clear();
     }
-    // rewrap 新口令临时密钥文件：运行结束时 onCommandFinished 已删除，但窗口在
-    // 轮换进行中被关闭（已 cancel）时该路径可能残留，此处兜底清理。
     if(!m_rewrapTempKey.isEmpty()) {
         QFile::remove(m_rewrapTempKey);
         m_rewrapTempKey.clear();
     }
-    // 持久化窗口几何（含背景图设置后的窗口大小，重启后保持生效）
     QSettings(QStringLiteral("FileEncryptor"),QStringLiteral("FileEncryptorGUI"))
         .setValue(QStringLiteral("geometry"),saveGeometry());
     e->accept();
 }
 
-// ---------- 顶栏菜单（关于 + 编辑；主题/视图设置控件在菜单栏右上角，同一行）----------
+// 顶栏菜单
 void MainWindow::buildMenu() {
     m_menuBar=menuBar();
 
-    // —— 关于菜单 ——
+
+    // 菜单按功能顺序排列
+    auto* editMenu=m_menuBar->addMenu(tr("编辑(&E)"));
+    auto* actEditConfig=editMenu->addAction(tr("编辑 YAML 配置..."));
+    connect(actEditConfig,&QAction::triggered,this,&MainWindow::onEditConfig);
+
+    auto* viewMenu=m_menuBar->addMenu(tr("视图(&V)"));
+    auto* actViewSettings=viewMenu->addAction(tr("视图设置..."));
+    connect(actViewSettings,&QAction::triggered,this,&MainWindow::onViewSettings);
+
+    auto* toolsMenu=m_menuBar->addMenu(tr("工具(&T)"));
+    auto* actTaskHistory=toolsMenu->addAction(tr("任务历史..."));
+    connect(actTaskHistory,&QAction::triggered,this,&MainWindow::onOpenTaskHistory);
+    auto* actRetryCli=toolsMenu->addAction(tr("重新检测 CLI 程序"));
+    connect(actRetryCli,&QAction::triggered,this,&MainWindow::onRetryCliDetection);
+    toolsMenu->addSeparator();
+
+    auto* langMenu=toolsMenu->addMenu(tr("语言(&L)"));
+    auto* langGroup=new QActionGroup(langMenu);
+    auto addLang=[&](const QString& label,const QString& id) {
+        auto* a=langMenu->addAction(label);
+        a->setCheckable(true);
+        a->setChecked(I18n::instance().currentLanguage()==id);
+        langGroup->addAction(a);
+        connect(a,&QAction::triggered,this,[this,id] {
+            I18n::instance().changeLanguage(id,this);
+        });
+    };
+    addLang(QStringLiteral("简体中文"),QStringLiteral("zh"));
+    addLang(QStringLiteral("English"),QStringLiteral("en"));
+    addLang(QStringLiteral("Русский"),QStringLiteral("ru"));
+
     auto* aboutMenu=m_menuBar->addMenu(tr("关于(&A)"));
+
+    auto* actCheckUpdate=aboutMenu->addAction(tr("检查更新..."));
+    connect(actCheckUpdate,&QAction::triggered,this,&MainWindow::onCheckForUpdate);
 
     auto* actCredits=aboutMenu->addAction(tr("鸣谢..."));
     connect(actCredits,&QAction::triggered,this,[this]{
@@ -240,50 +259,171 @@ void MainWindow::buildMenu() {
     aboutMenu->addSeparator();
     auto* actAboutQt=aboutMenu->addAction(tr("关于 Qt..."));
     connect(actAboutQt,&QAction::triggered,qApp,&QApplication::aboutQt);
-
-    // —— 编辑菜单（顶层，与“关于”同处菜单栏一行）——
-    auto* editMenu=m_menuBar->addMenu(tr("编辑(&E)"));
-    auto* actEditConfig=editMenu->addAction(tr("编辑 YAML 配置..."));
-    connect(actEditConfig,&QAction::triggered,this,&MainWindow::onEditConfig);
-
-    // —— 工具菜单 ——
-    // v1.3.0：密钥库管理/批量 ETA 入口已移除，菜单仅保留「任务历史」
-    auto* toolsMenu=m_menuBar->addMenu(tr("工具(&T)"));
-    auto* actTaskHistory=toolsMenu->addAction(tr("任务历史..."));
-    connect(actTaskHistory,&QAction::triggered,this,&MainWindow::onOpenTaskHistory);
-    toolsMenu->addSeparator();
-    auto* actRetryCli=toolsMenu->addAction(tr("重新检测 CLI 程序"));
-    connect(actRetryCli,&QAction::triggered,this,&MainWindow::onRetryCliDetection);
 }
 
-// ---------- 菜单栏右上角控件：颜色主题 + 视图设置（与“关于”同一行）----------
+// 自动更新
+QString MainWindow::locateUpdater() const {
+    const QString dir = QCoreApplication::applicationDirPath();
+    const QStringList cands = {
+        dir + QStringLiteral("/updater/Updater.exe"),
+        dir + QStringLiteral("/Updater.exe"),
+    };
+    for (const QString& c : cands)
+        if (QFile::exists(c)) return c;
+    const QStringList paths = qEnvironmentVariable("PATH").split(QDir::listSeparator(), Qt::SkipEmptyParts);
+    for (const QString& p : paths) {
+        const QString c = QDir(p).filePath(QStringLiteral("Updater.exe"));
+        if (QFile::exists(c)) return c;
+    }
+    return {};
+}
+
+void MainWindow::onCheckForUpdate() {
+    const QString updater = locateUpdater();
+    if (updater.isEmpty()) {
+        QMessageBox::warning(this, tr("检查更新"),
+            tr("未找到更新器 (Updater.exe)。请确认程序安装完整，或手动前往 GitHub 获取新版本。"));
+        return;
+    }
+    auto* dlg = new QProgressDialog(tr("正在检查更新..."), tr("取消"), 0, 0, this);
+    dlg->setWindowTitle(tr("检查更新"));
+    dlg->setWindowModality(Qt::WindowModal);
+    dlg->show();
+
+    auto* proc = new QProcess(this);
+    const QString platform = []() {
+#ifdef Q_OS_WIN
+        return QStringLiteral("windows");
+#else
+        return QStringLiteral("linux");
+#endif
+    }();
+    const QStringList args = {
+        QStringLiteral("--check"),
+        QStringLiteral("--current"), FileEncryptorLocator::guiVersion(),
+        QStringLiteral("--type"), QStringLiteral("qt"),
+        QStringLiteral("--platform"), platform,
+    };
+    connect(proc, &QProcess::finished, this, [this, dlg, proc, updater](int, QProcess::ExitStatus) {
+        dlg->close(); dlg->deleteLater();
+        const QByteArray out = proc->readAllStandardOutput();
+        proc->deleteLater();
+        handleCheckResult(out, updater);
+    });
+    connect(dlg, &QProgressDialog::canceled, proc, [proc] { proc->kill(); });
+    proc->start(updater, args);
+}
+
+void MainWindow::handleCheckResult(const QByteArray& out, const QString& updater) {
+    QJsonParseError err;
+    const QJsonDocument doc = QJsonDocument::fromJson(out, &err);
+    if (doc.isNull()) {
+        QMessageBox::warning(this, tr("检查更新"),
+            tr("无法解析更新器输出：%1\n原始输出：%2").arg(err.errorString(), QString::fromUtf8(out)));
+        return;
+    }
+    const QJsonObject o = doc.object();
+    if (!o.value(QStringLiteral("ok")).toBool()) {
+        QMessageBox::warning(this, tr("检查更新"),
+            tr("检查失败：%1").arg(o.value(QStringLiteral("error")).toString()));
+        return;
+    }
+    if (o.value(QStringLiteral("has_update")).toBool(false)) {
+        const QString latest = o.value(QStringLiteral("latest_version")).toString();
+        const QString notes = o.value(QStringLiteral("notes")).toString();
+        QMessageBox box(this);
+        box.setWindowTitle(tr("发现新版本"));
+        box.setText(tr("发现新版本 %1。").arg(latest));
+        box.setInformativeText(notes + QStringLiteral("\n\n") + tr("是否现在下载并安装？"));
+        box.setStandardButtons(QMessageBox::Yes | QMessageBox::No);
+        box.setDefaultButton(QMessageBox::Yes);
+        if (box.exec() == QMessageBox::Yes)
+            doUpdaterUpdate(updater,
+                o.value(QStringLiteral("download_url")).toString(),
+                o.value(QStringLiteral("sha256")).toString(),
+                o.value(QStringLiteral("sig_url")).toString());
+    } else {
+        QMessageBox::information(this, tr("检查更新"),
+            tr("已是最新版本（%1）。").arg(o.value(QStringLiteral("current_version")).toString()));
+    }
+}
+
+void MainWindow::doUpdaterUpdate(const QString& updater, const QString& url,
+                                 const QString& sha, const QString& sigUrl) {
+    if (url.isEmpty()) {
+        QMessageBox::warning(this, tr("更新"),
+            tr("未找到适用于本平台的安装包，请前往 GitHub 手动下载。"));
+        return;
+    }
+    const QString staging = QCoreApplication::applicationDirPath()
+                            + QStringLiteral("/update_staging");
+    QDir().mkpath(staging);
+
+    auto* dlg = new QProgressDialog(tr("正在下载并更新..."), tr("取消"), 0, 100, this);
+    dlg->setWindowTitle(tr("更新"));
+    dlg->setWindowModality(Qt::WindowModal);
+    dlg->show();
+
+    auto* proc = new QProcess(this);
+    QStringList args = {
+        QStringLiteral("--update"),
+        QStringLiteral("--url"), url,
+        QStringLiteral("--install-dir"), staging,
+    };
+    if (!sha.isEmpty()) { args << QStringLiteral("--sha256") << sha; }
+    if (!sigUrl.isEmpty()) { args << QStringLiteral("--sig-url") << sigUrl; }
+
+    connect(proc, &QProcess::readyReadStandardOutput, this, [dlg, proc] {
+        while (proc->canReadLine()) {
+            const QJsonDocument d = QJsonDocument::fromJson(proc->readLine().trimmed());
+            if (d.isObject()) {
+                const int p = d.object().value(QStringLiteral("progress")).toInt(-1);
+                if (p >= 0) dlg->setValue(p);
+            }
+        }
+    });
+    connect(proc, &QProcess::finished, this, [this, dlg, proc, staging, url] {
+        dlg->close(); dlg->deleteLater();
+        const QByteArray out = proc->readAllStandardOutput();
+        proc->deleteLater();
+        const bool done = out.contains("\"stage\":\"done\"");
+        if (done) {
+            const QString name = url.mid(url.lastIndexOf(QLatin1Char('/')) + 1);
+            QMessageBox::information(this, tr("更新"),
+                tr("更新包已下载并校验完成，存放于：\n%1\n\n请关闭本程序后以该文件替换当前程序并重新启动。")
+                    .arg(staging + QLatin1Char('/') + name));
+        } else {
+            QMessageBox::warning(this, tr("更新"),
+                tr("更新失败（详见输出）。可前往 GitHub 手动下载。"));
+        }
+    });
+    connect(dlg, &QProgressDialog::canceled, proc, [proc] { proc->kill(); });
+    proc->start(updater, args);
+}
+
+// 主题与视图控件
 void MainWindow::buildNavControls() {
     m_navWidget=new QWidget(this);
     auto* lay=new QHBoxLayout(m_navWidget);
     lay->setContentsMargins(0,0,0,0);
     lay->setSpacing(6);
 
-    // 主题：下拉框，提供 浅色 / 深色 两种模式
     lay->addWidget(new QLabel(tr("主题：")));
     m_themeCombo=new QComboBox;
     m_themeCombo->addItem(tr("浅色"),static_cast<int>(ThemeManager::Theme::Light));
     m_themeCombo->addItem(tr("深色"),static_cast<int>(ThemeManager::Theme::Dark));
-    // 反映当前持久化偏好
     const int idx=m_themeCombo->findData(static_cast<int>(ThemeManager::chosenTheme()));
     m_themeCombo->setCurrentIndex(idx>=0 ? idx : 0);
     connect(m_themeCombo,QOverload<int>::of(&QComboBox::currentIndexChanged),
         this,&MainWindow::onThemeComboChanged);
     lay->addWidget(m_themeCombo);
 
-    // 视图设置（背景图）
     m_btnViewSettings=new QPushButton(tr("视图设置"));
     connect(m_btnViewSettings,&QPushButton::clicked,this,&MainWindow::onViewSettings);
     lay->addWidget(m_btnViewSettings);
 
-    // 置于菜单栏右上角（与“关于”同一行）
     m_menuBar->setCornerWidget(m_navWidget,Qt::TopRightCorner);
 
-    // 主题切换（用户选择）→ 同步下拉框并刷新面板
     connect(&ThemeManager::instance(),&ThemeManager::themeChanged,
         this,&MainWindow::onThemeDarkChanged);
 }
@@ -291,14 +431,13 @@ void MainWindow::buildNavControls() {
 void MainWindow::onThemeComboChanged(int idx) {
     const auto t=static_cast<ThemeManager::Theme>(
         m_themeCombo->itemData(idx).toInt());
-    ThemeManager::setTheme(t);   // 持久化 + 应用调色板
+    ThemeManager::setTheme(t);
     applyButtonStyles();
-    applyPanelTransparency();    // 面板样式随主题刷新
-    refreshCommandPreview();     // 命令预览按当前主题对比色刷新
+    applyPanelTransparency();
+    refreshCommandPreview();
 }
 
-void MainWindow::onThemeDarkChanged(bool /*dark*/) {
-    // 用户切换主题后保持下拉框与面板同步
+void MainWindow::onThemeDarkChanged(bool ) {
     const int idx=m_themeCombo->findData(static_cast<int>(ThemeManager::chosenTheme()));
     if(idx>=0) {
         m_themeCombo->blockSignals(true);
@@ -307,32 +446,40 @@ void MainWindow::onThemeDarkChanged(bool /*dark*/) {
     }
     applyButtonStyles();
     applyPanelTransparency();
+    applyFlagRedTheme();
 }
 
-// ---------- 视图设置（自定义背景图）----------
+// 底色随配色
+void MainWindow::applyFlagRedTheme() {
+    const auto& r=ThemeManager::ui();
+    setStyleSheet(QStringLiteral("QMainWindow{background-color:%1;}")
+        .arg(QLatin1String(r.window)));
+    QPalette p=palette();
+    p.setColor(QPalette::Highlight, QColor(r.highlight));
+    p.setColor(QPalette::HighlightedText, Qt::white);
+    setPalette(p);
+}
+
 void MainWindow::onViewSettings() {
     ViewSettingsDialog dlg(m_bgPath,this);
     if(dlg.exec()!=QDialog::Accepted) return;
 
     const QString path=dlg.selectedImagePath();
     if(path.isEmpty()) {
-        // 清除背景
-        applyBackground(QString(), /*resizeToRatio=*/false);
+        applyBackground(QString(), false);
         return;
     }
-    // 先校验可加载，避免选了损坏文件还写进设置
     const QPixmap pm(path);
     if(pm.isNull()) {
         MsgBox::warn(this,tr("背景图无效"),
             tr("无法加载该图片，请选择有效的 PNG/JPG 等图片文件。"));
         return;
     }
-    applyBackground(path, /*resizeToRatio=*/true);
+    applyBackground(path, true);
 }
 
-// ---------- 背景图应用 ----------
+// 背景图应用
 void MainWindow::applyBackground(const QString& path,bool resizeToRatio) {
-    // 清除
     if(path.isEmpty()||!QFileInfo(path).isFile()) {
         m_bgPath.clear();
         m_bgSource=QPixmap();
@@ -343,7 +490,7 @@ void MainWindow::applyBackground(const QString& path,bool resizeToRatio) {
     }
 
     const QPixmap pm(path);
-    if(pm.isNull()) return;   // 不应发生（onViewSettings 已校验）；保险起见不改状态
+    if(pm.isNull()) return;
 
     m_bgPath=path;
     m_bgSource=pm;
@@ -352,16 +499,14 @@ void MainWindow::applyBackground(const QString& path,bool resizeToRatio) {
         m_bgLabel=new QLabel(this);
         m_bgLabel->setScaledContents(false);
         m_bgLabel->setAttribute(Qt::WA_TransparentForMouseEvents);
-        m_bgLabel->lower();          // 置于所有内容之下
+        m_bgLabel->lower();
     }
     m_bgLabel->show();
     resizeBgLabel();
 
-    // 持久化
     QSettings(QStringLiteral("FileEncryptor"),QStringLiteral("FileEncryptorGUI"))
         .setValue(QStringLiteral("backgroundImage"),path);
 
-    // 按图片比例拉伸/缩小窗口
     if(resizeToRatio) {
         const qreal ar=static_cast<qreal>(pm.width())/static_cast<qreal>(pm.height());
         QScreen* scr=screen();
@@ -376,7 +521,6 @@ void MainWindow::applyBackground(const QString& path,bool resizeToRatio) {
     }
 }
 
-// 背景图 QLabel：铺满整个窗口，等比扩展（KeepAspectRatioByExpanding）铺满不变形
 void MainWindow::resizeBgLabel() {
     if(!m_bgLabel) return;
     m_bgLabel->setGeometry(rect());
@@ -386,35 +530,34 @@ void MainWindow::resizeBgLabel() {
     }
 }
 
-// 面板透明：除输入框(QLineEdit)与按钮(QPushButton)保留自身样式外，
-// 其余区域背景一律透明，与整体背景（主题底色或背景图）保持一致，避免颜色突兀的区块。
 void MainWindow::applyPanelTransparency() {
     const QString transparent=QStringLiteral("background:transparent;");
-    const bool dk=ThemeManager::isDarkActive();
+    const auto& r=ThemeManager::ui();
+    const QString chinaRed=QLatin1String(r.highlight);
 
-    // 功能面板透明（其内部的标签/单选/复选本就无填充，自然融入整体背景）
+    // 区块底色随配色
+    const QString panelStyle=QStringLiteral("background:%1;border-radius:6px;")
+        .arg(QLatin1String(r.panelRgba));
     for(QWidget* p:{m_leftPanel, m_centerPanel, m_bottomPanel}) {
         if(!p) continue;
         p->setAttribute(Qt::WA_TranslucentBackground);
         p->setAutoFillBackground(false);
-        p->setStyleSheet(transparent);
+        p->setStyleSheet(panelStyle);
     }
 
-    // 通用配色：亮色用浅灰底+深字，暗色用深底+浅字
-    const QString fieldBg=dk ? QStringLiteral("#1E1E1E") : QStringLiteral("#F0F0EC");
-    const QString fieldFg=dk ? QStringLiteral("#E6E6E6") : QStringLiteral("#333333");
-    const QString fieldBor=dk ? QStringLiteral("#3C3C3C") : QStringLiteral("#C8C8C4");
-    const QString fieldSel=dk ? QStringLiteral("#3D6B99") : QStringLiteral("#4A7C50");
-    const QString altBg=dk ? QStringLiteral("#252525") : QStringLiteral("#E8E8E4");
-    const QString hoverBg=dk ? QStringLiteral("#333333") : QStringLiteral("#E0E0DC");
-    const QString indBg=dk ? QStringLiteral("#2A2A2A") : QStringLiteral("#FFFFFF");
-    const QString indBor=dk ? QStringLiteral("#5A5A5A") : QStringLiteral("#999999");
-    const QString ctrlBg=dk ? QStringLiteral("#3D3D40") : QStringLiteral("#ECECEA");
-    const QString ctrlFg=dk ? QStringLiteral("#E6E6E6") : QStringLiteral("#333333");
-    const QString ctrlBor=dk ? QStringLiteral("#4A4A4D") : QStringLiteral("#C8C8C4");
-    const QString ctrlHover=dk ? QStringLiteral("#4A4A4D") : QStringLiteral("#DCDCD8");
+    const QString fieldBg=QLatin1String(r.field);
+    const QString fieldFg=QLatin1String(r.text);
+    const QString fieldBor=QLatin1String(r.border);
+    const QString fieldSel=chinaRed;
+    const QString altBg=QLatin1String(r.alt);
+    const QString hoverBg=QLatin1String(r.ctrlHover);
+    const QString indBg=QLatin1String(r.indicator);
+    const QString indBor=QLatin1String(r.indicatorBorder);
+    const QString ctrlBg=QLatin1String(r.ctrl);
+    const QString ctrlFg=QLatin1String(r.text);
+    const QString ctrlBor=QLatin1String(r.border);
+    const QString ctrlHover=QLatin1String(r.ctrlHover);
 
-    // 文件列表：随主题——亮色浅灰底+深字，暗色深底+浅字
     if(m_fileList) {
         m_fileList->setStyleSheet(QStringLiteral(
             "QListWidget{background:%1;color:%2;border:1px solid %3;"
@@ -429,8 +572,6 @@ void MainWindow::applyPanelTransparency() {
         ).arg(ctrlBg,ctrlFg,ctrlBor,altBg,fieldSel,hoverBg,indBor,indBg));
     }
 
-    // 公共字段 QSS 模板：输入框/输出框/数值框共用的基础样式（随主题替换占位符），
-    // 一处定义、多处复用，避免三处重复书写同一段样式（P2-3 抽公共模板）。
     const QString fieldCss=QStringLiteral(
         "background:%1;color:%2;border:1px solid %3;border-radius:3px;padding:2px 4px;"
         "selection-background-color:%4;selection-color:#FFFFFF;")
@@ -440,9 +581,8 @@ void MainWindow::applyPanelTransparency() {
         if(e) e->setStyleSheet(fieldCss);
     }
     if(m_outputView) {
-        // 输出框 + 滚动条一体样式：显式接管滚动条、移除上下箭头（仅留滑块），配色随主题
-        const QString sbHandle=dk ? QStringLiteral("#5A5A5A") : QStringLiteral("#A8A8A4");
-        const QString sbHover=dk ? QStringLiteral("#6E6E6E") : QStringLiteral("#8A8A86");
+        const QString sbHandle=QLatin1String(r.scrollHandle);
+        const QString sbHover=QLatin1String(r.scrollHover);
         m_outputView->setStyleSheet(QStringLiteral(
             "QPlainTextEdit{%1}"
             "QScrollBar:vertical{background:%5;width:12px;margin:0;}"
@@ -458,7 +598,6 @@ void MainWindow::applyPanelTransparency() {
         ).arg(fieldCss,altBg,sbHandle,sbHover));
     }
 
-    // 勾选框(QCheckBox)/单选框(QRadioButton)：随主题，亮色浅灰底+深字
     const QString optionStyle=QStringLiteral(
         "QCheckBox,QRadioButton{background:%1;color:%2;"
         "border:1px solid %3;border-radius:3px;padding:4px 6px;spacing:6px;}"
@@ -466,10 +605,10 @@ void MainWindow::applyPanelTransparency() {
         "border:1px solid %4;background:%5;}"
         "QCheckBox::indicator{border-radius:2px;}"
         "QRadioButton::indicator{border-radius:7px;}"
-        "QCheckBox::indicator:hover,QRadioButton::indicator:hover{border:1px solid #7AA7D9;}"
+        "QCheckBox::indicator:hover,QRadioButton::indicator:hover{border:1px solid %7;}"
         "QCheckBox::indicator:checked{background:%6;border:1px solid %4;}"
         "QRadioButton::indicator:checked{background:%6;border:1px solid %4;}"
-    ).arg(fieldBg,fieldFg,fieldBor,indBor,indBg,fieldSel);
+    ).arg(fieldBg,fieldFg,fieldBor,indBor,indBg,fieldSel,chinaRed);
     for(QWidget* c:{static_cast<QWidget*>(m_chkForce), 
                        static_cast<QWidget*>(m_chkSha256),
                        static_cast<QWidget*>(m_chkCompress),
@@ -480,8 +619,6 @@ void MainWindow::applyPanelTransparency() {
         if(c) c->setStyleSheet(optionStyle);
     }
 
-    // 下拉框(QComboBox：主题/模式) 与其余按钮：随主题显式配色，
-    // 亮色浅灰底+深字（避免依赖调色板在某些环境下仍渲染深色）
     const QString comboStyle=QStringLiteral(
         "QComboBox{background:%1;color:%2;border:1px solid %3;border-radius:3px;padding:2px 6px;min-width:60px;}"
         "QComboBox::drop-down{border:none;width:18px;}"
@@ -494,18 +631,16 @@ void MainWindow::applyPanelTransparency() {
         if(cb) cb->setStyleSheet(comboStyle);
     }
 
-    // 数值框(QSpinBox：压缩级别)：与输入框同配色。SpinBox 已 setButtonSymbols(NoButtons)
-    // （无上下按钮），显式样式用于规避父级 background:transparent 层级导致的输入框透明。
     const QString spinStyle=QStringLiteral(
         "QSpinBox{%1}"
-        "QSpinBox:disabled{background:%2;color:#999999;border:1px solid %3;}"
-    ).arg(fieldCss,altBg,fieldBor);
+        "QSpinBox:disabled{background:%2;color:%4;border:1px solid %3;}"
+    ).arg(fieldCss,altBg,fieldBor,QLatin1String(r.placeholder));
     if(m_compressLevel) m_compressLevel->setStyleSheet(spinStyle);
     const QString btnStyle=QStringLiteral(
         "QPushButton{background:%1;color:%2;border:1px solid %3;border-radius:3px;padding:4px 10px;}"
         "QPushButton:hover{background:%4;}"
-        "QPushButton:disabled{background:%1;color:#999999;}"
-    ).arg(ctrlBg,ctrlFg,ctrlBor,ctrlHover);
+        "QPushButton:disabled{background:%1;color:%5;}"
+    ).arg(ctrlBg,ctrlFg,ctrlBor,ctrlHover,QLatin1String(r.placeholder));
     for(QPushButton* b:{m_btnAddFiles, m_btnAddDir, m_btnClearFiles,
                            m_btnOutDirBrowse, m_btnKeyfileBrowse, m_btnViewSettings,
                            m_btnRecipientBrowse, m_btnIdentityBrowse,
@@ -513,7 +648,6 @@ void MainWindow::applyPanelTransparency() {
         if(b) b->setStyleSheet(btnStyle);
     }
 
-    // 外层 splitter 透明，让背景在面板间隙也可见
     for(QWidget* s:{m_outerSplitter}) {
         if(!s) continue;
         s->setAttribute(Qt::WA_TranslucentBackground);
@@ -527,7 +661,7 @@ void MainWindow::resizeEvent(QResizeEvent* e) {
     resizeBgLabel();
 }
 
-// ---------- 编辑 YAML 配置（调用系统默认编辑器）----------
+// 编辑 YAML 配置
 
 static const char* kDefaultConfigYaml=
 "# 运维参数仅由此文件提供，CLI 不可覆盖；删除即恢复默认。\n"
@@ -544,12 +678,9 @@ static const char* kDefaultConfigYaml=
 "#   - C:/Data/In\n"
 "obfuscate_names: true     # 混淆输出文件名\n";
 
-// 定位 CLI 的 yml 配置（与 CLI core/config.cpp::find_config_file 搜索顺序一致）。
-// v1.3.1：统一回归标准 .yaml 后缀（与 CLI 一致）；旧名 fileencryptor.yml 仅读取时回退。
 QString MainWindow::locateConfigFile() const {
     const QString name=QStringLiteral("fileencryptor.yaml");
     const QString legacy=QStringLiteral("fileencryptor.yml");
-    // 在某目录下按「.yaml 优先、.yml 回退」查找的辅助逻辑
     auto findIn=[&](const QString& dir)->QString{
         if(dir.isEmpty()) return {};
         const QString p=QDir::toNativeSeparators(dir+QLatin1Char('/')+name);
@@ -558,18 +689,14 @@ QString MainWindow::locateConfigFile() const {
         if(QFileInfo(pl).isFile()) return pl;
         return {};
     };
-    // 1) FILEENCRYPTOR_CONFIG 环境变量（显式，最高优先）
     const QString env=qEnvironmentVariable("FILEENCRYPTOR_CONFIG");
     if(!env.isEmpty()&&QFileInfo(env).isFile()) return env;
-    // 2) CWD：用户在哪个目录启动，配置就在哪里
     QString p=findIn(QDir::current().absolutePath());
     if(!p.isEmpty()) return p;
-    // 3) CLI 可执行文件目录
     if(!m_fileEncryptorPath.isEmpty()) {
         p=findIn(QFileInfo(m_fileEncryptorPath).absolutePath());
         if(!p.isEmpty()) return p;
     }
-    // 4) 用户配置目录
     QString ucd;
 #ifdef Q_OS_WIN
     ucd=qEnvironmentVariable("APPDATA");
@@ -587,8 +714,6 @@ QString MainWindow::locateConfigFile() const {
 
 void MainWindow::onEditConfig() {
     QString target=locateConfigFile();
-    // 未找到 → 按 CLI 行为在 CWD 生成默认配置（便于用户直接编辑）。
-    // 新写入一律用 .yaml（标准 YAML 后缀），保持与 CLI 一致。
     if(target.isEmpty()) {
         target=QDir::current().absoluteFilePath(QStringLiteral("fileencryptor.yaml"));
         QFile f(target);
@@ -602,14 +727,13 @@ void MainWindow::onEditConfig() {
             f.close();
         }
     }
-    // 调用系统默认编辑器打开（按文件关联；无关联时提示路径）
     if(!QDesktopServices::openUrl(QUrl::fromLocalFile(target))) {
         MsgBox::info(this,tr("请手动打开"),
             tr("系统未关联 YAML 文件的默认编辑器，请手动打开：\n%1").arg(target));
     }
 }
 
-// ---------- CLI 检测相关 ----------
+// CLI 检测
 bool MainWindow::checkCliExists(bool showDialog) {
     QString foundPath;
     if(FileEncryptorLocator::existsWithVersion(&foundPath)) {
@@ -636,12 +760,11 @@ void MainWindow::showCliNotFoundError(const QString& context) {
     MsgBox::error(this,tr("FileEncryptor CLI 未找到"),detail);
 }
 
-// ---------- CLI zstd / aegis 能力探测（异步，避免主线程阻塞） ----------
+// 能力探测
 void MainWindow::probeZstdSupport() {
     m_zstdAvailable=false;
-    m_aegisAvailable=true;   // 默认乐观，避免误拦
+    m_aegisAvailable=true;
     if(m_fileEncryptorPath.isEmpty()) return;
-    // 复用同一 QProcess：已有探测在跑则先终止，避免排队堆积
     if(!m_probeProcess) {
         m_probeProcess=new QProcess(this);
         connect(m_probeProcess,QOverload<int,QProcess::ExitStatus>::of(&QProcess::finished),
@@ -649,7 +772,6 @@ void MainWindow::probeZstdSupport() {
     }
     if(m_probeProcess->state()!=QProcess::NotRunning) m_probeProcess->kill();
     m_probeProcess->start(m_fileEncryptorPath,QStringList{QStringLiteral("--features")});
-    // 单发定时器：超时（1s）即 kill，维持默认乐观值（zstd 不可用 / aegis 可用）
     if(!m_probeTimer) {
         m_probeTimer=new QTimer(this);
         m_probeTimer->setSingleShot(true);
@@ -664,13 +786,11 @@ void MainWindow::probeZstdSupport() {
 void MainWindow::onProbeFinished(int, QProcess::ExitStatus) {
     if(m_probeTimer) m_probeTimer->stop();
     if(!m_probeProcess) return;
-    // CLI 输出按 UTF-8（GUI 读 CLI 输出统一 fromUtf8 约定）
     const QString out=QString::fromUtf8(m_probeProcess->readAllStandardOutput());
     m_zstdAvailable=out.contains(QStringLiteral("zstd=1"));
-    // aegis=1 → 支持；aegis=0 → 不支持（缺 AES-NI）；缺省行按支持处理
     if(out.contains(QStringLiteral("aegis=0"))) m_aegisAvailable=false;
     else if(out.contains(QStringLiteral("aegis=1"))) m_aegisAvailable=true;
-    updateAsymVisibility();   // 探测完成后刷新压缩/非对称控件可用性
+    updateAsymVisibility();
 }
 
 void MainWindow::onRetryCliDetection() {
@@ -678,7 +798,6 @@ void MainWindow::onRetryCliDetection() {
         setStatus(tr("就绪 | FileEncryptor: %1").arg(m_fileEncryptorPath));
         MsgBox::info(this,tr("检测成功"),
             tr("已找到 CLI 程序：\n%1").arg(m_fileEncryptorPath));
-        // 重新探测 zstd 能力并刷新压缩控件状态
         probeZstdSupport();
         updateAsymVisibility();
     }
@@ -687,36 +806,49 @@ void MainWindow::onRetryCliDetection() {
     }
 }
 
-// ---------- 运行/取消按钮样式（主题感知，保证深色下文字清晰）----------
 void MainWindow::applyButtonStyles() {
     const bool dark=ThemeManager::isDarkActive();
-    // 运行按钮：浅色下用柔化绿（#4A7C50）+ 白字，降低饱和度；深色下亮绿
-    m_btnRun->setStyleSheet(
-        dark
-        ? "QPushButton{background:#43A047;color:#FFFFFF;padding:6px 18px;font-weight:bold;border-radius:4px;}"
-        "QPushButton:hover{background:#66BB6A;}"
-        : "QPushButton{background:#4A7C50;color:white;padding:6px 18px;font-weight:bold;border-radius:4px;}"
-        "QPushButton:hover{background:#3D6B4A;}");
-    m_btnCancel->setStyleSheet(
-        dark
-        ? "QPushButton{background:#E53935;color:#FFFFFF;padding:6px 18px;font-weight:bold;border-radius:4px;}"
-        "QPushButton:hover{background:#EF5350;}"
-        "QPushButton:disabled{background:#555;color:#ccc;}"
-        : "QPushButton{background:#C0392B;color:white;padding:6px 18px;font-weight:bold;border-radius:4px;}"
-        "QPushButton:hover{background:#A93226;}"
-        "QPushButton:disabled{background:#999;color:#eee;}");
-    if(m_btnRewrap)
-        m_btnRewrap->setStyleSheet(
-            dark
-            ? "QPushButton{background:#3D3D40;color:#E6E6E6;border:1px solid #4A4A4D;border-radius:3px;padding:4px 10px;}"
-              "QPushButton:hover{background:#4A4A4D;}"
-              "QPushButton:disabled{background:#3D3D40;color:#999999;}"
-            : "QPushButton{background:#ECECEA;color:#333333;border:1px solid #C8C8C4;border-radius:3px;padding:4px 10px;}"
-              "QPushButton:hover{background:#DCDCD8;}"
-              "QPushButton:disabled{background:#ECECEA;color:#999999;}");
+    // 国庆周走红色系
+    const bool red=ThemeManager::isNationalDay();
+    m_btnRun->setStyleSheet(red
+        ? (dark
+           ? QStringLiteral("QPushButton{background:#DE2910;color:#FFFFFF;padding:6px 18px;font-weight:bold;border-radius:4px;}"
+                            "QPushButton:hover{background:#EF4433;}")
+           : QStringLiteral("QPushButton{background:#C0392B;color:white;padding:6px 18px;font-weight:bold;border-radius:4px;}"
+                            "QPushButton:hover{background:#A93226;}"))
+        : (dark
+           ? QStringLiteral("QPushButton{background:#43A047;color:#FFFFFF;padding:6px 18px;font-weight:bold;border-radius:4px;}"
+                            "QPushButton:hover{background:#66BB6A;}")
+           : QStringLiteral("QPushButton{background:#4A7C50;color:white;padding:6px 18px;font-weight:bold;border-radius:4px;}"
+                            "QPushButton:hover{background:#3D6B4A;}")));
+    m_btnCancel->setStyleSheet(red
+        ? (dark
+           ? QStringLiteral("QPushButton{background:#7A1A12;color:#F2DAD6;padding:6px 18px;font-weight:bold;border-radius:4px;}"
+                            "QPushButton:hover{background:#95231A;}"
+                            "QPushButton:disabled{background:#4A1A16;color:#A87F79;}")
+           : QStringLiteral("QPushButton{background:#8A1E13;color:white;padding:6px 18px;font-weight:bold;border-radius:4px;}"
+                            "QPushButton:hover{background:#6E1810;}"
+                            "QPushButton:disabled{background:#D99A92;color:#FFF7F6;}"))
+        : (dark
+           ? QStringLiteral("QPushButton{background:#E53935;color:#FFFFFF;padding:6px 18px;font-weight:bold;border-radius:4px;}"
+                            "QPushButton:hover{background:#EF5350;}"
+                            "QPushButton:disabled{background:#555;color:#ccc;}")
+           : QStringLiteral("QPushButton{background:#C0392B;color:white;padding:6px 18px;font-weight:bold;border-radius:4px;}"
+                            "QPushButton:hover{background:#A93226;}"
+                            "QPushButton:disabled{background:#999;color:#eee;}")));
+    if(m_btnRewrap) {
+        const auto& r=ThemeManager::ui();
+        m_btnRewrap->setStyleSheet(QStringLiteral(
+            "QPushButton{background:%1;color:%2;border:1px solid %3;"
+            "border-radius:3px;padding:4px 10px;}"
+            "QPushButton:hover{background:%4;}"
+            "QPushButton:disabled{background:%1;color:%5;}")
+            .arg(QLatin1String(r.ctrl),QLatin1String(r.text),QLatin1String(r.border),
+                 QLatin1String(r.ctrlHover),QLatin1String(r.placeholder)));
+    }
 }
 
-// ---------- 左侧文件选择面板 ----------
+// 文件选择面板
 QWidget* MainWindow::buildLeftPanel() {
     auto* w=new QWidget;
     m_leftPanel=w;
@@ -747,7 +879,7 @@ QWidget* MainWindow::buildLeftPanel() {
     return w;
 }
 
-// ---------- 中部主要功能区 ----------
+// 功能区
 QWidget* MainWindow::buildCenterPanel() {
     auto* w=new QWidget;
     m_centerPanel=w;
@@ -756,7 +888,6 @@ QWidget* MainWindow::buildCenterPanel() {
 
     int row=0;
 
-    // 动作模式
     auto* lblAction=new QLabel(tr("<b>操作</b>"));
     lay->addWidget(lblAction,row,0);
     m_rbEncrypt=new QRadioButton(tr("加密"));
@@ -795,7 +926,6 @@ QWidget* MainWindow::buildCenterPanel() {
     lay->addLayout(keyMgmtRow,row,1);
     row++;
 
-    // 加密模式
     auto* lblMode=new QLabel(tr("加密模式"));
     lay->addWidget(lblMode,row,0);
     m_modeCombo=new QComboBox;
@@ -805,7 +935,6 @@ QWidget* MainWindow::buildCenterPanel() {
     lay->addWidget(m_modeCombo,row,1);
     row++;
 
-    // zstd 压缩（v5 磁盘格式；仅对称加密有意义，非对称 rage 由 CLI 拒绝）
     m_compressTitle=new QLabel(tr("压缩"));
     lay->addWidget(m_compressTitle,row,0);
     auto* compRow=new QHBoxLayout;
@@ -815,17 +944,13 @@ QWidget* MainWindow::buildCenterPanel() {
     m_compressLabel=new QLabel(tr("压缩级别 (0-22)："));
     m_compressLevel=new QSpinBox;
     m_compressLevel->setRange(-5,22);
-    m_compressLevel->setValue(3);   // zstd 默认级别
+    m_compressLevel->setValue(3);
     m_compressLevel->setToolTip(tr("zstd 级别：1..22 常规（越大越慢、压缩率越高），-1..-5 快速档；默认 3\n"
                                    "直接键入数值，回车或移开焦点后生效；也可用键盘 ↑/↓ 微调"));
-    // 输入体验：右对齐、固定宽度、无上下按钮（纯数字输入框，配色与输入框一致，
-    // 按用户要求移除与整体风格不符的箭头控件）；键盘 ↑/↓ 仍可微调。
     m_compressLevel->setButtonSymbols(QAbstractSpinBox::NoButtons);
     m_compressLevel->setAlignment(Qt::AlignRight);
     m_compressLevel->setKeyboardTracking(false);
     m_compressLevel->setFixedWidth(84);
-    // 中心面板是 background:transparent 的样式表层级，QSpinBox 若无显式样式会渲染退化
-    // （内部输入框透明导致看似无法编辑）；统一样式在 applyPanelTransparency() 里随主题设置。
     compRow->addWidget(m_chkCompress);
     compRow->addWidget(m_compressLabel);
     compRow->addWidget(m_compressLevel);
@@ -833,7 +958,6 @@ QWidget* MainWindow::buildCenterPanel() {
     lay->addLayout(compRow,row,1);
     row++;
 
-    // 非对称（age / X25519）输入区
     m_asymWidget=new QGroupBox(tr("非对称加密"));
     {
         auto* av=new QVBoxLayout(m_asymWidget);
@@ -844,7 +968,6 @@ QWidget* MainWindow::buildCenterPanel() {
         intro->setWordWrap(true);
         av->addWidget(intro);
 
-        // 收件人公钥（加密）
         m_recipientRow=new QWidget;
         {
             auto* rr=new QHBoxLayout(m_recipientRow);
@@ -858,7 +981,6 @@ QWidget* MainWindow::buildCenterPanel() {
         }
         av->addWidget(m_recipientRow);
 
-        // 身份私钥（解密）
         m_identityRow=new QWidget;
         {
             auto* ir=new QHBoxLayout(m_identityRow);
@@ -876,7 +998,6 @@ QWidget* MainWindow::buildCenterPanel() {
     lay->addWidget(m_asymWidget,row,0,1,2);
     row++;
 
-    // rage 密钥动作（-g 随机生成 / -G 口令派生 / -Y 导出公钥）：只需要输出目录或密钥材料
     m_keygenWidget=new QGroupBox(tr("rage 密钥管理"));
     {
         auto* kv=new QVBoxLayout(m_keygenWidget);
@@ -890,7 +1011,6 @@ QWidget* MainWindow::buildCenterPanel() {
     lay->addWidget(m_keygenWidget,row,0,1,2);
     row++;
 
-    // 输出目录
     auto* lblOut=new QLabel(tr("输出目录"));
     lay->addWidget(lblOut,row,0);
     auto* outRow=new QHBoxLayout;
@@ -902,7 +1022,6 @@ QWidget* MainWindow::buildCenterPanel() {
     lay->addLayout(outRow,row,1);
     row++;
 
-    // 密钥文件
     auto* lblKey=new QLabel(tr("密钥文件"));
     lay->addWidget(lblKey,row,0);
     auto* keyRow=new QHBoxLayout;
@@ -914,11 +1033,9 @@ QWidget* MainWindow::buildCenterPanel() {
     lay->addLayout(keyRow,row,1);
     row++;
 
-    // 选项
     auto* lblOpts=new QLabel(tr("选项"));
     lay->addWidget(lblOpts,row,0);
     auto* optsRow=new QHBoxLayout;
-    // 源文件处理：加密成功后对原文件的处置方式（保留 / 删除 / 回收站 / 安全擦除）
     m_sourceCombo=new QComboBox;
     m_sourceCombo->addItem(tr("保留源文件"),0);
     m_sourceCombo->addItem(tr("完成后删除源文件"),1);
@@ -940,7 +1057,6 @@ QWidget* MainWindow::buildCenterPanel() {
     lay->addLayout(optsRow,row,1);
     row++;
 
-    // 运行/取消 + 密钥轮换按钮
     auto* runRow=new QHBoxLayout;
     m_btnRun=new QPushButton(tr("▶ 运行"));
     m_btnCancel=new QPushButton(tr("■ 取消"));
@@ -959,7 +1075,7 @@ QWidget* MainWindow::buildCenterPanel() {
     return w;
 }
 
-// ---------- 下部只读文本框 ----------
+// 输出区
 QWidget* MainWindow::buildBottomPanel() {
     auto* w=new QWidget;
     m_bottomPanel=w;
@@ -970,32 +1086,24 @@ QWidget* MainWindow::buildBottomPanel() {
     headerRow->setContentsMargins(0,0,0,0);
     headerRow->addWidget(new QLabel(tr("<b>命令浏览与执行输出</b>")));
     headerRow->addStretch();
-    // 功能5：历史面板入口
     m_btnTaskHistory=new QPushButton(tr("任务历史..."));
     m_btnTaskHistory->setToolTip(tr("查看任务历史记录，双击一条可回填参数（回放）"));
     headerRow->addWidget(m_btnTaskHistory);
     lay->addLayout(headerRow);
 
-    // 功能6：批量进度帧直接在 m_outputView（拟 cmd）内原地整帧刷新，
-    // 不再使用独立面板（空闲态常驻的 TOTAL/ETA 行显得突兀，用户已下线）。
     m_outputView=new QPlainTextEdit;
     m_outputView->setReadOnly(true);
-    // 拟 cmd：禁止自动折行（进度行超宽时横向滚动兜底，保证每条进度条独占一行不折行）
     m_outputView->setLineWrapMode(QPlainTextEdit::NoWrap);
-    // 加大最小垂直高度：批量帧为 1 汇总行 + N 线程行（N=CPU 核数），
-    // 预留足够行数避免帧内容被遮挡/溢出
     m_outputView->setMinimumHeight(360);
     m_outputView->setPlaceholderText(tr("此处显示命令预览与执行输出。stdout 默认色，stderr 红色。"));
-    // 等宽字体便于对齐
     m_outputView->setFont(FontBootstrap::monoFont());
-    // 输出文档上限 5000 块防无限增长：超出自动从头部裁剪，配合 renderFrameLine 的块锚点回退追加
     m_outputView->document()->setMaximumBlockCount(5000);
     lay->addWidget(m_outputView);
 
     return w;
 }
 
-// ---------- 信号连接 ----------
+// 信号连接
 void MainWindow::connectSignals() {
     connect(m_btnAddFiles,&QPushButton::clicked,this,&MainWindow::onAddFiles);
     connect(m_btnAddDir,&QPushButton::clicked,this,&MainWindow::onAddDir);
@@ -1009,7 +1117,6 @@ void MainWindow::connectSignals() {
     connect(m_executor,&ICommandExecutor::outputLine,this,&MainWindow::onOutputLine);
     connect(m_executor,&ICommandExecutor::finished,this,&MainWindow::onCommandFinished);
 
-    // 选项变化刷新命令预览
     auto refresh=[this]{ refreshCommandPreview(); };
     connect(m_actionGroup,&QButtonGroup::idClicked,this,refresh);
     connect(m_modeCombo,QOverload<int>::of(&QComboBox::currentIndexChanged),this,refresh);
@@ -1018,14 +1125,11 @@ void MainWindow::connectSignals() {
     connect(m_sourceCombo,QOverload<int>::of(&QComboBox::currentIndexChanged),this,refresh);
     connect(m_chkForce,&QCheckBox::stateChanged,this,refresh);
     connect(m_chkSha256,&QCheckBox::stateChanged,this,refresh);
-    // 压缩：勾选变化同时联动级别框可用性（updateAsymVisibility 内统一裁决）
     connect(m_chkCompress,&QCheckBox::stateChanged,this,refresh);
     connect(m_chkCompress,&QCheckBox::stateChanged,this,[this](int){ updateAsymVisibility(); });
     connect(m_compressLevel,QOverload<int>::of(&QSpinBox::valueChanged),this,refresh);
-    // 文件列表勾选框切换 → 刷新命令预览（仅勾选项进入命令）
     connect(m_fileList,&QListWidget::itemChanged,this,refresh);
 
-    // 浏览按钮
     connect(m_btnOutDirBrowse,&QPushButton::clicked,this,[this]{
         QString d=QFileDialog::getExistingDirectory(this,tr("选择输出目录"),
             m_outDirEdit->text().isEmpty() ? QDir::homePath() : m_outDirEdit->text());
@@ -1037,7 +1141,6 @@ void MainWindow::connectSignals() {
         if(!f.isEmpty()) m_keyfileEdit->setText(f);
         });
 
-    // 非对称（age / X25519）：收件人公钥文件 / 身份私钥文件 浏览
     connect(m_btnRecipientBrowse,&QPushButton::clicked,this,[this]{
         QString f=QFileDialog::getOpenFileName(this,tr("选择公钥文件"),
             QDir::homePath(),tr("公钥文件 (*.txt *.agepub *);;所有文件 (*)"));
@@ -1048,19 +1151,16 @@ void MainWindow::connectSignals() {
             QDir::homePath(),tr("私钥文件 (*.txt *.agekey *);;所有文件 (*)"));
         if(!f.isEmpty()) m_identityEdit->setText(f);
         });
-    // 任务历史面板（功能5）
     connect(m_btnTaskHistory,&QPushButton::clicked,this,&MainWindow::onOpenTaskHistory);
 
-    // 输入清单变化 → 重算待处理规模（字节/文件数）并刷新批量面板的空闲预估
     connect(m_fileList,&QListWidget::itemChanged,this,[this]{ recomputePending(); });
-    // 模式切换：刷新非对称输入区可见性
     connect(m_modeCombo,QOverload<int>::of(&QComboBox::currentIndexChanged),
         this,&MainWindow::updateAsymVisibility);
     connect(m_actionGroup,&QButtonGroup::idClicked,
         this,[this](int){ updateAsymVisibility(); });
 }
 
-// ---------- 动作/模式切换：刷新 rage 相关控件的可见性 ----------
+// 动作/模式切换
 void MainWindow::updateAsymVisibility() {
     const int act=m_actionGroup->checkedId();
     const bool keygen=(act==static_cast<int>(CryptoAction::KeyGen));
@@ -1097,7 +1197,6 @@ void MainWindow::updateAsymVisibility() {
                                   "用于私钥还在、公钥丢失的情况（等价 rage-keygen -y）。"));
     }
 
-    // rage 密钥动作固定锁定到非对称算法（第三个）并禁用下拉
     if(isKeyAction) {
         for(int i=0;i<m_modeCombo->count();++i) {
             if(m_modeCombo->itemData(i).toInt()==static_cast<int>(CryptoMode::Asymmetric)) {
@@ -1110,7 +1209,6 @@ void MainWindow::updateAsymVisibility() {
         m_modeCombo->setDisabled(false);
     }
 
-    // zstd 压缩：仅「加密/批量加密」显示整行（非对称由 CLI 拒绝）；级别框始终可编辑
     const bool compAllowed=isEnc && !asym;
     m_compressTitle->setVisible(compAllowed);
     m_chkCompress->setVisible(compAllowed);
@@ -1124,13 +1222,10 @@ void MainWindow::updateAsymVisibility() {
                                      "请更换带 zstd 库构建的 FileEncryptorCLI。"));
     }
 
-    // 本函数改变影响 argv 的状态，统一在此刷新预览，避免各调用点遗漏
     refreshCommandPreview();
 }
 
-// ---------- 文件选择 ----------
 void MainWindow::addInputPaths(const QStringList& paths) {
-    // 去重：已存在的路径不重复加入（拖放重复拖同一文件是常见操作）
     QSet<QString> existing;
     for(int i=0;i<m_fileList->count();++i) existing.insert(m_fileList->item(i)->text());
     bool added=false;
@@ -1143,8 +1238,6 @@ void MainWindow::addInputPaths(const QStringList& paths) {
         added=true;
     }
     if(added) {
-        // 单文件动作（-e/-d）不支持目录输入：加入目录时自动切换为对应批量动作，
-        // 否则 CLI 会以 "Input is a directory" 拒绝整次任务
         const int act=m_actionGroup->checkedId();
         bool hasDir=false;
         for(const QString& p:paths)
@@ -1160,8 +1253,8 @@ void MainWindow::addInputPaths(const QStringList& paths) {
         }
         refreshCommandPreview();
     }
-    resetPendingCache();       // 输入集合变化 → 作废扫描缓存
-    recomputePending();   // 功能6：输入变化即刷新待处理规模与 ETA
+    resetPendingCache();
+    recomputePending();
 }
 
 void MainWindow::onAddFiles() {
@@ -1180,10 +1273,9 @@ void MainWindow::onClearFiles() {
     m_fileList->clear();
     refreshCommandPreview();
     resetPendingCache();
-    recomputePending();   // 功能6：清空后 ETA 归零
+    recomputePending();
 }
 
-// ---------- 拖放（功能4） ----------
 void MainWindow::dragEnterEvent(QDragEnterEvent* e) {
     if(e->mimeData()->hasUrls()) e->acceptProposedAction();
 }
@@ -1195,7 +1287,6 @@ void MainWindow::dropEvent(QDropEvent* e) {
     for(const QUrl& u:urls) {
         const QString p=u.toLocalFile();
         if(p.isEmpty()) continue;
-        // 目录与文件都允许加入：目录走批量动作（-be/-bd），文件走单/批量动作
         paths<<QDir::toNativeSeparators(p);
     }
     if(!paths.isEmpty()) {
@@ -1204,7 +1295,6 @@ void MainWindow::dropEvent(QDropEvent* e) {
     }
 }
 
-// ---------- 收集选项 ----------
 ShellOptions MainWindow::collectOptions() const {
     ShellOptions o;
     o.action=static_cast<CryptoAction>(m_actionGroup->checkedId());
@@ -1216,18 +1306,13 @@ ShellOptions MainWindow::collectOptions() const {
     }
 
     o.outputDir=m_outDirEdit->text().trimmed();
-    // 加密后源文件处置：0=保留 1=删除 3=回收站 2=安全擦除（与 CLI source_action 一致）
     o.sourceDisposition=m_sourceCombo ? m_sourceCombo->currentData().toInt() : 0;
     o.forceOverwrite=m_chkForce->isChecked();
     o.writeSha256=m_chkSha256->isChecked();
     o.keyfilePath=m_keyfileEdit->text().trimmed();
-    // zstd 压缩：开关与级别分离 —— compress 是布尔开关（-zstd），级别仅在勾选时下发。
-    // 非对称/解密等场景由 CliArgBuilder 再次把关（不下发任何压缩参数）。
     o.compress=m_chkCompress->isChecked();
     o.compressionLevel=o.compress ? m_compressLevel->value() : 0;
-    // 口令不再存于主页面：运行时经 PasswordDialog 弹窗获取（见 onRunClicked）
 
-    // 非对称收件人：支持多收件人（逗号/分号分隔 age1... 公钥串）；此处仅统计条数，写临时公钥文件推迟到运行时
     const QString rawRecip=m_recipientEdit->text().trimmed();
     o.recipientPath=rawRecip;
     o.recipientCount=0;
@@ -1235,21 +1320,19 @@ ShellOptions MainWindow::collectOptions() const {
         if(!seg.trimmed().isEmpty()) ++o.recipientCount;
     }
     o.identityPath=m_identityEdit->text().trimmed();
-    // Asymmetric decryption: the private key file is handed to the CLI as -k.
     {
         const bool asymDecrypt=(o.mode==CryptoMode::Asymmetric)&&
             (o.action==CryptoAction::Decrypt||o.action==CryptoAction::BatchDecrypt);
         if(asymDecrypt) o.keyfilePath=o.identityPath;
-        else if(o.action==CryptoAction::PubKey) o.keyfilePath=o.identityPath;   // -Y 从私钥文件读身份
-        else if(o.mode==CryptoMode::Asymmetric) o.keyfilePath.clear(); // asym encrypt needs no key file
+        else if(o.action==CryptoAction::PubKey) o.keyfilePath=o.identityPath;
+        else if(o.mode==CryptoMode::Asymmetric) o.keyfilePath.clear();
     }
 
     return o;
 }
 
-// ---------- 多收件人归一化（功能8） ----------
+// 多收件人归一化
 QString MainWindow::resolveRecipients(const QString& raw) const {
-    // 多条且全部为 age1... 公钥串时写临时文件走 -r 通道；其余原样返回由 CLI 校验
     QStringList parts;
     for(const QString& seg:raw.split(QRegularExpression(QStringLiteral("[,，;；]")),Qt::SkipEmptyParts)) {
         const QString t=seg.trimmed();
@@ -1261,26 +1344,22 @@ QString MainWindow::resolveRecipients(const QString& raw) const {
                                   ||s.startsWith(QLatin1String("publickey:")); });
     if(!allKeys) return raw.trimmed();
     if(!m_recipientTempFile.isEmpty()) { QFile::remove(m_recipientTempFile); m_recipientTempFile.clear(); }
-    // 用 QTemporaryFile 独占创建随机文件名，替代固定 <名>_<pid> 模板（共享 /tmp 下避免符号链接抢占）
     QTemporaryFile recTmp(QDir::tempPath()+QStringLiteral("/fileencryptor_recipients_XXXXXX"));
     recTmp.setAutoRemove(false);
-    if(!recTmp.open()) return raw.trimmed(); // 写失败回退
+    if(!recTmp.open()) return raw.trimmed();
     for(const QString& k:parts) recTmp.write((k+QLatin1Char('\n')).toUtf8());
     recTmp.close();
     m_recipientTempFile=recTmp.fileName();
     return m_recipientTempFile;
 }
 
-// ---------- 运行 ----------
+// 运行
 void MainWindow::onRunClicked() {
-    // 检测 CLI 是否存在
     if(!checkCliExists(true)) {
-        return;  // 用户取消或重试失败，阻止继续
+        return;
     }
 
-    // 检查是否已经存在（双重保险）
     if(m_fileEncryptorPath.isEmpty()) {
-        // 再次尝试定位
         m_fileEncryptorPath=FileEncryptorLocator::locate();
         if(m_fileEncryptorPath.isEmpty()) {
             showCliNotFoundError(tr("运行前检测"));
@@ -1290,12 +1369,8 @@ void MainWindow::onRunClicked() {
 
     ShellOptions o=collectOptions();
 
-    // 功能8：多收件人临时公钥文件【仅运行时】写盘（pending 扫描不会触发，避免残留临时文件）。
-    // 单收件人或普通路径原样返回；多条公钥串才写临时文件供 -r 通道使用。
     o.recipientPath=resolveRecipients(o.recipientPath);
 
-    // AEGIS-256 非交互一致性：选中 AEGIS-256 但本机探测到不支持（缺 AES-NI）时，
-    // 弹窗明确警告并中止任务，与 CLI 非交互「明确拒绝、绝不自动降级」行为完全一致。
     if(o.mode==CryptoMode::Aegis256 && !m_aegisAvailable) {
         MsgBox::error(this, tr("AEGIS-256 不可用"),
             tr("当前 CPU 不支持 AES-NI，AEGIS-256 在此环境下会极慢且抗侧信道能力弱。\n"
@@ -1303,11 +1378,10 @@ void MainWindow::onRunClicked() {
         return;
     }
 
-    // 校验
     const bool isKeyGen=(o.action==CryptoAction::KeyGen);
     const bool isDerive=(o.action==CryptoAction::Derive);
     const bool isPubKey=(o.action==CryptoAction::PubKey);
-    const bool noInputNeeded=(isKeyGen||isDerive||isPubKey);  // 三个 rage 密钥动作都不处理输入文件
+    const bool noInputNeeded=(isKeyGen||isDerive||isPubKey);
     if(!noInputNeeded && o.inputPaths.isEmpty()) {
         MsgBox::warn(this,tr("缺少输入"),tr("请先添加文件或目录。"));
         return;
@@ -1322,9 +1396,7 @@ void MainWindow::onRunClicked() {
     }
     const bool isAsym=(o.mode==CryptoMode::Asymmetric)&&!noInputNeeded;
     if(isKeyGen) {
-        // 随机生成：不需要公钥，也不需要口令
     } else if(isDerive) {
-        // 口令在下方弹窗获取并校验（策略 + 二次确认）
     } else if(isPubKey) {
         if(o.identityPath.isEmpty()) {
             MsgBox::warn(this,tr("缺少私钥"),
@@ -1333,7 +1405,6 @@ void MainWindow::onRunClicked() {
             return;
         }
     } else if(isAsym) {
-        // 非对称模式：不使用对称密码；加密需收件人公钥，解密需身份私钥
         if(isEnc) {
             if(o.recipientPath.isEmpty()) {
                 MsgBox::warn(this,tr("缺少公钥"),
@@ -1351,7 +1422,7 @@ void MainWindow::onRunClicked() {
         }
     }
 
-    // ---------- 对称模式口令（PIN 风格弹窗，默认星号掩码 / 按住显示 / 松开恢复） ----------
+    // 口令弹窗
     bool symNeedsPassword = !isAsym && o.keyfilePath.isEmpty()
         && (o.action==CryptoAction::Encrypt || o.action==CryptoAction::BatchEncrypt
             || o.action==CryptoAction::Decrypt || o.action==CryptoAction::BatchDecrypt
@@ -1359,7 +1430,6 @@ void MainWindow::onRunClicked() {
     std::vector<unsigned char> pw;
     if(symNeedsPassword) {
         if(o.action==CryptoAction::BatchDecrypt) {
-            // 缺陷修复：批量解密每文件完整执行 KDF 还原文件名很慢；警告用户是否启用
             o.restoreName = MsgBox::confirm(this, tr("批量解密文件名"),
                 tr("批量解密将对每个文件执行昂贵的密钥派生（KDF）以还原完整原始文件名，可能很慢。\n"
                    "是否启用「完整文件名还原」？\n（无论是否启用，输出文件的扩展名都会保留。）"));
@@ -1368,18 +1438,15 @@ void MainWindow::onRunClicked() {
         dlg.setPurpose(isDerive ? tr("口令派生") : (isEnc ? tr("加密口令") : tr("解密口令")));
         dlg.setRequireConfirm(o.action==CryptoAction::Encrypt
             || o.action==CryptoAction::BatchEncrypt || o.action==CryptoAction::Derive);
-        if(dlg.exec()!=QDialog::Accepted) return;   // 用户取消
+        if(dlg.exec()!=QDialog::Accepted) return;
         pw = dlg.takePassword();
         if(pw.empty()) return;
     }
 
-    // 构建命令
     CommandRequest req;
     req.programPath=m_fileEncryptorPath;
     req.arguments=CliArgBuilder::buildArguments(o);
     req.extraEnv=CliArgBuilder::buildEnvironment(o);
-    // CLI 统计文件：批量结束时写 JSON（total_bytes/files_done/files_failed/files_skipped/total_files）
-    // 统计文件路径：用 QTemporaryFile 独占创建随机名（关闭后保留空文件，由 CLI 写入、GUI 读取后删除）
     {
         QTemporaryFile statsTmp(QDir::tempPath()+QStringLiteral("/fe_stats_XXXXXX"));
         statsTmp.setAutoRemove(false);
@@ -1389,11 +1456,8 @@ void MainWindow::onRunClicked() {
         }
     }
     req.extraEnv.insert(QStringLiteral("FILEENCRYPTOR_STATS_FILE"),m_statsFile);
-    // 功能6：批量模式让 CLI 输出「帧式进度」（1 行汇总 + 每线程 1 行），
-    // GUI 解析整帧后在拟 cmd 输出区原地刷新，字段与 CLI 终端显示完全一致。
     if(o.action==CryptoAction::BatchEncrypt||o.action==CryptoAction::BatchDecrypt) {
         req.extraEnv.insert(QStringLiteral("FILEENCRYPTOR_PROGRESS_FRAME"),QStringLiteral("1"));
-        // 帧宽按输出区可用宽度注入（等宽字符列数），保证不会折行/跳动
         const QFontMetrics fm(m_outputView->font());
         const int cw=fm.horizontalAdvance(QLatin1Char('M'));
         int cols=cw>0?(m_outputView->viewport()->width()-8)/cw:100;
@@ -1401,50 +1465,40 @@ void MainWindow::onRunClicked() {
         req.extraEnv.insert(QStringLiteral("COLUMNS"),QString::number(cols));
     }
 
-    // Key material injected via child's stdin (never env/argv): symmetric password from `pw`; asym uses -r/-k.
     if(!(isKeyGen||isPubKey) && !isAsym && o.keyfilePath.isEmpty() && !pw.empty()) {
         req.stdinData=QByteArray(reinterpret_cast<const char*>(pw.data()),(int)pw.size());
     }
 
-    // 立即擦除内存中的口令副本（stdin 已写入子进程，见 ProcessCommandExecutor::execute）
     if(!pw.empty()) {
-        // v2.1.2：std::memset 后紧跟 clear()，编译器可判定为 dead store 而整段优化掉，
-        // 口令明文会一直留在堆上。改用 volatile 逐字节写零，确保真正落到内存。
         secure_zero(pw.data(),pw.size());
         pw.clear();
     }
 
-    // 输出区清空并显示命令预览
     m_outputView->clear();
     const QString preview=CliArgBuilder::buildPreview(m_fileEncryptorPath,o);
     appendOutput(QStringLiteral(">>> %1\n").arg(preview),false);
-    appendOutput(QStringLiteral("--- 执行开始 ---\n"),false);
+    appendOutput(tr("--- 执行开始 ---")+QStringLiteral("\n"),false);
 
-    // UI 状态切换
     m_btnRun->setEnabled(false);
     m_btnCancel->setEnabled(true);
-    m_runFileStarts=0;   // 功能11：重新统计本次运行的文件开始标记
+    m_runFileStarts=0;
     m_doneFiles=0; m_skipFiles=0; m_failFiles=0; m_totalFiles=0;
     m_currentFile.clear();
-    m_frameBlock=QTextBlock();  // 批量进度帧块随新任务重建
+    m_frameBlock=QTextBlock();
     m_frameLen=0;
     updateProgressLabel();
     setStatus(tr("运行中..."));
 
-    // 功能5：登记本次任务（结束时补全结果写入历史）
     beginTaskRecord(o);
 
     m_executor->execute(req);
-    // v2.1.2：QByteArray::clear() 只减引用计数、**不清零**，口令明文会留在堆上直到被复用。
-    // 先逐字节写零再释放（secure_zero 用 volatile 写，不会被优化掉）。
     if(!req.stdinData.isEmpty()) {
         secure_zero(req.stdinData.data(),(size_t)req.stdinData.size());
         req.stdinData.clear();
     }
 }
 
-// ---------- 密钥轮换（v6 容器 rewrap） ----------
-// 旧口令走 --key-stdin，新口令写临时文件走 --new-key-file；载荷密文不动，仅重裹 DEK。
+// 密钥轮换
 void MainWindow::onRewrapClicked() {
     if(!checkCliExists(true)) return;
     if(m_fileEncryptorPath.isEmpty()) {
@@ -1461,7 +1515,6 @@ void MainWindow::onRewrapClicked() {
         tr("加密容器 (*.ptd);;所有文件 (*)"));
     if(file.isEmpty()) return;
 
-    // 旧口令：解开当前容器
     std::vector<unsigned char> oldPw;
     {
         PasswordDialog dlg(this);
@@ -1471,7 +1524,6 @@ void MainWindow::onRewrapClicked() {
         oldPw=dlg.takePassword();
         if(oldPw.empty()) return;
     }
-    // 新口令：重裹后的容器口令
     std::vector<unsigned char> newPw;
     {
         PasswordDialog dlg(this);
@@ -1488,10 +1540,6 @@ void MainWindow::onRewrapClicked() {
         }
     }
 
-    // 新口令经临时密钥文件注入（CLI --new-key-file），结束后删除。
-    // 用 QTemporaryFile 独占创建不可预测文件名，消除 /tmp 下固定命名的符号链接抢占窗口；
-    // 显式收紧为 0600 权限，避免新口令明文被同机其他用户读取。关闭后不自动删除——子进程需经
-    // --new-key-file 路径读取，任务结束（成功/失败/取消）在 onCommandFinished、窗口关闭在 closeEvent 中立即 unlink。
     QTemporaryFile rewTmp(QDir::tempPath()+QStringLiteral("/fileencryptor_rewrap_XXXXXX"));
     rewTmp.setAutoRemove(false);
     if(!rewTmp.open()) {
@@ -1505,7 +1553,7 @@ void MainWindow::onRewrapClicked() {
     rewTmp.flush();
     const bool rewOk=(rewTmp.error()==QFile::NoError);
     const QString tmp=rewTmp.fileName();
-    rewTmp.close();   // autoRemove=false：磁盘文件保留，交 m_rewrapTempKey 管理
+    rewTmp.close();
     if(!rewOk) {
         QFile::remove(tmp);
         MsgBox::error(this,tr("密钥轮换"),tr("无法落盘临时新口令文件。"));
@@ -1527,7 +1575,7 @@ void MainWindow::onRewrapClicked() {
     m_outputView->clear();
     appendOutput(QStringLiteral(">>> %1 --rewrap \"%2\" --key-stdin --new-key-file \"%3\"\n")
         .arg(m_fileEncryptorPath,file,tmp),false);
-    appendOutput(QStringLiteral("--- 密钥轮换（载荷密文不动） ---\n"),false);
+    appendOutput(tr("--- 密钥轮换（载荷密文不动） ---")+QStringLiteral("\n"),false);
 
     m_btnRun->setEnabled(false);
     if(m_btnRewrap) m_btnRewrap->setEnabled(false);
@@ -1547,9 +1595,8 @@ void MainWindow::onCancelClicked() {
     }
 }
 
-// ---------- 执行回显 ----------
+// 执行回显
 void MainWindow::onOutputLine(const OutputLine& line) {
-    // 进度帧按 120ms 合并渲染，避免每帧整帧替换+滚动拖慢界面
     if(line.isFrame) {
         m_pendingFrame=line;
         m_framePending=true;
@@ -1557,7 +1604,6 @@ void MainWindow::onOutputLine(const OutputLine& line) {
         return;
     }
     if(line.isProgress) {
-        // 进度行原地替换，避免重复堆积/清屏异常
         const unsigned int rgb=line.isError ? ThemeManager::stderrColorRGB()
             : ThemeManager::stdoutColorRGB();
         QTextCharFormat fmt;
@@ -1565,12 +1611,10 @@ void MainWindow::onOutputLine(const OutputLine& line) {
         QTextCursor cur=m_outputView->textCursor();
         cur.movePosition(QTextCursor::End);
         if(m_lastProgressLine) {
-            // 上一行即进度行 → 替换它
             cur.movePosition(QTextCursor::StartOfLine);
             cur.movePosition(QTextCursor::EndOfLine,QTextCursor::KeepAnchor);
             cur.insertText(line.text,fmt);
         } else {
-            // 首条进度 → 换行后另起一行，保留上一普通行
             cur.insertText(QStringLiteral("\n")+line.text,fmt);
         }
         m_lastProgressLine=true;
@@ -1579,22 +1623,19 @@ void MainWindow::onOutputLine(const OutputLine& line) {
         return;
     }
     m_lastProgressLine=false;
-    // 统计 Encrypting:/Decrypting: 标记：取消时汇总已完成数，并显示当前文件（单文件模式唯一来源）
     if(line.text.startsWith(QLatin1String("Encrypting: "))||
        line.text.startsWith(QLatin1String("Decrypting: "))) {
         ++m_runFileStarts;
-        m_currentTask.filesDone=m_runFileStarts;   // 功能5：记录已完成文件数（取消时也保留）
+        m_currentTask.filesDone=m_runFileStarts;
         const int arrow=line.text.indexOf(QStringLiteral(" -> "));
         m_currentFile=(arrow>0) ? line.text.mid(12,arrow-12).trimmed()
                                 : line.text.mid(12).trimmed();
         updateProgressLabel();
     }
-    // 已完成条目计入「跳过」
     else if(line.text.startsWith(QLatin1String("Skipped: "))) {
         ++m_skipFiles;
         updateProgressLabel();
     }
-    // 单文件失败（口令错误 / 文件损坏等）：CLI 已打印原因并继续后续文件，此处只累加计数
     else if(line.text.startsWith(QLatin1String("Failed: "))&&
             line.text.contains(QStringLiteral("skipped, continuing"))) {
         ++m_failFiles;
@@ -1614,13 +1655,11 @@ void MainWindow::flushPendingFrame() {
     renderFrameLine(m_pendingFrame);
 }
 
-// 进度帧渲染：整帧原地替换（区间失效则追加自愈），并从 FILES 末行与槽位行解析实时计数
 void MainWindow::renderFrameLine(const OutputLine& line) {
     QStringList lines=line.text.split(QLatin1Char('\n'));
     while(!lines.isEmpty()&&lines.last().trimmed().isEmpty()) lines.removeLast();
     if(lines.isEmpty()) return;
 
-    // 解析计数：FILES 末行给完成/跳过/失败，槽位行首列为当前文件
     static const QRegularExpression reFiles(
         QStringLiteral("FILES\\s+(\\d+)/(\\d+)\\s+SKIP\\s+(\\d+)\\s+FAIL\\s+(\\d+)"));
     QStringList current;
@@ -1642,36 +1681,31 @@ void MainWindow::renderFrameLine(const OutputLine& line) {
     if(!current.isEmpty()) m_currentFile=current.join(QStringLiteral(", "));
     updateProgressLabel();
 
-    // —— 渲染 ——
     const QString block=lines.join(QLatin1Char('\n'))+QLatin1Char('\n');
     const unsigned int rgb=ThemeManager::stdoutColorRGB();
     QTextCharFormat fmt;
     fmt.setForeground(QColor((rgb>>16)&0xFF,(rgb>>8)&0xFF,rgb&0xFF));
 
     bool replaced=false;
-    // 用 QTextBlock 句柄锚定帧首块：position() 随文档裁剪（setMaximumBlockCount）
-    // 自动前移，因此字符偏移无需自行维护；块被裁掉则 isValid() 失效 → 回退追加。
     if(m_frameBlock.isValid()&&m_frameLen>0) {
         const int pos=m_frameBlock.position();
         const int docLen=m_outputView->document()->characterCount();
         if(pos>=0&&pos+m_frameLen<=docLen
-           // 区间自愈：帧首不再是汇总行 'T' 即视为失效，放弃替换、回退追加，避免残影
            &&m_outputView->document()->characterAt(pos)==QLatin1Char('T')) {
             QTextCursor sel(m_outputView->document());
             sel.setPosition(pos);
             sel.setPosition(pos+m_frameLen,QTextCursor::KeepAnchor);
-            sel.insertText(block,fmt);   // 原地整帧替换（新旧帧长度可不同）
+            sel.insertText(block,fmt);
             replaced=true;
         }
     }
     if(!replaced) {
-        // 首帧或区间失效：追加新帧块到文档末尾，记录其首块句柄
         QTextCursor cur=m_outputView->textCursor();
         cur.movePosition(QTextCursor::End);
         const int base=cur.position();
         cur.insertText(QStringLiteral("\n")+block,fmt);
         QTextCursor anchor(m_outputView->document());
-        anchor.setPosition(base+1);          // 前导换行之后即帧首
+        anchor.setPosition(base+1);
         m_frameBlock=anchor.block();
     }
     m_frameLen=block.size();
@@ -1680,7 +1714,6 @@ void MainWindow::renderFrameLine(const OutputLine& line) {
     bar->setValue(bar->maximum());
 }
 
-// 状态栏右侧计数条：运行中实时刷新 当前文件/完成/跳过/失败；空闲展示待处理规模
 void MainWindow::updateProgressLabel() {
     if(!m_progressLabel) return;
     QString full;
@@ -1706,18 +1739,15 @@ void MainWindow::onCommandFinished(const CommandResult& r) {
     m_btnRun->setEnabled(true);
     if(m_btnRewrap) m_btnRewrap->setEnabled(true);
     m_btnCancel->setEnabled(false);
-    if(!m_rewrapTempKey.isEmpty()) {          // rewrap 的新口令只用于本次运行
+    if(!m_rewrapTempKey.isEmpty()) {
         QFile::remove(m_rewrapTempKey);
         m_rewrapTempKey.clear();
     }
-    // 收尾前把节流中未渲染的最后一帧刷出，保证计数与进度条终态一致
     if(m_framePending) flushPendingFrame();
-    finishTaskRecord(r);         // 功能5：结果落盘
+    finishTaskRecord(r);
 
     QString summary;
     if(r.wasCancelled) {
-        // 功能11：取消不回滚已完成的输出。最后一个已开始的文件可能被中断，
-        // 以「文件开始标记数 - 1」估算已保留的完成文件数；重跑同一任务可从 .prs 续传。
         const int preserved=qMax(0,m_runFileStarts-1);
         summary=tr("--- 已取消（退出码 %1）：已保留 %2 个已完成文件的输出，"
                    "重跑同一任务将从 .prs 续传未完成部分 ---")
@@ -1736,20 +1766,16 @@ void MainWindow::onCommandFinished(const CommandResult& r) {
         summary=tr("--- 执行结束（退出码 %1） ---").arg(r.exitCode);
         setStatus(tr("结束（退出码 %1）").arg(r.exitCode));
     }
-    // 运行终态汇总：失败/跳过计数非 0 时一并提示，呼应「记录并提示后继续」
     if(m_failFiles>0||m_skipFiles>0) {
         summary+=tr("\n（完成 %1 / 跳过 %2 / 失败 %3）")
                     .arg(m_doneFiles).arg(m_skipFiles).arg(m_failFiles);
     }
     appendOutput(QStringLiteral("\n%1\n").arg(summary),r.exitCode!=0);
-    // 任务结束：源文件集合已变化（部分被删除/移回收站），作废缓存并重新统计待处理规模
     resetPendingCache();
     recomputePending();
     updateProgressLabel();
 
-    // 任务完成汇总弹窗（仅成功/失败的批量或加密任务，非取消）
     if(!r.wasCancelled && (m_doneFiles>0||m_failFiles>0)) {
-        // 计算加密后大小（扫描输出目录 .ptd）
         qint64 encSize=0;
         const QString outDir=m_outDirEdit->text().trimmed();
         if(!outDir.isEmpty()&&QFileInfo(outDir).isDir()) {
@@ -1775,7 +1801,6 @@ void MainWindow::onCommandFinished(const CommandResult& r) {
         dlg.exec();
     }
 
-    // 任务完成提醒：窗口有焦点则弹窗，否则发系统通知
     const QString notifyTitle = tr("任务完成");
     const QString notifyBody = summary.remove(QStringLiteral("---")).trimmed();
     if (isActiveWindow()) {
@@ -1785,7 +1810,7 @@ void MainWindow::onCommandFinished(const CommandResult& r) {
     }
 }
 
-// ---------- 功能5 / 功能6：任务历史与批量进度面板 ----------
+// 任务历史与进度
 QString MainWindow::actionKey(CryptoAction a) {
     switch(a) {
         case CryptoAction::Encrypt:       return QStringLiteral("encrypt");
@@ -1808,7 +1833,6 @@ QString MainWindow::modeKey(CryptoMode m) {
     return QStringLiteral("xchacha20");
 }
 
-// 工作线程递归统计规模；命中缓存的输入不再遍历（勾选/取消频繁重算，无缓存会反复全盘扫）
 static ScanResult scanInputs(const QStringList& paths,
                              std::shared_ptr<const QHash<QString,DirStat>> cache,
                              std::shared_ptr<std::atomic<bool>> cancel) {
@@ -1845,20 +1869,17 @@ static ScanResult scanInputs(const QStringList& paths,
     return r;
 }
 
-// 仅做防抖登记，真正扫描在工作线程完成（UI 线程递归大目录会卡顿数百毫秒~数秒）
 void MainWindow::recomputePending() {
     if(!m_pendingTimer) return;
     m_pendingTimer->start();
 }
 
-// 输入变化（新增/清空/回放）→ 缓存的整体统计失效，作废
 void MainWindow::resetPendingCache() {
     m_dirCache.clear();
 }
 
 void MainWindow::startPendingScan() {
     if(m_scanWatcher->isRunning()) {
-        // 上一轮还在扫：请求其尽快退出并标记补扫，避免排队堆积
         if(m_scanCancel) m_scanCancel->store(true,std::memory_order_relaxed);
         m_scanRestartPending=true;
         return;
@@ -1866,8 +1887,6 @@ void MainWindow::startPendingScan() {
     m_scanCancel=std::make_shared<std::atomic<bool>>(false);
     auto cancel=m_scanCancel;
     const QStringList paths=collectOptions().inputPaths;
-    // 以共享快照传入工作线程：按值捕获 shared_ptr（仅原子增引用计数，不拷贝整张 QHash），
-    // 既避免每轮整表拷贝，又因快照不可变、主线程仅在扫描结束后回填而天然无竞态。
     auto cache=std::make_shared<const QHash<QString,DirStat>>(m_dirCache);
     m_scanWatcher->setFuture(QtConcurrent::run(
         [paths,cache,cancel]{ return scanInputs(paths,cache,cancel); }));
@@ -1877,10 +1896,10 @@ void MainWindow::onPendingScanFinished() {
     const ScanResult r=m_scanWatcher->result();
     if(m_scanRestartPending) {
         m_scanRestartPending=false;
-        startPendingScan();     // 有更新请求：丢弃本轮结果，按最新输入重扫
+        startPendingScan();
         return;
     }
-    if(!r.complete) return;     // 被取消的半截结果不入库，也不覆盖上一次的有效值
+    if(!r.complete) return;
     m_pendingBytes=r.bytes;
     m_pendingFiles=r.files;
     for(auto it=r.entries.constBegin();it!=r.entries.constEnd();++it)
@@ -1897,10 +1916,9 @@ void MainWindow::beginTaskRecord(const ShellOptions& o) {
     m_currentTask.actionLabel=TaskHistory::actionLabel(m_currentTask.action);
     m_currentTask.mode=modeKey(o.mode);
     m_currentTask.inputCount=o.inputPaths.size();
-    m_currentTask.inputPaths=o.inputPaths;   // 回放时据原路径恢复输入列表
+    m_currentTask.inputPaths=o.inputPaths;
     m_currentTask.totalBytes=m_pendingBytes;
     m_currentTask.outputDir=o.outputDir;
-    // 完整参数快照（用于任务回放）
     m_currentTask.sourceIndex=o.sourceDisposition;
     m_currentTask.force=o.forceOverwrite;
     m_currentTask.sha256=o.writeSha256;
@@ -1918,7 +1936,6 @@ void MainWindow::finishTaskRecord(const CommandResult& r) {
     m_currentTask.finishedAt=QDateTime::currentDateTime()
         .toString(QStringLiteral("yyyy-MM-dd HH:mm:ss"));
     m_currentTask.durationMs=m_runTimer.isValid() ? m_runTimer.elapsed() : 0;
-    // 优先用 CLI 统计文件（精确），其次用帧/逐文件计数，最后回退「文件开始标记数」
     if(!m_statsFile.isEmpty()&&QFile::exists(m_statsFile)) {
         QFile sf(m_statsFile);
         if(sf.open(QIODevice::ReadOnly|QIODevice::Text)) {
@@ -1949,7 +1966,7 @@ void MainWindow::finishTaskRecord(const CommandResult& r) {
         : ((!r.errorString.isEmpty()||r.exitCode!=0) ? QStringLiteral("failed")
                                                      : QStringLiteral("success"));
     const TaskRecord done=m_currentTask;
-    m_currentTask=TaskRecord();     // 先摘出再清空，避免落盘期间被后续运行覆盖
+    m_currentTask=TaskRecord();
     QString err;
     if(!TaskHistory::append(done,err))
         appendOutput(tr("（警告：任务历史写入失败：%1）\n").arg(err),true);
@@ -1963,7 +1980,6 @@ void MainWindow::onOpenTaskHistory() {
     applyTaskRecord(rec);
 }
 
-// 回放：把历史记录的动作/模式/输出目录回填到主窗口（输入路径需用户自行选择）
 void MainWindow::applyTaskRecord(const TaskRecord& rec) {
     auto setAction=[&](CryptoAction a){
         if(QAbstractButton* b=m_actionGroup->button(static_cast<int>(a))) b->setChecked(true);
@@ -1986,7 +2002,6 @@ void MainWindow::applyTaskRecord(const TaskRecord& rec) {
     }
     if(!rec.outputDir.isEmpty()) m_outDirEdit->setText(rec.outputDir);
 
-    // 完整参数回放
     if(m_sourceCombo) {
         const int idx=m_sourceCombo->findData(rec.sourceIndex);
         if(idx>=0) m_sourceCombo->setCurrentIndex(idx);
@@ -1999,7 +2014,6 @@ void MainWindow::applyTaskRecord(const TaskRecord& rec) {
     if(m_recipientEdit) m_recipientEdit->setText(rec.recipient);
     if(m_identityEdit) m_identityEdit->setText(rec.identity);
 
-    // 输入路径随记录回填：把该次任务处理的文件/文件夹恢复到输入列表原位
     if(!rec.inputPaths.isEmpty()) {
         m_fileList->clear();
         addInputPaths(rec.inputPaths);
@@ -2011,9 +2025,7 @@ void MainWindow::applyTaskRecord(const TaskRecord& rec) {
     setStatus(tr("已回填历史任务参数：%1").arg(rec.actionLabel));
 }
 
-// ---------- 输出追加 + 自动滚动 ----------
 void MainWindow::appendOutput(const QString& text,bool isError) {
-    // 输出框背景随主题：亮色浅灰底→深字，暗色深底→浅字
     const unsigned int rgb=isError ? ThemeManager::stderrColorRGB()
         : ThemeManager::stdoutColorRGB();
     QTextCharFormat fmt;
@@ -2021,19 +2033,17 @@ void MainWindow::appendOutput(const QString& text,bool isError) {
     QTextCursor cur=m_outputView->textCursor();
     cur.movePosition(QTextCursor::End);
     cur.insertText(text,fmt);
-    // 自动滚到底
     QScrollBar* bar=m_outputView->verticalScrollBar();
     bar->setValue(bar->maximum());
 }
 
-// ---------- 命令预览刷新 ----------
+// 命令预览刷新
 void MainWindow::refreshCommandPreview() {
-    // 仅在空闲时刷新预览（运行中不打断回显）；不做文本嗅探，一律整块重绘
     if(m_executor&&m_executor->isRunning()) return;
     const ShellOptions o=collectOptions();
     const QString preview=CliArgBuilder::buildPreview(m_fileEncryptorPath,o);
     m_outputView->clear();
-    appendOutput(QStringLiteral(">>> 命令预览: %1\n").arg(preview),false);
+    appendOutput(tr(">>> 命令预览: %1").arg(preview)+QStringLiteral("\n"),false);
 }
 
 void MainWindow::setStatus(const QString& msg) {

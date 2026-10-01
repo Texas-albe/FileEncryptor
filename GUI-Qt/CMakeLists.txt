@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.16)
 
-project(FileEncryptorGUI VERSION 2.0.2 LANGUAGES CXX)
+project(FileEncryptorGUI VERSION 2.0.3 LANGUAGES CXX)
 
 # FileEncryptor GUI - Qt6 图形界面（Windows + Linux 双平台；Windows 另有 WinUI3 版本）
 
@@ -64,7 +64,8 @@ set(SHELL_SOURCES
     src/EtaEstimator.cpp
     src/BatchProgressPanel.cpp
     src/TaskHistoryDialog.cpp
-    src/TaskSummaryDialog.cpp)
+    src/TaskSummaryDialog.cpp
+    src/I18n.cpp)
 
 set(SHELL_HEADERS
     src/MainWindow.h
@@ -84,7 +85,8 @@ set(SHELL_HEADERS
     src/EtaEstimator.h
     src/BatchProgressPanel.h
     src/TaskHistoryDialog.h
-    src/TaskSummaryDialog.h)
+    src/TaskSummaryDialog.h
+    src/I18n.h)
 
 # Windows 图标资源（嵌入 exe；Linux/macOS 无 .rc，图标经窗口图标设置）
 set(SHELL_RESOURCES )
@@ -93,6 +95,8 @@ if(WIN32)
 endif()
 # Qt 资源（图标嵌入 exe，供 setWindowIcon 在三端标题栏统一渲染）
 list(APPEND SHELL_RESOURCES "${CMAKE_CURRENT_SOURCE_DIR}/icons.qrc")
+# 多语言资源（Updates/007 i18n）：en-US 翻译 .qm 嵌入 exe（.ts 为翻译源，重新生成见 translations/ 注释）
+list(APPEND SHELL_RESOURCES "${CMAKE_CURRENT_SOURCE_DIR}/i18n.qrc")
 
 # 字体资源（仅非 Windows 嵌入）：Linux/macOS 默认字体常不含 CJK 字形致中文方块，运行时 FontBootstrap 从 :/fonts/ 加载内嵌 Noto Sans SC 兜底；Windows 由系统 YaHei 覆盖，不嵌入以控体积。
 if(NOT WIN32)

@@ -1,4 +1,3 @@
-// ViewSettingsDialog 实现
 #include "ViewSettingsDialog.h"
 
 #include <QVBoxLayout>
@@ -18,7 +17,6 @@ ViewSettingsDialog::ViewSettingsDialog(const QString& currentPath, QWidget* pare
 
     auto* root = new QVBoxLayout(this);
 
-    // 说明
     auto* tip = new QLabel(tr("选择一张图片作为主窗口背景。背景会随窗口大小自适应铺满，"
                              "并在主题切换 / 重启后保持生效。"));
     tip->setWordWrap(true);
@@ -51,7 +49,6 @@ ViewSettingsDialog::ViewSettingsDialog(const QString& currentPath, QWidget* pare
     connect(box, &QDialogButtonBox::accepted, this, &QDialog::accept);
     connect(box, &QDialogButtonBox::rejected, this, &QDialog::reject);
 
-    // 确定前把当前选择写入结果
     connect(this, &QDialog::accepted, this, [this]{ m_result = m_current; });
 }
 
@@ -87,7 +84,6 @@ void ViewSettingsDialog::updatePreview(const QString& path) {
         m_preview->setPixmap(QPixmap());
         return;
     }
-    // 等比缩放到预览区宽度
     const QPixmap scaled = pm.scaledToWidth(m_preview->width() > 0 ? m_preview->width() : 400,
                                             Qt::SmoothTransformation);
     m_preview->setPixmap(scaled);

@@ -1,4 +1,4 @@
-// AboutDialogs - "关于"菜单的两个子项对话框（鸣谢 / README 摘要）
+// 关于菜单的两个子项对话框
 #pragma once
 #include <QDialog>
 

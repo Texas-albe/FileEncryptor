@@ -1,4 +1,3 @@
-// PasswordDialog 实现
 #include "PasswordDialog.h"
 #include "PasswordStrength.h"
 #include "MsgBox.h"
@@ -16,12 +15,11 @@
 #include <QPalette>
 #include <QColor>
 
-// 安全擦除：见 secure_zero.h（MainWindow 与 PasswordDialog 共用）。
 #include "secure_zero.h"
 
-// 不再使用自绘 EyeLineEdit：自绘 paintEvent 会绕开 IME 预编辑、选区高亮、滚动与 RTL 布局，且手工 setTextMargins 与内部几何冲突易致文字被眼睛按钮遮挡。改用 QLineEdit 自带 addAction(TrailingPosition)，由控件自行排布尾部动作并避让文本。
+// 用 QLineEdit 尾部动作实现眼睛
 
-// 小眼睛图标：visible=true 睁眼，false 闭眼（叠加斜杠）。颜色与文本框文字一致。
+// 眼睛图标绘制
 static QIcon makeEyeIcon(bool visible, const QColor& color) {
     const int S = 22;
     QPixmap pm(S, S);
@@ -31,19 +29,16 @@ static QIcon makeEyeIcon(bool visible, const QColor& color) {
     p.setPen(QPen(color, 1.6));
     p.setBrush(Qt::NoBrush);
 
-    // 眼眶（上下眼睑构成的水滴形眼睛）
     QPainterPath eye;
     eye.moveTo(4, S / 2.0);
     eye.quadTo(S / 2.0, S / 2.0 - 8, S - 4, S / 2.0);
     eye.quadTo(S / 2.0, S / 2.0 + 8, 4, S / 2.0);
     p.drawPath(eye);
 
-    // 瞳孔
     p.setBrush(color);
     p.drawEllipse(QPointF(S / 2.0, S / 2.0), 2.6, 2.6);
 
     if (!visible) {
-        // 闭眼斜杠
         p.drawLine(QLineF(5, 5, S - 5, S - 5));
     }
     return QIcon(pm);
@@ -80,7 +75,7 @@ PasswordDialog::PasswordDialog(QWidget* parent) : QDialog(parent) {
     strengthRow->addStretch();
     lay->addLayout(strengthRow);
 
-    // 二次确认（默认隐藏，setRequireConfirm 开启）
+    // 二次确认（默认隐藏）
     m_confirm = new QLineEdit;
     m_confirm->setEchoMode(QLineEdit::Password);
     m_confirm->setPlaceholderText(tr("再次输入以确认"));
@@ -104,11 +99,9 @@ PasswordDialog::PasswordDialog(QWidget* parent) : QDialog(parent) {
     onTextChanged();
 }
 
-// 在密码框右侧放置小眼睛动作（QLineEdit::TrailingPosition，控件自行管理布局）：
-// 点击在掩码/明文间切换，图标随之切换。颜色取当前调色板文字色，主题切换后仍可读。
 void PasswordDialog::setupEye(QLineEdit* le) {
     const QColor c = le->palette().color(QPalette::WindowText);
-    QAction* act = le->addAction(makeEyeIcon(/*visible=*/false, c), QLineEdit::TrailingPosition);
+    QAction* act = le->addAction(makeEyeIcon(false, c), QLineEdit::TrailingPosition);
     act->setToolTip(tr("点击显示/隐藏密码"));
     connect(act, &QAction::triggered, le, [le, act](bool) {
         const bool showing = (le->echoMode() == QLineEdit::Normal);
@@ -118,7 +111,7 @@ void PasswordDialog::setupEye(QLineEdit* le) {
 }
 
 PasswordDialog::~PasswordDialog() {
-    // std::memset + clear 会被优化成 dead store；用 volatile 逐字节写零确保真擦除。
+    // volatile 写零防优化
     secure_zero(m_secret.data(), m_secret.size());
     m_secret.clear();
 }
@@ -161,13 +154,9 @@ void PasswordDialog::onAccept() {
         MsgBox::error(this, tr("口令无效"), reason);
         return;
     }
-    // 取出口令（UTF-8 字节），随后清零临时缓冲并清掉输入框明文。
-    // 注意：m_pw->text() 返回的 QString 副本由 Qt 内部管理、不提供安全擦除接口，
-    // 这是 Qt GUI 层的固有限制——口令在转为 QByteArray 之前会在堆上短暂驻留，
-    // 无法通过应用层手段彻底清零；本函数已在拷贝进 m_secret 后立即清零这份 UTF-8 字节副本。
+    // 取出口令并清零缓冲
     QByteArray b = m_pw->text().toUtf8();
     m_secret.assign(b.begin(), b.end());
-    // 裸 memset 可能被编译器判定为 dead store 优化掉，改用 secure_zero 逐字节写零。
     secure_zero(b.data(), size_t(b.size()));
     m_pw->clear();
     m_confirm->clear();
@@ -176,6 +165,6 @@ void PasswordDialog::onAccept() {
 
 std::vector<unsigned char> PasswordDialog::takePassword() {
     std::vector<unsigned char> out;
-    out.swap(m_secret);   // 移动，原缓冲置空
+    out.swap(m_secret);
     return out;
 }

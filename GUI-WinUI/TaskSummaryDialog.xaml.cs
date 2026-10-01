@@ -2,6 +2,7 @@ using Microsoft.UI;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
+using FileEncryptorGUI.Services;
 
 namespace FileEncryptorGUI;
 
@@ -22,12 +23,12 @@ public sealed partial class TaskSummaryDialog : ContentDialog
 
         var items = new (string label, string value)[]
         {
-            ("用时", duration),
-            ("平均速度", avgSpeed),
-            ("加密后大小", encryptedSize),
-            ("完成", done.ToString()),
-            ("跳过", skip.ToString()),
-            ("失败", fail.ToString()),
+            (L10n.T("用时"), duration),
+            (L10n.T("平均速度"), avgSpeed),
+            (L10n.T("加密后大小"), encryptedSize),
+            (L10n.T("完成"), done.ToString()),
+            (L10n.T("跳过"), skip.ToString()),
+            (L10n.T("失败"), fail.ToString()),
         };
 
         for (int i = 0; i < items.Length; i++)
@@ -40,7 +41,7 @@ public sealed partial class TaskSummaryDialog : ContentDialog
             var card = new StackPanel { Margin = new Thickness(0, 0, 8, 8) };
             var label = new TextBlock { Text = items[i].label, FontSize = 11, Opacity = 0.6 };
             var value = new TextBlock { Text = items[i].value, FontSize = 14, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold };
-            if (items[i].label == "失败" && fail > 0)
+            if (items[i].label == L10n.T("失败") && fail > 0)
                 value.Foreground = new SolidColorBrush(Colors.OrangeRed);
             card.Children.Add(label);
             card.Children.Add(value);
@@ -52,7 +53,7 @@ public sealed partial class TaskSummaryDialog : ContentDialog
         panel.Children.Add(grid);
 
         Content = panel;
-        Title = "任务完成";
-        PrimaryButtonText = "确定";
+        Title = L10n.T("任务完成");
+        PrimaryButtonText = L10n.T("确定");
     }
 }

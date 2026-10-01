@@ -28,12 +28,13 @@ public class MainViewModel : ObservableObject
     private readonly Stopwatch _runTimer = new();
     private int _doneFiles, _skipFiles, _failFiles, _totalFiles;
     private string _currentFile = "";
-    private readonly StringBuilder _outputBuffer = new();
 
     public MainViewModel()
     {
         _dispatcher = DispatcherQueue.GetForCurrentThread();
         _cli.Finished += OnFinished;
+        // 进度计数来源（控制台模式下不触发）
+        _cli.OutputLine += OnOutputLine;
     }
 
     // ===== 输入 =====
@@ -80,12 +81,19 @@ public class MainViewModel : ObservableObject
     private bool _restoreName;
     public bool RestoreName { get => _restoreName; set { SetProperty(ref _restoreName, value); RefreshCommandPreview(); } }
 
-    // ===== 输出 =====
-    private string _outputText = "";
-    public string OutputText { get => _outputText; set => SetProperty(ref _outputText, value); }
-
-    private string _statusText = "就绪";
+    // ===== 状态 =====
+    private string _statusText = L10n.T("就绪");
     public string StatusText { get => _statusText; set => SetProperty(ref _statusText, value); }
+
+    // 记下键与参数，切换语言后可原样重翻译
+    private string _statusKey = "就绪";
+    private object?[] _statusArgs = Array.Empty<object?>();
+    public void SetStatus(string key, params object?[] args)
+    {
+        _statusKey = key;
+        _statusArgs = args;
+        StatusText = L10n.F(key, args);
+    }
 
     private string _progressLabel = "";
     public string ProgressLabel { get => _progressLabel; set => SetProperty(ref _progressLabel, value); }
@@ -102,7 +110,7 @@ public class MainViewModel : ObservableObject
     public string? CliPath => _cliPath;
 
     // ===== 命令 =====
-    public ICommand RunCommand => new RelayCommand(_ => Run(), _ => !IsRunning && InputPaths.Any(p => p.IsSelected) || IsKeyGenMode);
+    public ICommand RunCommand => new RelayCommand(_ => Run(), _ => !IsRunning && (InputPaths.Any(p => p.IsSelected) || IsKeyGenMode));
     public ICommand CancelCommand => new RelayCommand(_ => Cancel(), _ => IsRunning);
 
     // ===== CLI 探测 =====
@@ -112,14 +120,15 @@ public class MainViewModel : ObservableObject
         _cliPath = path;
         if (path != null)
         {
-            ProbeFeatures(path);
+            _ = ProbeFeaturesAsync(path);
             return true;
         }
         return false;
     }
 
-    private void ProbeFeatures(string cliPath)
+    private async Task ProbeFeaturesAsync(string cliPath)
     {
+        Process? p = null;
         try
         {
             var psi = new ProcessStartInfo
@@ -130,25 +139,39 @@ public class MainViewModel : ObservableObject
                 RedirectStandardOutput = true,
                 CreateNoWindow = true
             };
-            using var p = Process.Start(psi);
+            p = Process.Start(psi);
             if (p == null) return;
-            var output = p.StandardOutput.ReadToEnd();
-            p.WaitForExit(5000);
+            var output = await p.StandardOutput.ReadToEndAsync().ConfigureAwait(false);
+            // 5s 超时放弃探测
+            using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(5000));
+            await p.WaitForExitAsync(cts.Token).ConfigureAwait(false);
             _zstdAvailable = output.Contains("zstd=1");
             _aegisAvailable = output.Contains("aegis=1");
-            OnPropertyChanged(nameof(ZstdAvailable));
-            OnPropertyChanged(nameof(AegisAvailable));
+            _dispatcher.TryEnqueue(() =>
+            {
+                OnPropertyChanged(nameof(ZstdAvailable));
+                OnPropertyChanged(nameof(AegisAvailable));
+            });
         }
-        catch { /* 探测失败用默认值 */ }
+        catch (OperationCanceledException) { try { p?.Kill(); } catch { } }
+        catch {  }
     }
 
     // ===== 运行 =====
+    // 默认走系统控制台：进度与口令交互都在控制台完成
+    public bool UseSystemConsole { get; set; } = true;
+
     public void RunWithPassword(string password)
+    {
+        // 与 Qt / 交互式一致：原样发送口令字节，不追加换行
+        StartCli(Encoding.UTF8.GetBytes(password), UseSystemConsole);
+    }
+
+    private void StartCli(byte[] stdinData, bool console)
     {
         if (_cliPath == null) return;
         var opts = CollectOptions();
         var args = CliArgBuilder.BuildArguments(opts);
-        // 设置工作目录：优先第一个输入文件所在目录，其次输出目录，最后用户目录
         string? workDir = null;
         if (opts.InputPaths.Count > 0)
         {
@@ -161,30 +184,22 @@ public class MainViewModel : ObservableObject
         if (string.IsNullOrEmpty(workDir))
             workDir = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
 
-        // 直接拼出"口令字节 + 换行"，避免 password + "\n" 额外产生不可回收的字符串副本
-        var pwdBytes = Encoding.UTF8.GetBytes(password);
-        var stdinBytes = new byte[pwdBytes.Length + 1];
-        Array.Copy(pwdBytes, stdinBytes, pwdBytes.Length);
-        stdinBytes[pwdBytes.Length] = 0x0A;
-        Array.Clear(pwdBytes, 0, pwdBytes.Length);
-
         var req = new CommandRequest
         {
             ProgramPath = _cliPath,
             Arguments = args,
-            StdinData = stdinBytes,
-            WorkingDirectory = workDir
+            StdinData = stdinData,
+            WorkingDirectory = workDir,
+            ShowConsole = console
         };
 
         _doneFiles = _skipFiles = _failFiles = 0;
         _totalFiles = InputPaths.Count(p => p.IsSelected);
         _runTimer.Restart();
         IsRunning = true;
-        StatusText = "运行中...";
-        _outputBuffer.Clear();
-        OutputText = "";
+        SetStatus("运行中...");
 
-        // 计算总大小（含目录递归）
+        // 计算总大小
         long totalBytes = 0;
         foreach (var p in opts.InputPaths)
         {
@@ -198,7 +213,7 @@ public class MainViewModel : ObservableObject
             catch { }
         }
 
-        // 记录任务（完整参数快照）
+        // 记录任务快照
         _currentTask = new TaskRecord
         {
             Id = TaskHistoryService.NewId(),
@@ -228,8 +243,17 @@ public class MainViewModel : ObservableObject
 
     public void Run()
     {
-        // 密码由 View 层弹窗获取后调用 RunWithPassword
-        PasswordRequested?.Invoke();
+        // 需要口令时先由 GUI 采集，再传给 CLI
+        if (NeedsPassword()) PasswordRequested?.Invoke();
+        else StartCli(Array.Empty<byte>(), UseSystemConsole);
+    }
+
+    // 对称模式且未指定密钥文件/身份时才需要口令
+    private bool NeedsPassword()
+    {
+        if (IsAsymmetric) return false;
+        if (!string.IsNullOrEmpty(Keyfile)) return false;
+        return ActionIndex is 0 or 1 or 2 or 3 or 5;
     }
 
     public event Action? PasswordRequested;
@@ -243,14 +267,8 @@ public class MainViewModel : ObservableObject
 
     private void OnOutputLine(string text)
     {
-        _dispatcher.TryEnqueue(() =>
-        {
-            _outputBuffer.Append(text);
-            // 限制最大行数，避免内存膨胀
-            if (_outputBuffer.Length > 50000)
-                _outputBuffer.Remove(0, _outputBuffer.Length - 50000);
-            OutputText = _outputBuffer.ToString();
-        });
+        // 仅解析进度计数，输出本身显示在系统控制台
+        _dispatcher.TryEnqueue(() => ParseProgress(text));
     }
     private void OnFinished(CommandResult result)
     {
@@ -258,7 +276,9 @@ public class MainViewModel : ObservableObject
         {
             _runTimer.Stop();
             IsRunning = false;
-            StatusText = result.WasCancelled ? "已取消" : (result.ExitCode == 0 ? "完成" : $"失败 (exit {result.ExitCode})");
+            if (result.WasCancelled) SetStatus("已取消");
+            else if (result.ExitCode == 0) SetStatus("完成");
+            else SetStatus("失败 (exit {0})", result.ExitCode);
 
             if (_currentTask != null)
             {
@@ -275,13 +295,14 @@ public class MainViewModel : ObservableObject
             // 构建汇总
             var summary = new TaskSummaryInfo
             {
-                Title = result.WasCancelled ? "任务已取消" : (result.ExitCode == 0 ? "任务完成" : $"任务结束 (exit {result.ExitCode})"),
+                Title = result.WasCancelled
+                    ? L10n.T("任务已取消")
+                    : (result.ExitCode == 0 ? L10n.T("任务完成") : L10n.F("任务结束 (exit {0})", result.ExitCode)),
                 Duration = EtaEstimatorService.FormatDuration(_runTimer.ElapsedMilliseconds),
                 Done = _cli.FilesDone,
                 Skip = _cli.FilesSkip,
                 Fail = _cli.FilesFail,
             };
-            // 平均速度
             long totalBytes = _cli.TotalBytes > 0 ? _cli.TotalBytes : (_currentTask?.TotalBytes ?? 0);
             if (totalBytes > 0 && _runTimer.ElapsedMilliseconds > 0)
             {
@@ -289,12 +310,11 @@ public class MainViewModel : ObservableObject
                 summary.AvgSpeed = EtaEstimatorService.FormatRate(bps);
             }
             else summary.AvgSpeed = "-";
-            // 加密后大小默认占位，实际统计放到后台线程执行
+            // 加密后大小后台统计
             summary.EncryptedSize = "-";
 
             TaskCompleted?.Invoke(StatusText);
 
-            // 输出目录递归扫描可能很大/在网络盘上，移到后台线程，完成后再封送回 UI 刷新汇总
             var outDir = OutputDir;
             _ = Task.Run(() =>
             {
@@ -321,7 +341,7 @@ public class MainViewModel : ObservableObject
 
     private void ParseProgress(string line)
     {
-        // 解析 "Done: N, Skip: N, Fail: N" 等
+        // 解析 Done/Skip/Fail
         if (line.Contains("skipped"))
         {
             var m = System.Text.RegularExpressions.Regex.Match(line, @"skipped\s+(\d+)");
@@ -332,7 +352,15 @@ public class MainViewModel : ObservableObject
 
     private void UpdateProgressLabel()
     {
-        ProgressLabel = $"当前: {_currentFile} | 完成 {_doneFiles} | 跳过 {_skipFiles} | 失败 {_failFiles} / 共 {_totalFiles}";
+        ProgressLabel = L10n.F("当前: {0} | 完成 {1} | 跳过 {2} | 失败 {3} / 共 {4}",
+            _currentFile, _doneFiles, _skipFiles, _failFiles, _totalFiles);
+    }
+
+    // 切换语言后刷新尚未重算的运行态文本
+    public void RefreshRuntimeTexts()
+    {
+        StatusText = L10n.F(_statusKey, _statusArgs);
+        if (_totalFiles > 0 || _currentFile.Length > 0) UpdateProgressLabel();
     }
 
     public ShellOptions CollectOptions()
@@ -370,6 +398,7 @@ public class MainViewModel : ObservableObject
             WriteSha256 = Sha256,
             Compress = Compress,
             CompressionLevel = Compress ? CompressLevel : 0,
+            ConsoleMode = UseSystemConsole,
         };
     }
 
@@ -380,15 +409,13 @@ public class MainViewModel : ObservableObject
         var argStr = string.Join(" ", args.Select(a => a.StartsWith("-") ? a : "\"" + a.Replace("\"", "\\\"") + "\""));
         if (_cliPath == null)
         {
-            // 未检测到 CLI：只显示已选参数
             CommandPreview = argStr;
         }
         else
         {
-            // 检测到 CLI：显示完整可执行文件路径 + 参数
             CommandPreview = "\"" + _cliPath + "\"" + (string.IsNullOrEmpty(argStr) ? "" : " " + argStr);
         }
-        OutputText = ">>> " + CommandPreview;
+        // 预览写入独立区域
     }
 
     public void AddInputPaths(IEnumerable<string> paths)
@@ -397,11 +424,11 @@ public class MainViewModel : ObservableObject
         {
             if (!InputPaths.Any(x => x.Path == path))
                 InputPaths.Add(new SelectablePath { Path = path, IsSelected = true });
-            // 单文件模式下加入目录，自动切换到批量模式
+            // 单文件加目录转批量
             if (Directory.Exists(path))
             {
-                if (ActionIndex == 0) ActionIndex = 2;       // 加密 → 批量加密
-                else if (ActionIndex == 1) ActionIndex = 3;  // 解密 → 批量解密
+                if (ActionIndex == 0) ActionIndex = 2;
+                else if (ActionIndex == 1) ActionIndex = 3;
             }
         }
         RefreshCommandPreview();

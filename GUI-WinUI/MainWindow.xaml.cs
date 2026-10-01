@@ -28,9 +28,14 @@ public sealed partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
-        Title = "FileEncryptorGUI 2.0.0";
 
-        // 自定义标题栏：Acrylic 延伸到标题栏，按钮背景透明
+        // 先初始化语言再翻译界面
+        L10n.Init();
+        ApplyLocalization();
+
+        Title = $"FileEncryptorGUI {FileEncryptorLocator.GuiVersion}";
+        TitleText.Text = Title;
+
         ExtendsContentIntoTitleBar = true;
         SetTitleBar(DragRegion);
         var tb = AppWindow.TitleBar;
@@ -46,20 +51,28 @@ public sealed partial class MainWindow : Window
         ChkForce.IsChecked = true;
         RbEncrypt.IsChecked = true;
 
-        // 背景：自定义图片优先，否则 Acrylic
+        // 背景优先级：图片 > Acrylic
         RootGrid.Background = _backgroundBrush;
         ApplySavedBackground();
         if (_backgroundBrush.ImageSource == null)
             SystemBackdrop = new DesktopAcrylicBackdrop();
+
+        // 国庆节覆盖主题色
+        if (NationalDayTheme.IsActive())
+        {
+            RootGrid.Background = new Microsoft.UI.Xaml.Media.SolidColorBrush(NationalDayTheme.WindowBg);
+            SystemBackdrop = null;
+            // 运行/取消按钮也走红系，否则绿色运行键是杂色
+            NationalDayTheme.ApplyButtonColors(BtnRun, BtnCancel);
+        }
         ModeCombo.SelectedIndex = 0;
         SourceCombo.SelectedIndex = 0;
 
-        // 标题栏图标
         try {
             var iconPath = System.IO.Path.Combine(AppContext.BaseDirectory, "Assets", "app.ico");
             if (System.IO.File.Exists(iconPath))
                 this.AppWindow.SetIcon(iconPath);
-        } catch { /* 图标加载失败不影响功能 */ }
+        } catch {  }
 
         RootGrid.Loaded += OnFirstLoaded;
 
@@ -85,6 +98,112 @@ public sealed partial class MainWindow : Window
         this.Closed += (_, _) => App.Settings.Save();
     }
 
+    // ===== 多语言 =====
+
+    private void ApplyLocalization()
+    {
+        ApplyMenuLocalization();
+        // 中文时 T() 原样返回，遍历无害；保证从英文切回也能还原
+        LocalizeTree(RootGrid);
+        ViewModel.RefreshRuntimeTexts();
+    }
+
+    private void ApplyMenuLocalization()
+    {
+        MenuEdit.Title = L10n.T("编辑");
+        MenuView.Title = L10n.T("视图");
+        MenuTools.Title = L10n.T("工具");
+        MenuAbout.Title = L10n.T("关于");
+        MenuEditConfig.Text = L10n.T("编辑 CLI 配置");
+        MenuViewSettings.Text = L10n.T("背景设置...");
+        MenuRetryCli.Text = L10n.T("重新检测 CLI 程序");
+        MenuCheckUpdate.Text = L10n.T("检查更新...");
+        MenuCredits.Text = L10n.T("鸣谢...");
+        MenuReadme.Text = L10n.T("README 摘要...");
+        MenuLangZh.IsChecked = L10n.Current == L10n.Zh;
+        MenuLangEn.IsChecked = L10n.Current == L10n.En;
+        MenuLangRu.IsChecked = L10n.Current == L10n.Ru;
+    }
+
+    // 视觉树走不到折叠元素，需按逻辑树下钻，否则英文下重启会中英混杂
+    private static void LocalizeTree(Microsoft.UI.Xaml.DependencyObject root)
+    {
+        LocalizeElement(root);
+        switch (root)
+        {
+            case Microsoft.UI.Xaml.Controls.Panel p:
+                foreach (var c in p.Children) LocalizeTree(c);
+                return;
+            case Microsoft.UI.Xaml.Controls.Border b when b.Child != null:
+                LocalizeTree(b.Child);
+                return;
+            case Microsoft.UI.Xaml.Controls.ContentControl cc when cc.Content is Microsoft.UI.Xaml.DependencyObject cd:
+                LocalizeTree(cd);
+                return;
+            case Microsoft.UI.Xaml.Controls.ItemsControl ic:
+                foreach (var it in ic.Items)
+                    if (it is Microsoft.UI.Xaml.DependencyObject id) LocalizeTree(id);
+                return;
+        }
+        var count = Microsoft.UI.Xaml.Media.VisualTreeHelper.GetChildrenCount(root);
+        for (var i = 0; i < count; i++)
+            LocalizeTree(Microsoft.UI.Xaml.Media.VisualTreeHelper.GetChild(root, i));
+    }
+
+    private static void LocalizeElement(Microsoft.UI.Xaml.DependencyObject child)
+    {
+        switch (child)
+        {
+                case Microsoft.UI.Xaml.Controls.MenuBarItem mb:
+                    mb.Title = L10n.T(mb.Title ?? "");
+                    break;
+                case Microsoft.UI.Xaml.Controls.MenuFlyoutItem mi:
+                    mi.Text = L10n.T(mi.Text ?? "");
+                    break;
+                case Microsoft.UI.Xaml.Controls.TextBlock tb:
+                    tb.Text = L10n.T(tb.Text ?? "");
+                    break;
+                case Microsoft.UI.Xaml.Controls.TextBox box:
+                    box.PlaceholderText = L10n.T(box.PlaceholderText ?? "");
+                    break;
+                case Microsoft.UI.Xaml.Controls.PasswordBox pwb:
+                    pwb.PlaceholderText = L10n.T(pwb.PlaceholderText ?? "");
+                    break;
+                case Microsoft.UI.Xaml.Controls.ContentControl cc when cc.Content is string s:
+                    cc.Content = L10n.T(s);
+                    break;
+                // 下拉项未展开时不在视觉树中，需单独遍历 Items
+                case Microsoft.UI.Xaml.Controls.ComboBox cb:
+                    foreach (var item in cb.Items)
+                    {
+                        if (item is Microsoft.UI.Xaml.Controls.ComboBoxItem cbi && cbi.Content is string cs)
+                            cbi.Content = L10n.T(cs);
+                    }
+                    break;
+        }
+    }
+
+    private void OnLangZh(object sender, RoutedEventArgs e) => ChangeLanguage(L10n.Zh);
+    private void OnLangEn(object sender, RoutedEventArgs e) => ChangeLanguage(L10n.En);
+    private void OnLangRu(object sender, RoutedEventArgs e) => ChangeLanguage(L10n.Ru);
+
+    private async void ChangeLanguage(string lang)
+    {
+        if (lang == L10n.Current) { ApplyMenuLocalization(); return; }
+        L10n.Set(lang);
+        ApplyLocalization();
+
+        var dlg = new ContentDialog
+        {
+            Title = L10n.T("语言 / Language"),
+            Content = L10n.T("语言已切换，界面已立即刷新。\nLanguage switched; the UI has been refreshed."),
+            CloseButtonText = L10n.T("确定 / OK"),
+            XamlRoot = Content.XamlRoot,
+            RequestedTheme = CurrentTheme,
+        };
+        await dlg.ShowAsync();
+    }
+
     private void OnFirstLoaded(object sender, RoutedEventArgs e)
     {
         RootGrid.Loaded -= OnFirstLoaded;
@@ -94,7 +213,7 @@ public sealed partial class MainWindow : Window
             ViewModel.RefreshCommandPreview();
     }
 
-    // ===== 密钥管理（ActionIndex 4-6） =====
+    // ===== 密钥管理 =====
     private void OnKeyMgmtRadioChecked(object sender, RoutedEventArgs e)
     {
         if (RbKeyGen.IsChecked == true) ViewModel.ActionIndex = 4;
@@ -103,7 +222,6 @@ public sealed partial class MainWindow : Window
         UpdateVisibility();
     }
 
-    // ===== 标题栏按钮颜色（深色主题固定白色） =====
     private void UpdateTitleBarButtonColors()
     {
         var tb = AppWindow.TitleBar;
@@ -135,20 +253,58 @@ public sealed partial class MainWindow : Window
 
 
     // ===== CLI 未找到 =====
+    private int _cliNotFoundRetries;
     private async void ShowCliNotFoundDialog()
     {
-        if (Content?.XamlRoot == null) { DispatcherQueue.TryEnqueue(ShowCliNotFoundDialog); return; }
+        if (Content?.XamlRoot == null)
+        {
+            if (++_cliNotFoundRetries > 5) return;
+            DispatcherQueue.TryEnqueue(ShowCliNotFoundDialog);
+            return;
+        }
+        _cliNotFoundRetries = 0;
         var names = FileEncryptorLocator.GetExpectedNames();
         var nameList = string.Join("\n", names.Select(n => "  • " + n));
         var panel = new StackPanel();
-        var infoText = new TextBlock { Text = $"无法找到 FileEncryptor CLI 可执行文件\n\n程序需要 FileEncryptorCLI 命令行工具来执行加密/解密操作。\n\n预期文件名：\n{nameList}\n\n当前程序目录：{AppContext.BaseDirectory}", TextWrapping = TextWrapping.Wrap, IsTextSelectionEnabled = true };
+        var infoText = new TextBlock { Text = L10n.F("无法找到 FileEncryptor CLI 可执行文件\n\n程序需要 FileEncryptorCLI 命令行工具来执行加密/解密操作。\n\n预期文件名：\n{0}\n\n当前程序目录：{1}", nameList, AppContext.BaseDirectory), TextWrapping = TextWrapping.Wrap, IsTextSelectionEnabled = true };
         var statusText = new TextBlock { Text = "", Margin = new Thickness(0,8,0,0), Foreground = new SolidColorBrush(Microsoft.UI.Colors.Gray) };
         var progress = new ProgressBar { Minimum = 0, Maximum = 100, Value = 0, Visibility = Visibility.Collapsed, Margin = new Thickness(0,4,0,0) };
         panel.Children.Add(infoText); panel.Children.Add(statusText); panel.Children.Add(progress);
-        var dlg = new ContentDialog { Title = "FileEncryptor CLI 未找到", Content = panel, PrimaryButtonText = "重试", SecondaryButtonText = "下载 CLI", CloseButtonText = "关闭", XamlRoot = Content.XamlRoot, RequestedTheme = CurrentTheme };
+        var dlg = new ContentDialog { Title = L10n.T("FileEncryptor CLI 未找到"), Content = panel, PrimaryButtonText = L10n.T("重试"), SecondaryButtonText = L10n.T("下载 CLI"), CloseButtonText = L10n.T("关闭"), XamlRoot = Content.XamlRoot, RequestedTheme = CurrentTheme };
         var result = await dlg.ShowAsync();
         if (result == ContentDialogResult.Primary) { if (ViewModel.DetectCli(out _)) ViewModel.RefreshCommandPreview(); else ShowCliNotFoundDialog(); }
-        else if (result == ContentDialogResult.Secondary) { await DownloadCliFromGithub(statusText, progress); }
+        else if (result == ContentDialogResult.Secondary) { await ShowDownloadCliDialog(); }
+    }
+
+    private async System.Threading.Tasks.Task ShowDownloadCliDialog()
+    {
+        var statusText = new TextBlock { Text = L10n.T("准备下载…"), TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 8, 0, 0), Foreground = new SolidColorBrush(Microsoft.UI.Colors.Gray) };
+        var progress = new ProgressBar { Minimum = 0, Maximum = 100, Value = 0, Margin = new Thickness(0, 4, 0, 0) };
+        var panel = new StackPanel();
+        panel.Children.Add(statusText); panel.Children.Add(progress);
+        var dlg = new ContentDialog
+        {
+            Title = L10n.T("下载 CLI"),
+            Content = panel,
+            CloseButtonText = L10n.T("关闭"),
+            XamlRoot = Content.XamlRoot,
+            RequestedTheme = CurrentTheme
+        };
+        _ = DownloadCliFromGithub(statusText, progress);
+        await dlg.ShowAsync();
+    }
+
+    // 在 tag 列表中定位精确 tag：命中返回索引，未找到返回 -1
+    private static int IndexOfTag(System.Text.Json.JsonElement tags, string want)
+    {
+        var i = 0;
+        foreach (var t in tags.EnumerateArray())
+        {
+            if (string.Equals(t.GetProperty("name").GetString(), want, StringComparison.Ordinal))
+                return i;
+            i++;
+        }
+        return -1;
     }
 
     private async System.Threading.Tasks.Task DownloadCliFromGithub(TextBlock statusText, ProgressBar progress)
@@ -156,25 +312,24 @@ public sealed partial class MainWindow : Window
         string? tempPath = null;
         try
         {
-            statusText.Text = "正在从 GitHub 检索可用版本…";
+            statusText.Text = L10n.T("正在从 GitHub 检索可用版本…");
             using var http = new System.Net.Http.HttpClient();
             http.DefaultRequestHeaders.UserAgent.ParseAdd("FileEncryptorGUI");
             var tagsJson = await http.GetStringAsync("https://api.github.com/repos/Texas-albe/FileEncryptor/tags");
             using var tagsDoc = System.Text.Json.JsonDocument.Parse(tagsJson);
-            string bestTag = null; Version bestVer = null;
+            // 只接受与预期版本精确配套的 tag；取“最大版本”会下到不匹配的 CLI
             var guiVer = FileEncryptorLocator.GuiVersion;
-            foreach (var t in tagsDoc.RootElement.EnumerateArray())
+            var cliVer = FileEncryptorLocator.ExpectedCliVersion;
+            var want = $"GUI{guiVer}_CLI{cliVer}";
+            var idx = IndexOfTag(tagsDoc.RootElement, want);
+            if (idx < 0)
             {
-                var tag = t.GetProperty("name").GetString();
-                if (tag != null && tag.StartsWith($"GUI{guiVer}_CLI"))
-                {
-                    var verStr = tag.Substring($"GUI{guiVer}_CLI".Length);
-                    if (Version.TryParse(verStr, out var v) && (bestVer == null || v > bestVer)) { bestTag = tag; bestVer = v; }
-                }
+                statusText.Text = L10n.F("未找到预期的 CLI {0}（要求 tag GUI{1}_CLI{0}），已中止下载",
+                    cliVer, guiVer);
+                return;
             }
-            if (bestTag == null) { statusText.Text = $"未找到匹配 GUI {guiVer} 的 release"; return; }
-            statusText.Text = $"找到 {bestTag}，正在获取下载链接…";
-            var relJson = await http.GetStringAsync($"https://api.github.com/repos/Texas-albe/FileEncryptor/releases/tags/{bestTag}");
+            statusText.Text = L10n.F("找到 {0}，正在获取下载链接…", want);
+            var relJson = await http.GetStringAsync($"https://api.github.com/repos/Texas-albe/FileEncryptor/releases/tags/{want}");
             using var relDoc = System.Text.Json.JsonDocument.Parse(relJson);
             string downloadUrl = null; string fileName = null;
             var suffix = OperatingSystem.IsWindows() ? ".exe" : "";
@@ -184,31 +339,27 @@ public sealed partial class MainWindow : Window
                 if (an != null && an.StartsWith("FileEncryptorCLI-") && (suffix == "" || an.EndsWith(suffix)))
                 { downloadUrl = a.GetProperty("browser_download_url").GetString(); fileName = an; break; }
             }
-            if (downloadUrl == null) { statusText.Text = "未找到当前平台的 CLI 包"; return; }
+            if (downloadUrl == null) { statusText.Text = L10n.T("未找到当前平台的 CLI 包"); return; }
 
-            // 下载域名白名单：防止 release 数据被篡改后指向任意地址
             if (!IsAllowedDownloadHost(downloadUrl))
             {
-                statusText.Text = "下载链接域名不在白名单内，已中止";
+                statusText.Text = L10n.T("下载链接域名不在白名单内，已中止");
                 return;
             }
-            // 文件名净化：只取基名，拒绝路径分隔符/目录穿越
             fileName = Path.GetFileName(fileName.Trim());
             if (string.IsNullOrEmpty(fileName) || fileName.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0)
             {
-                statusText.Text = "下载文件名非法，已中止";
+                statusText.Text = L10n.T("下载文件名非法，已中止");
                 return;
             }
 
-            statusText.Text = $"下载中：{fileName}";
+            statusText.Text = L10n.F("下载中：{0}", fileName);
             progress.Visibility = Visibility.Visible;
 
-            // 先下载到临时文件，校验通过后再原子移动到目标位置
             tempPath = Path.Combine(Path.GetTempPath(), $"fe_cli_{Guid.NewGuid():N}.tmp");
             var bytes = await http.GetByteArrayAsync(downloadUrl);
             progress.Value = 60;
 
-            // 尝试同名 .sha256 校验；不存在则跳过校验并记录警告
             var expectedHash = await TryFetchSha256(http, downloadUrl);
             if (expectedHash != null)
             {
@@ -216,7 +367,7 @@ public sealed partial class MainWindow : Window
                 var actualHash = Convert.ToHexString(sha.ComputeHash(bytes)).ToLowerInvariant();
                 if (!string.Equals(actualHash, expectedHash, StringComparison.OrdinalIgnoreCase))
                 {
-                    statusText.Text = "SHA256 校验失败，下载内容已被丢弃";
+                    statusText.Text = L10n.T("SHA256 校验失败，下载内容已被丢弃");
                     return;
                 }
             }
@@ -230,9 +381,9 @@ public sealed partial class MainWindow : Window
             File.Move(tempPath, savePath, overwrite: true);
             tempPath = null;
             progress.Value = 100;
-            statusText.Text = $"下载完成：{fileName}";
+            statusText.Text = L10n.F("下载完成：{0}", fileName);
         }
-        catch (Exception ex) { statusText.Text = $"下载失败：{ex.Message}"; }
+        catch (Exception ex) { statusText.Text = L10n.F("下载失败：{0}", ex.Message); }
         finally
         {
             try { if (tempPath != null && File.Exists(tempPath)) File.Delete(tempPath); } catch { }
@@ -263,7 +414,7 @@ public sealed partial class MainWindow : Window
         }
         catch (Exception ex)
         {
-            ViewModel.OutputText = "[添加文件] 错误: " + ex.Message;
+            ViewModel.SetStatus("[添加文件] 错误: {0}", ex.Message);
         }
     }
 
@@ -279,7 +430,7 @@ public sealed partial class MainWindow : Window
         }
         catch (Exception ex)
         {
-            ViewModel.OutputText = "[添加目录] 错误: " + ex.Message;
+            ViewModel.SetStatus("[添加目录] 错误: {0}", ex.Message);
         }
     }
 
@@ -346,7 +497,7 @@ public sealed partial class MainWindow : Window
             picker.FileTypeFilter.Add("*");
             var folder = await picker.PickSingleFolderAsync();
             if (folder != null) OutDirEdit.Text = folder.Path;
-        } catch (Exception ex) { ViewModel.OutputText = "[输出目录] 错误: " + ex.Message; }
+        } catch (Exception ex) { ViewModel.SetStatus("[输出目录] 错误: {0}", ex.Message); }
     }
 
     private async void OnBrowseKeyfile(object sender, RoutedEventArgs e)
@@ -357,7 +508,7 @@ public sealed partial class MainWindow : Window
             picker.FileTypeFilter.Add("*");
             var file = await picker.PickSingleFileAsync();
             if (file != null) KeyfileEdit.Text = file.Path;
-        } catch (Exception ex) { ViewModel.OutputText = "[密钥文件] 错误: " + ex.Message; }
+        } catch (Exception ex) { ViewModel.SetStatus("[密钥文件] 错误: {0}", ex.Message); }
     }
 
     private async void OnBrowseRecipient(object sender, RoutedEventArgs e)
@@ -368,7 +519,7 @@ public sealed partial class MainWindow : Window
             picker.FileTypeFilter.Add("*");
             var file = await picker.PickSingleFileAsync();
             if (file != null) RecipientEdit.Text = file.Path;
-        } catch (Exception ex) { ViewModel.OutputText = "[收件人] 错误: " + ex.Message; }
+        } catch (Exception ex) { ViewModel.SetStatus("[收件人] 错误: {0}", ex.Message); }
     }
 
     private async void OnBrowseIdentity(object sender, RoutedEventArgs e)
@@ -379,7 +530,7 @@ public sealed partial class MainWindow : Window
             picker.FileTypeFilter.Add("*");
             var file = await picker.PickSingleFileAsync();
             if (file != null) IdentityEdit.Text = file.Path;
-        } catch (Exception ex) { ViewModel.OutputText = "[身份文件] 错误: " + ex.Message; }
+        } catch (Exception ex) { ViewModel.SetStatus("[身份文件] 错误: {0}", ex.Message); }
     }
 
     private void UpdateVisibility()
@@ -416,10 +567,10 @@ public sealed partial class MainWindow : Window
     {
         var dlg = new ContentDialog
         {
-            Title = "密钥轮换（v6 容器）",
-            Content = "选择一个已加密的 .ptd 文件，用旧口令解密后用新口令重新包裹 DEK。\n文件内容不变，仅更换口令。",
-            PrimaryButtonText = "选择文件",
-            SecondaryButtonText = "取消",
+            Title = L10n.T("密钥轮换（v6 容器）"),
+            Content = L10n.T("选择一个已加密的 .ptd 文件，用旧口令解密后用新口令重新包裹 DEK。\n文件内容不变，仅更换口令。"),
+            PrimaryButtonText = L10n.T("选择文件"),
+            SecondaryButtonText = L10n.T("取消"),
             XamlRoot = Content.XamlRoot,
             RequestedTheme = CurrentTheme
         };
@@ -431,8 +582,7 @@ public sealed partial class MainWindow : Window
             var file = await picker.PickSingleFileAsync();
             if (file != null)
             {
-                // TODO: rewrap 流程
-                ViewModel.StatusText = "密钥轮换功能实现中";
+                ViewModel.SetStatus("密钥轮换功能实现中");
             }
         }
     }
@@ -446,16 +596,173 @@ public sealed partial class MainWindow : Window
         if (File.Exists(configPath))
             Process.Start(new ProcessStartInfo(configPath) { UseShellExecute = true });
         else
-            ViewModel.StatusText = "配置文件不存在（首次运行 CLI 后生成）";
+            ViewModel.SetStatus("配置文件不存在（首次运行 CLI 后生成）");
     }
 
     private void OnExit(object sender, RoutedEventArgs e) => Close();
 
+    // 自动更新
+    private string LocateUpdater()
+    {
+        string dir = AppContext.BaseDirectory;
+        string[] cands = {
+            Path.Combine(dir, "updater", "Updater.exe"),
+            Path.Combine(dir, "Updater.exe"),
+        };
+        foreach (var c in cands) if (File.Exists(c)) return c;
+        var pathEnv = Environment.GetEnvironmentVariable("PATH") ?? "";
+        foreach (var p in pathEnv.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries))
+        {
+            var c = Path.Combine(p, "Updater.exe");
+            if (File.Exists(c)) return c;
+        }
+        return null;
+    }
+
+    private async void OnCheckForUpdate(object sender, RoutedEventArgs e)
+    {
+        var updater = LocateUpdater();
+        if (updater == null)
+        {
+            await ShowMessageAsync(L10n.T("检查更新"), L10n.T("未找到更新器 (Updater.exe)。请确认程序安装完整，或前往 GitHub 手动获取新版本。"));
+            return;
+        }
+        try
+        {
+            var start = new ProcessStartInfo(updater,
+                $"--check --current {FileEncryptorLocator.GuiVersion} --type winui --platform windows")
+            {
+                RedirectStandardOutput = true,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+            };
+            using var proc = Process.Start(start);
+            var outJson = await proc.StandardOutput.ReadToEndAsync();
+            await proc.WaitForExitAsync();
+            using var doc = System.Text.Json.JsonDocument.Parse(outJson);
+            var root = doc.RootElement;
+            if (!root.GetProperty("ok").GetBoolean())
+            {
+                await ShowMessageAsync(L10n.T("检查更新"), L10n.F("检查失败：{0}", root.GetProperty("error").GetString()));
+                return;
+            }
+            if (root.GetProperty("has_update").GetBoolean())
+            {
+                var latest = root.GetProperty("latest_version").GetString();
+                var notes = root.TryGetProperty("notes", out var n) ? n.GetString() : "";
+                var dlg = new ContentDialog
+                {
+                    Title = L10n.T("发现新版本"),
+                    Content = L10n.F("发现新版本 {0}。\n\n{1}\n\n是否现在下载并安装？", latest, notes),
+                    PrimaryButtonText = L10n.T("下载并安装"),
+                    CloseButtonText = L10n.T("关闭"),
+                    XamlRoot = Content.XamlRoot,
+                    RequestedTheme = CurrentTheme,
+                };
+                var r = await dlg.ShowAsync();
+                if (r == ContentDialogResult.Primary)
+                {
+                    var url = root.GetProperty("download_url").GetString();
+                    var sha = root.TryGetProperty("sha256", out var s) ? s.GetString() : "";
+                    var sig = root.TryGetProperty("sig_url", out var g) ? g.GetString() : "";
+                    await RunUpdaterUpdate(updater, url, sha, sig);
+                }
+            }
+            else
+            {
+                var cur = root.GetProperty("current_version").GetString();
+                await ShowMessageAsync("检查更新", L10n.F("已是最新版本（{0}）。", cur));
+            }
+        }
+        catch (Exception ex)
+        {
+            await ShowMessageAsync("检查更新", L10n.F("检查更新时出错：{0}", ex.Message));
+        }
+    }
+
+    private async System.Threading.Tasks.Task RunUpdaterUpdate(string updater, string url, string sha, string sig)
+    {
+        if (string.IsNullOrEmpty(url))
+        {
+            await ShowMessageAsync(L10n.T("更新"), L10n.T("未找到适用于本平台的安装包，请前往 GitHub 手动下载。"));
+            return;
+        }
+        var staging = Path.Combine(AppContext.BaseDirectory, "update_staging");
+        Directory.CreateDirectory(staging);
+        var args = $"--update --url \"{url}\" --install-dir \"{staging}\"";
+        if (!string.IsNullOrEmpty(sha)) args += $" --sha256 {sha}";
+        if (!string.IsNullOrEmpty(sig)) args += $" --sig-url \"{sig}\"";
+
+        var statusText = new TextBlock { Text = L10n.T("准备下载…"), TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 8, 0, 0), Foreground = new SolidColorBrush(Microsoft.UI.Colors.Gray) };
+        var progress = new ProgressBar { Minimum = 0, Maximum = 100, Value = 0, Margin = new Thickness(0, 4, 0, 0) };
+        var panel = new StackPanel(); panel.Children.Add(statusText); panel.Children.Add(progress);
+        var dlg = new ContentDialog
+        {
+            Title = L10n.T("更新"),
+            Content = panel,
+            CloseButtonText = L10n.T("关闭"),
+            XamlRoot = Content.XamlRoot,
+            RequestedTheme = CurrentTheme,
+        };
+        _ = UpdateWorker(updater, args, statusText, progress);
+        await dlg.ShowAsync();
+    }
+
+    private async System.Threading.Tasks.Task UpdateWorker(string updater, string args, TextBlock statusText, ProgressBar progress)
+    {
+        try
+        {
+            statusText.Text = L10n.T("正在下载并校验…");
+            var start = new ProcessStartInfo(updater, args) { RedirectStandardOutput = true, UseShellExecute = false, CreateNoWindow = true };
+            using var proc = Process.Start(start);
+            if (proc == null) { statusText.Text = L10n.T("无法启动更新器。"); return; }
+            while (!proc.StandardOutput.EndOfStream)
+            {
+                var line = await proc.StandardOutput.ReadLineAsync();
+                if (line == null) break;
+                try
+                {
+                    using var d = System.Text.Json.JsonDocument.Parse(line);
+                    var o = d.RootElement;
+                    if (o.TryGetProperty("progress", out var p) && p.ValueKind == System.Text.Json.JsonValueKind.Number)
+                    {
+                        int v = p.GetInt32();
+                        if (v >= 0) progress.Value = v;
+                    }
+                    if (o.TryGetProperty("stage", out var st))
+                    {
+                        var s = st.GetString();
+                        if (s == "downloading") statusText.Text = L10n.T("正在下载…");
+                        else if (s == "verifying") statusText.Text = L10n.T("正在校验完整性…");
+                        else if (s == "done") statusText.Text = L10n.T("更新包已下载并校验完成。");
+                        else if (s == "error") statusText.Text = L10n.T("更新失败：") + (o.TryGetProperty("error", out var er) ? er.GetString() : L10n.T("未知错误"));
+                    }
+                }
+                catch {  }
+            }
+            await proc.WaitForExitAsync();
+            if (proc.ExitCode == 0)
+                statusText.Text = L10n.F("更新包已就绪，存放于：\n{0}\n请关闭程序后以该文件替换当前程序并重新启动。", Path.Combine(AppContext.BaseDirectory, "update_staging"));
+            else
+                statusText.Text = L10n.T("更新失败（退出码 ") + proc.ExitCode + L10n.T("）。可前往 GitHub 手动下载。");
+        }
+        catch (Exception ex)
+        {
+            statusText.Text = L10n.T("更新出错：") + ex.Message;
+        }
+    }
+
+    private async System.Threading.Tasks.Task ShowMessageAsync(string title, string msg)
+    {
+        var dlg = new ContentDialog { Title = title, Content = msg, CloseButtonText = L10n.T("关闭"), XamlRoot = Content.XamlRoot, RequestedTheme = CurrentTheme };
+        await dlg.ShowAsync();
+    }
+
     private async void OnCredits(object sender, RoutedEventArgs e)
     {
         var panel = new StackPanel();
-        panel.Children.Add(new TextBlock { Text = "FileEncryptor v2.0.0 — 鸣谢", FontWeight = Microsoft.UI.Text.FontWeights.Bold, FontSize = 18, Margin = new Thickness(0,0,0,12) });
-        panel.Children.Add(new TextBlock { Text = "感谢以下贡献者的付出：", Margin = new Thickness(0,0,0,8) });
+        panel.Children.Add(new TextBlock { Text = "FileEncryptor v" + FileEncryptorLocator.GuiVersion + " — " + L10n.T("鸣谢"), FontWeight = Microsoft.UI.Text.FontWeights.Bold, FontSize = 18, Margin = new Thickness(0,0,0,12) });
+        panel.Children.Add(new TextBlock { Text = L10n.T("感谢以下贡献者的付出："), Margin = new Thickness(0,0,0,8) });
 
         var grid = new Grid();
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
@@ -472,44 +779,58 @@ public sealed partial class MainWindow : Window
             var tb2 = new TextBlock { Text = name, Margin = new Thickness(0,0,16,4) };
             Grid.SetColumn(tb2, 1); Grid.SetRow(tb2, row); grid.Children.Add(tb2);
             if (link != null) {
-                var hl = new HyperlinkButton { Content = "个人主页", NavigateUri = new Uri(link), Padding = new Thickness(0) };
+                var hl = new HyperlinkButton { Content = L10n.T("个人主页"), NavigateUri = new Uri(link), Padding = new Thickness(0) };
                 Grid.SetColumn(hl, 2); Grid.SetRow(hl, row); grid.Children.Add(hl);
             }
         }
-        AddRow(0, "代码开发", "瑶璎珞", "https://space.bilibili.com/3546692557212318");
+        AddRow(0, L10n.T("代码开发"), L10n.T("瑶璎珞"), "https://space.bilibili.com/3546692557212318");
         // 瑶璎珞额外加赞助链接
-        var sponsorLink = new HyperlinkButton { Content = "赞助支持", NavigateUri = new Uri("https://afdian.com/a/yaoyingluo"), Padding = new Thickness(0), Margin = new Thickness(16,0,0,0) };
+        var sponsorLink = new HyperlinkButton { Content = L10n.T("赞助支持"), NavigateUri = new Uri("https://afdian.com/a/yaoyingluo"), Padding = new Thickness(0), Margin = new Thickness(16,0,0,0) };
         Grid.SetColumn(sponsorLink, 3); Grid.SetRow(sponsorLink, 0); grid.Children.Add(sponsorLink);
-        AddRow(1, "测试", "就不错了我", "https://space.bilibili.com/1705671238");
-        AddRow(2, "宣传", "Twilight飞友", "https://space.bilibili.com/3546728261224829");
+        AddRow(1, L10n.T("测试"), L10n.T("就不错了我"), "https://space.bilibili.com/1705671238");
+        AddRow(2, L10n.T("宣传"), L10n.T("Twilight飞友"), "https://space.bilibili.com/3546728261224829");
         panel.Children.Add(grid);
 
-        panel.Children.Add(new TextBlock { Text = "\n本项目基于 libsodium 实现文件加密（XChaCha20-Poly1305 / AEGIS-256），采用 C++17 编写，跨平台运行于 Windows / Linux / macOS。", TextWrapping = TextWrapping.Wrap, Foreground = new Microsoft.UI.Xaml.Media.SolidColorBrush(Microsoft.UI.Colors.Gray), FontSize = 12 });
+        panel.Children.Add(new TextBlock { Text = L10n.T("\n本项目基于 libsodium 实现文件加密（XChaCha20-Poly1305 / AEGIS-256），采用 C++17 编写，跨平台运行于 Windows / Linux / macOS。"), TextWrapping = TextWrapping.Wrap, Foreground = new Microsoft.UI.Xaml.Media.SolidColorBrush(Microsoft.UI.Colors.Gray), FontSize = 12 });
 
-        var dlg = new ContentDialog { Title = "鸣谢", Content = new ScrollViewer { Content = panel, MaxHeight = 400, VerticalScrollBarVisibility = ScrollBarVisibility.Hidden }, CloseButtonText = "关闭", XamlRoot = Content.XamlRoot, RequestedTheme = CurrentTheme };
+        // 国庆节窗口内追加祝福语
+        if (NationalDayTheme.IsActive())
+        {
+            panel.Children.Add(new TextBlock
+            {
+                Text = NationalDayTheme.BirthdayMessage(),
+                TextWrapping = TextWrapping.Wrap,
+                FontWeight = Microsoft.UI.Text.FontWeights.Bold,
+                FontSize = 16,
+                Margin = new Thickness(0, 12, 0, 0),
+                Foreground = new Microsoft.UI.Xaml.Media.SolidColorBrush(NationalDayTheme.ChinaRed)
+            });
+        }
+
+        var dlg = new ContentDialog { Title = L10n.T("鸣谢"), Content = new ScrollViewer { Content = panel, MaxHeight = 400, VerticalScrollBarVisibility = ScrollBarVisibility.Hidden }, CloseButtonText = L10n.T("关闭"), XamlRoot = Content.XamlRoot, RequestedTheme = CurrentTheme };
         await dlg.ShowAsync();
     }
 
     private async void OnReadme(object sender, RoutedEventArgs e)
     {
         var panel = new StackPanel();
-        panel.Children.Add(new TextBlock { Text = "FileEncryptor v2.0.0 — 项目摘要", FontWeight = Microsoft.UI.Text.FontWeights.Bold, FontSize = 18, Margin = new Thickness(0,0,0,12) });
-        panel.Children.Add(new TextBlock { Text = "简介：跨平台（Windows / Linux / macOS）文件加密工具，基于 libsodium 实现 XChaCha20-Poly1305 与 AEGIS-256 加密。", TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0,0,0,8) });
-        panel.Children.Add(new TextBlock { Text = "核心特性", FontWeight = Microsoft.UI.Text.FontWeights.Bold, Margin = new Thickness(0,8,0,4) });
-        panel.Children.Add(new TextBlock { Text = "• 加密算法：XChaCha20-Poly1305（默认）/ AEGIS-256，密钥经 Argon2id 派生" });
-        panel.Children.Add(new TextBlock { Text = "• 单文件与批量：支持单文件加/解密，及目录批量加/解密（递归）" });
-        panel.Children.Add(new TextBlock { Text = "• 断点续传：加密中断后可从上次进度继续，防静默数据丢失" });
-        panel.Children.Add(new TextBlock { Text = "• 路径安全：拒绝目录穿越（..），白名单前缀校验" });
-        panel.Children.Add(new TextBlock { Text = "• 限速：进程级令牌桶限速（YAML max_speed 配置）" });
-        panel.Children.Add(new TextBlock { Text = "• 配置化：日志/并发/路径策略等运维参数经 YAML 配置", Margin = new Thickness(0,0,0,8) });
-        panel.Children.Add(new TextBlock { Text = "命令行用法", FontWeight = Microsoft.UI.Text.FontWeights.Bold, Margin = new Thickness(0,8,0,4) });
+        panel.Children.Add(new TextBlock { Text = "FileEncryptor v" + FileEncryptorLocator.GuiVersion + " " + L10n.T("— 项目摘要"), FontWeight = Microsoft.UI.Text.FontWeights.Bold, FontSize = 18, Margin = new Thickness(0,0,0,12) });
+        panel.Children.Add(new TextBlock { Text = L10n.T("简介：跨平台（Windows / Linux / macOS）文件加密工具，基于 libsodium 实现 XChaCha20-Poly1305 与 AEGIS-256 加密。"), TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0,0,0,8) });
+        panel.Children.Add(new TextBlock { Text = L10n.T("核心特性"), FontWeight = Microsoft.UI.Text.FontWeights.Bold, Margin = new Thickness(0,8,0,4) });
+        panel.Children.Add(new TextBlock { Text = L10n.T("• 加密算法：XChaCha20-Poly1305（默认）/ AEGIS-256，密钥经 Argon2id 派生") });
+        panel.Children.Add(new TextBlock { Text = L10n.T("• 单文件与批量：支持单文件加/解密，及目录批量加/解密（递归）") });
+        panel.Children.Add(new TextBlock { Text = L10n.T("• 断点续传：加密中断后可从上次进度继续，防静默数据丢失") });
+        panel.Children.Add(new TextBlock { Text = L10n.T("• 路径安全：拒绝目录穿越（..），白名单前缀校验") });
+        panel.Children.Add(new TextBlock { Text = L10n.T("• 限速：进程级令牌桶限速（YAML max_speed 配置）") });
+        panel.Children.Add(new TextBlock { Text = L10n.T("• 配置化：日志/并发/路径策略等运维参数经 YAML 配置"), Margin = new Thickness(0,0,0,8) });
+        panel.Children.Add(new TextBlock { Text = L10n.T("命令行用法"), FontWeight = Microsoft.UI.Text.FontWeights.Bold, Margin = new Thickness(0,8,0,4) });
         panel.Children.Add(new TextBlock { Text = "FileEncryptor -e/-d <FileName> [-o <Path>] [-de] [-m xchacha20|aegis256] [-y]\nFileEncryptor -be/-bd <Path> [-o <Path>] [-de] [-m xchacha20|aegis256] [-y]", FontFamily = new Microsoft.UI.Xaml.Media.FontFamily("Consolas"), Margin = new Thickness(0,0,0,8) });
-        panel.Children.Add(new TextBlock { Text = "密钥来源优先级", FontWeight = Microsoft.UI.Text.FontWeights.Bold, Margin = new Thickness(0,8,0,4) });
-        panel.Children.Add(new TextBlock { Text = "-k <keyfile>（密钥文件） > --key-stdin（stdin 管道） > ENCRYPTOR_KEY（环境变量） > 交互式输入；非对称模式用 X25519 身份私钥 > 交互式输入", TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0,0,0,8) });
-        panel.Children.Add(new TextBlock { Text = "许可证：GPLv3", Margin = new Thickness(0,8,0,0) });
-        panel.Children.Add(new TextBlock { Text = "本窗口为 README 摘要，完整文档请见项目根目录 README.md", Foreground = new Microsoft.UI.Xaml.Media.SolidColorBrush(Microsoft.UI.Colors.Gray), FontSize = 12, Margin = new Thickness(0,8,0,0) });
+        panel.Children.Add(new TextBlock { Text = L10n.T("密钥来源优先级"), FontWeight = Microsoft.UI.Text.FontWeights.Bold, Margin = new Thickness(0,8,0,4) });
+        panel.Children.Add(new TextBlock { Text = L10n.T("-k <keyfile>（密钥文件） > --key-stdin（stdin 管道） > ENCRYPTOR_KEY（环境变量） > 交互式输入；非对称模式用 X25519 身份私钥 > 交互式输入"), TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0,0,0,8) });
+        panel.Children.Add(new TextBlock { Text = L10n.T("许可证：GPLv3"), Margin = new Thickness(0,8,0,0) });
+        panel.Children.Add(new TextBlock { Text = L10n.T("本窗口为 README 摘要，完整文档请见项目根目录 README.md"), Foreground = new Microsoft.UI.Xaml.Media.SolidColorBrush(Microsoft.UI.Colors.Gray), FontSize = 12, Margin = new Thickness(0,8,0,0) });
 
-        var dlg = new ContentDialog { Title = "README 摘要", Content = new ScrollViewer { Content = panel, MaxHeight = 480, VerticalScrollBarVisibility = ScrollBarVisibility.Hidden }, CloseButtonText = "关闭", XamlRoot = Content.XamlRoot, RequestedTheme = CurrentTheme };
+        var dlg = new ContentDialog { Title = L10n.T("README 摘要"), Content = new ScrollViewer { Content = panel, MaxHeight = 480, VerticalScrollBarVisibility = ScrollBarVisibility.Hidden }, CloseButtonText = L10n.T("关闭"), XamlRoot = Content.XamlRoot, RequestedTheme = CurrentTheme };
         await dlg.ShowAsync();
     }
 
@@ -524,7 +845,6 @@ public sealed partial class MainWindow : Window
 
     private void RestoreTask(Models.TaskRecord rec)
     {
-        // 恢复操作模式
         ViewModel.ActionIndex = rec.Action switch
         {
             "encrypt" => 0,
@@ -536,7 +856,6 @@ public sealed partial class MainWindow : Window
             "pubkey" => 6,
             _ => ViewModel.ActionIndex
         };
-        // 恢复加密模式
         ViewModel.ModeIndex = rec.Mode switch
         {
             "xchacha20" => 0,
@@ -544,13 +863,10 @@ public sealed partial class MainWindow : Window
             "rage" => 2,
             _ => ViewModel.ModeIndex
         };
-        // 恢复输出目录
         if (!string.IsNullOrEmpty(rec.OutputDir))
             OutDirEdit.Text = rec.OutputDir;
-        // 恢复文件列表
         ViewModel.ClearInputPaths();
         ViewModel.AddInputPaths(rec.InputPaths);
-        // 恢复所有参数
         ViewModel.SourceIndex = rec.SourceIndex;
         ViewModel.Force = rec.Force;
         ViewModel.Sha256 = rec.Sha256;
@@ -560,26 +876,25 @@ public sealed partial class MainWindow : Window
         if (!string.IsNullOrEmpty(rec.Recipient)) RecipientEdit.Text = rec.Recipient;
         if (!string.IsNullOrEmpty(rec.Identity)) IdentityEdit.Text = rec.Identity;
         ChkRestoreName.IsChecked = rec.RestoreName;
-        // 同步 UI 控件状态
         ChkForce.IsChecked = rec.Force;
         ChkSha256.IsChecked = rec.Sha256;
         ChkCompress.IsChecked = rec.Compress;
         CompressLevel.Value = rec.CompressionLevel;
         SourceCombo.SelectedIndex = rec.SourceIndex;
         UpdateVisibility();
-        ViewModel.StatusText = $"已恢复任务: {rec.ActionLabel}";
+        ViewModel.SetStatus("已恢复任务: {0}", rec.ActionLabel);
     }
 
     private void OnRetryCliDetection(object sender, RoutedEventArgs e)
     {
         if (ViewModel.DetectCli(out var path))
         {
-            ViewModel.StatusText = $"已检测到 CLI: {path}";
+            ViewModel.SetStatus("已检测到 CLI: {0}", path);
             ViewModel.RefreshCommandPreview();
         }
         else
         {
-            ViewModel.StatusText = "未检测到 FileEncryptor CLI";
+            ViewModel.SetStatus("未检测到 FileEncryptor CLI");
             ShowCliNotFoundDialog();
         }
     }
@@ -588,7 +903,6 @@ public sealed partial class MainWindow : Window
     {
         var dlg = new ViewSettingsDialog(_backgroundBrush) { XamlRoot = Content.XamlRoot, RequestedTheme = CurrentTheme };
         await dlg.ShowAsync();
-        // 如果清除了背景，恢复 Acrylic
         if (_backgroundBrush.ImageSource == null && SystemBackdrop == null)
             SystemBackdrop = new DesktopAcrylicBackdrop();
         else if (_backgroundBrush.ImageSource != null)
@@ -602,7 +916,6 @@ public sealed partial class MainWindow : Window
         try
         {
             var uri = new Uri(path);
-            // 仅允许本地文件，拒绝 http/https 等远程 scheme 触发额外出网请求
             if (!uri.IsFile) return;
             var bitmap = new BitmapImage();
             bitmap.UriSource = uri;
@@ -610,24 +923,26 @@ public sealed partial class MainWindow : Window
             _backgroundBrush.Stretch = Stretch.UniformToFill;
             _backgroundBrush.Opacity = 1.0;
         }
-        catch { /* ignore */ }
+        catch {  }
     }
 
-    // 下载域名白名单：仅 GitHub 官方 release/CDN 地址
+    // 更新源白名单，与 Updater/src/updater.cpp 的 kGitHubHosts 保持一致
+    private static readonly string[] s_allowedHosts = {
+        "github.com", "api.github.com",
+        "objects.githubusercontent.com", "codeload.github.com"
+    };
+
+    // 仅 GitHub 官方域名（精确匹配，不做后缀模糊）
     private static bool IsAllowedDownloadHost(string url)
     {
         try
         {
             var host = new Uri(url).Host;
-            return host.Equals("github.com", StringComparison.OrdinalIgnoreCase)
-                || host.EndsWith(".github.com", StringComparison.OrdinalIgnoreCase)
-                || host.Equals("objects.githubusercontent.com", StringComparison.OrdinalIgnoreCase)
-                || host.EndsWith(".objects.githubusercontent.com", StringComparison.OrdinalIgnoreCase);
+            return s_allowedHosts.Any(h => string.Equals(host, h, StringComparison.OrdinalIgnoreCase));
         }
         catch { return false; }
     }
 
-    // 尝试拉取同名 .sha256 清单；不存在或不可信时返回 null
     private static async System.Threading.Tasks.Task<string?> TryFetchSha256(System.Net.Http.HttpClient http, string assetUrl)
     {
         try
@@ -635,7 +950,6 @@ public sealed partial class MainWindow : Window
             var shaUrl = assetUrl + ".sha256";
             if (!IsAllowedDownloadHost(shaUrl)) return null;
             var text = await http.GetStringAsync(shaUrl);
-            // 清单可能是 "<hash>  filename" 形式，取首个 token
             var token = text.Trim().Split(new[] { ' ', '\t', '\r', '\n' }, 2)[0];
             if (token.Length == 64) return token.ToLowerInvariant();
             return null;

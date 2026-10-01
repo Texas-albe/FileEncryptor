@@ -22,7 +22,7 @@ public partial class App : Application
             Directory.CreateDirectory(CrashLogDir);
             File.WriteAllText(CrashLogPath, $"{DateTime.Now:yyyy-MM-dd HH:mm:ss}\n{message}\n");
         }
-        catch { /* 日志写入失败不能阻塞崩溃处理 */ }
+        catch {  }
     }
 
     public App()
@@ -30,7 +30,7 @@ public partial class App : Application
         InitializeComponent();
         AppDomain.CurrentDomain.UnhandledException += (s, e) =>
         {
-            // 只记录异常类型与消息，不写完整 ToString()/堆栈，避免将来携带缓冲区内容的异常把敏感材料落盘
+            // 仅记录异常类型与消息
             if (e.ExceptionObject is Exception ex)
                 WriteCrashLog($"UnhandledException: {ex.GetType().Name}: {ex.Message}");
             else
@@ -47,7 +47,10 @@ public partial class App : Application
     {
         try
         {
+            // 固定深色主题
             Settings.Current.Theme = Services.AppTheme.Dark;
+            // 国庆节主题（节日窗口生效）
+            Services.NationalDayTheme.ApplyThemeOverrides();
             MainWindow = new MainWindow();
             MainWindow.Activate();
             Theme.ApplyTheme(Services.AppTheme.Dark);

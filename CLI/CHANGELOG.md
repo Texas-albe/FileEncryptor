@@ -1,7 +1,7 @@
 # ChangeLog - FileEncryptor CLI
 
 本文件记录 **FileEncryptor CLI** 子项目的所有重要变更（命令行加密工具 `FileEncryptorCLI(.exe)`）。
-图形界面项目的变更记录请见 `../GUI/CHANGELOG.md`。
+图形界面项目的变更记录请见 `../GUI-Qt/CHANGELOG.md` 与 `../GUI-WinUI/CHANGELOG.md`。
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
@@ -11,6 +11,17 @@
 > 不压缩且未启用容器扩展时仍写 v4 头以最大限度兼容；v6 与 v4 / v5 共用同一套 AEAD 载荷格式，
 > 2.4.0 可读取并解密 v1 ~ v6 全部格式，旧产物无需重加密即可解密。
 > CLI 主版本号历史上与合并项目同步；自 2.1.0 起 CLI/GUI 拆分独立发版。
+
+## [CLI 2.4.5] - 2026-09-30
+
+本版本新增国庆节祝福输出；磁盘格式与加解密算法不变，v1~v6 产物完全兼容。
+
+### Added
+- **国庆节祝福输出（每年 10/1–10/7 自动启用）**：节日窗口内，凡本进程向 stdout 产生了输出的调用（加密 / 解密 / 信息查看 / 密钥库 / `--help` 等），在输出文本末尾自动追加一行 `Happy Nth Birthday to the People's Republic of China!`（N = 当年年份 − 1949）。实现上以 RAII 替换 `std::cout` 的 streambuf 统一捕获 stdout 输出（main 有数十个提前 return 的出口，逐出口补打印既繁琐又易漏），仅在确有输出时追加；stderr 的错误信息不受影响。同时将 4 处 `printf` 输出统一改为 `std::cout`，保证输出追踪与顺序一致。
+
+### Fixed
+- **不支持 `--` 结束选项解析**：图形界面单文件模式会在输入路径前加 `--`，CLI 此前将其当作未知开关（`Unknown option: --`）并打印用法后退出，导致图形界面的单文件加解密必然失败。参数循环新增 `--` 分支，其后一律按输入路径处理（同时保护以 `-` 开头的文件名）。
+- **个别提示仍是中文**：帮助文本中 `-K` 说明的「功能1」、配置解析的「YAML 解析错误」与「配置顶层必须是映射(map)」改为英文，控制台输出语言统一。
 
 ## [CLI 2.4.4] - 2026-09-27
 

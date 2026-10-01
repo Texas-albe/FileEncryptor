@@ -1,17 +1,19 @@
-# 构建产物
 build/
 out/
+out/Ubuntu-26.04/
+out/packages/
 bin/
 obj/
 Debug/
 Release/
 *.exe
 *.pdb
+*.ilk
+*.exp
 *.obj
 *.o
 *.bak
 
-# CMake
 CMakeCache.txt
 CMakeFiles/
 cmake_install.cmake
@@ -23,7 +25,6 @@ qrc_*.cpp
 ui_*.h
 Testing/
 
-# VS / IDE
 .vs/
 *.vcxproj
 *.vcxproj.filters
@@ -38,7 +39,6 @@ Testing/
 .vscode/
 .idea/
 
-# 临时/系统
 .DS_Store
 Thumbs.db
 desktop.ini
@@ -49,21 +49,16 @@ desktop.ini
 *.sqlite
 *.cache
 
-# 第三方库构建产物
 third_party/smelibs/
-third_party/libsodium/**/Debug/
-third_party/libsodium/**/Release/
-third_party/libsodium/**/ltcg/
-third_party/yaml-cpp/lib/
-third_party/zstd/static/
-third_party/**/*.lib
-third_party/**/*.dll
-third_party/**/*.pdb
+third_party/libsodium/
+third_party/yaml-cpp/
+third_party/zstd/
+third_party/openssl/
+third_party/curl/
+third_party/rage/
 
-# 项目特定
 .workbuddy/
 The Next Release/
 scripts/
 fileencryptor.yaml
-# 更新包仓库（本地待应用更新，不纳入版本库）
 Updates/

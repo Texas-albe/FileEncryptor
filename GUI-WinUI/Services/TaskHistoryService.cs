@@ -1,4 +1,6 @@
 using System.IO;
+using System.Security.AccessControl;
+using System.Security.Principal;
 using System.Text.Json;
 using FileEncryptorGUI.Models;
 
@@ -6,6 +8,9 @@ namespace FileEncryptorGUI.Services;
 
 public static class TaskHistoryService
 {
+    // 同一文件加锁防并发截断
+    private static readonly object _gate = new();
+
     private static string HistoryDir => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
         "FileEncryptor", "GUI", "history");
@@ -14,17 +19,23 @@ public static class TaskHistoryService
     public static bool Append(TaskRecord record, out string error)
     {
         error = "";
-        try
+        lock (_gate)
         {
-            Directory.CreateDirectory(HistoryDir);
-            var json = JsonSerializer.Serialize(record);
-            File.AppendAllText(HistoryFile, json + "\n");
-            return true;
-        }
-        catch (Exception ex)
-        {
-            error = ex.Message;
-            return false;
+            try
+            {
+                Directory.CreateDirectory(HistoryDir);
+                // 历史含敏感路径，收紧 ACL
+                var newFile = !File.Exists(HistoryFile);
+                var json = JsonSerializer.Serialize(record);
+                File.AppendAllText(HistoryFile, json + "\n");
+                if (newFile) RestrictToCurrentUser(HistoryFile);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                error = ex.Message;
+                return false;
+            }
         }
     }
 
@@ -32,24 +43,27 @@ public static class TaskHistoryService
     {
         error = "";
         var result = new List<TaskRecord>();
-        try
+        lock (_gate)
         {
-            if (!File.Exists(HistoryFile)) return result;
-            foreach (var line in File.ReadAllLines(HistoryFile))
+            try
             {
-                if (string.IsNullOrWhiteSpace(line)) continue;
-                try
+                if (!File.Exists(HistoryFile)) return result;
+                foreach (var line in File.ReadAllLines(HistoryFile))
                 {
-                    var r = JsonSerializer.Deserialize<TaskRecord>(line);
-                    if (r != null) result.Add(r);
+                    if (string.IsNullOrWhiteSpace(line)) continue;
+                    try
+                    {
+                        var r = JsonSerializer.Deserialize<TaskRecord>(line);
+                        if (r != null) result.Add(r);
+                    }
+                    catch {  }
                 }
-                catch { /* 跳过损坏行 */ }
+                result.Reverse();
             }
-            result.Reverse(); // 最新在前
-        }
-        catch (Exception ex)
-        {
-            error = ex.Message;
+            catch (Exception ex)
+            {
+                error = ex.Message;
+            }
         }
         return result;
     }
@@ -57,15 +71,18 @@ public static class TaskHistoryService
     public static bool Clear(out string error)
     {
         error = "";
-        try
+        lock (_gate)
         {
-            if (File.Exists(HistoryFile)) File.Delete(HistoryFile);
-            return true;
-        }
-        catch (Exception ex)
-        {
-            error = ex.Message;
-            return false;
+            try
+            {
+                if (File.Exists(HistoryFile)) File.Delete(HistoryFile);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                error = ex.Message;
+                return false;
+            }
         }
     }
 
@@ -73,32 +90,54 @@ public static class TaskHistoryService
     public static bool Save(List<TaskRecord> records, out string error)
     {
         error = "";
-        try
+        lock (_gate)
         {
-            Directory.CreateDirectory(HistoryDir);
-            // Load 返回最新在前，写入时需要反转回正序
-            var ordered = records.AsEnumerable().Reverse().ToList();
-            var lines = ordered.Select(r => JsonSerializer.Serialize(r));
-            File.WriteAllLines(HistoryFile, lines);
-            return true;
-        }
-        catch (Exception ex)
-        {
-            error = ex.Message;
-            return false;
+            try
+            {
+                Directory.CreateDirectory(HistoryDir);
+                // 写回时反转为正序
+                var ordered = records.AsEnumerable().Reverse().ToList();
+                var lines = ordered.Select(r => JsonSerializer.Serialize(r));
+                File.WriteAllLines(HistoryFile, lines);
+                // 重新收紧 ACL
+                RestrictToCurrentUser(HistoryFile);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                error = ex.Message;
+                return false;
+            }
         }
     }
+
+    private static void RestrictToCurrentUser(string path)
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        try
+        {
+            var fs = new FileSecurity();
+            var user = WindowsIdentity.GetCurrent().User;
+            if (user == null) return;
+            fs.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
+            fs.AddAccessRule(new FileSystemAccessRule(user,
+                FileSystemRights.FullControl, AccessControlType.Allow));
+            new FileInfo(path).SetAccessControl(fs);
+        }
+        catch {  }
+    }
+
     public static string NewId() => Guid.NewGuid().ToString("N");
 
     public static string ActionLabel(string actionKey) => actionKey switch
     {
-        "encrypt" => "加密",
-        "decrypt" => "解密",
-        "batch-encrypt" => "批量加密",
-        "batch-decrypt" => "批量解密",
-        "keygen" => "生成密钥对",
-        "derive" => "口令派生密钥对",
-        "pubkey" => "导出公钥",
+        "encrypt" => L10n.T("加密"),
+        "decrypt" => L10n.T("解密"),
+        "batch-encrypt" => L10n.T("批量加密"),
+        "batch-decrypt" => L10n.T("批量解密"),
+        "keygen" => L10n.T("生成密钥对"),
+        "derive" => L10n.T("口令派生密钥对"),
+        "pubkey" => L10n.T("导出公钥"),
         _ => actionKey
     };
 }

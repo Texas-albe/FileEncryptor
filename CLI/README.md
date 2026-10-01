@@ -3,7 +3,7 @@
 跨平台（Windows / Linux / macOS）文件加密命令行工具，基于 [libsodium](https://doc.libsodium.org/) 实现高强度、抗篡改、可续传的分块加密。
 
 - 磁盘文件格式默认版本 **v6**（可扩展加密容器；v4/v5 按需写出，v1~v6 全部可直接解密，旧文件无需重加密）。
-- 程序版本 **2.4.2**。
+- 程序版本 **2.4.5**。
 
 ---
 
@@ -11,12 +11,12 @@
 
 本项目是 **FileEncryptor CLI 独立子项目**：编译产出 `FileEncryptorCLI(.exe)`，所有加密 / 解密 / 续传 / 路径安全 / YAML 配置逻辑全部静态链接进此可执行文件，**零外部运行时依赖**（libsodium、yaml-cpp 均静态打进二进制）。
 
-配套的图形界面项目位于 `../GUI/` —— GUI 通过 `QProcess` 启动本 CLI 程序执行实际加解密，本身不链接任何加密代码。
+配套的图形界面项目位于 `../GUI-Qt/`（Qt6 跨平台）与 `../GUI-WinUI/`（Windows WinUI3）—— GUI 通过 `QProcess` 启动本 CLI 程序执行实际加解密，本身不链接任何加密代码。
 
 | 项目 | 产物 | 依赖 | 关系 |
 |---|---|---|---|
 | **本项目**（CLI） | `FileEncryptorCLI(.exe)` | libsodium（静态）+ yaml-cpp（静态） | 完全独立，可单独发布 |
-| `../GUI/`（GUI） | `FileEncryptorGUI(.exe)` | Qt6（静态） + 本 CLI 作为运行时子进程 | GUI 依赖 CLI；CLI 不依赖 GUI |
+| `../GUI-Qt/`、`../GUI-WinUI/`（GUI） | `FileEncryptorGUI(.exe)` | Qt6（静态）/ WinUI3 + 本 CLI 作为运行时子进程 | GUI 依赖 CLI；CLI 不依赖 GUI |
 
 > 为什么 GUI 不直接链接本项目的 `core/` 代码：Qt6 官方只提供 `/MD`（动态 CRT）构建，libsodium 静态库是 `/MT`，两者 CRT 冲突（LNK2038）。正确架构是**进程级隔离**：GUI 用 `QProcess` 启动本 CLI exe。
 
@@ -74,8 +74,8 @@ rm -rf out/build/linux-release
 cmake --preset linux-release
 cmake --build --preset linux-release
 # 构建完成后自动：
-#   - 拷到 out/Ubuntu-26.04/build/linux-release/bin/FileEncryptorCLI-2.4.2-cmd-Linux
-#   - cpack 生成 out/packages/file-encryptor-cli-2.4.2-Linux.deb 和 .rpm
+#   - 拷到 out/Ubuntu-26.04/build/linux-release/bin/FileEncryptorCLI-2.4.5-cmd-Linux
+#   - cpack 生成 out/packages/file-encryptor-cli-2.4.5-Linux.deb 和 .rpm
 ```
 
 > 若系统中同时存在多个 libsodium（如 apt 旧版 + `/usr/local` 新版），可显式指定：
@@ -84,9 +84,9 @@ cmake --build --preset linux-release
 最终用户安装：
 
 ```bash
-sudo dpkg -i file-encryptor-cli-2.4.2-Linux.deb
+sudo dpkg -i file-encryptor-cli-2.4.5-Linux.deb
 # 或
-sudo rpm -ivh file-encryptor-cli-2.4.2-Linux.rpm
+sudo rpm -ivh file-encryptor-cli-2.4.5-Linux.rpm
 ```
 
 ### Windows（预编译 libsodium + MSVC）
@@ -350,9 +350,9 @@ cd ../third_party/rage/age-ffi
 
 ## 与 GUI 项目的协作
 
-GUI 项目位于仓库同级目录 `../GUI/`，编译产出 `FileEncryptorGUI(.exe)`。要让 GUI 能正常调用本 CLI：
+GUI 项目位于仓库同级目录 `../GUI-Qt/` 与 `../GUI-WinUI/`，编译产出 `FileEncryptorGUI(.exe)`。要让 GUI 能正常调用本 CLI：
 
 - **开发期**：把本项目 build 出的 `FileEncryptorCLI.exe` 复制到 GUI 项目的 build 输出目录（或设置 `FILEENCRYPTOR_EXE` 环境变量指向 CLI exe 的绝对路径）。
 - **打包发布**：把 `FileEncryptorGUI(.exe)` 与 `FileEncryptorCLI(.exe)` 放到同一目录，GUI 启动时会自动在同目录、env、PATH 中依次查找。
 
-详见 `../GUI/README.md`。
+详见 `../GUI-Qt/README.md` 与 `../GUI-WinUI/README.md`。

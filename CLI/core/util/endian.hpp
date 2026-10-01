@@ -4,8 +4,18 @@
 // 字节序转换工具：编译期判断端序，提供 host<->le/be 转换。
 namespace fe::util {
 
+// 编译期检测字节序；常见编译器宏覆盖主流平台，缺省回退小端（x86/ARM 默认）
+#if defined(__BYTE_ORDER__) && defined(__ORDER_LITTLE_ENDIAN__)
 constexpr bool is_little_endian() {
-    return true; // x86/ARM 均为小端；如需跨平台编译期检测可扩展
+    return __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__;
+#elif defined(_WIN32) || defined(__i386__) || defined(__x86_64__) || defined(_M_IX86) || defined(_M_X64) || defined(__arm__) || defined(__aarch64__) || defined(_M_ARM64)
+constexpr bool is_little_endian() {
+    return true;
+#else
+#error "Unknown byte order: extend is_little_endian() for this platform"
+constexpr bool is_little_endian() {
+    return true;
+#endif
 }
 
 constexpr uint16_t bswap16(uint16_t v) {

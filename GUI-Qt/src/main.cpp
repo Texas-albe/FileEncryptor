@@ -1,9 +1,10 @@
-// FileEncryptorGUI - Qt GUI 外壳入口，通过 QProcess 调用 FileEncryptorCLI，跨平台且不改原业务逻辑
+// Qt GUI 外壳入口
 
 #include "MainWindow.h"
 #include "ThemeManager.h"
 #include "FontBootstrap.h"
 #include "FileEncryptorLocator.h"
+#include "I18n.h"
 #include <QApplication>
 #include <QStyleFactory>
 #include <QIcon>
@@ -29,7 +30,6 @@ Q_IMPORT_PLUGIN(QICOPlugin)
 int main(int argc, char* argv[]) {
     QApplication app(argc, argv);
     app.setApplicationName("FileEncryptorGUI");
-    // GUI 版本单一来源 FileEncryptorLocator::guiVersion()（与 CMake project VERSION 同步）
     app.setApplicationVersion(FileEncryptorLocator::guiVersion());
     app.setOrganizationName("FileEncryptor");
 
@@ -42,8 +42,11 @@ int main(int argc, char* argv[]) {
     // 应用图标
     app.setWindowIcon(QIcon(QStringLiteral(":/icons/app.ico")));
 
-    // 应用持久化的主题偏好（浅色/深色）
+    // 应用主题偏好
     ThemeManager::initialize(&app);
+
+    // 安装翻译器
+    I18n::instance().init();
 
     MainWindow w;
     w.show();

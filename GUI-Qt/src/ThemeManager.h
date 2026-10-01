@@ -1,7 +1,7 @@
-// ThemeManager - 浅色/深色主题管理：通过 QPalette 统一应用 Light/Dark 主题，QSettings 持久化选择，并暴露 isDarkActive()/stdoutColorRGB()/htmlPalette() 供 UI 取高对比色（WCAG AA）。
-// 跨平台自行管理调色板，保证 Win/Linux/macOS 一致。
+// 主题管理（浅色/深色）
 #pragma once
 #include <QObject>
+#include <QDate>
 
 class QApplication;
 class QPalette;
@@ -11,41 +11,68 @@ class ThemeManager : public QObject {
 public:
     enum class Theme { Light = 0, Dark = 1 };
 
-    // 应用启动期调用：读取持久化偏好并应用到 app。
-    // forceSystemDarkDetection 仅用于单元测试，生产路径不传。
+    // 启动期应用主题
     static void initialize(QApplication* app);
 
-    // 单例（供信号连接；themeChanged 在 setTheme 时发射）
+    // 单例
     static ThemeManager& instance();
 
-    // 切换主题（同时持久化 + 应用 + 发射信号）
+    // 切换并持久化
     static void setTheme(Theme t);
 
-    // 当前用户选择（持久化的偏好，未必等于实际生效的浅/深）
     static Theme chosenTheme();
 
-    // 当前实际生效的是否为深色
+    // 当前是否深色
     static bool isDarkActive();
 
-    // 输出着色：stdout/stderr 在当前主题下的高对比度颜色（浅：stdout #1F1F1F、stderr #C62828；深：stdout #E6E6E6、stderr #FF8A80）。
+    // 输出区高对比颜色
     static unsigned int stdoutColorRGB();
     static unsigned int stderrColorRGB();
 
-    // 对话框 HTML 在当前主题下的配色（避免硬编码 #f5f5f5/#666 在深色下不可读）
+    // HTML 配色
     struct HtmlPalette {
-        const char* bodyFg;       // 正文文字色
-        const char* bodyBg;       // 正文背景色
-        const char* preBg;        // <pre> 代码块背景
-        const char* preFg;        // <pre> 代码块文字
-        const char* mutedFg;      // 弱化文字（页脚等）
-        const char* headingGreen; // 标题绿
-        const char* headingBlue;  // 标题蓝
-        const char* linkColor;    // 链接色
+        const char* bodyFg;
+        const char* bodyBg;
+        const char* preBg;
+        const char* preFg;
+        const char* mutedFg;
+        const char* headingGreen;
+        const char* headingBlue;
+        const char* linkColor;
     };
     static const HtmlPalette& htmlPalette();
 
+    // 界面配色
+    // 调色板与 QSS 共用，避免两处硬编码漂移
+    struct Ui {
+        const char* window;
+        const char* panelRgba;
+        const char* field;
+        const char* ctrl;
+        const char* ctrlHover;
+        const char* alt;
+        const char* border;
+        const char* text;
+        const char* indicator;
+        const char* indicatorBorder;
+        const char* placeholder;
+        const char* highlight;
+        const char* scrollHandle;
+        const char* scrollHover;
+    };
+    // 国庆周取国旗红，其余时间取中性色
+    static const Ui& ui();
+    // 次要说明文字色
+    static const char* mutedTextHex();
+
+    static bool isNationalDay(const QDate& d = QDate::currentDate());
+    static int nationalDayAge(const QDate& d = QDate::currentDate());
+    static const char* chinaRedHex();
+    static const char* lightRedBgHex();
+    static QString birthdayMessage(const QDate& d = QDate::currentDate());
+
 signals:
-    void themeChanged(bool darkActive);  // 主题切换后发射，UI 据此重绘已显示内容
+    void themeChanged(bool darkActive);
 
 private:
     ThemeManager() = default;

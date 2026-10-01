@@ -1,5 +1,5 @@
-// secure_zero - 安全擦除（GUI 公共头）
-// 用 volatile 指针逐字节写零，避免 memset 被编译器优化为 dead store 而失效，导致口令明文残留堆上（审计问题 9）
+// 安全擦除公共实现
+// volatile 写零防优化
 #pragma once
 #include <cstddef>
 

@@ -1,11 +1,9 @@
 // FileEncryptor 模糊测试 harness：驱动 .ptd 头部解析与 DEK 解裹路径。
-//
 // 用法：
-//   clang（libFuzzer）: FE_BUILD_FUZZ=ON 时编译为 libFuzzer 二进制，直接
-//       ./FileEncryptorFuzz -runs=100000 corpus/
-//   其他编译器（独立驱动）: 读单个文件当输入，手工喂样本回归：
-//       ./FileEncryptorFuzz <input-file>
-//
+// clang（libFuzzer）: FE_BUILD_FUZZ=ON 时编译为 libFuzzer 二进制，直接
+// ./FileEncryptorFuzz -runs=100000 corpus/
+// 其他编译器（独立驱动）: 读单个文件当输入，手工喂样本回归：
+// ./FileEncryptorFuzz <input-file>
 // 目标：任意字节输入下，版本解析 / 头部装载 / 容器长度 / DEK 解裹路径
 // 不崩溃、不越界（libsodium 的 AEAD 解密对任意 box/nonce/密钥安全）。
 #include "ptd_format.hpp"
@@ -30,7 +28,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
     const uint32_t container_len = get_be32(
         reinterpret_cast<const unsigned char*>(&h.container_len));
     if (container_len > 4096) return 0;   // 防恶意超大值拖慢 fuzz
-    if (h.reserved[0] == 0x01 && size >= 4 + 32) {
+    if (h.reserved[0] == 0x01 && size >= HEADER_SIZE_V6 + 4) {
         // 多收件人扩展区：N 与记录长度关系
         const uint32_t n = get_be32(data + HEADER_SIZE_V6);
         if (n <= 255) {

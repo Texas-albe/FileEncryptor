@@ -3,7 +3,7 @@ using FileEncryptorGUI.Models;
 
 namespace FileEncryptorGUI.Services;
 
-/// <summary>GUI 参数 → FileEncryptor argv（1:1 映射 Qt 版）；密钥经 stdin 注入，不进命令行/环境变量。</summary>
+// GUI 参数到 argv 的映射
 public static class CliArgBuilder
 {
     public static List<string> BuildArguments(ShellOptions options)
@@ -89,8 +89,7 @@ public static class CliArgBuilder
             }
         }
 
-        // 密钥经 stdin 注入（对称模式且无密钥文件时）。放在位置参数分隔符 -- 之前，
-        // 避免 -- 之后被误判为位置参数
+        // 密钥经 stdin 注入（-- 之前）：控制台模式同样经由 stdin，只是窗口可见
         bool needsStdinKey = options.Mode != CryptoMode.Asymmetric &&
                              string.IsNullOrEmpty(options.KeyfilePath) &&
                              options.Action is CryptoAction.Encrypt or CryptoAction.Decrypt
@@ -105,7 +104,7 @@ public static class CliArgBuilder
         }
         else if (options.Action is CryptoAction.Encrypt or CryptoAction.Decrypt or CryptoAction.PubKey)
         {
-            // 以 -- 终止选项解析，避免以 - 开头的文件名被 CLI 误认为开关
+            // -- 终止选项解析
             if (options.InputPaths.Count > 0) { args.Add("--"); args.Add(options.InputPaths[0]); }
         }
 
@@ -115,12 +114,11 @@ public static class CliArgBuilder
     public static string BuildPreview(string programPath, ShellOptions options)
     {
         var sb = new StringBuilder();
-        // 程序路径包裹双引号
         sb.Append('"').Append(programPath).Append('"');
         foreach (var a in BuildArguments(options))
         {
             sb.Append(' ');
-            // 开关（以 - 开头）不加引号，值参数（含路径）全部包裹双引号
+            // 值参数统一加引号
             if (a.StartsWith("-"))
                 sb.Append(a);
             else
@@ -130,7 +128,7 @@ public static class CliArgBuilder
             options.Action is CryptoAction.Encrypt or CryptoAction.Decrypt
                 or CryptoAction.BatchEncrypt or CryptoAction.BatchDecrypt or CryptoAction.Derive)
         {
-            sb.Append("  # 密钥经 stdin 管道注入");
+            sb.Append(L10n.T("  # 密钥经 stdin 管道注入"));
         }
         return sb.ToString();
     }

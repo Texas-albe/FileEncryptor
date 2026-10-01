@@ -23,17 +23,17 @@ public sealed partial class ViewSettingsDialog : ContentDialog
             Services.AppTheme.Dark => ElementTheme.Dark,
             _ => ElementTheme.Default
         };
-        Title = "视图设置";
-        PrimaryButtonText = "保存";
-        SecondaryButtonText = "取消";
+        Title = L10n.T("视图设置");
+        PrimaryButtonText = L10n.T("保存");
+        SecondaryButtonText = L10n.T("取消");
         _backgroundBrush = backgroundBrush;
 
         var panel = new StackPanel { Spacing = 12, Width = 380 };
 
         // 背景图
-        var bgLabel = new TextBlock { Text = "自定义背景图", FontWeight = FontWeights.Bold };
-        _bgPath = new TextBox { PlaceholderText = "图片路径", Text = App.Settings.Current.CustomBackgroundPath ?? "" };
-        var browseBtn = new Button { Content = "浏览..." };
+        var bgLabel = new TextBlock { Text = L10n.T("自定义背景图"), FontWeight = FontWeights.Bold };
+        _bgPath = new TextBox { PlaceholderText = L10n.T("图片路径"), Text = App.Settings.Current.CustomBackgroundPath ?? "" };
+        var browseBtn = new Button { Content = L10n.T("浏览...") };
         browseBtn.Click += async (_, _) =>
         {
             var picker = new Windows.Storage.Pickers.FileOpenPicker();
@@ -47,7 +47,7 @@ public sealed partial class ViewSettingsDialog : ContentDialog
             var file = await picker.PickSingleFileAsync();
             if (file != null) _bgPath.Text = file.Path;
         };
-        var clearBtn = new Button { Content = "清除背景" };
+        var clearBtn = new Button { Content = L10n.T("清除背景") };
         clearBtn.Click += (_, _) => { _bgPath.Text = ""; };
         var btnPanel = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
         btnPanel.Children.Add(browseBtn);
@@ -61,7 +61,7 @@ public sealed partial class ViewSettingsDialog : ContentDialog
         // 提示
         var hint = new TextBlock
         {
-            Text = "支持 PNG / JPG / BMP / WebP 格式。",
+            Text = L10n.T("支持 PNG / JPG / BMP / WebP 格式。"),
             FontSize = 12,
             TextWrapping = TextWrapping.Wrap,
             Foreground = new SolidColorBrush(Microsoft.UI.Colors.Gray)
@@ -89,12 +89,15 @@ public sealed partial class ViewSettingsDialog : ContentDialog
         }
         try
         {
+            var uri = new Uri(path);
+            // 仅允许本地文件
+            if (!uri.IsFile) return;
             var bitmap = new BitmapImage();
-            bitmap.UriSource = new Uri(path);
+            bitmap.UriSource = uri;
             _backgroundBrush.ImageSource = bitmap;
             _backgroundBrush.Stretch = Stretch.UniformToFill;
             _backgroundBrush.Opacity = 1.0;
         }
-        catch { /* 图片加载失败忽略 */ }
+        catch {  }
     }
 }

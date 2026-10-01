@@ -66,7 +66,7 @@ namespace fs = std::filesystem;
 #include <signal.h>
 #include <unistd.h>
 #endif
-// ---------- 常量 ----------
+// 常量
 static constexpr size_t CHUNK_SIZE=1*1024*1024;
 static constexpr size_t PASSWORD_MIN_LEN=6;
 
@@ -101,12 +101,12 @@ struct ProgressInfo {
 #pragma pack(pop)
 static constexpr size_t PROGRESS_SIZE=sizeof(ProgressInfo);
 
-// ---------- 辅助：模式查询 ----------
+// 辅助：模式查询
 static size_t tag_size_for_mode(CryptoMode m) {
     return (m==CryptoMode::AEGIS256) ? AEGIS256_TAG_SIZE : TAG_SIZE;
 }
 
-// ---------- 认证失败信息泄露防护 ----------
+// 认证失败信息泄露防护
 // 非详细模式下认证失败只输出通用错误，不暴露密码错误/头篡改等可枚举或侧信道探测细节。
 static bool g_verbose=false;
 void set_verbose(bool v) { g_verbose=v; }
@@ -130,7 +130,7 @@ static void report_auth_error(bool silent, const std::string& detail) {
     else fprintf(stderr, "Error: Decryption failed. (Invalid key or corrupted file)\n");
 }
 
-// ---------- 路径规范化（防别名绕过） ----------
+// 路径规范化（防别名绕过）
 // lexically_normal 解析 . 与 ..，make_preferred 统一分隔符，堵住路径别名绕过。
 static std::string normalize_path_lexical(const std::string& p) {
     std::string s = p;
@@ -168,7 +168,7 @@ static std::string normalize_path_lexical(const std::string& p) {
     return out;
 }
 
-// ---------- 续传进度绑定（防重放） ----------
+// 续传进度绑定（防重放）
 // 源路径+大小+mtime 纳入 .prs 的 HMAC，旧 .prs 无法重放到不同文件。
 static int64_t get_file_size_utf8(const std::string& path);
 // 前向声明：is_complete_output / decrypt_file 需要提前获知尾部（加密名）长度做文件大小校验。
@@ -231,7 +231,7 @@ static std::string compute_progress_binding(const std::string& in_path) {
     return "|" + norm + "|" + std::to_string(sz) + "|" + std::to_string(mt) + "|" + token;
 }
 
-// ---------- 明文 Blake2b 哈希（完整性校验） ----------
+// 明文 Blake2b 哈希（完整性校验）
 static bool file_blake2b(const std::string& path, unsigned char out[HASH_SIZE]) {
     std::ifstream f;
     if(!open_stream(f,path,std::ios::binary)) return false;
@@ -250,7 +250,7 @@ static bool file_blake2b(const std::string& path, unsigned char out[HASH_SIZE]) 
     return true;
 }
 
-// ---------- 4 MiB 聚合写出缓冲 ----------
+// 4 MiB 聚合写出缓冲
 // 块密文/明文攒满 4 MiB 再一次性写盘，合并小 syscall；verify_only 下不绑定输出流。
 struct AggWriter {
     std::ostream* os=nullptr;
@@ -275,7 +275,7 @@ struct AggWriter {
     }
 };
 
-// ---------- 输入侧 4 MiB 页对齐大缓冲 ----------
+// 输入侧 4 MiB 页对齐大缓冲
 // 缓冲从 4 KiB 扩到 4 MiB 页对齐，每块读取压到约 1 次内核读；须先于流声明（逆序析构）。
 struct InputBuffer {
     unsigned char* buf=nullptr;
@@ -300,7 +300,7 @@ struct InputBuffer {
     }
 };
 
-// ---------- SHA-256 校验单（功能10） ----------
+// SHA-256 校验单（功能10）
 // 加密后生成 <file>.sha256（<hex>  <基名>），供外部工具链校验传输完整性。
 static std::atomic<bool> g_write_sha256{false};
 void set_write_sha256(bool b) { g_write_sha256.store(b); }
@@ -340,7 +340,7 @@ void write_sha256_sidecar(const std::string& file) {
     log_event(LOG_INFO,"sha256_written",{{"path",sidecar}});
 }
 
-// ---------- AEGIS-256 可用性探测（缺 AES-NI 不可用） ----------
+// AEGIS-256 可用性探测（缺 AES-NI 不可用）
 // magic static 局部初始化保证线程安全（历史 static int cached 非线程安全）。
 bool aegis256_supported() {
     static const bool s_supported = []() -> bool {
@@ -393,7 +393,7 @@ CryptoMode resolve_encrypt_mode(CryptoMode requested, bool interactive,
     return requested;
 }
 
-// ---------- AAD 构建（元数据） ----------
+// AAD 构建（元数据）
 // 传入头部原始字节（对于 v3 不含末尾 32 字节 plaintext_hash）与块元数据。
 static std::vector<unsigned char> build_aad_with_metadata(
     const unsigned char* hdr_ptr, size_t hdr_len,
@@ -409,7 +409,7 @@ static std::vector<unsigned char> build_aad_with_metadata(
     return aad;
 }
 
-// ---------- 文件系统辅助（UTF-8 安全） ----------
+// 文件系统辅助（UTF-8 安全）
 static bool file_exists(const std::string& path) {
     std::ifstream f;
     return open_stream(f,path,std::ios::in|std::ios::binary);
@@ -447,7 +447,7 @@ static bool truncate_file(const std::string& path,uint64_t size) {
 }
 
 // 判断路径是否为符号链接 / 重解析点（已存在才报告，不存在返回 false）。
-// v2.1.2：去掉 static —— `-m rage` 分支（run_asym）需要同样的守卫。
+// v2.1.2：去掉 static `-m rage` 分支（run_asym）需要同样的守卫。
 bool path_is_symlink(const std::string& path) {
 #ifdef _WIN32
     std::wstring w=utf8_to_wstring(path);
@@ -474,6 +474,22 @@ bool path_has_traversal(const std::string& p) {
         start=pos+1;
     }
     return false;
+}
+
+// 用 std::filesystem::weakly_canonical 解析路径中已存在分量的符号链接/重解析点，
+// 使白名单前缀比较基于真实路径而非词法路径。不存在的末分量（待创建的输出文件）保留词法形式。
+// 局限：若白名单根目录内部存在指向外部的符号链接且运行期才被创建，仍可能绕过（本函数只解析调用时已存在的链路）。
+static std::string resolve_real_path(const std::string& p) {
+    std::error_code ec;
+#ifdef _WIN32
+    fs::path r = fs::weakly_canonical(fs::path(utf8_to_wstring(p)), ec);
+    if(ec) return normalize_path_lexical(p);
+    return wstring_to_utf8(r.make_preferred().wstring());
+#else
+    fs::path r = fs::weakly_canonical(fs::path(p), ec);
+    if(ec) return normalize_path_lexical(p);
+    return r.make_preferred().string();
+#endif
 }
 
 // 依据 YAML 配置校验输入输出路径（长度上限/白名单根目录）；true 允许，false 拒绝。
@@ -527,11 +543,14 @@ bool validate_io_paths(const std::string& in_path,const std::string& out_path,bo
             }
             return rnorm;
         };
+        // 符号链接解析后的真实路径用于白名单前缀比较，堵住根目录内部符号链接逃逸
+        const std::string in_real = resolve_real_path(in_path);
+        const std::string out_real = resolve_real_path(out_path);
         bool in_ok=false,out_ok=false;
         for(const auto& r:cfg.path_whitelist) {
-            const std::string rnorm = resolve_root(r);
-            if(!in_ok&&under(in_norm,rnorm))  in_ok=true;
-            if(!out_ok&&under(out_norm,rnorm)) out_ok=true;
+            const std::string rnorm = resolve_real_path(resolve_root(r));
+            if(!in_ok&&under(in_real,rnorm))  in_ok=true;
+            if(!out_ok&&under(out_real,rnorm)) out_ok=true;
         }
         if(!in_ok)  { if(!silent) fprintf(stderr,"Input path not in whitelist: %s\n",in_path.c_str());  return false; }
         if(!out_ok) { if(!silent) fprintf(stderr,"Output path not in whitelist: %s\n",out_path.c_str()); return false; }
@@ -614,9 +633,59 @@ static bool create_output_no_follow(const std::string& path) {
     ::close(fd);
     return true;
 }
+#else
+// Windows：CreateFileW 默认跟随符号链接/重解析点，无 O_NOFOLLOW 等价物。
+// 创建后用 GetFinalPathNameByHandleW 取句柄解析出的真实路径，与预期路径（均转绝对规范化、
+// 剥离 \\?\ 前缀、大小写不敏感）比对；不一致说明末分量是符号链接指向他处，关闭并删除后拒绝。
+static bool create_output_no_follow(const std::string& path) {
+    const std::wstring wpath=utf8_to_wstring(path);
+    HANDLE h=CreateFileW(wpath.c_str(),GENERIC_WRITE,0,NULL,CREATE_ALWAYS,
+                         FILE_ATTRIBUTE_NORMAL,NULL);
+    if(h==INVALID_HANDLE_VALUE) {
+        fprintf(stderr,"Cannot create output file: %s\n",path.c_str());
+        return false;
+    }
+    wchar_t final_buf[32768];
+    DWORD len=GetFinalPathNameByHandleW(h, final_buf, 32768, FILE_NAME_NORMALIZED);
+    if(len==0 || len>=32768) {
+        CloseHandle(h);
+        DeleteFileW(wpath.c_str());
+        return false;
+    }
+    std::wstring final_w(final_buf, len);
+    // GetFinalPathNameByHandleW 返回带 \\?\ 前缀的路径，剥离后再比较
+    if(final_w.size()>=4 && final_w[0]==L'\\' && final_w[1]==L'\\' && final_w[2]==L'?' && final_w[3]==L'\\') {
+        if(final_w.size()>=8 && final_w.compare(4,4,L"UNC\\")==0)
+            final_w = L"\\" + final_w.substr(8);
+        else
+            final_w = final_w.substr(4);
+    }
+    // 预期路径解析为绝对规范化形式
+    std::error_code ec;
+    fs::path expected = fs::absolute(fs::path(wpath), ec).lexically_normal();
+    std::wstring exp_w = expected.make_preferred().wstring();
+    // Windows 路径大小写不敏感
+    bool mismatch = (exp_w.size()!=final_w.size());
+    if(!mismatch) {
+        for(size_t i=0;i<exp_w.size();++i) {
+            wchar_t a=exp_w[i], b=final_w[i];
+            if(a>=L'A'&&a<=L'Z') a=(wchar_t)(a+32);
+            if(b>=L'A'&&b<=L'Z') b=(wchar_t)(b+32);
+            if(a!=b) { mismatch=true; break; }
+        }
+    }
+    if(mismatch) {
+        CloseHandle(h);
+        DeleteFileW(wpath.c_str());
+        fprintf(stderr,"Refusing to write through existing symlink: %s\n",path.c_str());
+        return false;
+    }
+    CloseHandle(h);
+    return true;
+}
 #endif
 
-// ---------- 跨进程输出锁 ----------
+// 跨进程输出锁
 static bool process_alive_pid(int pid) {
 #ifdef _WIN32
     if(pid<=0) return false;
@@ -722,7 +791,7 @@ struct OutputLockGuard {
 };
 
 // UTF-8 安全的原子替换
-// v2.1.2：去掉 static —— run_asym 用「先写 .prt 再原子替换」实现 rage 输出落盘。
+// v2.1.2：去掉 static run_asym 用「先写 .prt 再原子替换」实现 rage 输出落盘。
 bool replace_file_utf8(const std::string& from,const std::string& to) {
 #ifdef _WIN32
     std::wstring wf=utf8_to_wstring(from);
@@ -796,7 +865,7 @@ void tighten_file_permissions(const std::string& path) {
 #endif
 }
 
-// ---------- 反调试 ----------
+// 反调试
 // 检测到调试器会 exit(1)，只能在 main() 启动期、工作线程创建前调用，切勿移入并发 worker。
 void anti_debug_check() {
 #ifdef _WIN32
@@ -829,7 +898,7 @@ static void disable_core_dump() {
 #endif
 }
 
-// ---------- 辅助 ----------
+// 辅助
 template<typename T>
 static void secure_clear(T& v) {
     if(v.empty()) return;
@@ -838,7 +907,7 @@ static void secure_clear(T& v) {
     v.shrink_to_fit();
 }
 
-// ---------- 目录创建 ----------
+// 目录创建
 bool create_directory_recursive(const std::string& path) {
     // 1.5.2 安全加固：拒绝包含 ".." 的输出目录，避免越权创建目录
     //（如 -o "a/out/../../ESCAPE_X" 会在父级目录外建出 ESCAPE_X）。
@@ -879,7 +948,7 @@ bool create_directory_recursive(const std::string& path) {
 #endif
 }
 
-// ---------- 文件有效性检查 ----------
+// 文件有效性检查
 static bool is_file_valid(const std::string& path) {
     std::ifstream f;
     if(!open_stream(f,path,std::ios::binary)) return false;
@@ -889,7 +958,7 @@ static bool is_file_valid(const std::string& path) {
     unsigned char ver=hbuf[4];
     uint64_t need=header_size_for_version(ver);
     if((uint64_t)f.gcount()<need) return false;
-    return (memcmp(hbuf,MAGIC,4)==0&&(ver==1||ver==2||ver==3||ver==5||ver==VERSION));
+    return (memcmp(hbuf,MAGIC,4)==0&&(ver==1||ver==2||ver==3||ver==5||ver==6||ver==VERSION));
 }
 
 // 判断已存在的输出是否“完整且有效”，可安全跳过
@@ -941,7 +1010,7 @@ static bool is_complete_output(const std::string& out_path, bool encrypt, const 
     }
 }
 
-// ---------- 进度 ----------
+// 进度
 // 仅读取并校验结构（magic / version），HMAC 认证需密钥，由调用方在派生密钥后验证。
 static bool load_progress_raw(const std::string& out_path,ProgressInfo& info) {
     std::string prog_path=out_path+".prs";
@@ -987,7 +1056,7 @@ static bool save_progress(const std::string& out_path,
     std::string prog_path=out_path+".prs";
     std::string temp_prog=prog_path+".tmp";
     // temp 用 trunc 打开即可覆盖残留（上次 rename 失败遗留的 tmp 会作为本次源被重写），
-    // 无需逐次 unlink 预清理——每省一次元数据操作，对每 0.5s 一次的节流保存更友好。
+    // 无需逐次 unlink 预清理 每省一次元数据操作，对每 0.5s 一次的节流保存更友好。
 
     std::ofstream f;
     if(!open_stream(f,temp_prog,std::ios::binary|std::ios::trunc)) return false;
@@ -1012,7 +1081,7 @@ static void remove_progress(const std::string& out_path) {
     remove_file_utf8(prog_path);
 }
 
-// ---------- 进程级限速器（令牌桶，v1.7.2） ----------
+// 进程级限速器（令牌桶，v1.7.2）
 // 主循环按已处理字节数记账，超 max_bytes_per_sec 则休眠，覆盖全部并发线程。
 static uint64_t g_rl_max_bps = 0;          // 0 = 不限速
 static std::mutex g_rl_mutex;
@@ -1097,7 +1166,7 @@ static void print_progress(size_t processed,size_t total,
     }
 }
 
-// ---------- 文件名 / 扩展名混淆（v1.7.0） ----------
+// 文件名 / 扩展名混淆（v1.7.0）
 // 输出 <16hex>.<混淆扩展名>.ptd；混淆名=Blake2b(Blake2b(口令),路径) 确定性，续传命中同一文件且不泄露原名。
 static const char* const OBFUSCATED_EXTS[] = {
     "png","jpg","jpeg","apng","mp4","mp3","aac","avi","bmp","txt","yaml",
@@ -1106,7 +1175,7 @@ static const char* const OBFUSCATED_EXTS[] = {
 };
 static constexpr size_t OBFUSCATED_EXT_COUNT=sizeof(OBFUSCATED_EXTS)/sizeof(OBFUSCATED_EXTS[0]);
 
-// ---------- 原始文件名加密存储（v1.7.1） ----------
+// 原始文件名加密存储（v1.7.1）
 // 原名以 XChaCha20-Poly1305 信封追加密文末尾；尾部 [加密名 n+16B][magic "FENX"][len 4B]，最末 8 字节可直接定位；兼容旧 FENM 读取。
 static constexpr char NAME_FOOTER_MAGIC[4]     = {'F','E','N','M'}; // 旧版明文尾部（仅兼容读取）
 static constexpr char NAME_FOOTER_MAGIC_ENC[4] = {'F','E','N','X'}; // 新版加密尾部
@@ -1361,7 +1430,7 @@ bool read_original_name(const std::string& ptd_path, std::string& out_name,
     return decrypt_name_footer(ptd_path, out_name, kek.data(), salt_ptr);
 }
 
-// ---------- 只读元数据预览（功能2：文件头信息查看器） ----------
+// 只读元数据预览（功能2：文件头信息查看器）
 // 不派生密钥、不解密任何内容，仅解析公开头部与尾部信封标志。
 bool read_ptd_metadata(const std::string& ptd_path, PtdMeta& meta) {
     meta=PtdMeta{};
@@ -1419,7 +1488,7 @@ bool read_ptd_metadata(const std::string& ptd_path, PtdMeta& meta) {
     return true;
 }
 
-// ---------- 完整性校验（功能3：只验不解） ----------
+// 完整性校验（功能3：只验不解）
 bool verify_ptd(const std::string& ptd_path, const SecureBuffer& password) {
     // 自校验：直接流式解密并计算明文哈希，不再落盘 .verify.tmp（消除 4 倍 I/O）。
     // decrypt_file 在 verify_only 模式下当且仅当明文长度与存储哈希均匹配时返回 true。
@@ -1427,7 +1496,7 @@ bool verify_ptd(const std::string& ptd_path, const SecureBuffer& password) {
         nullptr, false, false, nullptr, nullptr, 0, true);
 }
 
-// ---------- 密钥轮换 / rewrap（v6 容器） ----------
+// 密钥轮换 / rewrap（v6 容器）
 // old_password 解出 wrapped DEK，new_password 派生新 KEK 重裹（key_version 自增），重写头部容器区与 hmac，载荷不动；仅 v6+。
 bool rewrap_file(const std::string& ptd_path,
     const SecureBuffer& old_password,
@@ -1597,7 +1666,7 @@ bool encrypt_file(const std::string& in_path,
                  :(mode==CryptoMode::AEGIS256)?AEGIS256_IV_LEN:XCHACHA20_IV_LEN;
     size_t tag_size=tag_size_for_mode(mode);
 
-    // ---- 续传检测：先读已存在输出的头部获取 salt，派生密钥后才能验证 .prs 的 HMAC ----
+    // 续传检测：先读已存在输出的头部获取 salt，派生密钥后才能验证 .prs 的 HMAC
     ProgressInfo prog_info{0,0,0,0,{0}};
     bool has_progress=false;
     bool out_exists=file_exists(out_path);
@@ -1714,7 +1783,7 @@ bool encrypt_file(const std::string& in_path,
                 sodium_memzero(kek.data(),kek.size());
             }
         }
-        // 注意：此处不能 key.clear()——提前 clear 会使后续 derive_key 写入已释放缓冲。
+        // 注意：此处不能 key.clear() 提前 clear 会使后续 derive_key 写入已释放缓冲。
         // 保留 key 的有效 32 字节缓冲，函数返回时 SecureBuffer 析构自动清零。
     }
 
@@ -1845,13 +1914,15 @@ bool encrypt_file(const std::string& in_path,
         fout.seekp((std::streamoff)trunc_pos,std::ios::beg);
     }
     else {
-#ifndef _WIN32
+#ifdef _WIN32
+        // Windows: create_output_no_follow 内部用 GetFinalPathNameByHandleW 复核
+#else
         ScopedUmask su(0077);
+#endif
         if(!create_output_no_follow(out_path)) {
             fprintf(stderr,"Cannot create output file: %s\n",out_path.c_str());
             return false;
         }
-#endif
         if(!open_stream(fout,out_path,std::ios::out|std::ios::binary|std::ios::trunc)) {
             fprintf(stderr,"Cannot create output file: %s\n",out_path.c_str());
             return false;
@@ -2153,7 +2224,7 @@ cleanup:
     return ok;
 }
 
-// ---------- 解密 ----------
+// 解密
 bool decrypt_file(const std::string& in_path,
     const std::string& out_path,
     const SecureBuffer& password,
@@ -2506,18 +2577,20 @@ bool decrypt_file(const std::string& in_path,
             if(have_hash) {
                 unsigned char empty_hash[HASH_SIZE];
                 crypto_generichash(empty_hash,HASH_SIZE,nullptr,0,nullptr,0);
-                if(memcmp(empty_hash,stored_hash,HASH_SIZE)!=0) return false;
+                if(sodium_memcmp(empty_hash,stored_hash,HASH_SIZE)!=0) return false;
             }
             return true;
         }
         std::ofstream fout;
-#ifndef _WIN32
+#ifdef _WIN32
+        // Windows: create_output_no_follow 内部用 GetFinalPathNameByHandleW 复核
+#else
         ScopedUmask su_empty(0077);
+#endif
         if(!create_output_no_follow(part_path)) {
             if(!silent) fprintf(stderr,"Cannot create output file: %s\n",out_path.c_str());
             return false;
         }
-#endif
         if(!open_stream(fout,part_path,std::ios::binary)) {
             if(!silent) fprintf(stderr,"Cannot create output file: %s\n",out_path.c_str());
             return false;
@@ -2535,7 +2608,7 @@ bool decrypt_file(const std::string& in_path,
         if(have_hash) {
             unsigned char empty_hash[HASH_SIZE];
             crypto_generichash(empty_hash,HASH_SIZE,nullptr,0,nullptr,0);
-            if(memcmp(empty_hash,stored_hash,HASH_SIZE)!=0) {
+            if(sodium_memcmp(empty_hash,stored_hash,HASH_SIZE)!=0) {
                 report_auth_error(silent, "Plaintext integrity check failed (empty file).");
                 remove_file_utf8(out_path);
                 return false;
@@ -2593,13 +2666,15 @@ bool decrypt_file(const std::string& in_path,
         fout.seekp((std::streamoff)start_bytes,std::ios::beg);
     }
     else {
-#ifndef _WIN32
+#ifdef _WIN32
+        // Windows: create_output_no_follow 内部用 GetFinalPathNameByHandleW 复核
+#else
         ScopedUmask su_prt(0077);
+#endif
         if(!create_output_no_follow(part_path)) {
             if(!silent) fprintf(stderr,"Cannot create output file: %s\n",out_path.c_str());
             return false;
         }
-#endif
         if(!open_stream(fout,part_path,std::ios::out|std::ios::binary|std::ios::trunc)) {
             if(!silent) fprintf(stderr,"Cannot create output file: %s\n",out_path.c_str());
             return false;
@@ -2890,7 +2965,7 @@ dec_cleanup:
     return ok;
 }
 
-// ---------- 目录遍历 ----------
+// 目录遍历
 #ifdef _WIN32
 #include <io.h>
 #else
@@ -2960,7 +3035,7 @@ static void collect_files_from_dir(const std::string& dir,std::vector<std::strin
 #endif
 }
 
-// ---------- 批量处理 ----------
+// 批量处理
 static std::string build_batch_out_path(const std::string& in_path,
     const std::string& out_dir_clean,
     const std::vector<std::string>& input_paths, bool include_root_name) {
@@ -3200,7 +3275,7 @@ bool process_files(const std::vector<std::string>& input_paths,
     printf("Processing %zu files (skipped %zu valid existing).\n",
         files_to_process.size(),all_files.size()-files_to_process.size());
 
-    // ---- 帧式进度显示（v2.3.0）：1 行汇总 + 每线程 1 行，按帧原地刷新 ----
+    // 帧式进度显示（v2.3.0）：1 行汇总 + 每线程 1 行，按帧原地刷新
     // use_frame=false 时（输出被重定向到文件/管道且宿主未显式开启）回退旧的单行 \r 进度条。
     feui::BatchProgress progress_ui;
     const bool use_frame=progress_ui.begin(num_threads,total_bytes);

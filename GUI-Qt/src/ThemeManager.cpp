@@ -1,5 +1,5 @@
-// ThemeManager 实现
 #include "ThemeManager.h"
+#include "I18n.h"
 #include <QApplication>
 #include <QGuiApplication>
 #include <QPalette>
@@ -14,64 +14,178 @@ static const char* kKey = "theme";
 static ThemeManager::Theme g_chosen = ThemeManager::Theme::Light;
 static bool g_darkActive = false;
 
-// ---------- 调色板 ----------
+// 国庆节主题
+bool ThemeManager::isNationalDay(const QDate& d) {
+    return d.month() == 10 && d.day() >= 1 && d.day() <= 7;
+}
+
+int ThemeManager::nationalDayAge(const QDate& d) {
+    return d.year() - 1949;
+}
+
+const char* ThemeManager::chinaRedHex() {
+    return "#DE2910";
+}
+
+const char* ThemeManager::lightRedBgHex() {
+    return "#F6C9C4";
+}
+
+// 界面配色
+namespace {
+
+const ThemeManager::Ui kRedLight = {
+    "#F7DDD9",                  // window
+    "rgba(240,196,190,0.55)",   // panelRgba（半透明，透出背景图）
+    "#FDEEEC",                  // field
+    "#F2BDB5",                  // ctrl
+    "#E9A79D",                  // ctrlHover
+    "#F6C9C4",                  // alt
+    "#D99A92",                  // border
+    "#3A1512",                  // text
+    "#FFF7F6",                  // indicator
+    "#B4655C",                  // indicatorBorder
+    "#9A6A64",                  // placeholder
+    "#DE2910",                  // highlight
+    "#B4655C",                  // scrollHandle
+    "#DE2910",                  // scrollHover
+};
+
+const ThemeManager::Ui kRedDark = {
+    "#3A1210",
+    "rgba(74,26,22,0.55)",
+    "#2A0E0C",
+    "#5C2222",
+    "#6E2A24",
+    "#35130F",
+    "#7A322B",
+    "#F2DAD6",
+    "#2A0E0C",
+    "#A85449",
+    "#A87F79",
+    "#DE2910",
+    "#A85449",
+    "#DE2910",
+};
+
+const ThemeManager::Ui kNeutralLight = {
+    "#F3F3EF",
+    "transparent",
+    "#F0F0EC",
+    "#ECECEA",
+    "#DCDCD8",
+    "#E8E8E4",
+    "#C8C8C4",
+    "#333333",
+    "#FFFFFF",
+    "#999999",
+    "#8A8A8A",
+    "#4A7C50",
+    "#A8A8A4",
+    "#8A8A86",
+};
+
+const ThemeManager::Ui kNeutralDark = {
+    "#2D2D30",
+    "transparent",
+    "#1E1E1E",
+    "#3D3D40",
+    "#4A4A4D",
+    "#252525",
+    "#3C3C3C",
+    "#E6E6E6",
+    "#2A2A2A",
+    "#5A5A5A",
+    "#909090",
+    "#2E7D32",
+    "#5A5A5A",
+    "#6E6E6E",
+};
+
+const ThemeManager::Ui& pick(bool dark) {
+    if (ThemeManager::isNationalDay()) return dark ? kRedDark : kRedLight;
+    return dark ? kNeutralDark : kNeutralLight;
+}
+
+}
+
+const ThemeManager::Ui& ThemeManager::ui() {
+    return pick(g_darkActive);
+}
+
+const char* ThemeManager::mutedTextHex() {
+    return ui().placeholder;
+}
+
+QString ThemeManager::birthdayMessage(const QDate& d) {
+    if (I18n::instance().currentLanguage() == QStringLiteral("en"))
+        return QString("Happy %1th Birthday to the People's Republic of China! "
+                       "May it always prosper!")
+            .arg(nationalDayAge(d));
+    return QString("祝祖国%1岁生日快乐！永远繁荣昌盛！").arg(nationalDayAge(d));
+}
+
+// 调色板
 QPalette ThemeManager::buildLightPalette() {
-    // 柔和浅色调色板：暖白底 + 中灰文字，降低对比度（约 9~10:1，仍满足 WCAG AA），
-    // 长时间使用不易视觉疲劳
+    const Ui& r = pick(false);
     QPalette p;
-    p.setColor(QPalette::Window,          QColor(0xF3, 0xF3, 0xEF));  // 暖白
-    p.setColor(QPalette::WindowText,      QColor(0x33, 0x33, 0x33));  // 中灰文字
-    p.setColor(QPalette::Base,            QColor(0xFA, 0xFA, 0xFA));  // 非纯白，减刺眼
-    p.setColor(QPalette::AlternateBase,   QColor(0xEC, 0xEC, 0xEA));
-    p.setColor(QPalette::Text,            QColor(0x33, 0x33, 0x33));
-    p.setColor(QPalette::Button,          QColor(0xE8, 0xE8, 0xE6));
-    p.setColor(QPalette::ButtonText,      QColor(0x33, 0x33, 0x33));
+    p.setColor(QPalette::Window,          QColor(r.window));
+    p.setColor(QPalette::WindowText,      QColor(r.text));
+    p.setColor(QPalette::Base,            QColor(r.field));
+    p.setColor(QPalette::AlternateBase,   QColor(r.alt));
+    p.setColor(QPalette::Text,            QColor(r.text));
+    p.setColor(QPalette::Button,          QColor(r.ctrl));
+    p.setColor(QPalette::ButtonText,      QColor(r.text));
     p.setColor(QPalette::BrightText,      QColor(0xFF, 0xFF, 0xFF));
-    p.setColor(QPalette::Highlight,       QColor(0x4A, 0x7C, 0x50));  // 柔化绿
+    p.setColor(QPalette::Highlight,       QColor(r.highlight));
     p.setColor(QPalette::HighlightedText,  QColor(0xFF, 0xFF, 0xFF));
-    p.setColor(QPalette::ToolTipBase,     QColor(0xFA, 0xFA, 0xFA));
-    p.setColor(QPalette::ToolTipText,     QColor(0x33, 0x33, 0x33));
-    p.setColor(QPalette::PlaceholderText, QColor(0x8A, 0x8A, 0x8A));  // 更柔和的占位符
+    p.setColor(QPalette::Link,            QColor(r.highlight));
+    p.setColor(QPalette::ToolTipBase,     QColor(r.field));
+    p.setColor(QPalette::ToolTipText,     QColor(r.text));
+    p.setColor(QPalette::PlaceholderText, QColor(r.placeholder));
     return p;
 }
 
 QPalette ThemeManager::buildDarkPalette() {
-    // 深色调色板：深灰背景 + 高亮浅色文字，保证 WCAG AA
+    const Ui& r = pick(true);
     QPalette p;
-    p.setColor(QPalette::Window,          QColor(0x2D, 0x2D, 0x30));
-    p.setColor(QPalette::WindowText,      QColor(0xE6, 0xE6, 0xE6));  // 对 #2D2D30 对比 ~11:1
-    p.setColor(QPalette::Base,            QColor(0x1E, 0x1E, 0x1E));  // 输入框更深
-    p.setColor(QPalette::AlternateBase,   QColor(0x25, 0x25, 0x26));
-    p.setColor(QPalette::Text,            QColor(0xE6, 0xE6, 0xE6));  // 对 #1E1E1E 对比 ~13:1
-    p.setColor(QPalette::Button,          QColor(0x3D, 0x3D, 0x40));
-    p.setColor(QPalette::ButtonText,      QColor(0xE6, 0xE6, 0xE6));
+    p.setColor(QPalette::Window,          QColor(r.window));
+    p.setColor(QPalette::WindowText,      QColor(r.text));
+    p.setColor(QPalette::Base,            QColor(r.field));
+    p.setColor(QPalette::AlternateBase,   QColor(r.alt));
+    p.setColor(QPalette::Text,            QColor(r.text));
+    p.setColor(QPalette::Button,          QColor(r.ctrl));
+    p.setColor(QPalette::ButtonText,      QColor(r.text));
     p.setColor(QPalette::BrightText,      QColor(0xFF, 0xFF, 0xFF));
-    p.setColor(QPalette::Highlight,       QColor(0x2E, 0x7D, 0x32));
+    p.setColor(QPalette::Highlight,       QColor(r.highlight));
     p.setColor(QPalette::HighlightedText,  QColor(0xFF, 0xFF, 0xFF));
-    p.setColor(QPalette::ToolTipBase,     QColor(0x1E, 0x1E, 0x1E));
-    p.setColor(QPalette::ToolTipText,     QColor(0xE6, 0xE6, 0xE6));
-    p.setColor(QPalette::PlaceholderText, QColor(0x90, 0x90, 0x90));
+    p.setColor(QPalette::Link,            QColor(r.highlight));
+    p.setColor(QPalette::ToolTipBase,     QColor(r.field));
+    p.setColor(QPalette::ToolTipText,     QColor(r.text));
+    p.setColor(QPalette::PlaceholderText, QColor(r.placeholder));
     return p;
 }
 
-// ---------- 持久化 ----------
+// 持久化
+// 存字符串而非枚举值：早期读写过 1/2 的旧值，数字含义有过漂移，字符串无歧义
 void ThemeManager::persist(Theme t) {
     QSettings s(kOrg, kApp);
-    s.setValue(kKey, static_cast<int>(t));
+    s.setValue(kKey, t == Theme::Dark ? QStringLiteral("dark") : QStringLiteral("light"));
 }
 
 ThemeManager::Theme ThemeManager::load() {
     QSettings s(kOrg, kApp);
+    const QVariant v = s.value(kKey);
+    const QString str = v.toString();
+    if (str.compare(QStringLiteral("dark"), Qt::CaseInsensitive) == 0) return Theme::Dark;
+    if (str.compare(QStringLiteral("light"), Qt::CaseInsensitive) == 0) return Theme::Light;
+    // 兼容旧数字值：现行枚举 1 = 深色，早期还有用 2 表示深色的
     bool ok = false;
-    const int v = s.value(kKey, static_cast<int>(Theme::Light)).toInt(&ok);
+    const int n = v.toInt(&ok);
     if (!ok) return Theme::Light;
-    // 兼容旧版持久化值（旧：0=System 1=Light 2=Dark；新：0=Light 1=Dark）
-    if (v == 2) return Theme::Dark;   // 原 Dark
-    if (v == 1) return Theme::Light; // 原 Light
-    return Theme::Light;              // 0（原 System）/ 非法 → 浅色
+    return (n == static_cast<int>(Theme::Dark) || n == 2) ? Theme::Dark : Theme::Light;
 }
 
-// ---------- 公开 API ----------
 void ThemeManager::initialize(QApplication* app) {
     g_chosen = load();
     const bool dark = (g_chosen == Theme::Dark);
@@ -87,11 +201,9 @@ void ThemeManager::setTheme(Theme t) {
     if (auto* app = qApp) {
         app->setPalette(dark ? buildDarkPalette() : buildLightPalette());
     }
-    // 通知 UI 重绘
     if (auto* app = qApp) {
         for (QWidget* w : app->topLevelWidgets()) w->update();
     }
-    // 发射信号（单例），供导航栏下拉框 / 面板透明度同步
     emit instance().themeChanged(g_darkActive);
 }
 
@@ -105,6 +217,7 @@ ThemeManager::Theme ThemeManager::chosenTheme() { return g_chosen; }
 bool ThemeManager::isDarkActive() { return g_darkActive; }
 
 unsigned int ThemeManager::stdoutColorRGB() {
+    if (isNationalDay()) return g_darkActive ? 0xF2DAD6u : 0x3A1512u;
     return g_darkActive ? 0xE6E6E6u : 0x333333u;
 }
 
@@ -112,11 +225,9 @@ unsigned int ThemeManager::stderrColorRGB() {
     return g_darkActive ? 0xFF8A80u : 0xC0392Bu;
 }
 
-// ---------- HTML 调色板派生 ----------
+// HTML 调色板派生
 namespace {
 
-// HtmlPalette 的字段是 const char*，需要持久字符串存储；store 里的 std::string
-// 生命周期与函数内 static 一致，view 中的指针因此始终有效。
 struct HtmlPaletteStore {
     std::string bodyFg, bodyBg, preBg, preFg, mutedFg;
     ThemeManager::HtmlPalette view;
@@ -143,15 +254,17 @@ HtmlPaletteStore makeHtmlPalette(const QPalette& p,
     return s;
 }
 
-} // namespace
+}
 
 const ThemeManager::HtmlPalette& ThemeManager::htmlPalette() {
-    // 中性色统一从 QPalette 派生，避免此前 buildXxxPalette() 的 QColor 与这里的十六进制字符串两份维护漂移（审计曾发现 light.mutedFg 与 PlaceholderText 已不一致）；
-    // 仅强调色（标题绿/蓝、链接）保留独立定义——深色下刻意比 Highlight 更亮以保证对比度。
-    // 注意：静态变量必须是 HtmlPaletteStore 而非 HtmlPalette——view 里的 const char* 指向 store 内 std::string，只存 view 会随临时 store 析构而悬空。
-    static const HtmlPaletteStore light = makeHtmlPalette(
+    static const HtmlPaletteStore lightNeutral = makeHtmlPalette(
         buildLightPalette(), "#4A7C50", "#2E5C9A");
-    static const HtmlPaletteStore dark = makeHtmlPalette(
+    static const HtmlPaletteStore darkNeutral = makeHtmlPalette(
         buildDarkPalette(), "#66BB6A", "#64B5F6");
-    return g_darkActive ? dark.view : light.view;
+    static const HtmlPaletteStore lightRed = makeHtmlPalette(
+        buildLightPalette(), "#C0392B", "#DE2910");
+    static const HtmlPaletteStore darkRed = makeHtmlPalette(
+        buildDarkPalette(), "#FF8A80", "#FF6B6B");
+    if (isNationalDay()) return g_darkActive ? darkRed.view : lightRed.view;
+    return g_darkActive ? darkNeutral.view : lightNeutral.view;
 }

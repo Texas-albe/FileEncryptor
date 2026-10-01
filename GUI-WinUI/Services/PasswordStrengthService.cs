@@ -13,7 +13,7 @@ public class StrengthResult
 
 public static class PasswordStrengthService
 {
-    public const int MinPasswordLength = 6;
+    public const int MinPasswordLength = 8;
 
     private static int CharsetSize(string pw, out bool lower, out bool upper, out bool digit, out bool symbol)
     {
@@ -35,7 +35,7 @@ public static class PasswordStrengthService
         if (string.IsNullOrEmpty(pw))
         {
             r.Level = StrengthLevel.Empty;
-            r.Label = "未输入";
+            r.Label = L10n.T("未输入");
             r.ColorHex = "#888888";
             return r;
         }
@@ -45,35 +45,35 @@ public static class PasswordStrengthService
         int kinds = (lower ? 1 : 0) + (upper ? 1 : 0) + (digit ? 1 : 0) + (symbol ? 1 : 0);
 
         int entropy = 0;
-        if (cs > 0) entropy = (int)Math.Round(len * Math.Log2(cs));
+        if (cs > 0) entropy = (int)Math.Round(len * Math.Log2(cs), MidpointRounding.AwayFromZero);
         r.EntropyBits = entropy;
 
         if (len < 6 || entropy < 28)
         {
             r.Level = StrengthLevel.Weak;
-            r.Label = "弱";
+            r.Label = L10n.T("弱");
             r.ColorHex = "#D32F2F";
         }
         else if (len < 10 && entropy < 48)
         {
             r.Level = StrengthLevel.Medium;
-            r.Label = "中";
+            r.Label = L10n.T("中");
             r.ColorHex = "#F9A825";
         }
         else
         {
             r.Level = StrengthLevel.Strong;
-            r.Label = "强";
+            r.Label = L10n.T("强");
             r.ColorHex = "#2E7D32";
         }
 
         string kindStr = "";
-        if (lower) kindStr += "小写 ";
-        if (upper) kindStr += "大写 ";
-        if (digit) kindStr += "数字 ";
-        if (symbol) kindStr += "符号 ";
-        if (string.IsNullOrEmpty(kindStr)) kindStr = "无";
-        r.Detail = $"长度 {len} | 种类 {kinds} | 熵 ~{entropy} bits | {kindStr.Trim()}";
+        if (lower) kindStr += L10n.T("小写 ");
+        if (upper) kindStr += L10n.T("大写 ");
+        if (digit) kindStr += L10n.T("数字 ");
+        if (symbol) kindStr += L10n.T("符号 ");
+        if (string.IsNullOrEmpty(kindStr)) kindStr = L10n.T("无");
+        r.Detail = L10n.F("长度 {0} | 种类 {1} | 熵 ~{2} bits | {3}", len, kinds, entropy, kindStr.Trim());
 
         return r;
     }
@@ -84,7 +84,7 @@ public static class PasswordStrengthService
         int len = password.Length;
         if (len < MinPasswordLength)
         {
-            reason = $"口令过短（至少 {MinPasswordLength} 个字符）。";
+            reason = L10n.F("口令过短（至少 {0} 个字符）。", MinPasswordLength);
             return false;
         }
 
@@ -105,7 +105,7 @@ public static class PasswordStrengthService
         int kinds = (lower ? 1 : 0) + (upper ? 1 : 0) + (digit ? 1 : 0) + (symbol ? 1 : 0);
         if (kinds >= 2 || len >= 16) return true;
 
-        reason = "口令过弱：请至少含 2 类字符（小写/大写/数字/符号），或长度 >= 16。";
+        reason = L10n.T("口令过弱：请至少含 2 类字符（小写/大写/数字/符号），或长度 >= 16。");
         return false;
     }
 }

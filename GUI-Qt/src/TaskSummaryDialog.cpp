@@ -1,4 +1,5 @@
 #include "TaskSummaryDialog.h"
+#include "ThemeManager.h"
 #include <QDialogButtonBox>
 #include <QGridLayout>
 #include <QLabel>
@@ -24,7 +25,8 @@ TaskSummaryDialog::TaskSummaryDialog(const QString& title, const QString& durati
 
     auto addItem=[&](int row,int col,const QString& label,const QString& value,bool warn=false){
         auto* l=new QLabel(label);
-        l->setStyleSheet("color:#888;font-size:11px;");
+        l->setStyleSheet(QStringLiteral("color:%1;font-size:11px;")
+            .arg(QLatin1String(ThemeManager::mutedTextHex())));
         auto* v=new QLabel(value);
         v->setStyleSheet(warn?"color:#ff6b6b;font-size:14px;font-weight:bold;":"font-size:14px;font-weight:bold;");
         grid->addWidget(l,row,col*2);

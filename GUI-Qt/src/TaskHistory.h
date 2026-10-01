@@ -1,39 +1,37 @@
-// TaskHistory - 任务历史持久化（功能5）：每行一条 JSON 记录存于 <用户配置目录>/history/tasks.log（JSONL，追加写、单条损坏不影响其余）。
-// 记录动作/模式/输入规模/耗时/结果，供历史面板回放，并为批量 ETA（功能6）提供速率样本。
+// 任务历史持久化
 #pragma once
 #include <QString>
 #include <QStringList>
 #include <QVector>
 
 struct TaskRecord {
-    QString id;              // 唯一标识（UUID 无花括号）
-    QString startedAt;       // "yyyy-MM-dd HH:mm:ss"（本地时间）
-    QString finishedAt;      // 同上；未完成为空
-    qint64  durationMs=0;    // 实际耗时
-    QString action;          // 机器键：encrypt/decrypt/batch-encrypt/batch-decrypt/keygen/derive/pubkey
-    QString actionLabel;     // 显示名（中文）
-    QString mode;            // 机器键：xchacha20/aegis256/asymmetric
-    int     inputCount=0;    // 输入路径数
-    QStringList inputPaths;  // 输入路径原列表（回放时恢复到输入列表原位；旧记录无此字段）
-    qint64  totalBytes=0;    // 输入数据总量（目录递归统计）
-    int     filesDone=0;     // CLI 已开始处理的文件数（取消时用于估算保留数）
-    int     filesSkip=0;     // 跳过数（CLI 统计文件）
-    int     filesFail=0;     // 失败数（CLI 统计文件）
-    QString outputDir;       // -o（空=源目录）
+    QString id;
+    QString startedAt;
+    QString finishedAt;
+    qint64  durationMs=0;
+    QString action;
+    QString actionLabel;
+    QString mode;
+    int     inputCount=0;
+    QStringList inputPaths;
+    qint64  totalBytes=0;
+    int     filesDone=0;
+    int     filesSkip=0;
+    int     filesFail=0;
+    QString outputDir;
     int     exitCode=0;
     bool    cancelled=false;
     QString error;
-    QString status;          // success / failed / cancelled
-    // 完整参数快照（用于任务回放）
-    int     sourceIndex=0;   // 源文件处理方式
-    bool    force=false;     // --force
-    bool    sha256=false;    // --sha256
-    bool    compress=false;  // -zstd
-    int     compressionLevel=0; // --compression-level
-    QString keyfile;         // -k
-    QString recipient;       // -r
-    QString identity;        // 身份文件（非对称解密）
-    bool    restoreName=false; // --restore-name
+    QString status;
+    int     sourceIndex=0;
+    bool    force=false;
+    bool    sha256=false;
+    bool    compress=false;
+    int     compressionLevel=0;
+    QString keyfile;
+    QString recipient;
+    QString identity;
+    bool    restoreName=false;
 };
 
 class TaskHistory {
@@ -41,14 +39,14 @@ public:
     static QString dir();
     static QString filePath();
 
-    // 追加一条记录；目录不存在时自动创建
+    // 追加一条记录
     static bool append(const TaskRecord& r,QString& err);
-    // 读取全部记录（最新在前）；文件不存在视为空历史（返回 true）
+    // 读取全部记录（最新在前）
     static bool load(QVector<TaskRecord>& out,QString& err);
     static bool clear(QString& err);
-    // 保存修改后的列表（删除特定条目后写回）
+    // 保存列表
     static bool save(const QVector<TaskRecord>& records,QString& err);
-    // 仅保留最近 keepLatest 条（超出部分丢弃）
+    // 裁剪到最近 N 条
     static bool prune(int keepLatest,QString& err);
 
     static QString newId();

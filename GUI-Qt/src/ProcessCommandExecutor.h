@@ -1,5 +1,4 @@
-// ProcessCommandExecutor - 用 QProcess 异步执行 FileEncryptor CLI：按行推送 stdout/stderr，cancel() kill 进程树。
-// 密钥/身份私钥经请求内 stdinData 写入子进程 stdin 后关闭写通道，不经环境变量；QProcess 跨平台行为一致。
+// QProcess 异步执行 CLI
 #pragma once
 #include "ICommandExecutor.h"
 #include <QProcess>
@@ -22,16 +21,16 @@ private slots:
 
 private:
     QProcess* m_process = nullptr;
-    QString m_outBuffer;   // stdout 行缓冲（按 \n 切分）
-    QString m_errBuffer;   // stderr 行缓冲
+    QString m_outBuffer;
+    QString m_errBuffer;
     bool m_cancelled = false;
-    bool m_finishedEmitted = false;  // finished 每次执行至多发一次
+    bool m_finishedEmitted = false;
 
     void flushLines(QString& buffer, bool isError);
-    void handleLine(const QString& line, bool isError);   // 帧哨兵 / 普通行分流
+    void handleLine(const QString& line, bool isError);
     void emitFinished(const CommandResult& r);
     void cleanup();
 
-    QStringList m_frameLines;   // 当前帧累计的行（哨兵 BEGIN/END 之间）
+    QStringList m_frameLines;
     bool m_inFrame = false;
 };

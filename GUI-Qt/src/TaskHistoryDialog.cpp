@@ -1,4 +1,3 @@
-// TaskHistoryDialog 实现（功能5 + 功能6 面板）
 #include "TaskHistoryDialog.h"
 #include "EtaEstimator.h"
 #include "MsgBox.h"
@@ -30,7 +29,7 @@ TaskHistoryDialog::TaskHistoryDialog(QWidget* parent) : QDialog(parent) {
     m_stats->setWordWrap(true);
     lay->addWidget(m_stats);
 
-    // ---- 历史表 ----
+    // 历史表
     m_table=new QTableWidget;
     m_table->setColumnCount(10);
     m_table->setHorizontalHeaderLabels({
