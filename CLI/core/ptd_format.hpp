@@ -6,6 +6,12 @@
 #include <sodium.h>
 #include "util/byte_io.hpp"
 
+// 字节序原语统一由 util/byte_io.hpp 提供，提前转发到当前命名空间供后续函数直接调用。
+using fe::util::put_le32;
+using fe::util::get_le32;
+using fe::util::put_be32;
+using fe::util::get_be32;
+
 // 格式级长度常量（libsodium 定值）
 inline constexpr size_t ARGON2_SALT_LEN  = crypto_pwhash_SALTBYTES;  // 16
 inline constexpr size_t HASH_SIZE        = crypto_generichash_BYTES; // 32（明文 Blake2b）
@@ -157,11 +163,53 @@ bool wrap_dek(const unsigned char* dek, const unsigned char* kek,
 bool unwrap_dek(const unsigned char* box, const unsigned char* kek,
                 const unsigned char* nonce, unsigned char dek[32]);
 
-// 字节序原语统一由 util/byte_io.hpp 提供，此处转发保持调用方兼容。
-using fe::util::put_le32;
-using fe::util::get_le32;
-using fe::util::put_be32;
-using fe::util::get_be32;
+// ---------------------------------------------------------------------------
+// 非对称收件人（OpenSSL X25519/X448）
+// v6 固定头 256 字节之后、16 字节块元数据之前，可选追加一段"收件人 blob"；
+// 收件人数量与总字节数记入固定头 reserved[0..3]（大端 recip_len）。recip_len=0
+// 表示纯对称 v6（字节布局与旧版完全一致，保持向后兼容）。
+// blob 本身不含在 header_hmac / 载荷 AAD 内：篡改只影响"哪些密钥能解裹 DEK"，
+// 不危及载荷机密性（伪造 stanza 因缺少正确 DEK 包装而无用）。
+// ---------------------------------------------------------------------------
+inline constexpr uint8_t RECIP_ALGO_X25519 = 1;
+inline constexpr uint8_t RECIP_ALGO_X448   = 2;
+inline constexpr uint8_t RECIP_ALGO_MLKEM  = 3;   // X25519 + ML-KEM-768 手工混合
+inline constexpr size_t   RECIP_KEY_X25519 = 32;   // 原始公钥/私钥字节数
+inline constexpr size_t   RECIP_KEY_X448   = 56;
+inline constexpr size_t   RECIP_WRAP_LEN   = 48;   // DEK(32) + Poly1305 tag(16)，零 nonce
+
+// 混合收件人（algo=3）的分段长度：公钥串 = X25519(32) || ML-KEM-768(1184)。
+// stanza 内 recip_pub 与用户串同构，eph_pub 则是 临时 X25519(32) || KEM 密文(1088)：
+// ML-KEM 是 KEM 而非签名，封装密文必须随 stanza 一起传给解压方才能解裹。
+inline constexpr size_t   RECIP_KEY_MLKEM_PUB  = 32 + 1184;   // 1216
+inline constexpr size_t   RECIP_KEY_MLKEM_PRIV = 32 + 2400;   // 2432
+inline constexpr size_t   RECIP_EPH_MLKEM_CT   = 32 + 1088;   // 1120
+
+// 静态公钥字节数（stanza.recip_pub）与临时公钥区字节数（stanza.eph_pub）。
+size_t recip_static_len(uint8_t algo);
+size_t recip_eph_len(uint8_t algo);
+
+// 单条收件人 stanza（内存表示）。pub_len/eph_len 由向量长度隐式给出。
+struct RecipientStanza {
+    uint8_t algo = RECIP_ALGO_X25519;
+    std::vector<unsigned char> recip_pub;   // 收件人静态公钥（用户可见标识，对应 age1.../X448-...）
+    std::vector<unsigned char> eph_pub;     // 临时公钥（ECDH 用）
+    std::vector<unsigned char> wrapped_dek; // RECIP_WRAP_LEN 字节
+};
+
+// 序列化/反序列化整段收件人 blob（变长，每条含算法与长度前缀）。
+bool serialize_recipients(const std::vector<RecipientStanza>& stanzas,
+                          std::vector<unsigned char>& blob);
+bool parse_recipients(const unsigned char* data, size_t len,
+                     std::vector<RecipientStanza>& stanzas);
+
+// 读写固定头 reserved[0..3] 中的 recip_len（大端）。
+inline uint32_t get_recip_len(const unsigned char reserved[33]) {
+    return get_be32(reinterpret_cast<const unsigned char*>(reserved));
+}
+inline void put_recip_len(unsigned char reserved[33], uint32_t n) {
+    put_be32(reinterpret_cast<unsigned char*>(reserved), n);
+}
 
 // 从字节缓冲装载磁盘头结构（strict-aliasing 安全）：禁止直接 reinterpret_cast
 // char[] 为 FileHeaderV*（GCC/Clang -fstrict-aliasing 下是 UB），memcpy 到本地 POD 后再读。

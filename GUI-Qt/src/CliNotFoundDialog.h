@@ -16,7 +16,9 @@ public:
         QWidget* parent=nullptr);
     ~CliNotFoundDialog();
 
-    static bool showAndAsk(QWidget* parent=nullptr);
+    // 调用方用 exec() 弹出后，靠这两个 getter 判断后续动作
+    bool retryPressed() const { return m_retry; }
+    bool downloaded() const { return m_downloaded; }
 
 private slots:
     void onRetry();
@@ -37,6 +39,7 @@ private:
     bool isAllowedDownloadHost(const QUrl& url) const;
 
     bool m_retry=false;
+    bool m_downloaded=false;
     QNetworkAccessManager* m_net=nullptr;
     QNetworkReply* m_currentReply=nullptr;
     QPushButton* m_downloadBtn=nullptr;

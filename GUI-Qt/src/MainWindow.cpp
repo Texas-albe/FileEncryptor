@@ -49,6 +49,7 @@
 #include <QHBoxLayout>
 #include <QVBoxLayout>
 #include <QGridLayout>
+#include <QSizePolicy>
 #include <QSplitter>
 #include <QGroupBox>
 #include <QMessageBox>
@@ -94,8 +95,9 @@ MainWindow::MainWindow(QWidget* parent): QMainWindow(parent) {
     setWindowTitle(QStringLiteral("FileEncryptorGUI %1").arg(
         qApp->applicationVersion().isEmpty() ? FileEncryptorLocator::guiVersion()
         : qApp->applicationVersion()));
-    // 默认窗口 16:9
-    resize(1351,760);
+    // 默认窗口 16:9，宽度定高（kDefaultWindowWidth 可调）
+    const int defW=1351;
+    resize(defW,qRound(defW*9.0/16.0));
 
     m_trayIcon=new QSystemTrayIcon(this);
     m_trayIcon->setIcon(QIcon::fromTheme(QStringLiteral("fileencryptor"),
@@ -145,7 +147,6 @@ MainWindow::MainWindow(QWidget* parent): QMainWindow(parent) {
     applyFlagRedTheme();
     if(s.contains(QStringLiteral("geometry")))
         restoreGeometry(s.value(QStringLiteral("geometry")).toByteArray());
-
     m_statusLabel=new QLabel(this);
     statusBar()->addWidget(m_statusLabel,1);
     m_progressLabel=new QLabel(this);
@@ -169,6 +170,7 @@ MainWindow::MainWindow(QWidget* parent): QMainWindow(parent) {
 
     connectSignals();
     probeZstdSupport();
+    updateSm4Visibility();
     updateAsymVisibility();
     refreshCommandPreview();
     updateProgressLabel();
@@ -222,6 +224,8 @@ void MainWindow::buildMenu() {
     connect(actTaskHistory,&QAction::triggered,this,&MainWindow::onOpenTaskHistory);
     auto* actRetryCli=toolsMenu->addAction(tr("重新检测 CLI 程序"));
     connect(actRetryCli,&QAction::triggered,this,&MainWindow::onRetryCliDetection);
+    auto* actDownloadCli=toolsMenu->addAction(tr("下载 CLI..."));
+    connect(actDownloadCli,&QAction::triggered,this,&MainWindow::onDownloadCli);
     toolsMenu->addSeparator();
 
     auto* langMenu=toolsMenu->addMenu(tr("语言(&L)"));
@@ -278,6 +282,20 @@ QString MainWindow::locateUpdater() const {
     return {};
 }
 
+// 更新器报回的 error 码 → 中文说明（与 Updater/src/updater.cpp 的 error 字段对应）。
+// 文案直接以字面量写进 translate，便于 lupdate 收录译文。
+static QString updaterErrorText(const QString& code) {
+    auto t = [](const char* s) { return QCoreApplication::translate("MainWindow", s); };
+    if (code == QStringLiteral("network_unreachable")) return QCoreApplication::translate("MainWindow", "网络连接不可用，请检查网络后重试。");
+    if (code == QStringLiteral("dns_failed")) return QCoreApplication::translate("MainWindow", "无法解析服务器地址，请检查网络后重试。");
+    if (code == QStringLiteral("timeout")) return QCoreApplication::translate("MainWindow", "检查更新超时，请稍后再试。");
+    if (code == QStringLiteral("tls_verify_failed")) return QCoreApplication::translate("MainWindow", "安全证书校验失败，可能是网络环境拦截了更新服务。");
+    if (code == QStringLiteral("rate_limited")) return QCoreApplication::translate("MainWindow", "检查过于频繁，请稍后再试。");
+    if (code == QStringLiteral("release_not_found")) return QCoreApplication::translate("MainWindow", "服务端未找到可更新的版本。");
+    if (code == QStringLiteral("host_not_allowed")) return QCoreApplication::translate("MainWindow", "更新服务地址不可达。");
+    return code;
+}
+
 void MainWindow::onCheckForUpdate() {
     const QString updater = locateUpdater();
     if (updater.isEmpty()) {
@@ -310,7 +328,18 @@ void MainWindow::onCheckForUpdate() {
         proc->deleteLater();
         handleCheckResult(out, updater);
     });
+    // 更新器起不来（缺 dll / 被杀软拦）时 finished 不会来，只连 finished 会让进度框一直转
+    connect(proc, &QProcess::errorOccurred, this, [this, dlg, proc](QProcess::ProcessError) {
+        dlg->close(); dlg->deleteLater();
+        proc->deleteLater();
+        QMessageBox::warning(this, tr("检查更新"),
+            tr("无法启动更新器，请确认程序安装完整。"));
+    });
     connect(dlg, &QProgressDialog::canceled, proc, [proc] { proc->kill(); });
+    QTimer::singleShot(60000, this, [proc, dlg] {
+        if (proc->state() != QProcess::NotRunning) proc->kill();
+        dlg->close(); dlg->deleteLater();
+    });
     proc->start(updater, args);
 }
 
@@ -318,14 +347,23 @@ void MainWindow::handleCheckResult(const QByteArray& out, const QString& updater
     QJsonParseError err;
     const QJsonDocument doc = QJsonDocument::fromJson(out, &err);
     if (doc.isNull()) {
-        QMessageBox::warning(this, tr("检查更新"),
-            tr("无法解析更新器输出：%1\n原始输出：%2").arg(err.errorString(), QString::fromUtf8(out)));
+        const QString raw = QString::fromUtf8(out).trimmed();
+        if (raw.isEmpty())
+            QMessageBox::warning(this, tr("检查更新"),
+                tr("检查更新未返回结果（可能已超时）。请稍后再试。"));
+        else
+            QMessageBox::warning(this, tr("检查更新"),
+                tr("无法解析更新器输出：%1\n原始输出：%2").arg(err.errorString(), raw));
         return;
     }
     const QJsonObject o = doc.object();
     if (!o.value(QStringLiteral("ok")).toBool()) {
+        // 把更新器给的具体原因（网络/超时/证书/限流）显示出来，别只丢一个错误码
+        const QString code = o.value(QStringLiteral("error")).toString();
+        const QString detail = o.value(QStringLiteral("detail")).toString();
         QMessageBox::warning(this, tr("检查更新"),
-            tr("检查失败：%1").arg(o.value(QStringLiteral("error")).toString()));
+            tr("检查失败：%1%2").arg(updaterErrorText(code),
+                detail.isEmpty() ? QString() : QStringLiteral("\n") + detail));
         return;
     }
     if (o.value(QStringLiteral("has_update")).toBool(false)) {
@@ -341,7 +379,8 @@ void MainWindow::handleCheckResult(const QByteArray& out, const QString& updater
             doUpdaterUpdate(updater,
                 o.value(QStringLiteral("download_url")).toString(),
                 o.value(QStringLiteral("sha256")).toString(),
-                o.value(QStringLiteral("sig_url")).toString());
+                o.value(QStringLiteral("sig_url")).toString(),
+                o.value(QStringLiteral("size")).toVariant().toLongLong());
     } else {
         QMessageBox::information(this, tr("检查更新"),
             tr("已是最新版本（%1）。").arg(o.value(QStringLiteral("current_version")).toString()));
@@ -349,7 +388,7 @@ void MainWindow::handleCheckResult(const QByteArray& out, const QString& updater
 }
 
 void MainWindow::doUpdaterUpdate(const QString& updater, const QString& url,
-                                 const QString& sha, const QString& sigUrl) {
+                                 const QString& sha, const QString& sigUrl, long long size) {
     if (url.isEmpty()) {
         QMessageBox::warning(this, tr("更新"),
             tr("未找到适用于本平台的安装包，请前往 GitHub 手动下载。"));
@@ -372,6 +411,7 @@ void MainWindow::doUpdaterUpdate(const QString& updater, const QString& url,
     };
     if (!sha.isEmpty()) { args << QStringLiteral("--sha256") << sha; }
     if (!sigUrl.isEmpty()) { args << QStringLiteral("--sig-url") << sigUrl; }
+    if (size > 0) { args << QStringLiteral("--size") << QString::number(size); }
 
     connect(proc, &QProcess::readyReadStandardOutput, this, [dlg, proc] {
         while (proc->canReadLine()) {
@@ -386,6 +426,10 @@ void MainWindow::doUpdaterUpdate(const QString& updater, const QString& url,
         dlg->close(); dlg->deleteLater();
         const QByteArray out = proc->readAllStandardOutput();
         proc->deleteLater();
+        if (!out.contains("\"stage\":\"done\"") && out.isEmpty()) {
+            QMessageBox::warning(this, tr("更新"), tr("更新器未返回任何结果（可能已超时）。"));
+            return;
+        }
         const bool done = out.contains("\"stage\":\"done\"");
         if (done) {
             const QString name = url.mid(url.lastIndexOf(QLatin1Char('/')) + 1);
@@ -397,7 +441,16 @@ void MainWindow::doUpdaterUpdate(const QString& updater, const QString& url,
                 tr("更新失败（详见输出）。可前往 GitHub 手动下载。"));
         }
     });
+    connect(proc, &QProcess::errorOccurred, this, [this, dlg, proc] {
+        dlg->close(); dlg->deleteLater();
+        proc->deleteLater();
+        QMessageBox::warning(this, tr("更新"), tr("无法启动更新器，请确认程序安装完整。"));
+    });
     connect(dlg, &QProgressDialog::canceled, proc, [proc] { proc->kill(); });
+    QTimer::singleShot(300000, this, [proc, dlg] {
+        if (proc->state() != QProcess::NotRunning) proc->kill();
+        dlg->close(); dlg->deleteLater();
+    });
     proc->start(updater, args);
 }
 
@@ -609,9 +662,12 @@ void MainWindow::applyPanelTransparency() {
         "QCheckBox::indicator:checked{background:%6;border:1px solid %4;}"
         "QRadioButton::indicator:checked{background:%6;border:1px solid %4;}"
     ).arg(fieldBg,fieldFg,fieldBor,indBor,indBg,fieldSel,chinaRed);
-    for(QWidget* c:{static_cast<QWidget*>(m_chkForce), 
+    for(QWidget* c:{static_cast<QWidget*>(m_chkForce),
                        static_cast<QWidget*>(m_chkSha256),
                        static_cast<QWidget*>(m_chkCompress),
+                       static_cast<QWidget*>(m_chkPqc),
+                       static_cast<QWidget*>(m_chkX448),
+                       static_cast<QWidget*>(m_chkWatermark),
                        static_cast<QWidget*>(m_rbEncrypt), static_cast<QWidget*>(m_rbDecrypt),
                        static_cast<QWidget*>(m_rbBatchEncrypt), static_cast<QWidget*>(m_rbBatchDecrypt),
                        static_cast<QWidget*>(m_rbKeyGen), static_cast<QWidget*>(m_rbDerive),
@@ -627,7 +683,7 @@ void MainWindow::applyPanelTransparency() {
         "QComboBox QAbstractItemView{background:%1;color:%2;border:1px solid %3;"
         "selection-background-color:%4;selection-color:#FFFFFF;outline:0;}"
     ).arg(ctrlBg,ctrlFg,ctrlBor,fieldSel);
-    for(QComboBox* cb:{m_themeCombo, m_modeCombo, m_sourceCombo}) {
+    for(QComboBox* cb:{m_themeCombo, m_modeCombo, m_sourceCombo, m_fileCipherCombo}) {
         if(cb) cb->setStyleSheet(comboStyle);
     }
 
@@ -641,10 +697,11 @@ void MainWindow::applyPanelTransparency() {
         "QPushButton:hover{background:%4;}"
         "QPushButton:disabled{background:%1;color:%5;}"
     ).arg(ctrlBg,ctrlFg,ctrlBor,ctrlHover,QLatin1String(r.placeholder));
+    // 全部普通按钮共用同一套外观（含后加的「密钥轮换」「水印私钥浏览」）
     for(QPushButton* b:{m_btnAddFiles, m_btnAddDir, m_btnClearFiles,
                            m_btnOutDirBrowse, m_btnKeyfileBrowse, m_btnViewSettings,
                            m_btnRecipientBrowse, m_btnIdentityBrowse,
-                           m_btnTaskHistory}) {
+                           m_btnTaskHistory, m_btnRewrap, m_btnWmKeyBrowse}) {
         if(b) b->setStyleSheet(btnStyle);
     }
 
@@ -660,6 +717,7 @@ void MainWindow::resizeEvent(QResizeEvent* e) {
     QMainWindow::resizeEvent(e);
     resizeBgLabel();
 }
+
 
 // 编辑 YAML 配置
 
@@ -757,7 +815,29 @@ void MainWindow::showCliNotFoundError(const QString& context) {
     detail+=tr("\n当前程序目录：\n  %1\n").arg(FileEncryptorLocator::selfDir());
     detail+=tr("\n也可设置环境变量 FILEENCRYPTOR_EXE 指向 CLI 程序路径。");
 
-    MsgBox::error(this,tr("FileEncryptor CLI 未找到"),detail);
+    // 与 WinUI 一致：对话框里直接给「下载 CLI」，下载成功后自动重新探测
+    CliNotFoundDialog dlg(detail,this);
+    const bool retry=dlg.exec()==QDialog::Accepted && dlg.retryPressed();
+    if(!retry && !dlg.downloaded()) return;
+    rescanCli();
+}
+
+// 重新探测 CLI 并刷新依赖它的界面状态（重试、手动检测、下载完成后共用）
+void MainWindow::rescanCli() {
+    if(FileEncryptorLocator::existsWithVersion(&m_fileEncryptorPath)) {
+        setStatus(tr("就绪 | FileEncryptor: %1").arg(m_fileEncryptorPath));
+        MsgBox::info(this,tr("检测成功"),
+            tr("已找到 CLI 程序：\n%1").arg(m_fileEncryptorPath));
+        probeZstdSupport();
+        updateAsymVisibility();
+    }
+}
+
+void MainWindow::onDownloadCli() {
+    CliNotFoundDialog dlg(QString(),this);
+    const bool retry=dlg.exec()==QDialog::Accepted && dlg.retryPressed();
+    if(!retry && !dlg.downloaded()) return;
+    rescanCli();
 }
 
 // 能力探测
@@ -790,20 +870,17 @@ void MainWindow::onProbeFinished(int, QProcess::ExitStatus) {
     m_zstdAvailable=out.contains(QStringLiteral("zstd=1"));
     if(out.contains(QStringLiteral("aegis=0"))) m_aegisAvailable=false;
     else if(out.contains(QStringLiteral("aegis=1"))) m_aegisAvailable=true;
+    if(out.contains(QStringLiteral("sm4=0"))) m_sm4Available=false;
+    else if(out.contains(QStringLiteral("sm4=1"))) m_sm4Available=true;
+    // 旧 CLI 的 --features 没有 pqc 字段：按「不支持」处理，由勾选状态决定是否下发 --no-pqc
+    m_pqcAvailable=!out.contains(QStringLiteral("pqc=0"));
+    updateSm4Visibility();
     updateAsymVisibility();
 }
 
 void MainWindow::onRetryCliDetection() {
-    if(FileEncryptorLocator::existsWithVersion(&m_fileEncryptorPath)) {
-        setStatus(tr("就绪 | FileEncryptor: %1").arg(m_fileEncryptorPath));
-        MsgBox::info(this,tr("检测成功"),
-            tr("已找到 CLI 程序：\n%1").arg(m_fileEncryptorPath));
-        probeZstdSupport();
-        updateAsymVisibility();
-    }
-    else {
-        showCliNotFoundError(tr("手动重试"));
-    }
+    if(FileEncryptorLocator::existsWithVersion(&m_fileEncryptorPath)) rescanCli();
+    else showCliNotFoundError(tr("手动重试"));
 }
 
 void MainWindow::applyButtonStyles() {
@@ -836,16 +913,6 @@ void MainWindow::applyButtonStyles() {
            : QStringLiteral("QPushButton{background:#C0392B;color:white;padding:6px 18px;font-weight:bold;border-radius:4px;}"
                             "QPushButton:hover{background:#A93226;}"
                             "QPushButton:disabled{background:#999;color:#eee;}")));
-    if(m_btnRewrap) {
-        const auto& r=ThemeManager::ui();
-        m_btnRewrap->setStyleSheet(QStringLiteral(
-            "QPushButton{background:%1;color:%2;border:1px solid %3;"
-            "border-radius:3px;padding:4px 10px;}"
-            "QPushButton:hover{background:%4;}"
-            "QPushButton:disabled{background:%1;color:%5;}")
-            .arg(QLatin1String(r.ctrl),QLatin1String(r.text),QLatin1String(r.border),
-                 QLatin1String(r.ctrlHover),QLatin1String(r.placeholder)));
-    }
 }
 
 // 文件选择面板
@@ -885,6 +952,7 @@ QWidget* MainWindow::buildCenterPanel() {
     m_centerPanel=w;
     auto* lay=new QGridLayout(w);
     lay->setColumnStretch(1,1);
+    lay->setVerticalSpacing(10);
 
     int row=0;
 
@@ -926,27 +994,52 @@ QWidget* MainWindow::buildCenterPanel() {
     lay->addLayout(keyMgmtRow,row,1);
     row++;
 
-    auto* lblMode=new QLabel(tr("加密模式"));
-    lay->addWidget(lblMode,row,0);
-    m_modeCombo=new QComboBox;
-    m_modeCombo->addItem(tr("XChaCha20-Poly1305（默认，兼容性最好）"),static_cast<int>(CryptoMode::XChaCha20));
-    m_modeCombo->addItem(tr("AEGIS-256（需 AES-NI 指令）"),static_cast<int>(CryptoMode::Aegis256));
-    m_modeCombo->addItem(tr("X25519 + ChaCha20-Poly1305（非对称）"),static_cast<int>(CryptoMode::Asymmetric));
-    lay->addWidget(m_modeCombo,row,1);
+    // 模式整行收进容器：密钥管理动作下整行一起藏，免得只藏控件留下孤零零的左侧标签
+    m_modeRow=new QWidget;
+    {
+        auto* mr=new QHBoxLayout(m_modeRow);
+        mr->setContentsMargins(0,0,0,0);
+        // 模式项不带括号说明，算法特性交给悬停提示
+        m_modeTitle=new QLabel(tr("加密模式"));
+        mr->addWidget(m_modeTitle);
+        // 模式与文件算法同排各占一半
+        m_modeCombo=new QComboBox;
+        m_modeCombo->setSizePolicy(QSizePolicy::Expanding,QSizePolicy::Preferred);
+        m_modeCombo->addItem(tr("XChaCha20-Poly1305"),static_cast<int>(CryptoMode::XChaCha20));
+        m_modeCombo->addItem(tr("AEGIS-256"),static_cast<int>(CryptoMode::Aegis256));
+        m_modeCombo->addItem(tr("SM4-GCM"),static_cast<int>(CryptoMode::Sm4));
+        m_modeCombo->addItem(tr("X25519 非对称"),static_cast<int>(CryptoMode::Asymmetric));
+        mr->addWidget(m_modeCombo,1);
+
+        // 仅非对称模式显示；非对称只加密此算法生成的密钥
+        m_fileCipherLabel=new QLabel(tr("文件算法："));
+        mr->addWidget(m_fileCipherLabel);
+        m_fileCipherCombo=new QComboBox;
+        m_fileCipherCombo->setSizePolicy(QSizePolicy::Expanding,QSizePolicy::Preferred);
+        m_fileCipherCombo->addItem(tr("XChaCha20-Poly1305（默认）"),static_cast<int>(CryptoMode::XChaCha20));
+        m_fileCipherCombo->addItem(tr("AEGIS-256"),static_cast<int>(CryptoMode::Aegis256));
+        m_fileCipherCombo->addItem(tr("SM4-GCM"),static_cast<int>(CryptoMode::Sm4));
+        m_fileCipherCombo->setToolTip(tr("非对称模式下的文件载荷加密算法"));
+        mr->addWidget(m_fileCipherCombo,1);
+    }
+    lay->addWidget(m_modeRow,row,0,1,2);
     row++;
 
     m_compressTitle=new QLabel(tr("压缩"));
     lay->addWidget(m_compressTitle,row,0);
-    auto* compRow=new QHBoxLayout;
+    // 整行收进容器，显隐一次切换
+    m_compressRow=new QWidget;
+    {
+        auto* compRow=new QHBoxLayout(m_compressRow);
+        compRow->setContentsMargins(0,0,0,0);
     m_chkCompress=new QCheckBox(tr("压缩数据"));
-    m_chkCompress->setToolTip(tr("加密时逐块 zstd 压缩（磁盘格式 v5，旧版本 CLI 无法读取）。\n"
-                                 "仅对称加密有效；输出名混淆下压缩率统计见 CLI 详细输出。"));
-    m_compressLabel=new QLabel(tr("压缩级别 (0-22)："));
+    m_chkCompress->setToolTip(tr("加密时逐块压缩，对称与非对称均生效"));
+    m_compressTipTemplate=m_chkCompress->toolTip();   // 能力探测后要还原默认说明
+    m_compressLabel=new QLabel(tr("压缩级别（1-22）："));
     m_compressLevel=new QSpinBox;
     m_compressLevel->setRange(-5,22);
     m_compressLevel->setValue(3);
-    m_compressLevel->setToolTip(tr("zstd 级别：1..22 常规（越大越慢、压缩率越高），-1..-5 快速档；默认 3\n"
-                                   "直接键入数值，回车或移开焦点后生效；也可用键盘 ↑/↓ 微调"));
+    m_compressLevel->setToolTip(tr("数值越大压缩比越小，默认 3"));
     m_compressLevel->setButtonSymbols(QAbstractSpinBox::NoButtons);
     m_compressLevel->setAlignment(Qt::AlignRight);
     m_compressLevel->setKeyboardTracking(false);
@@ -955,18 +1048,16 @@ QWidget* MainWindow::buildCenterPanel() {
     compRow->addWidget(m_compressLabel);
     compRow->addWidget(m_compressLevel);
     compRow->addStretch();
-    lay->addLayout(compRow,row,1);
+    }
+    lay->addWidget(m_compressRow,row,1);
     row++;
 
     m_asymWidget=new QGroupBox(tr("非对称加密"));
     {
         auto* av=new QVBoxLayout(m_asymWidget);
-        av->setContentsMargins(8,8,8,8);
-        av->setSpacing(6);
-        auto* intro=new QLabel(tr("混合加密：随机生成的文件密钥用 X25519 公钥封装（rage/age 格式）。\n"
-                                  "加密只需要公钥（可公开），解密才需要私钥。"));
-        intro->setWordWrap(true);
-        av->addWidget(intro);
+        // 顶部留白刚好放下组标题
+        av->setContentsMargins(6,18,6,6);
+        av->setSpacing(4);
 
         m_recipientRow=new QWidget;
         {
@@ -974,12 +1065,23 @@ QWidget* MainWindow::buildCenterPanel() {
             rr->setContentsMargins(0,0,0,0);
             rr->addWidget(new QLabel(tr("公钥：")));
             m_recipientEdit=new QLineEdit;
-            m_recipientEdit->setPlaceholderText(tr("age1... 公钥，或每行一个公钥的文件"));
+            m_recipientEdit->setPlaceholderText(tr("公钥，或每行一个公钥的文件"));
             rr->addWidget(m_recipientEdit,1);
             m_btnRecipientBrowse=new QPushButton(tr("浏览..."));
             rr->addWidget(m_btnRecipientBrowse);
         }
         av->addWidget(m_recipientRow);
+    }
+    m_asymWidget->setVisible(false);
+    lay->addWidget(m_asymWidget,row,0,1,2);
+    row++;
+
+    // 私钥文件行与说明同组：导出公钥时只看到「标题 + 私钥行 + 说明」一块，中间不留空白
+    m_keygenWidget=new QGroupBox(tr("非对称密钥管理"));
+    {
+        auto* kv=new QVBoxLayout(m_keygenWidget);
+        kv->setContentsMargins(6,18,6,6);
+        kv->setSpacing(4);
 
         m_identityRow=new QWidget;
         {
@@ -987,22 +1089,12 @@ QWidget* MainWindow::buildCenterPanel() {
             ir->setContentsMargins(0,0,0,0);
             ir->addWidget(new QLabel(tr("私钥文件：")));
             m_identityEdit=new QLineEdit;
-            m_identityEdit->setPlaceholderText(tr("包含 AGE-SECRET-KEY-... 的文件（如 rage_private.txt）"));
+            m_identityEdit->setPlaceholderText(tr("身份私钥文件"));
             ir->addWidget(m_identityEdit,1);
             m_btnIdentityBrowse=new QPushButton(tr("浏览..."));
             ir->addWidget(m_btnIdentityBrowse);
         }
-        av->addWidget(m_identityRow);
-    }
-    m_asymWidget->setVisible(false);
-    lay->addWidget(m_asymWidget,row,0,1,2);
-    row++;
-
-    m_keygenWidget=new QGroupBox(tr("rage 密钥管理"));
-    {
-        auto* kv=new QVBoxLayout(m_keygenWidget);
-        kv->setContentsMargins(8,8,8,8);
-        kv->setSpacing(6);
+        kv->addWidget(m_identityRow);
         m_keygenIntro=new QLabel;
         m_keygenIntro->setWordWrap(true);
         kv->addWidget(m_keygenIntro);
@@ -1041,27 +1133,52 @@ QWidget* MainWindow::buildCenterPanel() {
     m_sourceCombo->addItem(tr("完成后删除源文件"),1);
     m_sourceCombo->addItem(tr("完成后移入回收站"),3);
     m_sourceCombo->addItem(tr("完成后安全擦除（多次覆写）"),2);
-    m_sourceCombo->setToolTip(tr("加密成功后对源文件的处理方式：\n"
-        "· 删除：直接删除（不可恢复）\n"
-        "· 回收站：移入系统回收站（可恢复，受控删除）\n"
-        "· 安全擦除：0x00 / 0xFF / 随机三次覆写后删除\n"
-        "仅加密动作生效。"));
+    m_sourceCombo->setToolTip(tr("加密成功后对源文件的处理方式，仅加密动作生效"));
     m_chkForce=new QCheckBox(tr("覆盖已存在文件"));
     m_chkSha256=new QCheckBox(tr("生成校验单"));
-    m_chkSha256->setToolTip(tr("加密成功后额外生成 <输出名>.ptd.sha256 校验单（密文 SHA-256 十六进制 + 文件名），\n"
-                               "便于与外部备份 / 传输工具链配合校验传输完整性。仅加密动作有效。"));
+    m_chkSha256->setToolTip(tr("额外生成 .sha256 校验单，便于校验传输完整性"));
+    // 与「生成校验单」同排，样式统一
+    m_chkPqc=new QCheckBox(tr("后量子 PQC"));
+    m_chkPqc->setChecked(true);
+    // 提示与 WinUI 一致
+    m_chkPqc->setToolTip(tr("非对称收件人用 X25519（或 X448）+ ML-KEM-768 混合密钥，水印签名用 ML-DSA-65"));
+    m_chkX448=new QCheckBox(tr("使用 X448"));
+    m_chkX448->setToolTip(tr("勾选后非对称封装使用 X448，不勾选则使用 X25519"));
+    m_chkWatermark=new QCheckBox(tr("签名水印"));
+    m_chkWatermark->setToolTip(tr("在密文尾部追加一条签名水印"));
     optsRow->addWidget(m_sourceCombo);
     optsRow->addWidget(m_chkForce);
     optsRow->addWidget(m_chkSha256);
+    optsRow->addWidget(m_chkPqc);
+    optsRow->addWidget(m_chkX448);
+    optsRow->addWidget(m_chkWatermark);
     optsRow->addStretch();
     lay->addLayout(optsRow,row,1);
+    row++;
+
+    // 勾选签名水印后显示，不明文回显
+    m_wmKeyRow=new QWidget;
+    m_wmKeyRow->setVisible(false);
+    {
+        auto* wr=new QHBoxLayout(m_wmKeyRow);
+        wr->setContentsMargins(0,0,0,0);
+        wr->addWidget(new QLabel(tr("水印签名密钥")));
+        m_wmKeyEdit=new QLineEdit;
+        m_wmKeyEdit->setEchoMode(QLineEdit::Password);
+        m_wmKeyEdit->setPlaceholderText(tr("私钥 PEM（密码框输入，不明文回显）"));
+        wr->addWidget(m_wmKeyEdit,1);
+        m_btnWmKeyBrowse=new QPushButton(tr("浏览..."));
+        wr->addWidget(m_btnWmKeyBrowse);
+        wr->addWidget(new QLabel(tr("留空 = 只写水印记录不签名")));
+    }
+    lay->addWidget(m_wmKeyRow,row,0,1,2);
     row++;
 
     auto* runRow=new QHBoxLayout;
     m_btnRun=new QPushButton(tr("▶ 运行"));
     m_btnCancel=new QPushButton(tr("■ 取消"));
     m_btnRewrap=new QPushButton(tr("密钥轮换"));
-    m_btnRewrap->setToolTip(tr("对 v6 容器用新口令重裹 DEK（rewrap）：载荷密文不动，零重加密开销。"));
+    m_btnRewrap->setToolTip(tr("用新口令重新包裹文件密钥，密文不动、零重加密开销"));
     m_btnCancel->setEnabled(false);
     runRow->addWidget(m_btnRewrap);
     runRow->addStretch();
@@ -1129,6 +1246,24 @@ void MainWindow::connectSignals() {
     connect(m_chkCompress,&QCheckBox::stateChanged,this,[this](int){ updateAsymVisibility(); });
     connect(m_compressLevel,QOverload<int>::of(&QSpinBox::valueChanged),this,refresh);
     connect(m_fileList,&QListWidget::itemChanged,this,refresh);
+    connect(m_chkPqc,&QCheckBox::stateChanged,this,refresh);
+    connect(m_chkWatermark,&QCheckBox::stateChanged,this,[this](int){ updateAsymVisibility(); });
+    connect(m_wmKeyEdit,&QLineEdit::textChanged,this,refresh);
+    connect(m_btnWmKeyBrowse,&QPushButton::clicked,this,[this]{
+        const QString f=QFileDialog::getOpenFileName(this,tr("选择水印签名私钥"),
+            QDir::homePath(),tr("私钥 PEM (*.pem *.key);;所有文件 (*)"));
+        if(f.isEmpty()) return;
+        // 密钥内容直接进密码框，界面不回显明文
+        QFile in(f);
+        if(!in.open(QIODevice::ReadOnly|QIODevice::Text)) {
+            setStatus(tr("[水印私钥] 读取失败：%1").arg(in.errorString()));
+            return;
+        }
+        const QString pem=QString::fromUtf8(in.readAll());
+        in.close();
+        m_wmKeyEdit->setText(pem);
+        setStatus(tr("[水印私钥] 已载入：%1").arg(QFileInfo(f).fileName()));
+        });
 
     connect(m_btnOutDirBrowse,&QPushButton::clicked,this,[this]{
         QString d=QFileDialog::getExistingDirectory(this,tr("选择输出目录"),
@@ -1156,8 +1291,31 @@ void MainWindow::connectSignals() {
     connect(m_fileList,&QListWidget::itemChanged,this,[this]{ recomputePending(); });
     connect(m_modeCombo,QOverload<int>::of(&QComboBox::currentIndexChanged),
         this,&MainWindow::updateAsymVisibility);
+    if(m_fileCipherCombo) {
+        connect(m_fileCipherCombo,QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this,&MainWindow::updateAsymVisibility);
+    }
     connect(m_actionGroup,&QButtonGroup::idClicked,
         this,[this](int){ updateAsymVisibility(); });
+    if(m_chkX448) {
+        connect(m_chkX448,&QCheckBox::toggled,this,[this](bool){ updateAsymVisibility(); });
+    }
+}
+
+// SM4 依赖 OpenSSL：--features 报告 sm4=0 时禁用该模式项，避免用户选中后 CLI 直接报错
+void MainWindow::updateSm4Visibility() {
+    for(QComboBox* cb:{m_modeCombo, m_fileCipherCombo}) {
+        if(!cb) continue;
+        for(int i=0;i<cb->count();++i) {
+            if(cb->itemData(i).toInt()==static_cast<int>(CryptoMode::Sm4)) {
+                // Qt 约定：UserRole-1 置 false 即禁用该项
+                cb->setItemData(i, !m_sm4Available ? QVariant(false) : QVariant(),
+                                Qt::UserRole-1);
+                if(!m_sm4Available && cb->currentIndex()==i) cb->setCurrentIndex(0);
+                break;
+            }
+        }
+    }
 }
 
 // 动作/模式切换
@@ -1169,58 +1327,103 @@ void MainWindow::updateAsymVisibility() {
     const bool isKeyAction=(keygen||derive||pubkey);
     const bool isEnc=(act==static_cast<int>(CryptoAction::Encrypt)||
                       act==static_cast<int>(CryptoAction::BatchEncrypt));
+    const bool asymDecrypt=(act==static_cast<int>(CryptoAction::Decrypt)||
+                            act==static_cast<int>(CryptoAction::BatchDecrypt));
     const bool asym=(!isKeyAction)&&
         (m_modeCombo->currentData().toInt()==static_cast<int>(CryptoMode::Asymmetric));
 
-    m_asymWidget->setVisible(asym||pubkey);
-    m_recipientRow->setVisible(asym&&isEnc);
-    m_identityRow->setVisible((asym&&!isEnc)||pubkey);
+    // 解密不看模式：模式下拉若停在非对称，下一次对称解密会被判成非对称而不弹口令框
+    if(asymDecrypt&&asym) {
+        for(int i=0;i<m_modeCombo->count();++i) {
+            if(m_modeCombo->itemData(i).toInt()==static_cast<int>(CryptoMode::XChaCha20)) {
+                m_modeCombo->setCurrentIndex(i);
+                break;
+            }
+        }
+    }
 
-    m_keygenWidget->setVisible(isKeyAction);
+    // 公钥行只服务加密；解密靠下面密钥管理组里的「私钥文件」行
+    m_asymWidget->setVisible(asym&&isEnc);
+    m_recipientRow->setVisible(asym&&isEnc);
+    // 「私钥文件」行与说明同时服务密钥管理三项与解密动作
+    const bool identityShown=isKeyAction||asymDecrypt;
+    m_identityRow->setVisible(identityShown);
+    m_keygenWidget->setVisible(identityShown);
+    // 曲线开关：非对称模式下控制封装曲线，生成密钥对时控制 -x448（CLI 只认这条）；
+    // 派生(-G)/导出公钥(-Y)固定走 X25519，对称加密也无需曲线，故一律隐藏。
+    if(m_chkX448) m_chkX448->setVisible((asym&&isEnc)||keygen);
+    // 模式整行：只有加密动作才用得上（解密不带 -m，非对称解密走「私钥文件」入口）
+    m_modeRow->setVisible(isEnc&&!isKeyAction);
+    // 加密专属字段：解密与密钥管理动作下一律不出现（这些参数 CLI 只对加密动作生效，
+    // 留在界面上只是点不动的死控件）
+    const bool encFields=isEnc&&!isKeyAction;
+    // 文件算法仍在容器里，单独按非对称模式控制显隐
+    if(m_fileCipherLabel) m_fileCipherLabel->setVisible(asym&&isEnc);
+    if(m_fileCipherCombo) {
+        m_fileCipherCombo->setVisible(asym&&isEnc);
+        // 非对称模式禁用 SM4 之外的选择在界面上无意义，降级为非对称时自动回到默认项
+        if(asym && m_fileCipherCombo->currentIndex()<0) m_fileCipherCombo->setCurrentIndex(0);
+    }
+    if(m_sourceCombo) m_sourceCombo->setVisible(encFields);
+    if(!encFields) {
+        // 藏起来的开关清掉勾选，CLI 不会收到对当前动作无意义的开关
+        if(m_chkSha256&&m_chkSha256->isChecked()) m_chkSha256->setChecked(false);
+        if(m_chkWatermark&&m_chkWatermark->isChecked()) m_chkWatermark->setChecked(false);
+    }
+    if(m_chkSha256) m_chkSha256->setVisible(encFields);
+    if(m_chkWatermark) m_chkWatermark->setVisible(encFields);
+
     if(keygen) {
-        m_keygenWidget->setTitle(tr("rage 随机生成密钥对"));
-        m_keygenIntro->setText(tr("在下方输出目录中随机生成一对 X25519 密钥：\n"
-                                  "  公钥             -> 打印到输出面板（age1...，可公开分享）\n"
-                                  "  rage_private.txt -> 私钥文件（AGE-SECRET-KEY-...，务必妥善保管）"));
+        const QString curve=m_chkX448&&m_chkX448->isChecked()
+            ? QStringLiteral("X448") : QStringLiteral("X25519");
+        m_keygenWidget->setTitle(tr("随机生成密钥对"));
+        m_keygenIntro->setText(tr("在输出目录随机生成一对 %1 密钥：公钥打印到输出面板，私钥写入 rage_private.txt。").arg(curve));
     } else if(derive) {
-        m_keygenWidget->setTitle(tr("rage 口令派生密钥对"));
-        m_keygenIntro->setText(tr("用右侧「口令」经 Argon2id 确定性派生一对 X25519 密钥：\n"
-                                  "  公钥                  -> 打印到输出面板（age1...）\n"
-                                  "  rage_private.txt      -> 私钥文件（AGE-SECRET-KEY-...）\n"
-                                  "  rage_derive_salt.txt  -> 16 字节随机盐，复现同一密钥对必需\n"
-                                  "同一口令 + 同一盐永远得到同一对密钥，因此口令可以代替私钥文件；"
-                                  "但盐必须一并保存，否则无法再次派生出来。"));
+        m_keygenWidget->setTitle(tr("口令派生密钥对"));
+        m_keygenIntro->setText(tr("由口令派生一对 X25519 密钥：公钥打印到输出面板，私钥写入 rage_private.txt，"
+                                  "盐写入 rage_derive_salt.txt（复现同一密钥对必需）。"));
     } else if(pubkey) {
-        m_keygenWidget->setTitle(tr("rage 由私钥导出公钥"));
-        m_keygenIntro->setText(tr("读取下方「私钥文件」里的 AGE-SECRET-KEY-...，"
-                                  "反推出对应的 age1... 公钥并打印到输出面板。\n"
-                                  "用于私钥还在、公钥丢失的情况（等价 rage-keygen -y）。"));
+        m_keygenWidget->setTitle(tr("由私钥导出公钥"));
+        m_keygenIntro->setText(tr("读取私钥文件反推出对应公钥，打印到输出面板。"));
+    } else if(asymDecrypt) {
+        m_keygenWidget->setTitle(tr("非对称解密"));
+        m_keygenIntro->setText(tr("填写身份私钥文件即可解密选中的 .ptd，无需口令。"));
     }
 
     if(isKeyAction) {
+        // 密钥管理动作固定落在非对称项，切回加密动作时参数才是预期的 -m
         for(int i=0;i<m_modeCombo->count();++i) {
             if(m_modeCombo->itemData(i).toInt()==static_cast<int>(CryptoMode::Asymmetric)) {
                 m_modeCombo->setCurrentIndex(i);
                 break;
             }
         }
-        m_modeCombo->setDisabled(true);
-    } else {
-        m_modeCombo->setDisabled(false);
     }
 
-    const bool compAllowed=isEnc && !asym;
+    // 压缩对非对称同样可用
+    const bool compAllowed=isEnc;
     m_compressTitle->setVisible(compAllowed);
-    m_chkCompress->setVisible(compAllowed);
-    m_compressLabel->setVisible(compAllowed);
-    m_compressLevel->setVisible(compAllowed);
-    m_chkCompress->setEnabled(compAllowed);
-    m_compressLabel->setEnabled(compAllowed);
-    m_compressLevel->setEnabled(compAllowed);
-    if(compAllowed && !m_zstdAvailable) {
-        m_chkCompress->setToolTip(tr("当前 CLI 不支持 zstd（--features zstd=0），压缩参数不会下发。\n"
-                                     "请更换带 zstd 库构建的 FileEncryptorCLI。"));
+    m_compressRow->setVisible(compAllowed);
+    // 禁用以免 CliArgBuilder 仍下发 -zstd
+    const bool compressUsable=compAllowed && m_zstdAvailable;
+    m_chkCompress->setEnabled(compressUsable);
+    m_compressLabel->setEnabled(compressUsable);
+    m_compressLevel->setEnabled(compressUsable);
+    if(!m_zstdAvailable) {
+        if(m_chkCompress->isChecked()) m_chkCompress->setChecked(false);
+        m_chkCompress->setToolTip(tr("当前 CLI 不支持压缩，请更换带 zstd 的 CLI"));
+    } else {
+        m_chkCompress->setToolTip(m_compressTipTemplate);
     }
+
+    // 能力开关常驻，仅由勾选状态决定是否下发
+    const bool wmOn=m_chkWatermark && m_chkWatermark->isChecked();
+    const QString pqcTip=tr("非对称收件人用 X25519（或 X448）+ ML-KEM-768 混合密钥，水印签名用 ML-DSA-65");
+    m_chkPqc->setEnabled(m_pqcAvailable);
+    m_chkPqc->setToolTip(m_pqcAvailable
+        ? pqcTip
+        : tr("当前 CLI 不支持后量子，请更换带 ML-KEM 的 CLI"));
+    m_wmKeyRow->setVisible(isEnc && wmOn);
 
     refreshCommandPreview();
 }
@@ -1299,6 +1502,9 @@ ShellOptions MainWindow::collectOptions() const {
     ShellOptions o;
     o.action=static_cast<CryptoAction>(m_actionGroup->checkedId());
     o.mode=static_cast<CryptoMode>(m_modeCombo->currentData().toInt());
+    if(o.mode==CryptoMode::Asymmetric && m_fileCipherCombo) {
+        o.fileMode=static_cast<CryptoMode>(m_fileCipherCombo->currentData().toInt());
+    }
 
     for(int i=0; i<m_fileList->count(); ++i) {
         auto* it=m_fileList->item(i);
@@ -1310,8 +1516,13 @@ ShellOptions MainWindow::collectOptions() const {
     o.forceOverwrite=m_chkForce->isChecked();
     o.writeSha256=m_chkSha256->isChecked();
     o.keyfilePath=m_keyfileEdit->text().trimmed();
-    o.compress=m_chkCompress->isChecked();
+    // CLI 无 zstd 时禁用勾选框，这里再兜一层，避免任务记录/预览里出现别人无法执行的指令
+    o.compress=m_chkCompress->isChecked() && m_zstdAvailable;
     o.compressionLevel=o.compress ? m_compressLevel->value() : 0;
+    o.useX448=(m_chkX448 && m_chkX448->isChecked());
+    o.pqc=(m_chkPqc && m_chkPqc->isChecked());
+    o.watermark=m_chkWatermark->isChecked();
+    o.watermarkKeyPath=m_wmKeyEdit->text().trimmed();
 
     const QString rawRecip=m_recipientEdit->text().trimmed();
     o.recipientPath=rawRecip;
@@ -1321,8 +1532,8 @@ ShellOptions MainWindow::collectOptions() const {
     }
     o.identityPath=m_identityEdit->text().trimmed();
     {
-        const bool asymDecrypt=(o.mode==CryptoMode::Asymmetric)&&
-            (o.action==CryptoAction::Decrypt||o.action==CryptoAction::BatchDecrypt);
+        const bool asymDecrypt=(o.action==CryptoAction::Decrypt||
+                                o.action==CryptoAction::BatchDecrypt);
         if(asymDecrypt) o.keyfilePath=o.identityPath;
         else if(o.action==CryptoAction::PubKey) o.keyfilePath=o.identityPath;
         else if(o.mode==CryptoMode::Asymmetric) o.keyfilePath.clear();
@@ -1341,6 +1552,8 @@ QString MainWindow::resolveRecipients(const QString& raw) const {
     if(parts.size()<=1) return raw.trimmed();
     const bool allKeys=std::all_of(parts.cbegin(),parts.cend(),
         [](const QString& s){ return s.startsWith(QLatin1String("age1"))
+                                  ||s.startsWith(QLatin1String("MLKEM1-"))
+                                  ||s.startsWith(QLatin1String("X448-"))
                                   ||s.startsWith(QLatin1String("publickey:")); });
     if(!allKeys) return raw.trimmed();
     if(!m_recipientTempFile.isEmpty()) { QFile::remove(m_recipientTempFile); m_recipientTempFile.clear(); }
@@ -1378,6 +1591,13 @@ void MainWindow::onRunClicked() {
         return;
     }
 
+    if(o.mode==CryptoMode::Sm4 && !m_sm4Available) {
+        MsgBox::error(this, tr("SM4-GCM 不可用"),
+            tr("当前 CLI 未编译 OpenSSL 支持（--features 中 sm4=0），SM4-GCM 无法使用。\n"
+               "请改用 XChaCha20-Poly1305（默认模式）。"));
+        return;
+    }
+
     const bool isKeyGen=(o.action==CryptoAction::KeyGen);
     const bool isDerive=(o.action==CryptoAction::Derive);
     const bool isPubKey=(o.action==CryptoAction::PubKey);
@@ -1394,7 +1614,10 @@ void MainWindow::onRunClicked() {
             tr("单文件模式只接受一个输入路径，请清空后只选一个，或改用批量模式。"));
         return;
     }
-    const bool isAsym=(o.mode==CryptoMode::Asymmetric)&&!noInputNeeded;
+    // 非对称判定对解密同样成立：解密不看模式，只认「私钥文件」入口
+    const bool asymDecrypt=(!isEnc)&&!noInputNeeded&&
+        (o.action==CryptoAction::Decrypt||o.action==CryptoAction::BatchDecrypt);
+    const bool isAsym=((o.mode==CryptoMode::Asymmetric)&&!noInputNeeded)||asymDecrypt;
     if(isKeyGen) {
     } else if(isDerive) {
     } else if(isPubKey) {
@@ -1415,7 +1638,7 @@ void MainWindow::onRunClicked() {
         } else {
             if(o.identityPath.isEmpty()) {
                 MsgBox::warn(this,tr("缺少私钥"),
-                    tr("非对称解密需要私钥文件，例如 rage_private.txt。"));
+                    tr("非对称解密需要身份私钥文件。"));
                 m_identityEdit->setFocus();
                 return;
             }
@@ -1828,6 +2051,7 @@ QString MainWindow::modeKey(CryptoMode m) {
     switch(m) {
         case CryptoMode::XChaCha20:   return QStringLiteral("xchacha20");
         case CryptoMode::Aegis256:    return QStringLiteral("aegis256");
+        case CryptoMode::Sm4:         return QStringLiteral("sm4");
         case CryptoMode::Asymmetric:  return QStringLiteral("asymmetric");
     }
     return QStringLiteral("xchacha20");
@@ -1915,6 +2139,7 @@ void MainWindow::beginTaskRecord(const ShellOptions& o) {
     m_currentTask.action=actionKey(o.action);
     m_currentTask.actionLabel=TaskHistory::actionLabel(m_currentTask.action);
     m_currentTask.mode=modeKey(o.mode);
+    if(o.mode==CryptoMode::Asymmetric) m_currentTask.fileCipher=modeKey(o.fileMode);
     m_currentTask.inputCount=o.inputPaths.size();
     m_currentTask.inputPaths=o.inputPaths;
     m_currentTask.totalBytes=m_pendingBytes;
@@ -1924,6 +2149,11 @@ void MainWindow::beginTaskRecord(const ShellOptions& o) {
     m_currentTask.sha256=o.writeSha256;
     m_currentTask.compress=o.compress;
     m_currentTask.compressionLevel=o.compressionLevel;
+    m_currentTask.pqc=o.pqc;
+    m_currentTask.watermark=o.watermark;
+    // 明文私钥不写进任务记录，恢复任务时由用户重新输入
+    m_currentTask.watermarkKey=CliArgBuilder::isPrivateKeyMaterial(o.watermarkKeyPath)
+        ? QStringLiteral("<protected>") : o.watermarkKeyPath;
     m_currentTask.keyfile=o.keyfilePath;
     m_currentTask.recipient=o.recipientPath;
     m_currentTask.identity=o.identityPath;
@@ -1965,6 +2195,7 @@ void MainWindow::finishTaskRecord(const CommandResult& r) {
         ? QStringLiteral("cancelled")
         : ((!r.errorString.isEmpty()||r.exitCode!=0) ? QStringLiteral("failed")
                                                      : QStringLiteral("success"));
+    CliArgBuilder::cleanupWatermarkTemp();
     const TaskRecord done=m_currentTask;
     m_currentTask=TaskRecord();
     QString err;
@@ -1995,11 +2226,22 @@ void MainWindow::applyTaskRecord(const TaskRecord& rec) {
     int mode=-1;
     if(rec.mode==QStringLiteral("xchacha20"))      mode=static_cast<int>(CryptoMode::XChaCha20);
     else if(rec.mode==QStringLiteral("aegis256"))  mode=static_cast<int>(CryptoMode::Aegis256);
+    else if(rec.mode==QStringLiteral("sm4"))       mode=static_cast<int>(CryptoMode::Sm4);
     else if(rec.mode==QStringLiteral("asymmetric")) mode=static_cast<int>(CryptoMode::Asymmetric);
     if(mode>=0) {
         const int idx=m_modeCombo->findData(mode);
         if(idx>=0) m_modeCombo->setCurrentIndex(idx);
     }
+    // 非对称模式的文件算法一并回填，否则下拉停在默认项却回放出另一套 -m
+    if(m_fileCipherCombo && mode==static_cast<int>(CryptoMode::Asymmetric)) {
+        int fc=-1;
+        if(rec.fileCipher==QStringLiteral("aegis256"))      fc=static_cast<int>(CryptoMode::Aegis256);
+        else if(rec.fileCipher==QStringLiteral("sm4"))      fc=static_cast<int>(CryptoMode::Sm4);
+        else if(rec.fileCipher==QStringLiteral("xchacha20")) fc=static_cast<int>(CryptoMode::XChaCha20);
+        const int idx=fc>=0 ? m_fileCipherCombo->findData(fc) : 0;
+        if(idx>=0) m_fileCipherCombo->setCurrentIndex(idx);
+    }
+    if(m_chkX448) m_chkX448->setChecked(rec.mode==QStringLiteral("x448"));
     if(!rec.outputDir.isEmpty()) m_outDirEdit->setText(rec.outputDir);
 
     if(m_sourceCombo) {
@@ -2010,6 +2252,14 @@ void MainWindow::applyTaskRecord(const TaskRecord& rec) {
     if(m_chkSha256) m_chkSha256->setChecked(rec.sha256);
     if(m_chkCompress) m_chkCompress->setChecked(rec.compress);
     if(m_compressLevel) m_compressLevel->setValue(rec.compressionLevel);
+    if(m_chkPqc) m_chkPqc->setChecked(rec.pqc);
+    if(m_chkWatermark) m_chkWatermark->setChecked(rec.watermark);
+    // 历史里只有占位符，私钥需重新输入
+    if(m_wmKeyEdit) {
+        const QString wmKey=rec.watermarkKey.startsWith(QLatin1Char('<'))
+            ? QString() : rec.watermarkKey;
+        m_wmKeyEdit->setText(wmKey);
+    }
     if(m_keyfileEdit) m_keyfileEdit->setText(rec.keyfile);
     if(m_recipientEdit) m_recipientEdit->setText(rec.recipient);
     if(m_identityEdit) m_identityEdit->setText(rec.identity);

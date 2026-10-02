@@ -44,6 +44,10 @@ QJsonObject toJson(const TaskRecord& r) {
     o.insert(QStringLiteral("sha256"),r.sha256);
     o.insert(QStringLiteral("compress"),r.compress);
     o.insert(QStringLiteral("compressionLevel"),r.compressionLevel);
+    if(!r.fileCipher.isEmpty()) o.insert(QStringLiteral("fileCipher"),r.fileCipher);
+    o.insert(QStringLiteral("pqc"),r.pqc);
+    o.insert(QStringLiteral("watermark"),r.watermark);
+    if(!r.watermarkKey.isEmpty()) o.insert(QStringLiteral("watermarkKey"),r.watermarkKey);
     if(!r.keyfile.isEmpty()) o.insert(QStringLiteral("keyfile"),r.keyfile);
     if(!r.recipient.isEmpty()) o.insert(QStringLiteral("recipient"),r.recipient);
     if(!r.identity.isEmpty()) o.insert(QStringLiteral("identity"),r.identity);
@@ -79,6 +83,10 @@ TaskRecord fromJson(const QJsonObject& o) {
     r.sha256      =o.value(QStringLiteral("sha256")).toBool(false);
     r.compress    =o.value(QStringLiteral("compress")).toBool(false);
     r.compressionLevel=o.value(QStringLiteral("compressionLevel")).toInt(0);
+    r.fileCipher     =o.value(QStringLiteral("fileCipher")).toString();
+    r.pqc            =o.value(QStringLiteral("pqc")).toBool(true);
+    r.watermark      =o.value(QStringLiteral("watermark")).toBool(false);
+    r.watermarkKey   =o.value(QStringLiteral("watermarkKey")).toString();
     r.keyfile     =o.value(QStringLiteral("keyfile")).toString();
     r.recipient   =o.value(QStringLiteral("recipient")).toString();
     r.identity    =o.value(QStringLiteral("identity")).toString();

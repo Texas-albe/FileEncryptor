@@ -34,6 +34,10 @@ struct Config {
     // 加密强度预设（功能14） 0=fast(ops3/64MB) 1=standard(ops4/128MB,默认) 2=strong(ops6/512MB)。 写入文件头，解密端自适应（v2+ 支持参数化）。
     int         kdf_preset = 1;
 
+    // 加密默认算法（多算法架构）：空 = xchacha20；可取 "xchacha20" / "aegis256" / "sm4"。
+    // 仅当 CLI 未显式指定 -m 时生效；解密永远以文件头 mode 字节为准。
+    std::string default_cipher;
+
     // 校验单（功能10）：加密成功后生成 <out>.ptd.sha256
     // 内容为输出密文的 SHA-256，便于与外部备份 / 传输工具链配合校验完整性。
     bool        write_sha256 = false;

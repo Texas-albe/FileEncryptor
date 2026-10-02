@@ -38,9 +38,18 @@ public static class L10n
         ["口令派生密钥对"] = "Derive keypair from passphrase",
         ["导出公钥"] = "Export public key",
         ["加密模式"] = "Encryption mode",
-        ["XChaCha20-Poly1305（默认，兼容性最好）"] = "XChaCha20-Poly1305 (default, best compatibility)",
-        ["AEGIS-256（需 AES-NI 指令）"] = "AEGIS-256 (requires AES-NI)",
-        ["X25519 + ChaCha20-Poly1305（非对称）"] = "X25519 + ChaCha20-Poly1305 (asymmetric)",
+        ["XChaCha20-Poly1305"] = "XChaCha20-Poly1305",
+        ["AEGIS-256"] = "AEGIS-256",
+        ["SM4-GCM"] = "SM4-GCM",
+        ["X25519 非对称"] = "X25519 asymmetric",
+        ["文件算法："] = "File cipher:",
+        ["XChaCha20-Poly1305（默认）"] = "XChaCha20-Poly1305 (default)",
+        ["非对称模式下的文件载荷加密算法；非对称部分只加密此处所选算法生成的密钥"] =
+            "Symmetric cipher used for the file payload; the asymmetric part only wraps the key it generates",
+        ["X25519 非对称模式下只负责包裹文件密钥，载荷密文算法由右侧「文件算法」指定"] =
+            "In X25519 asymmetric mode the app only wraps the file key; the payload cipher comes from \"File cipher\"",
+        ["勾选后非对称封装走 X448 曲线，不勾选为 X25519；生成密钥对同样改走 X448"] =
+            "Checked: asymmetric wrapping uses the X448 curve; unchecked uses X25519 (also applies to keypair generation)",
         ["压缩 (zstd)"] = "Compression (zstd)",
         ["压缩数据"] = "Compress data",
         ["压缩级别:"] = "Compression level:",
@@ -61,7 +70,7 @@ public static class L10n
         ["▶ 运行"] = "▶ Run",
         ["■ 取消"] = "■ Cancel",
         ["收件人:"] = "Recipients:",
-        ["age1... 公钥或公钥文件路径"] = "age1... public key or a public-key file path",
+        ["公钥或公钥文件路径"] = "Public key or a public-key file path",
         ["身份文件:"] = "Identity file:",
         ["私钥文件路径"] = "Private key file path",
         ["还原完整原始文件名（批量解密，较慢）"] = "Restore full original file names (batch decrypt, slower)",
@@ -229,6 +238,18 @@ public static class L10n
         ["语言 / Language"] = "Language",
         ["语言已切换，界面已立即刷新。\nLanguage switched; the UI has been refreshed."] = "Language switched; the UI has been refreshed.",
         ["确定 / OK"] = "OK",
+        // 更新检查（Updater 返回的错误码）
+        ["网络连接不可用，请检查网络后重试。"] = "Network unreachable; check your connection and retry.",
+        ["无法解析服务器地址，请检查网络后重试。"] = "Could not resolve the server; check your connection and retry.",
+        ["检查更新超时，请稍后再试。"] = "The update check timed out. Please try again later.",
+        ["安全证书校验失败，可能是网络环境拦截了更新服务。"] = "Security certificate verification failed; the update service may be blocked.",
+        ["检查过于频繁，请稍后再试。"] = "Too many check requests. Please try again later.",
+        ["服务端未找到可更新的版本。"] = "No updatable release found on the server.",
+        ["更新服务地址不可达。"] = "The update service host is not allowed or unreachable.",
+        ["检查更新未返回结果（可能已超时）。请稍后再试。"] = "The update check returned nothing (possibly timed out). Please try again later.",
+        ["更新器未返回任何结果（可能已超时）。"] = "The updater returned nothing (possibly timed out).",
+        ["无法启动更新器，请确认程序安装完整。"] = "Could not launch the updater; make sure the installation is complete.",
+        ["下载超时，请稍后再试。"] = "The download timed out. Please try again later.",
     };
 
     // 俄文译文（zh -> ru）
@@ -258,9 +279,18 @@ public static class L10n
         ["口令派生密钥对"] = "Производная пара ключей от пароля",
         ["导出公钥"] = "Экспортировать открытый ключ",
         ["加密模式"] = "Режим шифрования",
-        ["XChaCha20-Poly1305（默认，兼容性最好）"] = "XChaCha20-Poly1305 (по умолчанию, лучшая совместимость)",
-        ["AEGIS-256（需 AES-NI 指令）"] = "AEGIS-256 (требуется инструкция AES-NI)",
-        ["X25519 + ChaCha20-Poly1305（非对称）"] = "X25519 + ChaCha20-Poly1305 (асимметричное)",
+        ["XChaCha20-Poly1305"] = "XChaCha20-Poly1305",
+        ["AEGIS-256"] = "AEGIS-256",
+        ["SM4-GCM"] = "SM4-GCM",
+        ["X25519 非对称"] = "X25519 асимметричное",
+        ["文件算法："] = "Алгоритм файла:",
+        ["XChaCha20-Poly1305（默认）"] = "XChaCha20-Poly1305 (по умолчанию)",
+        ["非对称模式下的文件载荷加密算法；非对称部分只加密此处所选算法生成的密钥"] =
+            "Симметричный шифр полезной нагрузки файла; асимметричная часть только оборачивает его ключ",
+        ["X25519 非对称模式下只负责包裹文件密钥，载荷密文算法由右侧「文件算法」指定"] =
+            "В асимметричном режиме X25519 оборачивается только ключ файла; шифр полезной нагрузки задан справа",
+        ["勾选后非对称封装走 X448 曲线，不勾选为 X25519；生成密钥对同样改走 X448"] =
+            "С флажком — обёртка ключа по кривой X448, без флажка — X25519 (в том числе при генерации пары ключей)",
         ["压缩 (zstd)"] = "Сжатие (zstd)",
         ["压缩数据"] = "Сжимать данные",
         ["压缩级别:"] = "Уровень сжатия:",
@@ -281,7 +311,7 @@ public static class L10n
         ["▶ 运行"] = "▶ Запустить",
         ["■ 取消"] = "■ Отмена",
         ["收件人:"] = "Получатели:",
-        ["age1... 公钥或公钥文件路径"] = "открытый ключ age1... или путь к файлу открытого ключа",
+        ["公钥或公钥文件路径"] = "Публичный ключ или путь к файлу публичного ключа",
         ["身份文件:"] = "Файл удостоверения:",
         ["私钥文件路径"] = "Путь к файлу закрытого ключа",
         ["还原完整原始文件名（批量解密，较慢）"] = "Восстановить полные исходные имена файлов (пакетная расшифровка, медленнее)",
@@ -420,6 +450,18 @@ public static class L10n
         ["语言 / Language"] = "Язык",
         ["语言已切换，界面已立即刷新。\nLanguage switched; the UI has been refreshed."] = "Язык переключён; интерфейс обновлён.",
         ["确定 / OK"] = "OK",
+        // 更新检查（Updater 返回的错误码）
+        ["网络连接不可用，请检查网络后重试。"] = "Сеть недоступна; проверьте подключение и повторите.",
+        ["无法解析服务器地址，请检查网络后重试。"] = "Не удалось разрешить адрес сервера; проверьте подключение и повторите.",
+        ["检查更新超时，请稍后再试。"] = "Проверка обновлений превысила таймаут. Попробуйте позже.",
+        ["安全证书校验失败，可能是网络环境拦截了更新服务。"] = "Проверка сертификата не удалась; сервис обновлений, возможно, заблокирован.",
+        ["检查过于频繁，请稍后再试。"] = "Слишком много запросов. Попробуйте позже.",
+        ["服务端未找到可更新的版本。"] = "На сервере не найдено доступной версии.",
+        ["更新服务地址不可达。"] = "Адрес сервиса обновлений недоступен.",
+        ["检查更新未返回结果（可能已超时）。请稍后再试。"] = "Проверка обновлений не вернула результат (возможно, таймаут). Попробуйте позже.",
+        ["更新器未返回任何结果（可能已超时）。"] = "Обновлятор не вернул результат (возможно, таймаут).",
+        ["无法启动更新器，请确认程序安装完整。"] = "Не удалось запустить обновлятор; проверьте целостность установки.",
+        ["下载超时，请稍后再试。"] = "Загрузка прервана по таймауту. Попробуйте позже.",
     };
 
     // 外文→中文反向表

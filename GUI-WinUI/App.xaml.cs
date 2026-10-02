@@ -38,7 +38,8 @@ public partial class App : Application
         };
         UnhandledException += (s, e) =>
         {
-            WriteCrashLog($"XamlUnhandledException: {e.Exception.GetType().Name}: {e.Message}");
+            // XAML 解析失败只给一行消息时没法定位，这里连 inner exception 与栈一起落盘。
+            WriteCrashLog("XamlUnhandledException: " + (e.Exception?.ToString() ?? "null"));
             e.Handled = true;
         };
     }

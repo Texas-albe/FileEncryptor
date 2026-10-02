@@ -6,7 +6,8 @@
 //
 // 用法：
 //   Updater --check  --current <ver> --type <qt|winui> --platform <windows|linux> [--etag <e>]
-//   Updater --update --url <url> --sha256 <hex> --install-dir <path> [--sig-url <url>] [--restart-cmd <cmd>]
+//   Updater --update --url <url> --sha256 <hex> --size <n> --install-dir <path> [--sig-url <url>]
+// 失败时 stdout 仍给出 JSON，error 为分类原因，detail 为具体说明（供 GUI 展示）。
 //
 // --check  ：查 GitHub 最新 release，匹配当前 type/platform 的资产，输出一行 JSON 到 stdout。
 // --update：下载资产到临时目录，校验大小 + SHA256（+ 可选 Minisign），成功后放入 install-dir。
@@ -293,7 +294,30 @@ static const char* const kGitHubHosts[] = {
     "github.com", "api.github.com",
     "objects.githubusercontent.com", "codeload.github.com",
 };
+// release 资产下载时 GitHub 会 302 到该域，漏掉会导致「有更新但下载不到」
+static const char* const kGitHubAssetHosts[] = {
+    "release-assets.githubusercontent.com",
+    "objects.githubusercontent.com", "codeload.github.com",
+};
 static bool g_allowAnyHost = false; // --allow-any-host 时放开
+static std::string g_proxy;         // --proxy 显式代理，为空则沿用 curl 的环境变量代理
+
+// 精确匹配白名单，不做后缀模糊（防 evilgithub.com 之类）
+static bool hostInList(const std::string& host, const char* const* list, size_t n) {
+    if (host.empty()) return false;
+    for (size_t i = 0; i < n; i++) if (host == list[i]) return true;
+    return false;
+}
+static bool isGitHubHost(const std::string& host) {
+    return hostInList(host, kGitHubHosts, sizeof(kGitHubHosts) / sizeof(kGitHubHosts[0]));
+}
+static bool isGitHubAssetHost(const std::string& host) {
+    return hostInList(host, kGitHubAssetHosts, sizeof(kGitHubAssetHosts) / sizeof(kGitHubAssetHosts[0]));
+}
+// API 请求只允许 GitHub 域；下载/签名 URL 额外允许对象存储域
+static bool isGitHubOrAssetHost(const std::string& host) {
+    return isGitHubHost(host) || isGitHubAssetHost(host);
+}
 
 // 取 URL 主机（小写、去端口、去凭据）
 static std::string urlHost(const std::string& url) {
@@ -310,25 +334,58 @@ static std::string urlHost(const std::string& url) {
     return h;
 }
 
-// 精确匹配白名单，不做后缀模糊（防 evilgithub.com 之类）
-static bool isGitHubHost(const std::string& host) {
-    if (host.empty()) return false;
-    for (const char* g : kGitHubHosts) if (host == g) return true;
-    return false;
-}
-
-// 仅 http/https，且主机在 GitHub 白名单内
-static bool urlAllowed(const std::string& url, std::string* hostOut) {
+// 仅 http/https，且主机在 GitHub 白名单内（下载场景额外放行对象存储域）
+static bool urlAllowed(const std::string& url, std::string* hostOut, bool allowAssetHost = false) {
     std::string host = urlHost(url);
     if (hostOut) *hostOut = host;
     if (g_allowAnyHost) return !host.empty();
     size_t s = url.find("://");
     std::string scheme = (s != std::string::npos) ? url.substr(0, s) : std::string();
     if (scheme != "https" && scheme != "http") return false;
-    return isGitHubHost(host);
+    return allowAssetHost ? isGitHubOrAssetHost(host) : isGitHubHost(host);
 }
 
 // ===================== libcurl 回调与 GET / 下载 =====================
+// CA 证书包：Windows 上 curl 的 OpenSSL 后端不读系统证书库，缺 CAINFO 时 HTTPS 直接
+// 报证书校验失败（表现为「检查不了更新」）；Linux 的 OpenSSL 默认路径已覆盖，这里也
+// 允许 CURL_CA_BUNDLE / SSL_CERT_FILE 覆盖以便自带 CA 分发。
+static void applyCaBundle(CURL* h) {
+#ifdef _WIN32
+    std::vector<std::string> cands;
+    if (const char* e = getenv("CURL_CA_BUNDLE")) cands.emplace_back(e);
+    char exepath[MAX_PATH] = { 0 };
+    if (GetModuleFileNameA(NULL, exepath, MAX_PATH) > 0) {
+        std::string dir(exepath);
+        dir.erase(dir.find_last_of("\\/"));
+        cands.push_back(dir + "\\ca\\ca-bundle.crt");
+        cands.push_back(dir + "\\curl-ca-bundle.crt");
+    }
+    const char* installed[] = {
+        "C:\\Windows\\System32\\curl-ca-bundle.crt",
+        "C:\\Windows\\curl\\curl-ca-bundle.crt",
+        "C:\\Program Files\\curl\\curl-ca-bundle.crt",
+    };
+    for (const char* p : installed) cands.emplace_back(p);
+#else
+    std::vector<std::string> cands;
+    if (const char* e = getenv("SSL_CERT_FILE")) cands.emplace_back(e);
+    if (const char* e = getenv("CURL_CA_BUNDLE")) cands.emplace_back(e);
+    const char* installed[] = {
+        "/etc/ssl/certs/ca-certificates.crt",
+        "/etc/ssl/cert.pem",
+        "/etc/pki/tls/certs/ca-bundle.crt",
+    };
+    for (const char* p : installed) cands.emplace_back(p);
+#endif
+    for (const std::string& c : cands) {
+        std::FILE* f = std::fopen(c.c_str(), "rb");
+        if (!f) continue;
+        std::fclose(f);
+        curl_easy_setopt(h, CURLOPT_CAINFO, c.c_str());
+        return;
+    }
+}
+
 struct GetCtx {
     std::vector<char>* body = nullptr;
     std::string* etag = nullptr;
@@ -353,14 +410,63 @@ static size_t getHeaderCb(char* buffer, size_t size, size_t nmemb, void* userdat
     return n;
 }
 
+// HTTP 结果：ok=false 时 error 为可展示给用户的分类原因，detail 带 curl 原文
+struct HttpResult {
+    bool ok = false;
+    long status = 0;
+    std::string error;   // 分类原因：network_unreachable / tls_verify_failed / ...
+    std::string detail;  // curl 错误串或 respone 说明
+    std::string etag;
+    std::string effectiveUrl;
+};
+
+// 把 curl 失败 / HTTP 状态码翻译成 GUI 能理解的原因（GUI 只拿到 error 字段）
+static void classify(int curlCode, const std::string& curlErr, long status, HttpResult* r) {
+    // 错误码比错误串稳：代理类失败在 Windows 上的 strerror 未必带 "proxy"
+    // curl 8.x 公开头不再导出这几个旧枚举，按 curl.h 里的历史数值硬写
+    if (curlCode == 3 /*COULDNT_RESOLVE_PROXY*/ || curlCode == 5 /*COULDNT_CONNECT_PROXY*/ ||
+        curlCode == 403 /*PROXY*/) { r->error = "proxy_failed"; return; }
+    if (curlCode == 401 /*PROXY_AUTH*/) { r->error = "proxy_auth_failed"; return; }
+    if (status == 403 || status == 429) { r->error = "rate_limited"; return; }
+    if (status == 404) { r->error = "release_not_found"; return; }
+    if (status >= 500) { r->error = "server_error"; return; }
+    if (!curlErr.empty()) {
+        // 代理相关失败要单独说清：用户看得懂「代理不通」才知道去查代理而不是重装
+        if (curlErr.find("proxy") != std::string::npos) {
+            if (curlErr.find("authentication") != std::string::npos) r->error = "proxy_auth_failed";
+            else if (curlErr.find("resolve") != std::string::npos ||
+                     curlErr.find("connect") != std::string::npos ||
+                     curlErr.find("CONNECT") != std::string::npos) r->error = "proxy_failed";
+            else r->error = "proxy_failed";
+            return;
+        }
+        if (curlErr.find("Could not resolve host") != std::string::npos ||
+            curlErr.find("Couldn't resolve host") != std::string::npos) r->error = "dns_failed";
+        else if (curlErr.find("Operation timed out") != std::string::npos) r->error = "timeout";
+        else if (curlErr.find("Could not connect") != std::string::npos ||
+                 curlErr.find("connect()") != std::string::npos) r->error = "network_unreachable";
+        else if (curlErr.find("SSL certificate") != std::string::npos) r->error = "tls_verify_failed";
+        else r->error = "network_failed";
+        return;
+    }
+    r->error = "network_failed";
+}
+
 // 低层 GET（跟随重定向，最多 6 次；支持 If-None-Match、Range 头）。
-static bool lowGet(const std::string& url, std::vector<char>* out,
-                   long* statusOut, std::string* etagOut, std::string* finalUrlOut,
-                   const std::string& etagIn, const std::string& rangeHeader) {
+static HttpResult lowGet(const std::string& url, std::vector<char>* out,
+                         long* statusOut, std::string* etagOut, std::string* finalUrlOut,
+                         const std::string& etagIn, const std::string& rangeHeader,
+                         const HttpResult* preset = nullptr, const char* purpose = nullptr) {
+    HttpResult r;
     CURL* h = curl_easy_init();
-    if (!h) return false;
+    if (!h) { r.error = "curl_init_failed"; r.detail = "curl_easy_init returned null"; return r; }
     GetCtx ctx{out, etagOut, finalUrlOut};
     curl_easy_setopt(h, CURLOPT_URL, url.c_str());
+    // 无超时会让 GUI 一直转圈：连不上/被墙时必须有上限
+    curl_easy_setopt(h, CURLOPT_CONNECTTIMEOUT, 15L);
+    curl_easy_setopt(h, CURLOPT_TIMEOUT, 30L);
+    curl_easy_setopt(h, CURLOPT_NOSIGNAL, 1L);
+    if (!g_proxy.empty()) curl_easy_setopt(h, CURLOPT_PROXY, g_proxy.c_str());
     curl_easy_setopt(h, CURLOPT_WRITEFUNCTION, getWriteCb);
     curl_easy_setopt(h, CURLOPT_WRITEDATA, &ctx);
     curl_easy_setopt(h, CURLOPT_HEADERFUNCTION, getHeaderCb);
@@ -377,6 +483,7 @@ static bool lowGet(const std::string& url, std::vector<char>* out,
     }
     if (!rangeHeader.empty()) hdr = curl_slist_append(hdr, rangeHeader.c_str());
     if (hdr) curl_easy_setopt(h, CURLOPT_HTTPHEADER, hdr);
+    applyCaBundle(h);
 
     CURLcode rc = curl_easy_perform(h);
     long code = 0;
@@ -385,16 +492,28 @@ static bool lowGet(const std::string& url, std::vector<char>* out,
     curl_easy_getinfo(h, CURLINFO_EFFECTIVE_URL, &eff);
     if (eff && finalUrlOut) *finalUrlOut = eff;
     if (statusOut) *statusOut = code;
+    r.status = code;
+    if (eff) r.effectiveUrl = eff;
+
+    if (rc == CURLE_OK) {
+        r.ok = true;
+    } else {
+        r.detail = curl_easy_strerror(rc);
+        if (preset) { r.error = preset->error; if (preset->detail.empty()) r.detail = preset->detail; }
+        else classify((int)rc, r.detail, code, &r);
+    }
+    (void)purpose;
 
     if (hdr) curl_slist_free_all(hdr);
     curl_easy_cleanup(h);
-    return rc == CURLE_OK;
+    return r;
 }
 
 struct DlCtx {
     std::ofstream* f = nullptr;
     long long* written = nullptr;
     long long total = 0;
+    long long base = 0; // 已续传的偏移
     const std::function<void(long long, long long)>* prog = nullptr;
 };
 static size_t dlWriteCb(void* ptr, size_t size, size_t nmemb, void* userdata) {
@@ -416,30 +535,39 @@ static size_t dlHeaderCb(char* buffer, size_t size, size_t nmemb, void* userdata
         std::string lk; for (char ch : key) lk += (char)tolower((unsigned char)ch);
         if (lk == "content-length") {
             long long len = atoll(trim(line.substr(colon + 1)).c_str());
-            if (len > 0) c->total = len; // 含续传偏移（调用方已把 resumeFrom 预置进 total）
+            // 续传时 Content-Length 只含剩余部分，进度条总长按完整大小算
+            if (len > 0) c->total = (c->base > 0) ? (len + c->base) : len;
         }
     }
     return n;
 }
+
+// 最近一次下载失败的原因：downloadToFile 只返回 -1，错误细节要靠它带出去
+static std::string g_dlError;
 
 // 下载到文件（支持 Range 续传、进度回调）。返回实际写入字节数；失败时返回 -1。
 static long long downloadToFile(const std::string& url, const std::string& outPathUtf8,
                                  long long resumeFrom,
                                  const std::function<void(long long, long long)>& onProgress) {
     CURL* h = curl_easy_init();
-    if (!h) return -1;
+    if (!h) { g_dlError = "curl_easy_init failed"; return -1; }
 
     std::ofstream f;
     if (resumeFrom > 0)
         f.open(nativePath(outPathUtf8), std::ios::binary | std::ios::out | std::ios::ate);
     else
         f.open(nativePath(outPathUtf8), std::ios::binary | std::ios::out | std::ios::trunc);
-    if (!f) { fprintf(stderr, "[update] cannot open out file: %s\n", outPathUtf8.c_str()); curl_easy_cleanup(h); return -1; }
+    if (!f) {
+        g_dlError = "cannot open output file: " + outPathUtf8;
+        fprintf(stderr, "[update] cannot open out file: %s\n", outPathUtf8.c_str());
+        curl_easy_cleanup(h);
+        return -1;
+    }
     if (resumeFrom > 0) f.seekp((std::streamoff)resumeFrom, std::ios::beg);
 
     long long written = resumeFrom;
     long long total = resumeFrom; // 若响应含 Content-Length，dlHeaderCb 会改写为剩余+偏移
-    DlCtx ctx{&f, &written, total, &onProgress};
+    DlCtx ctx{&f, &written, total, resumeFrom, &onProgress};
 
     curl_easy_setopt(h, CURLOPT_URL, url.c_str());
     curl_easy_setopt(h, CURLOPT_WRITEFUNCTION, dlWriteCb);
@@ -450,18 +578,36 @@ static long long downloadToFile(const std::string& url, const std::string& outPa
     curl_easy_setopt(h, CURLOPT_MAXREDIRS, 6L);
     curl_easy_setopt(h, CURLOPT_USERAGENT, "FileEncryptorUpdater/1.0");
     curl_easy_setopt(h, CURLOPT_IPRESOLVE, CURL_IPRESOLVE_V4); // 避免沙箱/部分网络无 IPv6 路由导致连接失败
+    curl_easy_setopt(h, CURLOPT_CONNECTTIMEOUT, 20L);
+    curl_easy_setopt(h, CURLOPT_NOSIGNAL, 1L);
+    // 大文件下载给足时间，但要能出进度；单次写入无响应超过 120s 就算断流
+    curl_easy_setopt(h, CURLOPT_TIMEOUT, 0L);
+    curl_easy_setopt(h, CURLOPT_LOW_SPEED_LIMIT, 4096L);
+    curl_easy_setopt(h, CURLOPT_LOW_SPEED_TIME, 60L);
+    applyCaBundle(h);
     if (resumeFrom > 0) curl_easy_setopt(h, CURLOPT_RESUME_FROM_LARGE, (curl_off_t)resumeFrom);
 
     CURLcode rc = curl_easy_perform(h);
     f.flush();
-    if (rc != CURLE_OK) {
-        char* eff = nullptr;
-        curl_easy_getinfo(h, CURLINFO_EFFECTIVE_URL, &eff);
-        fprintf(stderr, "[update] curl error: %s (rc=%d) effective=%s written=%lld\n",
-                curl_easy_strerror(rc), (int)rc, eff ? eff : "?", (long long)written);
+    long code = 0;
+    curl_easy_getinfo(h, CURLINFO_RESPONSE_CODE, &code);
+    char* eff = nullptr;
+    curl_easy_getinfo(h, CURLINFO_EFFECTIVE_URL, &eff);
+    bool ok = (rc == CURLE_OK);
+    // curl 对 4xx/5xx 也返回 CURLE_OK，不查状态码就会把错误页当安装包写完
+    if (ok && resumeFrom == 0 && code != 200 && code != 206) {
+        ok = false;
+        g_dlError = "http status " + std::to_string(code);
+        fprintf(stderr, "[update] unexpected http status %ld\n", code);
+    }
+    if (!ok) {
+        g_dlError = std::string(curl_easy_strerror(rc)) + " (http " + std::to_string(code) + ")";
+        fprintf(stderr, "[update] curl error: %s (rc=%d) status=%ld effective=%s written=%lld total=%lld\n",
+                curl_easy_strerror(rc), (int)rc, code, eff ? eff : "?",
+                (long long)written, (long long)ctx.total);
     }
     curl_easy_cleanup(h);
-    return (rc == CURLE_OK) ? written : -1;
+    return ok ? written : -1;
 }
 
 // 语义化版本比较：a<b 返回 <0，a==b 返回 0，a>b 返回 >0（仅比较前三个整数段）
@@ -482,31 +628,65 @@ static int versionCmp(const std::string& a, const std::string& b) {
     return 0;
 }
 
-// 从 tag（如 GUI2.0.2_CLI2.4.4）提取 GUI 版本
-static std::string guiVerFromTag(const std::string& tag) {
-    size_t p = tag.find("GUI");
-    if (p == std::string::npos) return std::string();
-    size_t start = p + 3;
-    size_t end = start;
-    while (end < tag.size() && (isdigit((unsigned char)tag[end]) || tag[end] == '.')) end++;
-    return tag.substr(start, end - start);
+// 从数字起点起摘一段版本号，只保留 x.y.z 三段
+static std::string takeNumVer(const std::string& s, size_t from) {
+    size_t i = from;
+    while (i < s.size() && !isdigit((unsigned char)s[i])) i++;
+    size_t st = i;
+    while (i < s.size() && (isdigit((unsigned char)s[i]) || s[i] == '.')) i++;
+    std::string v = s.substr(st, i - st);
+    std::vector<std::string> segs; std::string cur;
+    for (char c : v) { if (c == '.') { segs.push_back(cur); cur.clear(); } else cur += c; }
+    segs.push_back(cur);
+    std::string out;
+    for (size_t k = 0; k < segs.size() && k < 3; k++) { if (k) out += '.'; out += segs[k]; }
+    return out;
 }
 
-// 根据 type/platform 从资产名匹配下载资产
+// 从 tag 提取 GUI 版本：兼容 GUI2.1.0 / GUI-Qt-2.1.0 / gui-2.1.0 / CLI2.7.0_GUI2.1.0。
+// 认不出 GUI 段时退化为 tag 里最后一个版本号——否则换 tag 命名后会静默判定「已是最新」，
+// 表现为「明明有新版本却总说没更新」。
+static std::string guiVerFromTag(const std::string& tag) {
+    for (size_t p = 0; p + 3 <= tag.size(); p++)
+        if (iequals(tag.substr(p, 3), "GUI")) {
+            std::string v = takeNumVer(tag, p + 3);
+            if (!v.empty()) return v;
+        }
+    std::string last;
+    for (size_t i = 0; i < tag.size(); i++)
+        if (isdigit((unsigned char)tag[i])) {
+            std::string v = takeNumVer(tag, i);
+            if (!v.empty()) last = v;
+        }
+    return last;
+}
+
+// 根据 type/platform 从资产名匹配下载资产（大小写不敏感）
 static int matchAsset(const JsonValue& assets, const std::string& type, const std::string& platform) {
+    auto lower = [](const std::string& s) {
+        std::string o = s; for (char& c : o) c = (char)tolower((unsigned char)c); return o;
+    };
+    const bool win = (platform == "windows" || platform == "win" || platform == "windows_x64");
+    const bool linux = (platform == "linux");
+    const bool isWinui = (type == "winui");
     std::vector<std::string> cands;
     for (const auto& a : assets.arr) {
         const JsonValue* n = a.find("name");
         if (!n) continue;
-        std::string name = n->asStr();
+        const std::string ln = lower(n->asStr());
         bool ok = false;
-        if (type == "winui" && platform == "windows")
-            ok = name.find("WinUI") != std::string::npos && name.find("Windows") != std::string::npos && name.find(".msi") != std::string::npos;
-        else if (type == "qt" && platform == "windows")
-            ok = name.find("Qt") != std::string::npos && name.find("Windows") != std::string::npos && name.find(".exe") != std::string::npos;
-        else if (type == "qt" && platform == "linux")
-            ok = name.find("Qt") != std::string::npos && name.find("Linux") != std::string::npos;
-        if (ok) cands.push_back(name);
+        if (isWinui && win)
+            // WinUI 分发过 .msi，也曾出独立 exe：命中其一即可，别只认 .msi
+            ok = (ln.find("winui") != std::string::npos || ln.find("winui3") != std::string::npos)
+                 && (ln.find("windows") != std::string::npos || ln.find("win") != std::string::npos)
+                 && (ln.find(".msi") != std::string::npos || ln.find(".exe") != std::string::npos);
+        else if (!isWinui && win)
+            ok = ln.find("qt") != std::string::npos
+                 && (ln.find("windows") != std::string::npos || ln.find("win") != std::string::npos)
+                 && ln.find(".exe") != std::string::npos;
+        else if (linux)
+            ok = ln.find("qt") != std::string::npos && ln.find("linux") != std::string::npos;
+        if (ok) cands.push_back(n->asStr());
     }
     if (cands.empty()) return -1;
     for (size_t i = 0; i < assets.arr.size(); i++) {
@@ -542,8 +722,11 @@ static int doCheck(const std::string& current, const std::string& type, const st
     }
     std::vector<char> body;
     long status = 0; std::string etagNew, finalUrl;
-    if (!lowGet(api, &body, &status, &etagNew, &finalUrl, etagIn, std::string())) {
-        printf("{\"ok\":false,\"error\":\"network_failed\"}\n");
+    HttpResult hr = lowGet(api, &body, &status, &etagNew, &finalUrl, etagIn, std::string());
+    if (!hr.ok) {
+        // 把具体原因（DNS/超时/TLS/限流）透出，GUI 才不会只显示一句「网络失败」
+        printf("{\"ok\":false,\"error\":\"%s\",\"detail\":\"%s\",\"http_status\":%ld}\n",
+               jsonEscape(hr.error).c_str(), jsonEscape(hr.detail).c_str(), hr.status);
         return 1;
     }
     if (status == 304) {
@@ -551,7 +734,7 @@ static int doCheck(const std::string& current, const std::string& type, const st
         return 0;
     }
     if (status != 200 || body.empty()) {
-        printf("{\"ok\":false,\"error\":\"api_status_%ld\"}\n", status);
+        printf("{\"ok\":false,\"error\":\"api_status_%ld\",\"detail\":\"%s\"}\n", status, jsonEscape(hr.detail).c_str());
         return 1;
     }
     JsonValue root;
@@ -601,23 +784,22 @@ static int doCheck(const std::string& current, const std::string& type, const st
     }
     printf("\"etag\":\"%s\",", jsonEscape(etagNew).c_str());
     printf("\"notes\":\"%s\"}", jsonEscape(notes).c_str());
-    printf("\n");
+    fflush(stdout);
     return 0;
 }
 
 // ===================== --update =====================
 static int doUpdate(const std::string& url, const std::string& expectedSha,
-                    const std::string& installDir, const std::string& sigUrl,
-                    const std::string& restartCmd) {
+                    long long expectedSize, const std::string& installDir, const std::string& sigUrl) {
     std::string host;
-    if (!urlAllowed(url, &host)) {
+    if (!urlAllowed(url, &host, true)) {
         fprintf(stderr, "[update] host not allowed: %s\n", host.c_str());
         printf("{\"progress\":100,\"stage\":\"error\",\"error\":\"host_not_allowed\",\"host\":\"%s\"}\n",
                jsonEscape(host).c_str());
         fflush(stdout);
         return 1;
     }
-    if (!sigUrl.empty() && !urlAllowed(sigUrl, &host)) {
+    if (!sigUrl.empty() && !urlAllowed(sigUrl, &host, true)) {
         fprintf(stderr, "[update] sig host not allowed: %s\n", host.c_str());
         printf("{\"progress\":100,\"stage\":\"error\",\"error\":\"host_not_allowed\",\"host\":\"%s\"}\n",
                jsonEscape(host).c_str());
@@ -652,7 +834,9 @@ static int doUpdate(const std::string& url, const std::string& expectedSha,
     printf("{\"progress\":0,\"stage\":\"downloading\"}\n"); fflush(stdout);
     long long got = downloadToFile(url, tmpPathUtf8, 0, progress);
     if (got < 0) {
-        printf("{\"progress\":100,\"stage\":\"error\",\"error\":\"download_failed\"}\n");
+        printf("{\"progress\":100,\"stage\":\"error\",\"error\":\"download_failed\",\"detail\":\"%s\"}\n",
+               jsonEscape(g_dlError).c_str());
+        std::filesystem::remove_all(tmpDir, ec);
         return 1;
     }
     printf("{\"progress\":100,\"stage\":\"verifying\"}\n"); fflush(stdout);
@@ -660,7 +844,20 @@ static int doUpdate(const std::string& url, const std::string& expectedSha,
     long long fsize = 0;
     auto szec = std::error_code{};
     fsize = (long long)std::filesystem::file_size(tmpFile, szec);
-    (void)fsize;
+    // 断点/代理截断会在无 SHA 断言时留下半个安装包，落盘后必须核对大小
+    if (expectedSize > 0 && fsize != expectedSize) {
+        printf("{\"progress\":100,\"stage\":\"error\",\"error\":\"size_mismatch\","
+               "\"expected\":%lld,\"actual\":%lld}\n", (long long)expectedSize, fsize);
+        std::filesystem::remove(tmpFile, ec);
+        std::filesystem::remove_all(tmpDir, ec);
+        return 1;
+    }
+    if (fsize != got) {
+        printf("{\"progress\":100,\"stage\":\"error\",\"error\":\"size_mismatch\",\"actual\":%lld}\n", fsize);
+        std::filesystem::remove(tmpFile, ec);
+        std::filesystem::remove_all(tmpDir, ec);
+        return 1;
+    }
     std::string actualSha = sha256File(tmpPathUtf8);
     bool shaOk = expectedSha.empty() ? true : iequals(actualSha, expectedSha);
     if (!shaOk) {
@@ -709,8 +906,12 @@ static int doUpdate(const std::string& url, const std::string& expectedSha,
 
 // ===================== main =====================
 int main(int argc, char** argv) {
-    curl_global_init(CURL_GLOBAL_DEFAULT);
-    std::string mode, current, type, platform, etag, url, sha, installDir, sigUrl, restartCmd;
+    if (curl_global_init(CURL_GLOBAL_DEFAULT) != CURLE_OK) {
+        fprintf(stderr, "[update] curl_global_init failed\n");
+        return 2;
+    }
+    std::string mode, current, type, platform, etag, url, sha, installDir, sigUrl;
+    long long expectedSize = 0;
     for (int i = 1; i < argc; i++) {
         std::string a = argv[i];
         auto next = [&](std::string& out) { if (i + 1 < argc) out = argv[++i]; };
@@ -722,9 +923,10 @@ int main(int argc, char** argv) {
         else if (a == "--etag") next(etag);
         else if (a == "--url") next(url);
         else if (a == "--sha256") next(sha);
+        else if (a == "--size") { if (i + 1 < argc) expectedSize = atoll(argv[++i]); }
         else if (a == "--install-dir") next(installDir);
         else if (a == "--sig-url") next(sigUrl);
-        else if (a == "--restart-cmd") next(restartCmd);
+        else if (a == "--proxy") next(g_proxy);
         else if (a == "--allow-any-host") g_allowAnyHost = true;
     }
     int rc = 2;
@@ -738,7 +940,7 @@ int main(int argc, char** argv) {
             printf("{\"ok\":false,\"error\":\"usage: --update --url <u> --install-dir <d> [--sha256 <h>]\"}\n");
             rc = 2;
         } else {
-            rc = doUpdate(url, sha, installDir, sigUrl, restartCmd);
+            rc = doUpdate(url, sha, expectedSize, installDir, sigUrl);
         }
     } else {
         printf("{\"ok\":false,\"error\":\"usage: Updater --check|--update ...\"}\n");

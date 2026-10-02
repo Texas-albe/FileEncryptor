@@ -1,15 +1,38 @@
 #include "CliArgBuilder.h"
 #include <QCoreApplication>
 #include <QDir>
+#include <QFile>
+#include <QUuid>
 
 // 命令预览随界面语言
+
+// -m 取值：GUI 的选项下标与 CLI 模式名一一对应
+static const char* modeToken(CryptoMode m) {
+    switch (m) {
+    case CryptoMode::Aegis256: return "aegis256";
+    case CryptoMode::Sm4:      return "sm4";
+    default:                   return "xchacha20";
+    }
+}
+
+// 密码框里存的是私钥明文，而 CLI 的 --wm-sign 只收文件路径：
+// 是密钥材料就落一份临时文件给 CLI 用，路径在任务结束时清掉。
+static QString s_wmKeyTempPath;
+
+bool CliArgBuilder::isPrivateKeyMaterial(const QString& key)
+{
+    return key.contains(QStringLiteral("PRIVATE KEY"));
+}
 
 QStringList CliArgBuilder::buildArguments(const ShellOptions& o) {
     QStringList args;
 
-    // 三个 rage 密钥动作无需输入文件
+    // 三个密钥动作无需输入文件
     if (o.action == CryptoAction::KeyGen) {
         args << QStringLiteral("-g");
+        if (o.useX448) {
+            args << QStringLiteral("-x448");
+        }
         if (!o.outputDir.isEmpty()) {
             args << QStringLiteral("-o") << o.outputDir;
         }
@@ -34,6 +57,12 @@ QStringList CliArgBuilder::buildArguments(const ShellOptions& o) {
         return args;
     }
 
+    const bool isAsym = (o.mode == CryptoMode::Asymmetric);
+    const bool isEnc = (o.action == CryptoAction::Encrypt ||
+                        o.action == CryptoAction::BatchEncrypt);
+    const bool isBatch = (o.action == CryptoAction::BatchEncrypt ||
+                          o.action == CryptoAction::BatchDecrypt);
+
     // 处理单/批加密解密
     switch (o.action) {
     case CryptoAction::Encrypt:       args << QStringLiteral("-e");  break;
@@ -46,57 +75,30 @@ QStringList CliArgBuilder::buildArguments(const ShellOptions& o) {
         break;
     }
 
+    // CLI 的 -m 后写覆盖前写，但 -m x25519/x448 只置 asym 标志、不改算法，
+    // 所以两条都带上即为「非对称封装 + 指定文件载荷对称算法」。
+    // 解密一律不带 -m：非对称通道由 CLI 按「.ptd + 身份私钥文件」自动识别。
+    if (isEnc) {
+        if (isAsym) {
+            args << QStringLiteral("-m") << (o.useX448 ? QStringLiteral("x448") : QStringLiteral("x25519"));
+            args << QStringLiteral("-m") << modeToken(o.fileMode);
+        } else {
+            args << QStringLiteral("-m") << modeToken(o.mode);
+        }
+    }
+
     if (!o.outputDir.isEmpty()) {
         args << QStringLiteral("-o") << o.outputDir;
     }
 
-    if (o.sourceDisposition == 1) {
-        args << QStringLiteral("-de");
-    } else if (o.sourceDisposition == 2) {
-        args << QStringLiteral("--wipe-source");
-    } else if (o.sourceDisposition == 3) {
-        args << QStringLiteral("--recycle-source");
-    }
-
-    const bool isAsym = (o.mode == CryptoMode::Asymmetric);
-    const bool isEnc = (o.action == CryptoAction::Encrypt ||
-                        o.action == CryptoAction::BatchEncrypt);
-
-    if (o.mode == CryptoMode::XChaCha20) {
-        args << QStringLiteral("-m") << QStringLiteral("xchacha20");
-    } else if (o.mode == CryptoMode::Aegis256) {
-        args << QStringLiteral("-m") << QStringLiteral("aegis256");
-    } else {
-        args << QStringLiteral("-m") << QStringLiteral("rage");
-    }
-
-    // 压缩：开关 + 级别
-    if (o.compress && isEnc && !isAsym) {
-        args << QStringLiteral("-zstd");
-        if (o.compressionLevel != 0) {
-            args << QStringLiteral("--compression-level") << QString::number(o.compressionLevel);
-        }
-    }
-
-    // 加密成功后生成校验单
-    if (o.writeSha256 && isEnc) {
-        args << QStringLiteral("--sha256");
-    }
-
-    if (isAsym && isEnc && !o.recipientPath.isEmpty()) {
-        args << QStringLiteral("-r") << o.recipientPath;
-    }
-
-    bool isBatch = (o.action == CryptoAction::BatchEncrypt ||
-                    o.action == CryptoAction::BatchDecrypt);
-    if (isBatch) {
-        // 批模式：每条路径用 -i
-        for (const QString& p : o.inputPaths) {
-            args << QStringLiteral("-i") << p;
-        }
-    } else {
-        if (!o.inputPaths.isEmpty()) {
-            args << o.inputPaths.first();
+    // 源文件处理（仅加密动作）
+    if (isEnc) {
+        if (o.sourceDisposition == 1) {
+            args << QStringLiteral("-de");
+        } else if (o.sourceDisposition == 2) {
+            args << QStringLiteral("--wipe-source");
+        } else if (o.sourceDisposition == 3) {
+            args << QStringLiteral("--recycle-source");
         }
     }
 
@@ -104,20 +106,75 @@ QStringList CliArgBuilder::buildArguments(const ShellOptions& o) {
         args << QStringLiteral("-y");
     }
 
-
-    // 批量解密还原文件名
-    if (o.action == CryptoAction::BatchDecrypt && o.restoreName) {
-        args << QStringLiteral("--restore-name");
-    }
-
+    // 密钥文件：界面把「对称口令文件」与「非对称身份私钥」都填到这里，
+    // 非对称时它走 identityPath，因此此处按原样下发即同时覆盖两种用途。
     if (!o.keyfilePath.isEmpty()) {
         args << QStringLiteral("-k") << o.keyfilePath;
     }
 
-    if (!isAsym) {
-        if (o.keyfilePath.isEmpty()) {
-            args << QStringLiteral("--key-stdin");
+    if (isAsym && isEnc && !o.recipientPath.isEmpty()) {
+        args << QStringLiteral("-r") << o.recipientPath;
+    }
+
+    if (o.action == CryptoAction::BatchDecrypt && o.restoreName) {
+        args << QStringLiteral("--restore-name");
+    }
+
+    if (o.writeSha256 && isEnc) {
+        args << QStringLiteral("--sha256");
+    }
+
+    // 后量子开关：CLI 仅在密钥生成、水印签名 / 验签处读取该开关（纯对称加密无影响），
+    // 因此只在真正受影响的下发路径上带参数，避免给不认它的旧 CLI 造成未知开关报错。
+    const bool pqcAffects = (o.action == CryptoAction::KeyGen) || o.watermark;
+    if (pqcAffects && !o.pqc) {
+        args << QStringLiteral("--no-pqc");
+    }
+
+    // 尾部水印：仅加密动作下发；带签名私钥时一并下发 --wm-sign
+    if (o.watermark && isEnc) {
+        args << QStringLiteral("--watermark");
+        QString key = o.watermarkKeyPath.trimmed();
+        if (!key.isEmpty()) {
+            if (isPrivateKeyMaterial(key)) {
+                if (s_wmKeyTempPath.isEmpty()) {
+                    s_wmKeyTempPath = QDir::temp().absoluteFilePath(
+                        QStringLiteral("fe_wm_%1.pem").arg(
+                            QUuid::createUuid().toString(QUuid::WithoutBraces).left(8)));
+                    QFile out(s_wmKeyTempPath);
+                    if (out.open(QIODevice::WriteOnly | QIODevice::Text)) {
+                        out.write(key.toUtf8());
+                        out.close();
+                    } else {
+                        s_wmKeyTempPath.clear();
+                    }
+                }
+                if (!s_wmKeyTempPath.isEmpty()) key = s_wmKeyTempPath;
+            }
+            args << QStringLiteral("--wm-sign") << key;
         }
+    }
+
+    // 压缩：开关 + 级别（非对称 .ptd 同样支持，CLI run_asym 会把级别透传给 encrypt_file）
+    if (o.compress && isEnc) {
+        args << QStringLiteral("-zstd");
+        if (o.compressionLevel != 0) {
+            args << QStringLiteral("--compression-level") << QString::number(o.compressionLevel);
+        }
+    }
+
+    // 口令经 stdin 注入：必须早于输入路径，否则会被 -- 吞成输入文件
+    if (!isAsym && o.keyfilePath.isEmpty()) {
+        args << QStringLiteral("--key-stdin");
+    }
+
+    // 输入路径放最后：CLI 用 -- 终止选项解析，其后的参数一律是输入文件
+    if (isBatch) {
+        for (const QString& p : o.inputPaths) {
+            args << QStringLiteral("-i") << p;
+        }
+    } else if (!o.inputPaths.isEmpty()) {
+        args << QStringLiteral("--") << o.inputPaths.first();
     }
 
     return args;
@@ -127,6 +184,12 @@ QProcessEnvironment CliArgBuilder::buildEnvironment(const ShellOptions& ) {
     return QProcessEnvironment::systemEnvironment();
 }
 
+void CliArgBuilder::cleanupWatermarkTemp() {
+    if (s_wmKeyTempPath.isEmpty()) return;
+    QFile::remove(s_wmKeyTempPath);
+    s_wmKeyTempPath.clear();
+}
+
 QString CliArgBuilder::buildPreview(const QString& programPath, const ShellOptions& o) {
     // 命令预览的引号策略
     QString cmd = QStringLiteral("\"%1\"").arg(QDir::toNativeSeparators(programPath));
@@ -134,40 +197,40 @@ QString CliArgBuilder::buildPreview(const QString& programPath, const ShellOptio
     static const QStringList valueFlags = {
         QStringLiteral("-o"), QStringLiteral("-i"), QStringLiteral("-k"),
         QStringLiteral("-r"), QStringLiteral("--salt"),
-        QStringLiteral("--compression-level"), QStringLiteral("-cl")
+        QStringLiteral("--compression-level"), QStringLiteral("-cl"),
+        QStringLiteral("--wm-sign"), QStringLiteral("--wm-verify")
     };
 
     const QStringList args = buildArguments(o);
     bool expectValue = false;
-    auto isIntLiteral=[](const QString& s)->bool {
-        if(s.isEmpty()) return false;
-        int i=(s.at(0)==QLatin1Char('-')||s.at(0)==QLatin1Char('+'))?1:0;
-        if(i>=s.size()) return false;
-        for(;i<s.size();++i) if(!s.at(i).isDigit()) return false;
-        return true;
-    };
+    bool expectKey = false;
     for (int i=0; i<args.size(); ++i) {
         const QString& a = args[i];
+        // 密钥取值只显示占位符：临时文件落盘失败时这里是私钥明文
+        if (!a.startsWith(QLatin1Char('-')) && (expectKey || isPrivateKeyMaterial(a))) {
+            cmd += QCoreApplication::translate("CliArgBuilder", " <private-key>");
+            expectValue = false;
+            expectKey = false;
+            continue;
+        }
         // 预览显示收件人数而非路径
         if (expectValue && o.recipientCount > 1 && a == o.recipientPath) {
             cmd += QCoreApplication::translate("CliArgBuilder", " %1 个收件人").arg(o.recipientCount);
             expectValue = false;
             continue;
         }
-        const bool needsQuote = (expectValue && !isIntLiteral(a)) ||
-                                a.contains(QLatin1Char(' ')) ||
-                                a.contains(QLatin1Char('\t')) ||
-                                a.contains(QLatin1Char('"'));
+        // 预览引号策略与 WinUI 版对齐：选项本身不加引号，取值一律加引号
         QString shown;
-        if (needsQuote) {
+        if (a.startsWith(QLatin1Char('-'))) {
+            shown = a;
+        } else {
             QString escaped = a;
             escaped.replace(QLatin1Char('"'), QStringLiteral("\\\""));
             shown = QStringLiteral("\"%1\"").arg(escaped);
-        } else {
-            shown = a;
         }
         cmd += QStringLiteral(" %1").arg(shown);
         expectValue = valueFlags.contains(a);
+        expectKey = (a == QStringLiteral("--wm-sign") || a == QStringLiteral("--wm-verify"));
     }
 
     // 密钥经 stdin 注入

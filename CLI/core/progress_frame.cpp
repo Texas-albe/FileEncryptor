@@ -221,7 +221,8 @@ bool BatchProgress::begin(int threads, uint64_t total_bytes) {
     m_total = total_bytes;
     m_processed = 0;
     m_written = 0;
-    m_rows = (threads > 0 ? threads : 1) + 1;
+    // 行数恒定 = 汇总 + 每线程 + FILES 常驻，避免帧行数跳变引发光标定位错位
+    m_rows = (threads > 0 ? threads : 1) + 2;
     m_slots.assign(threads > 0 ? threads : 1, ProgressSlot());
     m_started = std::chrono::steady_clock::now();
     m_last_render = std::chrono::steady_clock::time_point();
@@ -247,7 +248,7 @@ void BatchProgress::setFileStats(uint64_t done,uint64_t failed,uint64_t skipped,
     m_fileDone=done; m_fileFailed=failed; m_fileSkipped=skipped; m_fileTotal=total;
 }
 
-std::vector<std::string> BatchProgress::build_lines(int width) const {
+std::vector<std::string> BatchProgress::build_lines(int width) {
     // 列宽
     int avail = width - kRateW - kEtaW - 3 * kSepW;
     if (avail < 30) avail = 30;
@@ -288,10 +289,16 @@ std::vector<std::string> BatchProgress::build_lines(int width) const {
     lines.push_back(line1);
 
     // 第 2..n+1 行：每线程一行（文件路径 | 进度条 | 速率 | ETA）
-    for (const ProgressSlot& s : m_slots) {
+    for (ProgressSlot& s : m_slots) {
         std::string col1, col2, col3, col4;
         if (s.active && s.total > 0) {
-            col1 = truncate_path(s.path, (size_t)path_w);
+            // 路径截断缓存：路径与列宽未变时复用上一帧结果，省逐字节宽度扫描
+            if (s.cache_w != path_w || s.cache_path != s.path) {
+                s.cache_path = s.path;
+                s.cache_w = path_w;
+                s.cache_trunc = truncate_path(s.path, (size_t)path_w);
+            }
+            col1 = s.cache_trunc;
 
             double frac = (double)s.done / (double)s.total;
             if (frac < 0.0) frac = 0.0;
@@ -335,14 +342,13 @@ std::vector<std::string> BatchProgress::build_lines(int width) const {
                       + pad_left(col4, (size_t)kEtaW));
     }
 
-    // 末行 FILES 给出文件级计数，宿主按帧解析即可，避免每文件多打一行刷屏
-    if(m_fileTotal>0||m_fileDone>0||m_fileFailed>0||m_fileSkipped>0) {
-        char st[128];
-        std::snprintf(st,sizeof(st),"FILES %llu/%llu   SKIP %llu   FAIL %llu",
-            (unsigned long long)m_fileDone,(unsigned long long)m_fileTotal,
-            (unsigned long long)m_fileSkipped,(unsigned long long)m_fileFailed);
-        lines.push_back(head_by_width(st,(size_t)(width>0?width:80)));
-    }
+    // 末行 FILES 常驻占位（全零也输出）：行数恒定后 \x1b[%dA 上移不会因行数跳变错位
+    // （此前 KDF 阶段无完成文件时少一行，首文件完成瞬间跳变导致光标逐行下移）。
+    char st[128];
+    std::snprintf(st,sizeof(st),"FILES %llu/%llu   SKIP %llu   FAIL %llu",
+        (unsigned long long)m_fileDone,(unsigned long long)m_fileTotal,
+        (unsigned long long)m_fileSkipped,(unsigned long long)m_fileFailed);
+    lines.push_back(head_by_width(st,(size_t)(width>0?width:80)));
     return lines;
 }
 
@@ -385,11 +391,16 @@ void BatchProgress::render() {
     bool due;
     {
         std::lock_guard<std::mutex> lk(m_mutex);
-        // 节流：80ms 一帧（首次立即渲染）
+        // 帧率分级：TTY 80ms / 非 TTY（GUI 管道解析）250ms；无进度增量时放宽到 500ms
+        // （KDF 阶段 worker 全在 Argon2 里，无新进度可显示，空转渲染纯浪费 CPU）。
+        const auto base_throttle = m_tty ? std::chrono::milliseconds(80)
+                                         : std::chrono::milliseconds(250);
+        const auto idle_throttle = std::chrono::milliseconds(500);
+        const uint64_t proc = m_processed.load(std::memory_order_relaxed);
         due = m_last_render.time_since_epoch().count() == 0
-            || std::chrono::duration_cast<std::chrono::milliseconds>(now - m_last_render).count() >= 80;
+            || (now - m_last_render) >= (proc == m_last_proc ? idle_throttle : base_throttle);
+        if (due) { m_last_render = now; m_last_proc = proc; }
         if (!due) return;
-        m_last_render = now;
     }
     std::vector<std::string> lines;
     {

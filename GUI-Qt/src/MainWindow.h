@@ -70,12 +70,15 @@ private slots:
     void onCommandFinished(const CommandResult& r);
     void refreshCommandPreview();
     void updateAsymVisibility();
+    // SM4 需 OpenSSL 支持：不可用时禁用模式下拉里的对应项
+    void updateSm4Visibility();
     void onThemeComboChanged(int idx);
     void onViewSettings();
     void onEditConfig();
     void onThemeDarkChanged(bool dark);
     void resizeEvent(QResizeEvent* e) override;
     void onRetryCliDetection();
+    void onDownloadCli();
     void onOpenTaskHistory();
     void onCheckForUpdate();
     void startPendingScan();
@@ -98,13 +101,14 @@ private:
     // 自动更新流程
     QString locateUpdater() const;
     void handleCheckResult(const QByteArray& out, const QString& updater);
-    void doUpdaterUpdate(const QString& updater, const QString& url, const QString& sha, const QString& sigUrl);
+    void doUpdaterUpdate(const QString& updater, const QString& url, const QString& sha, const QString& sigUrl, long long size);
     void applyBackground(const QString& path,bool resizeToRatio=false);
     void resizeBgLabel();
 
     // CLI 检测相关
     bool checkCliExists(bool showDialog=true);
     void showCliNotFoundError(const QString& context=QString());
+    void rescanCli();
     void probeZstdSupport();
     void onProbeFinished(int exitCode, QProcess::ExitStatus status);
 
@@ -154,16 +158,31 @@ private:
     QRadioButton* m_rbKeyGen=nullptr;
     QRadioButton* m_rbDerive=nullptr;
     QRadioButton* m_rbPubKey=nullptr;
+    QWidget* m_modeRow=nullptr;   // 模式 + 文件算法同行，密钥管理下整行隐藏
     QComboBox* m_modeCombo=nullptr;
+    QLabel* m_modeTitle=nullptr;
+    // 非对称模式下的文件载荷加密算法（非对称只包裹该算法生成的会话密钥）
+    QComboBox* m_fileCipherCombo=nullptr;
+    QLabel* m_fileCipherLabel=nullptr;
     QComboBox* m_sourceCombo=nullptr;
     QCheckBox* m_chkForce=nullptr;
     QCheckBox* m_chkSha256=nullptr;
     QCheckBox* m_chkCompress=nullptr;
+    QWidget* m_compressRow=nullptr;
+    QCheckBox* m_chkX448=nullptr;
     QSpinBox* m_compressLevel=nullptr;
+    QString   m_compressTipTemplate;
     QLabel*   m_compressLabel=nullptr;
     QLabel*   m_compressTitle=nullptr;
+    QCheckBox* m_chkPqc=nullptr;
+    QCheckBox* m_chkWatermark=nullptr;
+    QWidget*   m_wmKeyRow=nullptr;
+    QLineEdit* m_wmKeyEdit=nullptr;
+    QPushButton* m_btnWmKeyBrowse=nullptr;
     bool      m_zstdAvailable=false;
     bool      m_aegisAvailable=true;
+    bool      m_sm4Available=true;
+    bool      m_pqcAvailable=true;
     QLineEdit* m_outDirEdit=nullptr;
     QPushButton* m_btnOutDirBrowse=nullptr;
     QLineEdit* m_keyfileEdit=nullptr;

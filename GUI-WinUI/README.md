@@ -4,7 +4,7 @@ Windows 平台的 FileEncryptor 图形界面，基于 **WinUI 3 (Windows App SDK
 
 Linux 平台的 Qt6 版本见 [`../GUI-Qt/`](../GUI-Qt/)。
 
-- 程序版本 **2.0.3**（配套 CLI 2.4.5）。
+- 程序版本 **2.1.0**（配套 CLI 2.7.0）。
 
 ## 项目定位
 
@@ -13,8 +13,8 @@ Linux 平台的 Qt6 版本见 [`../GUI-Qt/`](../GUI-Qt/)。
 | 项目 | 产物 | 技术栈 |
 |---|---|---|
 | `../CLI/` | `FileEncryptorCLI.exe` | C++17 / CMake / libsodium |
-| **本项目** | `FileEncryptorGUI-2.0.3-WinUI-Windows.msi` | C# / .NET 8 / WinUI 3 |
-| `../GUI-Qt/` | `FileEncryptorGUI-2.0.3-Qt-Linux` | C++ / Qt6 |
+| **本项目** | `FileEncryptorGUI-2.1.0-WinUI-Windows.msi` | C# / .NET 8 / WinUI 3 |
+| `../GUI-Qt/` | `FileEncryptorGUI-2.1.0-Qt-Linux` | C++ / Qt6 |
 
 ## 功能
 

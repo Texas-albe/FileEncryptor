@@ -127,8 +127,9 @@ static void print_usage() {
         <<"  -d                Decrypt single file\n"
         <<"  -be               Batch encrypt directories/files\n"
         <<"  -bd               Batch decrypt directories/files\n\n"
-        <<"Key management (rage/age):\n"
-        <<"  -g                Generate an X25519 keypair (public key -> stdout)\n"
+        <<"Key management (asymmetric):\n"
+        <<        "  -g                Generate asymmetric keypair: X25519 + ML-KEM-768 hybrid (default)\n"
+        <<"                      classic X25519/X448 with --no-pqc\n"
         <<"  -G                Derive an X25519 keypair from a password (Argon2id)\n"
         <<"  -Y                Export public key from a private key file (-k)\n"
         <<"  -L, --keylib      Manage the local key library (list|add|remove|show|pub|export)\n"
@@ -136,6 +137,10 @@ static void print_usage() {
         <<"  -V, --verify      Verify integrity of .ptd file(s) without writing plaintext\n"
         <<"  -R, --recover-name Recover the original filename from a .ptd (offline; add --rename to rename)\n\n"
         <<"  -h, --help, -?    Show this help\n\n"
+        <<"Post-quantum:\n"
+        <<"  --pqc             Hybrid X25519+ML-KEM-768 recipients and ML-DSA-65 watermark\n"
+        <<"                    signatures (default on)\n"
+        <<"  --no-pqc          Classic only: X25519/X448 recipients and RSA watermark signatures\n\n"
         <<"Options:\n"
         <<"  -o <dir>          Output directory (optional, default: source file's directory)\n"
         <<"  -de               Delete source after success: plaintext (encrypt) / .ptd (decrypt)\n"
@@ -144,28 +149,35 @@ static void print_usage() {
         <<"  --rewrap <file>   Rotate key of a v6 container (payload untouched; old password via -k/env/interactive)\n"
         <<"  --new-key-file F  New password key file for --rewrap\n"
         <<"  --new-key-stdin   New password for --rewrap read from stdin\n"
-        <<"  -m <mode>         Encryption mode: xchacha20 (default) | aegis256 | rage\n"
-        <<"                      rage = asymmetric hybrid encryption: a random file key\n"
-  <<"                             is wrapped to X25519 recipients (rage/age format)\n"
+        <<"  -m <mode>         Encryption mode: xchacha20 (default) | aegis256 | sm4 | x25519 | x448\n"
+        <<"                      x25519 | x448 = asymmetric: DEK wrapped to recipients (-r / -K)\n"
         <<"  -y, --force       Overwrite existing output files without asking\n"
         <<"  --force-decrypt   Decrypt corrupted files: skip failed chunks (zero-filled) and\n"
         <<"                    ignore final integrity hash. WARNING: output may be incomplete.\n"
         <<"  -k <keyfile>      Read key material from file (non-interactive; alt: ENCRYPTOR_KEY env / --key-stdin)\n"
-        <<"                      -m rage decrypt: this is the private key file (AGE-SECRET-KEY-...)\n"
+        <<"                      asymmetric decrypt: this is the identity private key file (AGE-SECRET-KEY-... / X448SEC-...)\n"
         <<"  -K <name>[,...]   Resolve keys from the local key library:\n"
-        <<"                      -m rage encrypt: recipient/identity names, comma-separated\n"
-        <<"                      -m rage decrypt: one identity name (same as -k <library key>)\n"
-        <<"  -r <pub|file>     Public key for -m rage encrypt: an \"age1...\" string, or a file\n"
-        <<"                      holding one public key per line ('#' comments and publickey: ok)\n"
+        <<"                      asymmetric encrypt: recipient/identity names, comma-separated\n"
+        <<"                      asymmetric decrypt: one identity name (same as -k <library key>)\n"
+        <<"  -r <pub|file>     Recipient public key: an \"age1...\" / \"X448-...\" / \"MLKEM1-...\"\n"
+        <<"                      string, or a file holding one public key per line\n"
+        <<"                      ('#' comments and publickey: ok)\n"
+        <<"  -x448             Generate an X448 keypair with -g (default: X25519)\n"
         <<"  --key-stdin       Read the password from stdin until EOF (symmetric modes only)\n"
         <<"  --salt <hex|file> Salt for -G: 32 hex chars, or a file holding them (default: random 16B)\n"
         <<"  --restore-name, -rn  Batch decrypt: restore full original filenames (slow: one KDF per file)\n"
-        <<"  --obfuscate-name, -on  -m rage only: hide the output filename (original name unrecoverable)\n"
+        <<"  --obfuscate-name, -on  force an obfuscated output filename (<16hex>.<3 letters>.ptd)\n"
         <<"  --sha256          Write a <out>.ptd.sha256 sidecar after successful encryption\n"
         <<"  --rename          With -R: rename the .ptd in place to its original name (content unchanged)\n"
         <<"  --as <name>       With -L add: library name for the imported key\n"
         <<"  --alias <text>    With -L add: display alias for the key\n"
-        <<"  --notes <text>    With -L add: single-line note stored in the index\n\n"
+        <<"  --notes <text>    With -L add: single-line note stored in the index\n"
+        <<"  --watermark       Embed a signed watermark tail (machine ID + timestamp + signature)\n"
+        <<"  --no-watermark    Do not embed a watermark (default)\n"
+        <<"  --wm-sign <file>  With --watermark: ML-DSA-65 private key PEM (--no-pqc: RSA)\n"
+        <<"  --wm-verify <file> With --watermark-extract: matching public key PEM to verify\n"
+        <<"  --watermark-extract <file>  Read and verify the watermark tail (no key needed)\n"
+        <<"  --wm-keygen <file>  Generate a signature key PEM and print its public key\n\n"
         <<"Config (YAML): log file/level, worker threads, path length/whitelist, progress\n"
         <<"  rotation, rate limit (max_speed), password policy (min_password_length /\n"
         <<"  min_password_classes), KDF preset (kdf_preset: fast|standard|strong),\n"
@@ -179,11 +191,15 @@ static void print_usage() {
         <<"    FileEncryptor -e/-d <FileName> [-o <Path>] [-de] [-m xchacha20|aegis256] [-y]\n"
         <<"    FileEncryptor -be/-bd <Path> [-o <Path>] [-de] [-m xchacha20|aegis256] [-y]\n"
         <<"    FileEncryptor -e/-be <File> [-zstd] [--compression-level <N>]   (zstd: 1..22 normal, -1..-5 fast)\n"
-        <<"    FileEncryptor -e/-d -m rage -r <pub>|-k <priv> <File> [-o <Path>] [-y]\n"
-        <<"  Key management (rage/age):\n"
-        <<"    FileEncryptor -g [-o <dir>]\n"
+        <<"    FileEncryptor -e/-d -m x25519 -r <pub>|-k <priv> <File> [-o <Path>] [-y]\n"
+        <<"  Key management (asymmetric):\n"
+        <<"    FileEncryptor -g [-o <dir>] [-x448] [--no-pqc]\n"
         <<"    FileEncryptor -G [-o <dir>] [--salt <hex|file>]\n"
         <<"    FileEncryptor -Y -k <private key file>\n"
+        <<"\n  Watermark:\n"
+        <<"    FileEncryptor -e --watermark --wm-sign <priv.pem> <File>\n"
+        <<"    FileEncryptor --watermark-extract <File.ptd> [--wm-verify <pub.pem>]\n"
+        <<"    FileEncryptor --wm-keygen <priv.pem>   (ML-DSA-65; add --no-pqc for RSA-3072)\n"
         <<"  Key library:\n"
         <<"    FileEncryptor -L list\n"
         <<"    FileEncryptor -L add <keyfile> --as <name> [--alias <text>] [--notes <text>]\n"
@@ -191,8 +207,8 @@ static void print_usage() {
         <<"    FileEncryptor -L show <name>\n"
         <<"    FileEncryptor -L pub <name|keyfile>    (derive and cache the recipient key)\n"
         <<"    FileEncryptor -L export <name> [dest_dir]\n"
-        <<"    FileEncryptor -e -m rage -K <name>[,<name>...] <File>\n"
-        <<"    FileEncryptor -d -m rage -K <identity name> <File.age>\n";
+        <<"    FileEncryptor -e -m x25519 -K <name>[,<name>...] <File>\n"
+        <<"    FileEncryptor -d -k <identity file> <File.ptd>\n";
 }
 
 #ifdef _WIN32
@@ -233,9 +249,11 @@ static bool collect_recipients(const std::string& spec,
     auto is_pubkey=[&trim](const std::string& s)->bool{
         if(s.rfind("publickey:",0)==0) return true;
         std::string low=trim(s);
+        // 前缀含大写，统一小写后再比对（age1... / x448-... / mlkem1-... 均视为内联公钥）
         std::transform(low.begin(),low.end(),low.begin(),
             [](unsigned char c){ return (char)std::tolower(c); });
-        return low.rfind("age1",0)==0;
+        return low.rfind("age1",0)==0 || low.rfind("x448-",0)==0
+            || low.rfind("mlkem1-",0)==0;
     };
 
     const std::string t=trim(spec);
@@ -260,7 +278,10 @@ static bool collect_recipients(const std::string& spec,
         if(v.empty()||v[0]=='#') continue;
         v=strip_prefix(v);
         if(v.empty()) continue;
-        if(!is_pubkey(v)) { err="Invalid public key line (expected age1...): "+v; return false; }
+        if(!is_pubkey(v)) {
+            err="Invalid public key line (expected age1... / x448-... / mlkem1-...): "+v;
+            return false;
+        }
         out.push_back(v);
     }
     rf.close();
@@ -268,8 +289,8 @@ static bool collect_recipients(const std::string& spec,
     return true;
 }
 
-// Asymmetric (hybrid) dispatch built on rage/age (X25519 + ChaCha20-Poly1305). encrypt : wrap the file key to the public key given by -r (an "age1..." string, or a file holding public keys) -> <name>.age decrypt : unwrap with the private key file given by -k
-// ("AGE-SECRET-KEY-...") v2.1.2 加固（对应安全审计 1 / 5 / 6）： - 此前本函数完全绕过 validate_io_paths()，即绕过路径白名单与 max_path_length； - 输出无符号链接守卫、无 .prt 原子落盘（对称路径三处守卫 + 原子替换全无）； - 输出文件名恒为明文（对称模式默认混淆）。现加 --obfuscate-name 显式开启， 未开启时打印元数据泄露提示。
+// 非对称调度：DEK 以收件人公钥（X25519/X448）包装进 v6 容器（.ptd）。
+// 路径校验 / 符号链接守卫 / .prt 原子落盘复用对称路径同一套。
 static bool run_asym(const std::vector<std::string>& input_paths,
                      const std::string& output_dir,
                      bool is_encrypt,
@@ -279,10 +300,12 @@ static bool run_asym(const std::vector<std::string>& input_paths,
                      const std::string& identity_file,
                      const SecureBuffer& key_material,
                      bool obfuscate_name=false,
-                     const std::vector<std::string>& extra_recipients = {}) {
+                     const std::vector<std::string>& extra_recipients = {},
+                     CryptoMode mode = CryptoMode::XCHACHA20,
+                     int compress_level = 0) {
     std::vector<std::string> recipients;
     if(is_encrypt) {
-        // -r takes the public key itself ("age1...") or a file of public keys;
+        // -r takes the public key itself ("age1..." / "X448-...") or a file of public keys;
         // -K 补充密钥库收件人（二者至少其一）。重复公钥去重。
         if(recipient_spec.empty()&&extra_recipients.empty()) {
             std::cerr<<"Asymmetric encryption requires -r <public key or public key file> "
@@ -321,14 +344,9 @@ static bool run_asym(const std::vector<std::string>& input_paths,
             std::string base=in_path;
             size_t pos=base.find_last_of("/\\");
             std::string fname=(pos!=std::string::npos)?base.substr(pos+1):base;
-            // v2.1.2：rage 模式没有"加密文件名信封"（对称模式的文件名存在密文尾部， 可无损还原），一旦混淆就**永久丢失**文件名。因此不跟随
-            // obfuscate_names 默认值直接启用，必须由 --obfuscate-name 显式开启。
+            // 容器自带文件名信封（与对称路径一致），混淆名需 --obfuscate-name 显式开启。
             if(obfuscate_name) {
                 fname=make_obfuscated_basename(in_path,key_material);
-            } else {
-                std::cerr<<"Note: -m rage output keeps the original filename in cleartext "
-                    "(no encrypted name envelope). Use --obfuscate-name to hide it "
-                    "(the original name is then unrecoverable).\n";
             }
             if(!output_dir.empty()) {
                 if(!create_directory_recursive(output_dir)) {
@@ -342,13 +360,13 @@ static bool run_asym(const std::vector<std::string>& input_paths,
                 out_path=in_path;
             }
             out_path=to_native_path(out_path);   // 分隔符统一（Windows）
-            out_path+=".age";
+            out_path+=".ptd";
         } else {
             std::string lower=in_path;
             std::transform(lower.begin(),lower.end(),lower.begin(),
                 [](unsigned char c){ return (char)std::tolower(c); });
-            if(lower.size()<4||lower.substr(lower.size()-4)!=".age") {
-                std::cerr<<"Asymmetric decryption input must have .age extension: "<<in_path<<"\n";
+            if(lower.size()<4||lower.substr(lower.size()-4)!=".ptd") {
+                std::cerr<<"Asymmetric decryption input must have .ptd extension: "<<in_path<<"\n";
                 all_ok=false; continue;
             }
             std::string stem=in_path.substr(0,in_path.size()-4);
@@ -372,18 +390,12 @@ static bool run_asym(const std::vector<std::string>& input_paths,
             }
         }
 
-        // v2.1.2：路径策略校验 + 符号链接守卫（此前 rage 分支完全没有，可整体绕过白名单）
-        // 1) 输入路径的 ".." 穿越（此前仅 -o 在参数解析处查过，in_path 从未查）
-        if(path_has_traversal(in_path)) {
-            std::cerr<<"Path contains directory traversal (..): "<<in_path<<"\n";
-            all_ok=false; continue;
-        }
-        // 2) 白名单 / max_path_length（与对称路径同一套 validate_io_paths）
+        // 路径策略校验 + 符号链接守卫（与对称路径同一套）
+        // 输入路径的 ".." 交由 validate_io_paths 的白名单前缀比较裁决
         if(!validate_io_paths(in_path,out_path,false)) {
             std::cerr<<"Path validation failed (config policy)\n";
             all_ok=false; continue;
         }
-        // 3) 拒绝写入既有的符号链接 / 重解析点（否则明文会被重定向到攻击者指定路径）
         if(path_is_symlink(out_path)) {
             std::cerr<<"Refusing to write through existing symlink: "<<out_path<<"\n";
             all_ok=false; continue;
@@ -400,38 +412,53 @@ static bool run_asym(const std::vector<std::string>& input_paths,
             }
         }
 
-        // v2.1.2：先写 .prt 再原子替换 避免中断时留下半截（明文）输出被误认为成品。
+        // 先写 .prt 再原子替换，避免中断时留下半截（明文）输出被误认为成品。
         const std::string part_path=out_path+".prt";
-        // 与对称路径一致：.prt 半成品若为符号链接/重解析点则拒绝写入，避免明文被重定向
         if(path_is_symlink(part_path)) {
             std::cerr<<"Refusing to write through existing symlink: "<<part_path<<"\n";
             all_ok=false; continue;
         }
         remove_file_utf8(part_path);   // 清掉上次残留
 
-        AsymOutcome o;
+        bool ok=false;
         if(is_encrypt) {
             std::cout<<"Asymmetric encrypting: "<<in_path<<" -> "<<out_path<<"\n";
-            o=fe_asym_encrypt(recipients,in_path,part_path);
+            try {
+                ok=encrypt_file(in_path,part_path,SecureBuffer(),mode,nullptr,false,compress_level,
+                                true,&recipients);
+            } catch(const std::exception& e) {
+                fprintf(stderr,"Error: asymmetric encryption failed: %s\n",e.what());
+                ok=false;
+            } catch(...) {
+                fprintf(stderr,"Error: asymmetric encryption failed (unexpected exception)\n");
+                ok=false;
+            }
         } else {
             std::cout<<"Asymmetric decrypting: "<<in_path<<" -> "<<out_path<<"\n";
             std::string identity(key_material.cdata(), key_material.size());
-            {   // the private key file may carry a trailing newline / spaces
-                // 就地 erase（而非 substr）：substr 会另开缓冲，原缓冲里的完整私钥
-                // 无法再被擦除，旧版本正是因此留下内存残片（审计问题 9）。
+            {   // 私钥文件可能带尾随换行 / 空格；就地 erase 避免缓冲残留（审计问题 9）
                 size_t a=0,b=identity.size();
                 while(a<b && (unsigned char)identity[a]<=0x20) ++a;
                 while(b>a && (unsigned char)identity[b-1]<=0x20) --b;
                 if(b<identity.size()) identity.erase(b);
                 if(a>0)               identity.erase(0,a);
             }
-            o=fe_asym_decrypt(identity,in_path,part_path);
+            try {
+                ok=decrypt_file(in_path,part_path,SecureBuffer(),nullptr,
+                                false,false,nullptr,nullptr,0,false,0,identity);
+            } catch(const std::exception& e) {
+                fprintf(stderr,"Error: asymmetric decryption failed: %s\n",e.what());
+                ok=false;
+            } catch(...) {
+                fprintf(stderr,"Error: asymmetric decryption failed (unexpected exception)\n");
+                ok=false;
+            }
             // resize 到 capacity() 再清零，覆盖字符串容量尾部的私钥残留
             identity.resize(identity.capacity());
             sodium_memzero(identity.data(),identity.size());
         }
-        if(!o.ok) {
-            std::cerr<<"Failed: "<<o.error<<"\n";
+        if(!ok) {
+            std::cerr<<"Failed to process: "<<in_path<<"\n";
             remove_file_utf8(part_path);
             all_ok=false; continue;
         }
@@ -450,11 +477,10 @@ static bool run_asym(const std::vector<std::string>& input_paths,
     return all_ok;
 }
 
-// Generate an X25519 keypair (rage/age). stdout                     -> recipient public key "age1..." only (safe to pipe/redirect) <output_dir>/rage_private.txt
-// -> identity "AGE-SECRET-KEY-..." (keep secret) Everything informational goes to stderr so stdout stays a clean public key.
-static bool run_keygen(const std::string& output_dir,bool force_overwrite) {
+// -g：随机生成密钥对。公钥写 stdout（干净一行，可重定向），私钥写 <dir>/rage_private.txt。
+static bool run_keygen(const std::string& output_dir,bool force_overwrite,uint8_t algo) {
     std::string pub, priv;
-    AsymOutcome o=fe_generate_keypair(pub,priv);
+    AsymOutcome o=fe_generate_keypair(algo,pub,priv);
     if(!o.ok) {
         std::cerr<<"Key generation failed: "<<o.error<<"\n";
         return false;
@@ -501,12 +527,22 @@ static bool run_keygen(const std::string& output_dir,bool force_overwrite) {
     }
     tighten_file_permissions(priv_path);   // 收紧密钥文件权限（仅拥有者可读）
 
+    // 公钥也落盘（与私钥同目录、同名风格）：stdout 只 serving 管道用途，存文件才方便复用
+    const std::string pub_path=dir+"rage_public.txt";
+    if(!write_line(pub_path,pub)) {
+        std::cerr<<"Cannot write: "<<pub_path<<"\n";
+        sodium_memzero(priv.data(),priv.size());
+        return false;
+    }
+
     // stdout: the public key alone, so it can be piped straight into -r or a file
     std::cout<<pub<<"\n";
     std::cout.flush();
     // stderr: everything else, so redirecting stdout still yields a clean key
     std::cerr<<"Private key file: "<<priv_path<<"\n";
-    std::cerr<<"Public key (age1...) printed above - share it freely; the private key decrypts.\n";
+    std::cerr<<"Public key file : "<<pub_path<<"\n";
+    std::cerr<<"Public key ("<<(algo==RECIP_ALGO_MLKEM?"MLKEM1-...":algo==RECIP_ALGO_X448?"X448-...":"age1...")
+        <<") printed above - share it freely; the private key decrypts.\n";
 
     sodium_memzero(priv.data(),priv.size());
     return true;
@@ -549,8 +585,7 @@ static bool parse_salt(const std::string& spec,std::vector<unsigned char>& out) 
     return true;
 }
 
-// 由口令确定性派生 X25519 密钥对（-G）。 stdout                     -> 公钥 "age1..."（可直接重定向 / 管道） <dir>/rage_private.txt     -> 私钥
-// "AGE-SECRET-KEY-..." <dir>/rage_derive_salt.txt -> 16 字节随机盐（hex）；复现同一密钥对必需 同口令 + 同盐 ⇒ 完全相同的密钥对，因此不保存私钥也能靠口令找回。
+// -G：由口令派生密钥对。输出同 -g，另写 <dir>/rage_derive_salt.txt（复现同一密钥对必需）。
 static bool run_derive(const std::string& output_dir,
                        const SecureBuffer& password,
                        const std::string& salt_spec,
@@ -632,7 +667,7 @@ static bool run_derive(const std::string& output_dir,
     return true;
 }
 
-// 由身份私钥导出收件人公钥（-Y），等价于 rage-keygen -y。
+// -Y：由身份私钥导出收件人公钥。
 static bool run_pubkey(const SecureBuffer& identity) {
     std::string id(identity.cdata(),identity.size());
     {   // 私钥文件可能带尾随换行 / 空格；就地 erase 避免 substr 产生无法擦除的临时副本
@@ -651,7 +686,7 @@ static bool run_pubkey(const SecureBuffer& identity) {
     }
     std::cout<<pub<<"\n";
     std::cout.flush();
-    std::cerr<<"Public key (age1...) printed above; it corresponds to the given private key.\n";
+    std::cerr<<"Public key printed above; it corresponds to the given private key.\n";
     return true;
 }
 
@@ -665,6 +700,7 @@ static bool run_info(const std::string& path) {
     }
     const char* mode_str = (meta.mode==CryptoMode::XCHACHA20)?"XChaCha20"
                          : (meta.mode==CryptoMode::AEGIS256)?"AEGIS-256"
+                         : (meta.mode==CryptoMode::SM4)?"SM4-GCM"
                          : (meta.mode==CryptoMode::AES_GCM)?"AES-GCM(legacy)":"unknown";
     std::cout<<"File: "<<path<<"\n";
     std::cout<<"  version          : "<<(int)meta.version<<"\n";
@@ -682,13 +718,63 @@ static bool run_info(const std::string& path) {
     if(!meta.plaintext_hash_hex.empty())
         std::cout<<"  plaintext Blake2b : "<<meta.plaintext_hash_hex<<"\n";
     std::cout<<"  encrypted name    : "<<(meta.has_name_footer?"yes":"no")<<"\n";
+    if(meta.compression>0) {
+        std::cout<<"  compression       : zstd";
+        if(meta.comp_level!=0) std::cout<<" (level "<<(int)meta.comp_level<<")";
+        std::cout<<"\n";
+    } else {
+        std::cout<<"  compression       : none\n";
+    }
     std::cout<<"  (metadata only; key correctness is NOT verified)\n";
     return true;
 }
 
+// 水印查看器（只读尾部记录，不需口令）。带公钥时验签，验签失败即记录被改过或公钥不对。
+static bool run_watermark(const std::string& path, const std::string& pub_pem, bool pqc) {
+    WatermarkInfo wm;
+    if(!read_watermark(path, wm, pub_pem, pqc)) {
+        std::cerr<<"No watermark found in: "<<path<<"\n";
+        return false;
+    }
+    std::cout<<"File: "<<path<<"\n";
+    std::cout<<"  signed     : "<<(wm.has_signature?"yes":"no")<<"\n";
+    if(wm.has_signature) {
+        if(!wm.verify_attempted)
+            std::cout<<"  signature  : not checked (no --wm-verify public key)\n";
+        else
+            std::cout<<"  signature  : "<<(wm.verify_ok?"verified":"VERIFICATION FAILED")<<"\n";
+    }
+    if(!wm.error.empty())
+        std::cout<<"  note       : "<<wm.error<<"\n";
+    std::cout<<"  machine id : "<<(wm.machine_id_hex.empty()?"-":wm.machine_id_hex)<<"\n";
+    std::cout<<"  sources    : MAC="<<((wm.flags&0x01)?"yes":"no")
+             <<"  mainboard="<<((wm.flags&0x02)?"yes":"no")<<"\n";
+    std::cout<<"  timestamp  : "<<(wm.timestamp?wm_timestamp_text(wm.timestamp):std::string("-"))<<"\n";
+    std::cout<<"  nonce      : "<<(wm.nonce_hex.empty()?"-":wm.nonce_hex)<<"\n";
+    return wm.verify_ok || wm.error.empty();
+}
+
+// 身份私钥常以文件/终端输入传入，尾部必带换行；带 \r\n 时 EVP 解码出的密钥是垃圾，
+// -V/-R 会误报「解密失败」，故统一先裁剪首尾空白再当身份使用。
+static std::string normalize_identity(const SecureBuffer& buf) {
+    const unsigned char* p=reinterpret_cast<const unsigned char*>(buf.cdata());
+    size_t a=0, b=buf.size();
+    while(a<b && p[a]<=0x20) ++a;
+    while(b>a && p[b-1]<=0x20) --b;
+    return std::string(reinterpret_cast<const char*>(p+a), b-a);
+}
+
+// 口令材料本身是身份私钥串时按非对称通道处理：省得 -V/-R 漏写 -m x25519 直接失败。
+static bool looks_like_identity(const SecureBuffer& buf) {
+    const std::string s=normalize_identity(buf);
+    return s.rfind("AGE-SECRET-KEY-",0)==0 || s.rfind("MLKEM1SEC-",0)==0
+        || s.rfind("X448SEC-",0)==0;
+}
+
 // 功能3：完整性校验（只验不解）。对单文件解密到临时文件比对明文哈希，不落盘明文。
-static bool run_verify(const std::string& path, const SecureBuffer& pw) {
-    if(verify_ptd(path, pw)) {
+static bool run_verify(const std::string& path, const SecureBuffer& pw,
+                       const std::string& asym_identity) {
+    if(verify_ptd(path, pw, asym_identity)) {
         std::cout<<"OK    "<<path<<"\n";
         return true;
     }
@@ -698,9 +784,10 @@ static bool run_verify(const std::string& path, const SecureBuffer& pw) {
 
 // 功能15：离线还原混淆文件名（不改内容）。用口令恢复 .ptd 尾部信封中的原始文件名并打印；
 // 带 --rename 时把 .ptd 自身重命名为 <原始名>.ptd（内容不变）。
-static bool run_recover(const std::string& path, const SecureBuffer& pw, bool do_rename) {
+static bool run_recover(const std::string& path, const SecureBuffer& pw, bool do_rename,
+                        const std::string& asym_identity) {
     std::string orig;
-    if(!read_original_name(path, orig, pw)) {
+    if(!read_original_name(path, orig, pw, nullptr, 0, nullptr, asym_identity)) {
         std::cerr<<"Cannot recover original name (wrong key or no name envelope): "<<path<<"\n";
         return false;
     }
@@ -952,9 +1039,10 @@ struct NationalDaySuffix {
         std::cout.rdbuf(old_);   // 先恢复真实缓冲区，再追加祝福行
         if (buf_.any_ && is_national_day_week()) {
             // 空行隔开，避免与前面的业务输出粘连
-            std::cout << "\nHappy " << motherland_age()
+            // 祝福走 stderr：stdout 要留干净，否则重定向公钥/公钥串进文件时会把祝福写进数据
+            std::cerr << "\nHappy " << motherland_age()
                       << "th Birthday to the People's Republic of China!\n";
-            std::cout.flush();
+            std::cerr.flush();
         }
     }
 };
@@ -1006,26 +1094,40 @@ int main(int argc,char* argv[]) {
         ACTION_NONE,ACTION_ENCRYPT,ACTION_DECRYPT,
         ACTION_BATCH_ENCRYPT,ACTION_BATCH_DECRYPT,ACTION_KEYGEN,
         ACTION_DERIVE,ACTION_PUBKEY,ACTION_INFO,ACTION_VERIFY,ACTION_RECOVER,
-        ACTION_KEYLIB,ACTION_REWRAP
+        ACTION_KEYLIB,ACTION_REWRAP,ACTION_WATERMARK
     } action=ACTION_NONE;
 
     std::vector<std::string> input_paths;
     std::string output_dir;
     CryptoMode mode=CryptoMode::XCHACHA20;
+    // 未显式指定 -m 时，加密默认算法取 YAML crypto.default_cipher（空 = xchacha20）
+    {
+        const std::string& dc = global_config().default_cipher;
+        if (dc == "aegis256") mode = CryptoMode::AEGIS256;
+        else if (dc == "sm4") mode = CryptoMode::SM4;
+    }
     int source_action=0;          // 0=保留 1=删除(-de) 2=安全擦除(--wipe-source) 3=回收站(--recycle-source)
     bool force_overwrite=false;
     bool force_decrypt=false;
     int num_threads=0;
     bool restore_name=false;     // 批量解密是否还原完整原始文件名（默认 false：仅保留扩展名，省去每文件 KDF）
-    bool obfuscate_name=false;   // -m rage：是否混淆输出文件名（原始名不可恢复，故需显式开启）
+    bool obfuscate_name=false;   // -on：强制混淆输出文件名（另受配置 obfuscate_names 控制）
     std::string keyfile_path;   // 一.1：密钥文件输入（-k）
-    bool asym_mode=false;       // -m age：非对称混合加密（rage/age，X25519 + ChaCha20-Poly1305）
-    std::string recipient_spec; // -r <pub|file>: public key (age1...) or a file of them (encrypt)
+    bool asym_mode=false;       // -m x25519/x448：非对称（DEK 由收件人公钥包裹进 v6 容器）
+    bool x448_mode=false;        // -x448：非对称 ECDH 曲线用 X448（默认 X25519）
+    std::string recipient_spec; // -r <pub|file>: public key (age1... / X448-...) or a file of them (encrypt)
     bool key_from_stdin=false;  // --key-stdin：从 stdin 读取密钥材料（密码或 age 身份私钥）
+    bool preview_mode=false;    // --preview：仅解密并输出明文前缀到 stdout，不落盘
+    size_t preview_max=4096;    // --max-bytes N：预览字节数上限（默认 4 KiB）
     std::string salt_spec;      // --salt <hex|file>：-G 派生的盐（空 = 生成随机盐）
     bool force_sha256=false;    // --sha256：本次加密生成 <out>.ptd.sha256 校验单（功能10）
     bool recover_rename=false;  // --rename：配合 -R 原地重命名 .ptd（内容不变）
-    std::string keylib_refs;    // -K <name>[,...]：密钥库引用（rage 加密=收件人；解密=身份）
+    bool pqc_on=true;           // --pqc / --no-pqc：后量子（混合 KEM + ML-DSA 签名），默认开启
+    WatermarkSpec wm_spec;      // --watermark / --no-watermark / --wm-sign：尾部水印
+    std::string wm_verify_pem;  // --wm-verify：<--watermark-extract> 验签用的签名公钥 PEM
+    bool wm_keygen_mode=false;  // --wm-keygen <file>：生成水印签名密钥（ML-DSA-65/RSA）
+    std::string wm_keygen_path; // --wm-keygen 的私钥落盘路径
+    std::string keylib_refs;    // -K <name>[,...]：密钥库引用（加密=收件人；解密=身份）
     std::string keylib_as;      // --as <name>：-L add 的库内名称
     std::string keylib_alias;   // --alias <text>：-L add 的展示别名
     std::string keylib_notes;   // --notes <text>：-L add 的备注
@@ -1139,8 +1241,12 @@ int main(int argc,char* argv[]) {
             std::string m=argv[++i];
             if(m=="xchacha20") mode=CryptoMode::XCHACHA20;
             else if(m=="aegis256") mode=CryptoMode::AEGIS256;
-            else if(m=="rage"||m=="age") asym_mode=true;   // "rage" canonical; "age" kept as alias
+            else if(m=="sm4") mode=CryptoMode::SM4;
+            else if(m=="x25519"||m=="x448") asym_mode=true;   // 曲线由收件人公钥串决定
             else { std::cerr<<"Unknown mode: "<<m<<"\n"; return 1; }
+        }
+        else if(arg=="-x448") {
+            x448_mode=true;
         }
         else if(arg=="-i"&&i+1<argc) {
             input_paths.push_back(argv[++i]);
@@ -1167,7 +1273,7 @@ int main(int argc,char* argv[]) {
             restore_name=true;
         }
         else if(arg=="--obfuscate-name"||arg=="-on") {
-            obfuscate_name=true;   // 仅 -m rage：混淆输出文件名（原始名不可恢复）
+            obfuscate_name=true;   // 强制混淆输出文件名（初始名已加密存在文件尾信封）
         }
         else if(arg=="--sha256") {
             force_sha256=true;     // 功能10：本次加密生成校验单
@@ -1196,7 +1302,51 @@ int main(int argc,char* argv[]) {
             std::cout<<"zstd=0\n";
 #endif
             std::cout<<"aegis="<<(aegis256_supported()?1:0)<<"\n";
+            std::cout<<"sm4="<<(sm4_supported()?1:0)<<"\n";
+            std::cout<<"pqc="<<(pqc_supported()?1:0)<<"\n";
             return 0;
+        }
+        else if(arg=="--preview") {
+            preview_mode=true;
+            // 预览即解密的一种：未显式给 -d/-e 等动作时，自动按解密处理
+            if(action==ACTION_NONE) action=ACTION_DECRYPT;
+        }
+        else if(arg=="--max-bytes"&&i+1<argc) {
+            preview_max=(size_t)std::strtoull(argv[++i],nullptr,10);
+            if(preview_max==0) {
+                std::cerr<<"--max-bytes requires a positive integer.\n";
+                return 1;
+            }
+        }
+        else if(arg=="--pqc") {
+            pqc_on=true;
+            wm_spec.pqc=true;
+        }
+        else if(arg=="--no-pqc") {
+            pqc_on=false;
+            wm_spec.pqc=false;
+        }
+        else if(arg=="--watermark") {
+            wm_spec.enabled=true;
+            wm_spec.pqc=pqc_on;
+        }
+        else if(arg=="--no-watermark") {
+            wm_spec.enabled=false;
+        }
+        else if(arg=="--wm-sign"&&i+1<argc) {
+            wm_spec.sign_key=argv[++i];
+        }
+        else if(arg=="--wm-verify"&&i+1<argc) {
+            wm_verify_pem=argv[++i];
+        }
+        else if(arg=="--wm-keygen"&&i+1<argc) {
+            wm_keygen_mode=true;
+            wm_keygen_path=argv[++i];
+        }
+        else if(arg=="--watermark-extract"&&i+1<argc) {
+            if(action!=ACTION_NONE) { std::cerr<<"Multiple modes specified.\n"; return 1; }
+            action=ACTION_WATERMARK;    // 只读尾部水印，不需要口令
+            input_paths.push_back(argv[++i]);
         }
         else if(arg[0]!='-') {
             input_paths.push_back(arg);
@@ -1211,15 +1361,34 @@ int main(int argc,char* argv[]) {
     bool is_batch=(action==ACTION_BATCH_ENCRYPT||action==ACTION_BATCH_DECRYPT);
     bool is_encrypt=(action==ACTION_ENCRYPT||action==ACTION_BATCH_ENCRYPT);
 
+    // --wm-keygen <file> 不设置 action（它单独完成一次签名密钥生成），
+    // 必须排在 usage 短路之前，否则只有这一个开关时会被当成无动作直接打印帮助。
+    if(wm_keygen_mode) {
+        std::string pub_pem, err;
+        if(!wm_generate_keypair(wm_keygen_path, pqc_on, pub_pem, err)) {
+            std::cerr<<err<<"\n";
+            return 1;
+        }
+        std::cout<<pub_pem;
+        std::cout.flush();
+        std::cerr<<"Private key written to: "<<wm_keygen_path<<"\n";
+        std::cerr<<"Public key (PEM) printed above - save it for --wm-verify.\n";
+        return 0;
+    }
+
     if(action==ACTION_NONE) {
         print_usage();
         return 0;
     }
 
-    // Key generation needs no input file: -g [-o <dir>]
+    // Key generation needs no input file: -g [-o <dir>] [-x448] [--no-pqc]
     if(action==ACTION_KEYGEN) {
-        return run_keygen(output_dir,force_overwrite) ? 0 : 1;
+        uint8_t kalgo = RECIP_ALGO_X25519;
+        if(pqc_on)                     kalgo = RECIP_ALGO_MLKEM;   // 默认：X25519 + ML-KEM-768
+        else if(x448_mode)             kalgo = RECIP_ALGO_X448;
+        return run_keygen(output_dir,force_overwrite,kalgo) ? 0 : 1;
     }
+    // --wm-keygen 分支已上移至 usage 短路之前（见上方）
 
     // 功能1：密钥库管理（-L）。子命令与操作数走位置参数（list/add/remove/show/pub/export）
     if(action==ACTION_KEYLIB) {
@@ -1234,9 +1403,18 @@ int main(int argc,char* argv[]) {
         return all?0:1;
     }
 
+    // 水印查看：--watermark-extract（尾部只读，可批量）
+    if(action==ACTION_WATERMARK) {
+        if(input_paths.empty()) { std::cerr<<"No input files specified.\n"; return 1; }
+        bool all=true;
+        for(const auto& p: input_paths) if(!run_watermark(p, wm_verify_pem, pqc_on)) all=false;
+        return all?0:1;
+    }
+
     // -G（口令派生）/ -Y（公钥导出）/ -V（校验）/ -R（还原名）/ -H（查看头）只需密钥材料或输入文件
     if(input_paths.empty()&&action!=ACTION_DERIVE&&action!=ACTION_PUBKEY
-       &&action!=ACTION_VERIFY&&action!=ACTION_RECOVER&&action!=ACTION_INFO) {
+       &&action!=ACTION_VERIFY&&action!=ACTION_RECOVER&&action!=ACTION_INFO
+       &&action!=ACTION_WATERMARK) {
         std::cerr<<"No input paths specified.\n";
         print_usage();
         return 1;
@@ -1247,12 +1425,7 @@ int main(int argc,char* argv[]) {
         return 1;
     }
 
-    // 源文件处置对加密（删明文）与解密（删 .ptd）均有效；仅 rage 非对称分支不适用。
-    if(source_action!=0&&asym_mode) {
-        std::cerr<<"Source handling options (-de / --wipe-source / --recycle-source) "
-                   "are not supported for -m rage (asymmetric).\n";
-        return 1;
-    }
+    // 源文件处置对加密（删明文）与解密（删 .ptd）均有效，非对称分支同样支持。
 
     // 压缩选项校验：仅对称加密可用；未集成 zstd 时拒绝；级别需在 zstd 支持范围内
     if(compress_level!=0) {
@@ -1260,10 +1433,6 @@ int main(int argc,char* argv[]) {
         std::cerr<<"Compression requested but this build was compiled without zstd support.\n";
         return 1;
 #endif
-        if(asym_mode) {
-            std::cerr<<"Compression (-z/--compression-level) is only available for symmetric modes, not -m rage/age.\n";
-            return 1;
-        }
         if(!is_encrypt) {
             std::cerr<<"-z/--compression-level is only valid for encryption (-e/-be).\n";
             return 1;
@@ -1296,7 +1465,7 @@ int main(int argc,char* argv[]) {
             return 1;
         }
         if(!asym_mode) {
-            std::cerr<<"-K applies only to -m rage mode.\n";
+            std::cerr<<"-K applies only to -m x25519/x448 mode.\n";
             return 1;
         }
         std::string kerr;
@@ -1392,6 +1561,9 @@ int main(int argc,char* argv[]) {
                 }
             }
         }
+        // 交互与 GUI 管道常以回车结尾（PowerShell 管道会附加换行、终端输入按回车确认），
+        // 剥离尾部换行，否则密码含 \r\n 导致派生出的 KEK 与加密时不一致、解不开文件。
+        while(!sbuf.empty() && (sbuf.back()=='\n'||sbuf.back()=='\r')) sbuf.pop_back();
         if(sbuf.empty()) {
             std::cerr<<"No key material received from stdin (--key-stdin).\n";
             return 1;
@@ -1414,6 +1586,21 @@ int main(int argc,char* argv[]) {
 #else
             unsetenv("ENCRYPTOR_KEY");
 #endif
+        }
+    }
+
+    // 解密侧自动识别非对称：输入是 .ptd 且密钥材料本身就是身份私钥时走非对称通道，
+    // 不必再显式写 -m x25519（两个 GUI 都只给「私钥文件」一个入口直接解密）。
+    if(!asym_mode && !is_encrypt && used_key_source && looks_like_identity(password)) {
+        for(const std::string& p: input_paths) {
+            std::string low=p;
+            std::transform(low.begin(),low.end(),low.begin(),
+                [](unsigned char c){ return (char)std::tolower(c); });
+            if(low.size()>=4 && low.compare(low.size()-4,4,".ptd")==0) {
+                asym_mode=true;
+                log_event(LOG_INFO,"asym_mode",{{"auto","identity"}});
+                break;
+            }
         }
     }
 
@@ -1448,14 +1635,20 @@ int main(int argc,char* argv[]) {
         }
         if(action==ACTION_PUBKEY) return run_pubkey(password)?0:1;
         if(action==ACTION_VERIFY) {
+            // 非对称容器的校验要用身份私钥解裹 DEK，对称口令文件不适用
+            const std::string ident = (asym_mode||looks_like_identity(password))
+                ? normalize_identity(password) : std::string();
             bool all=true;
-            for(const auto& p: input_paths) if(!run_verify(p,password)) all=false;
+            for(const auto& p: input_paths) if(!run_verify(p,password,ident)) all=false;
             return all?0:1;
         }
         // ACTION_RECOVER：--rename 启用原地重命名（内容不变）
         {
+            const std::string ident = (asym_mode||looks_like_identity(password))
+                ? normalize_identity(password) : std::string();
             bool all=true;
-            for(const auto& p: input_paths) if(!run_recover(p,password,recover_rename)) all=false;
+            for(const auto& p: input_paths)
+                if(!run_recover(p,password,recover_rename,ident)) all=false;
             return all?0:1;
         }
     }
@@ -1531,10 +1724,12 @@ int main(int argc,char* argv[]) {
     g_force_decrypt=force_decrypt;
 
     if(asym_mode) {
-        all_ok=run_asym(input_paths,output_dir,is_encrypt,source_action,force_overwrite,recipient_spec,keyfile_path,password,obfuscate_name,lib_recipients);
+        // 输出名策略与对称路径一致：配置 obfuscate_names 默认开启时非对称也混淆，-on 可强制
+        all_ok=run_asym(input_paths,output_dir,is_encrypt,source_action,force_overwrite,recipient_spec,keyfile_path,password,
+            obfuscate_name||global_config().obfuscate_names,lib_recipients,mode,compress_level);
     }
     else if(is_batch) {
-        all_ok=process_files(input_paths,output_dir,password,mode,is_encrypt,source_action,force_overwrite,num_threads,restore_name,compress_level);
+        all_ok=process_files(input_paths,output_dir,password,mode,is_encrypt,source_action,force_overwrite,num_threads,restore_name,compress_level,wm_spec.enabled?&wm_spec:nullptr);
     }
     else {
         // 单文件处理放入 lambda：用 early-return 替代 goto cleanup_password，
@@ -1620,7 +1815,8 @@ int main(int argc,char* argv[]) {
             }
 
             // 覆盖提示：基于最终输出路径（加密问 .ptd、解密问明文文件）
-            if(!force_overwrite && !has_resume_meta) {
+            // 预览模式不落盘，无需覆盖确认
+            if(!force_overwrite && !has_resume_meta && !preview_mode) {
                 std::ifstream test;
                 if(open_stream(test,out_path,std::ios::in)&&test.good()) {
                     test.close();
@@ -1640,7 +1836,8 @@ int main(int argc,char* argv[]) {
                 // 防御性兜底：任何未预期异常（如编码转换失败）都以干净错误退出，
                 // 而非未捕获导致 std::terminate/fastfail（GUI 侧表现为"进程崩溃"）。
                 try {
-                    ok=encrypt_file(in_path,out_path,password,mode,nullptr,true,compress_level);
+                    ok=encrypt_file(in_path,out_path,password,mode,nullptr,true,compress_level,
+                                    false,nullptr,wm_spec.enabled?&wm_spec:nullptr);
                 } catch(const std::exception& e) {
                     fprintf(stderr,"Error: encryption failed: %s\n",e.what());
                     ok=false;
@@ -1657,9 +1854,17 @@ int main(int argc,char* argv[]) {
                 if(ok && write_sha256_enabled()) write_sha256_sidecar(out_path); // 功能10：校验单
             }
             else {
-                std::cout<<"Decrypting: "<<in_path<<" -> "<<out_path<<"\n";
+                if(preview_mode) {
+                    std::cerr<<"Previewing first "<<preview_max<<" bytes of: "<<in_path<<"\n";
+                } else {
+                    std::cout<<"Decrypting: "<<in_path<<" -> "<<out_path<<"\n";
+                }
                 try {
-                    ok=decrypt_file(in_path,out_path,password,nullptr,false,true);
+                    // 预览：传入 preview_max，并用空回调抑制进度条（避免污染 stdout 的明文前缀）
+                    std::function<void(size_t,size_t)> noop_cb=[](size_t,size_t){};
+                    ok=decrypt_file(in_path,out_path,password,
+                        preview_mode?noop_cb:nullptr,false,true,
+                        nullptr,nullptr,0,false,preview_mode?preview_max:0);
                 } catch(const std::exception& e) {
                     fprintf(stderr,"Error: decryption failed: %s\n",e.what());
                     ok=false;

@@ -1,0 +1,47 @@
+<Project Sdk="WixToolset.Sdk/4.0.5">
+  <PropertyGroup>
+    <!-- 版本唯一来源：Product.wxs 通过 $(var.Version) 消费，MSI 版本与输出文件名一起变 -->
+    <GuiVersion>2.1.0</GuiVersion>
+    <OutputType>Package</OutputType>
+    <OutputName>FileEncryptorGUI-$(GuiVersion)-Qt-Windows</OutputName>
+    <Platform>x64</Platform>
+    <SuppressIces>ICE03</SuppressIces>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="WixToolset.UI.wixext" Version="4.0.5" />
+    <PackageReference Include="WixToolset.Util.wixext" Version="4.0.5" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <!-- Qt GUI 构建输出（静态链接，目录下只有 exe；Updater.exe 由 build_updater.ps1 拷入） -->
+    <QtBuildDirName Condition="'$(QtBuildDirName)' == ''">x64-release</QtBuildDirName>
+    <!-- 目录属性末尾不留反斜杠：拼进 cmake 命令行时会被当成转义引号，路径直接失效 -->
+    <QtBuildDir Condition="'$(QtBuildDir)' == ''">$(MSBuildThisFileDirectory)..\..\GUI-Qt\out\build\$(QtBuildDirName)</QtBuildDir>
+    <QtStageSrcDir>$(QtBuildDir)\</QtStageSrcDir>
+    <!-- 暂存目录：WiX 只引用固定文件名，Qt 的 exe 名带版本号，在这里统一重命名 -->
+    <QtStageDir>$(MSBuildThisFileDirectory)bin\qt\</QtStageDir>
+    <DefineConstants>PublishDir=$(QtStageDir);Version=$(GuiVersion)</DefineConstants>
+  </PropertyGroup>
+
+  <!-- 构建 MSI 前先编 Qt GUI，VS 里点一次「生成」就能出安装包，不必手动先过一遍 CMake -->
+  <Target Name="BuildQtBeforePackage" BeforeTargets="BeforeBuild">
+    <Exec Command="cmake --build &quot;$(QtBuildDir)&quot; --target FileEncryptorGUI --config $(Configuration)"
+          Condition="Exists('$(QtBuildDir)CMakeCache.txt')" />
+  </Target>
+
+  <!-- 构建 MSI 前把 Qt GUI 与 Updater 拷进暂存目录，供 Product.wxs 引用 -->
+  <Target Name="StageQtFilesBeforeBuild" BeforeTargets="BeforeBuild">
+    <PropertyGroup>
+      <QtGuiExePath>$(QtStageSrcDir)FileEncryptorGUI-$(GuiVersion)-Qt-Windows.exe</QtGuiExePath>
+    </PropertyGroup>
+    <Error Condition="!Exists('$(QtGuiExePath)')"
+           Text="Qt GUI 产物不存在：$([System.IO.Path]::GetFullPath('$(QtGuiExePath)'))。用 -p:QtBuildDir=&lt;目录&gt; 指定构建目录，或先手动构建目标 FileEncryptorGUI。" />
+    <Copy SourceFiles="$(QtGuiExePath)"
+          DestinationFiles="$(QtStageDir)\FileEncryptorGUI-Qt.exe"
+          SkipUnchangedFiles="true" Condition="Exists('$(QtGuiExePath)')" />
+    <Copy SourceFiles="$(QtStageSrcDir)Updater.exe"
+          DestinationFiles="$(QtStageDir)\Updater.exe"
+          SkipUnchangedFiles="true"
+          Condition="Exists('$(QtStageSrcDir)Updater.exe')" />
+  </Target>
+</Project>

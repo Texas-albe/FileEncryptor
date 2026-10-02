@@ -9,3 +9,5 @@ io_buffer_size: 1MB       # 内部流式缓冲（可写 512KB / 2MB 等）
 max_speed: 0              # 0 = 不限速；可写 10MB/s、1.5GB/s、512KB/s（进程级总吞吐上限）
 max_path_length: 0        # 0 = 不限
 path_whitelist_enabled: false
+crypto:
+  default_cipher: xchacha20   # xchacha20 / aegis256（CLI 未指定 -m 时生效）

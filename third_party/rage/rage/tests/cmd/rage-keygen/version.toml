@@ -1,6 +1,0 @@
-bin.name = "rage-keygen"
-args = "--version"
-stdout = """
-rage-keygen 0.12.1
-"""
-stderr = ""

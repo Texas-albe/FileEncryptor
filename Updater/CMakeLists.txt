@@ -2,6 +2,18 @@
 # HTTP 层用 libcurl：Windows/Linux 均从 bundled 源码静态编译；产物名固定 Updater(.exe)。
 
 cmake_minimum_required(VERSION 3.20)
+
+# 必须在 project() 之前钉住链接器（同 CLI，见 CLI/CMakeLists.txt 注释）
+if(WIN32)
+  find_program(FE_CL_EXECUTABLE NAMES cl.exe
+               HINTS "$ENV{VCToolsInstallDir}/bin/Hostx64/x64"
+                     "$ENV{VCToolsInstallDir}/bin/Hostx86/x64")
+  if(FE_CL_EXECUTABLE)
+    get_filename_component(FE_CL_DIR "${FE_CL_EXECUTABLE}" DIRECTORY)
+    set(CMAKE_LINKER "${FE_CL_DIR}/link.exe" CACHE FILEPATH "MSVC 链接器" FORCE)
+  endif()
+endif()
+
 project(Updater VERSION 1.0.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
@@ -55,21 +67,20 @@ set(CURL_USE_PKGCONFIG OFF CACHE BOOL "" FORCE)  # 禁 pkg-config 检测
 set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)      # 不编译 curl 示例程序
 
 if(WIN32)
-  # 静态 OpenSSL 需先就位，curl 后端检测与 Updater 链接才拿得到
-  include(${CMAKE_CURRENT_LIST_DIR}/cmake/openssl_windows.cmake)
-  run_openssl_windows_build(
-    SRC_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/openssl")
-  set(OPENSSL_ROOT_DIR "${FE_OSSL_PREFIX}")
-  set(OPENSSL_USE_STATIC_LIBS ON)
-  find_package(OpenSSL REQUIRED)
-  set(CURL_USE_SCHANNEL OFF CACHE BOOL "" FORCE) # 用 OpenSSL 而非系统 TLS
-  set(CURL_USE_OPENSSL ON CACHE BOOL "" FORCE)
-  set(CURL_WINDOWS_SSPI ON CACHE BOOL "" FORCE)  # Windows SSP
+  # Windows 走 Schannel（系统原生 TLS）：curl 的 OpenSSL 后端在 Windows 上不读系统证书库，
+  # 而 Updater 目录里往往没有 ca-bundle.crt，TLS 校验必失败（用户侧表现为「检查不了更新」）。
+  # updater.cpp 自带 SHA256，Windows 下 Updater 不再需要 OpenSSL。
+  set(CURL_USE_SCHANNEL ON CACHE BOOL "" FORCE)
+  set(CURL_USE_OPENSSL OFF CACHE BOOL "" FORCE)
+  set(CURL_WINDOWS_SSPI ON CACHE BOOL "" FORCE)  # Schannel 需要 SSPI
 else()
   set(CURL_USE_OPENSSL ON CACHE BOOL "" FORCE)   # Linux 用系统 OpenSSL
   set(OPENSSL_USE_STATIC_LIBS ON)                # curl 内部检测也走静态
 endif()
 
+# Updater 只要静态库，不要 curl 的安装规则：否则 libcurl 的 curl-config、
+# pkgconfig、头文件与 man page 会冒泡进顶层，把 Updater 的 DEB/RPM 撑到 500+ 文件
+set(CURL_DISABLE_INSTALL ON CACHE BOOL "" FORCE)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../third_party/curl
                  ${CMAKE_CURRENT_BINARY_DIR}/curl-build)
 
@@ -133,9 +144,8 @@ if(NOT WIN32)
 endif()
 
 if(WIN32)
-  # 静态 OpenSSL 在 Windows 上还要这些系统库
+  # Schannel 链接所需的系统库
   target_link_libraries(Updater PRIVATE
-      OpenSSL::SSL OpenSSL::Crypto
       ws2_32 crypt32 advapi32 user32 bcrypt ncrypt iphlpapi)
 endif()
 

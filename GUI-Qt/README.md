@@ -4,7 +4,7 @@
 
 FileEncryptor **图形界面**。Windows 侧使用 **WinUI 3**（Windows App SDK，C#），Linux 侧使用 **Qt 6**（Widgets，C++，静态链接）。两个平台共享同一份 CLI 后端，界面各自独立实现。
 
-- 程序版本 **2.0.3**（配套 CLI 2.4.5）。
+- 程序版本 **2.1.0**（配套 CLI 2.7.0）。
 
 ---
 
@@ -64,8 +64,8 @@ sudo apt install qt6-base-dev
 cmake --preset linux-release
 cmake --build --preset linux-release
 # 构建完成后自动：
-#   - 拷到 out/Ubuntu-26.04/build/linux-release/bin/FileEncryptorGUI-2.0.3-Qt-Linux
-#   - cpack 生成 out/packages/file-encryptor-gui-qt-2.0.3-Linux.deb 和 .rpm
+#   - 拷到 out/Ubuntu-26.04/build/linux-release/bin/FileEncryptorGUI-2.1.0-Qt-Linux
+#   - cpack 生成 out/packages/file-encryptor-gui-qt-2.1.0-Linux.deb 和 .rpm
 ```
 
 > **Linux 中文字体（豆腐块修复）**：最小化 / 服务器环境常无 CJK 字体，界面中文会渲染成方块（□）。

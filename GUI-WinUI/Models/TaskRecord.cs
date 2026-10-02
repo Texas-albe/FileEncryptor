@@ -26,8 +26,13 @@ public class TaskRecord
     [JsonPropertyName("sha256")] public bool Sha256 { get; set; }
     [JsonPropertyName("compress")] public bool Compress { get; set; }
     [JsonPropertyName("compressionLevel")] public int CompressionLevel { get; set; }
+    // 非对称模式下的文件载荷对称算法（xchacha20 / aegis256 / sm4）
+    [JsonPropertyName("fileCipher")] public string FileCipher { get; set; } = "";
     [JsonPropertyName("keyfile")] public string Keyfile { get; set; } = "";
     [JsonPropertyName("recipient")] public string Recipient { get; set; } = "";
     [JsonPropertyName("identity")] public string Identity { get; set; } = "";
     [JsonPropertyName("restoreName")] public bool RestoreName { get; set; }
+    [JsonPropertyName("pqc")] public bool Pqc { get; set; } = true;
+    [JsonPropertyName("watermark")] public bool Watermark { get; set; }
+    [JsonPropertyName("watermarkKey")] public string WatermarkKey { get; set; } = "";
 }

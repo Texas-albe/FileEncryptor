@@ -40,26 +40,37 @@ CliNotFoundDialog::CliNotFoundDialog(const QString& detailMessage, QWidget* pare
     setModal(true);
     m_net = new QNetworkAccessManager(this);
     auto* root = new QVBoxLayout(this);
-    auto* iconRow = new QHBoxLayout;
+
+    // 图标与「无法找到… / 程序需要…」两行文案放同一行
+    auto* headRow = new QHBoxLayout;
     QLabel* iconLabel = new QLabel;
     iconLabel->setPixmap(QApplication::style()->standardIcon(QStyle::SP_MessageBoxCritical).pixmap(48, 48));
-    iconRow->addWidget(iconLabel);
-    iconRow->addStretch();
-    root->addLayout(iconRow);
-    auto* mainLabel = new QLabel(tr("<b>无法找到 FileEncryptor CLI 可执行文件</b><br/><br/>程序需要 FileEncryptorCLI 命令行工具来执行加密/解密操作。"));
-    mainLabel->setWordWrap(true);
-    root->addWidget(mainLabel);
+    headRow->addWidget(iconLabel);
+    auto* headText = new QVBoxLayout;
+    headText->setSpacing(2);
+    auto* titleLabel = new QLabel(tr("<b>无法找到 FileEncryptor CLI 可执行文件</b>"));
+    auto* subLabel = new QLabel(tr("程序需要 FileEncryptorCLI 命令行工具来执行加密/解密操作。"));
+    for (QLabel* t : { titleLabel, subLabel }) {
+        t->setWordWrap(true);
+        headText->addWidget(t);
+    }
+    headRow->addLayout(headText, 1);
+    headRow->addStretch();
+    root->addLayout(headRow);
+
+    // 不再单独设「详细信息」段：预置文件名、当前程序目录、可设置环境变量三项平铺
     const QStringList expected = FileEncryptorLocator::getExpectedNames();
-    QString detail = tr("预期文件名：") + "<br/>";
+    QString info = tr("预期文件名：") + QStringLiteral("<br/>");
     for (const QString& name : expected)
-        detail += QStringLiteral("&nbsp;&nbsp;• %1<br/>").arg(name);
-    detail += tr("<br/>当前程序目录：%1").arg(FileEncryptorLocator::selfDir());
-    if (!detailMessage.isEmpty()) detail += tr("<br/>详细信息：%1").arg(detailMessage);
+        info += QStringLiteral("&nbsp;&nbsp;• %1<br/>").arg(name);
+    info += tr("<br/>当前程序目录：%1<br/>").arg(FileEncryptorLocator::selfDir());
+    info += tr("也可设置环境变量 FILEENCRYPTOR_EXE 指向 CLI 程序路径。");
+    (void)detailMessage;
     const QString muted=QLatin1String(ThemeManager::mutedTextHex());
-    auto* detailLabel = new QLabel(detail);
-    detailLabel->setWordWrap(true);
-    detailLabel->setStyleSheet(QStringLiteral("QLabel{font-size:10pt;color:%1;}").arg(muted));
-    root->addWidget(detailLabel);
+    auto* infoLabel = new QLabel(info);
+    infoLabel->setWordWrap(true);
+    infoLabel->setStyleSheet(QStringLiteral("QLabel{font-size:10pt;color:%1;}").arg(muted));
+    root->addWidget(infoLabel);
     m_statusLabel = new QLabel;
     m_statusLabel->setWordWrap(true);
     m_statusLabel->setStyleSheet(QStringLiteral("QLabel{font-size:9pt;color:%1;}").arg(muted));
@@ -85,7 +96,14 @@ CliNotFoundDialog::~CliNotFoundDialog() {
     if (!m_tempPath.isEmpty()) QFile::remove(m_tempPath);
 }
 void CliNotFoundDialog::onRetry() { m_retry = true; accept(); }
-void CliNotFoundDialog::onCancel() { m_retry = false; reject(); }
+void CliNotFoundDialog::onCancel() {
+    // 先把 reply 摘掉再 abort，否则 abort 同步触发的 finished 会走进网络错误分支
+    QNetworkReply* r=m_currentReply;
+    m_currentReply=nullptr;
+    if(r) { r->abort(); r->deleteLater(); }
+    m_retry=false;
+    reject();
+}
 
 void CliNotFoundDialog::onDownload() {
     m_downloadBtn->setEnabled(false);
@@ -262,6 +280,7 @@ void CliNotFoundDialog::installFromTemp() {
     }
     m_tempPath.clear();
     m_assetData.clear();
+    m_downloaded=true;
     QString msg = tr("下载完成：%1").arg(QFileInfo(m_savePath).fileName());
     if (m_shaWarned) msg += tr("（未提供 SHA256 校验文件，已跳过完整性校验）");
     m_statusLabel->setText(msg);
@@ -276,7 +295,3 @@ void CliNotFoundDialog::failDownload(const QString& msg) {
     m_downloadBtn->setEnabled(true);
 }
 
-bool CliNotFoundDialog::showAndAsk(QWidget* parent) {
-    CliNotFoundDialog dlg(QString(), parent);
-    return dlg.exec() == QDialog::Accepted && dlg.m_retry;
-}

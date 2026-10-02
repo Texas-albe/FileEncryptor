@@ -1,9 +1,11 @@
 <Project Sdk="WixToolset.Sdk/4.0.5">
   <PropertyGroup>
+    <!-- 版本唯一来源：Product.wxs 通过 $(var.Version) 消费，MSI 版本与输出文件名一起变 -->
+    <GuiVersion>2.1.0</GuiVersion>
     <OutputType>Package</OutputType>
-    <OutputName>FileEncryptorGUI-2.0.1-WinUI-Windows</OutputName>
+    <OutputName>FileEncryptorGUI-$(GuiVersion)-WinUI-Windows</OutputName>
     <Platform>x64</Platform>
-    <DefineConstants>PublishDir=..\bin\x64\Release\net8.0-windows10.0.19041.0\win-x64\publish</DefineConstants>
+    <DefineConstants>PublishDir=..\bin\x64\Release\net8.0-windows10.0.19041.0\win-x64\publish;Version=$(GuiVersion)</DefineConstants>
     <SuppressIces>ICE03</SuppressIces>
   </PropertyGroup>
   <ItemGroup>
@@ -18,5 +20,10 @@
              Properties="Configuration=$(Configuration);Platform=x64;RuntimeIdentifier=win-x64;SelfContained=true" />
     <Copy SourceFiles="..\bin\x64\$(Configuration)\net8.0-windows10.0.19041.0\win-x64\App.xbf;..\bin\x64\$(Configuration)\net8.0-windows10.0.19041.0\win-x64\MainWindow.xbf;..\bin\x64\$(Configuration)\net8.0-windows10.0.19041.0\win-x64\TaskNotificationWindow.xbf"
           DestinationFolder="..\bin\x64\$(Configuration)\net8.0-windows10.0.19041.0\win-x64\publish" />
+    <!-- Updater 由 build_updater.ps1 产出，publish 后补拷，MSI 才能把更新器一并装入 -->
+    <Copy SourceFiles="..\bin\x64\$(Configuration)\net8.0-windows10.0.19041.0\win-x64\Updater.exe"
+          DestinationFolder="..\bin\x64\$(Configuration)\net8.0-windows10.0.19041.0\win-x64\publish"
+          Condition="Exists('..\bin\x64\$(Configuration)\net8.0-windows10.0.19041.0\win-x64\Updater.exe')"
+          SkipUnchangedFiles="true" />
   </Target>
 </Project>

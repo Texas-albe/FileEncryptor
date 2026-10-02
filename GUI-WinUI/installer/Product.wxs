@@ -3,9 +3,9 @@
      xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui"
      xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
 
-  <Package Name="FileEncryptor GUI"
+    <Package Name="FileEncryptor GUI (WinUI)"
            Manufacturer="FileEncryptor"
-           Version="2.0.1"
+           Version="$(var.Version)"
            UpgradeCode="12345678-1234-1234-1234-1234567890AB"
            Language="1033" Codepage="utf-8">
 
@@ -42,10 +42,11 @@
                   Return="asyncNoWait" />
 
     <!-- Main program: required (Level=1 + Absent=disallow, always installed) -->
-    <Feature Id="MainFeature" Title="FileEncryptor GUI" Level="1"
+    <Feature Id="MainFeature" Title="FileEncryptor GUI (WinUI)" Level="1"
              Description="The main FileEncryptor graphical user interface (WinUI 3). Required.">
       <ComponentGroupRef Id="AppFiles" />
       <ComponentRef Id="MainExe" />
+      <ComponentRef Id="UpdaterExe" />
       <ComponentRef Id="StartMenuShortcut" />
       <ComponentRef Id="DesktopShortcut" />
     </Feature>
@@ -72,10 +73,10 @@
   <Fragment>
     <Directory Id="TARGETDIR" Name="SourceDir">
       <Directory Id="ProgramFiles64Folder">
-        <Directory Id="INSTALLFOLDER" Name="FileEncryptor" />
+        <Directory Id="INSTALLFOLDER" Name="FileEncryptor (WinUI)" />
       </Directory>
       <Directory Id="ProgramMenuFolder">
-        <Directory Id="ProgramMenuDir" Name="FileEncryptor" />
+        <Directory Id="ProgramMenuDir" Name="FileEncryptor (WinUI)" />
       </Directory>
       <Directory Id="DesktopFolder" />
     </Directory>
@@ -85,6 +86,11 @@
     <!-- Main exe (separate component for shortcut reference) -->
     <Component Id="MainExe" Directory="INSTALLFOLDER">
       <File Id="MainExeFile" Source="$(var.PublishDir)\FileEncryptorGUI.WinUI3.exe" KeyPath="yes" />
+    </Component>
+
+    <!-- Auto-update helper: needed by the GUI to check and apply updates -->
+    <Component Id="UpdaterExe" Directory="INSTALLFOLDER">
+      <File Id="UpdaterExeFile" Source="$(var.PublishDir)\Updater.exe" KeyPath="yes" />
     </Component>
 
     <Component Id="StartMenuShortcut" Directory="ProgramMenuDir">
@@ -100,7 +106,7 @@
 
     <Component Id="DesktopShortcut" Directory="DesktopFolder">
       <Shortcut Id="DesktopSc"
-                Name="FileEncryptor GUI"
+                Name="FileEncryptor GUI (WinUI)"
                 Target="[#MainExeFile]"
                 WorkingDirectory="INSTALLFOLDER"
                 Icon="app.ico" />

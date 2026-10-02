@@ -4,6 +4,7 @@
 #include "zstd.h"   // 仅当构建集成了 zstd 预编译库时引入（third_party/zstd/include）
 #endif
 #include <cstdio>
+#include <fcntl.h>
 #include <cstdlib>
 #include <cstring>
 #include <cstdint>
@@ -19,17 +20,26 @@
 #include <sys/stat.h>
 #include <sodium.h>
 #include "config.hpp"
+#include "cipher.hpp"
 #include "progress_frame.hpp"
 #include "ptd_format.hpp"
+#include "asym_crypto.hpp"
+#include "machine_id.hpp"
+#include "watermark.hpp"
 #include "kdf.hpp"
 #include "util/byte_io.hpp"
 #include "util/hex.hpp"
 #include "secure_zero.hpp"
 #include <atomic>
+#ifdef FE_WITH_OPENSSL
+#include <openssl/evp.h>
+#include <openssl/obj_mac.h>
+#endif
 #include <thread>
 #include <mutex>
 #include <condition_variable>
 #include <filesystem>
+#include <ctime>
 
 #ifdef _WIN32
 #include <io.h>      // _isatty / _fileno
@@ -73,6 +83,7 @@ static constexpr size_t PASSWORD_MIN_LEN=6;
 static constexpr size_t AES_GCM_IV_LEN=crypto_aead_aes256gcm_NPUBBYTES;
 static constexpr size_t XCHACHA20_IV_LEN=crypto_aead_xchacha20poly1305_ietf_NPUBBYTES;
 static constexpr size_t AEGIS256_IV_LEN=crypto_aead_aegis256_NPUBBYTES;
+static constexpr size_t SM4_IV_LEN=12;   // GCM 推荐 nonce 长度（SM4 仅在 FE_WITH_OPENSSL 时可用，常量恒定义便于三元式）
 static constexpr size_t AEGIS256_TAG_SIZE=crypto_aead_aegis256_ABYTES;
 static constexpr size_t TAG_SIZE=16;
 static constexpr size_t MAX_TAG_SIZE=AEGIS256_TAG_SIZE;
@@ -103,7 +114,11 @@ static constexpr size_t PROGRESS_SIZE=sizeof(ProgressInfo);
 
 // 辅助：模式查询
 static size_t tag_size_for_mode(CryptoMode m) {
-    return (m==CryptoMode::AEGIS256) ? AEGIS256_TAG_SIZE : TAG_SIZE;
+    if(m==CryptoMode::AEGIS256) return AEGIS256_TAG_SIZE;
+#ifdef FE_WITH_OPENSSL
+    if(m==CryptoMode::SM4)      return 16;
+#endif
+    return TAG_SIZE;
 }
 
 // 认证失败信息泄露防护
@@ -172,7 +187,8 @@ static std::string normalize_path_lexical(const std::string& p) {
 // 源路径+大小+mtime 纳入 .prs 的 HMAC，旧 .prs 无法重放到不同文件。
 static int64_t get_file_size_utf8(const std::string& path);
 // 前向声明：is_complete_output / decrypt_file 需要提前获知尾部（加密名）长度做文件大小校验。
-static bool peek_name_footer_len(const std::string& ptd_path, uint64_t& footer_len);
+static bool peek_name_footer_len(const std::string& ptd_path, uint64_t& footer_len,
+                                 uint32_t* wm_len_out = nullptr);
 
 // 内容令牌：对源文件头部64KB+尾部64KB+总大小求 Blake2b 作指纹，防 mtime 复刻重放；
 // 小文件(<128KB)直接全文哈希，大文件不读全文，开销恒定。
@@ -356,6 +372,39 @@ bool aegis256_supported() {
     return s_supported;
 }
 
+bool sm4_supported() {
+#ifdef FE_WITH_OPENSSL
+    static const bool s_supported = []() -> bool {
+        unsigned char key[16], nonce[12], pt[32], ct[64], pt2[32];
+        unsigned long long ct_len = 0, pt_len = 0;
+        randombytes_buf(key, sizeof(key));
+        randombytes_buf(nonce, sizeof(nonce));
+        memset(pt, 0x5A, sizeof(pt));
+        std::unique_ptr<Cipher> c = create_cipher(CryptoMode::SM4);
+        if(!c) return false;
+        int e = c->encrypt(pt, sizeof(pt), nullptr, 0, nonce, key, ct, ct_len);
+        int d = (e == 0) ? c->decrypt(ct, ct_len, nullptr, 0, nonce, key, pt2, pt_len) : -1;
+        return (e == 0 && d == 0 && pt_len == sizeof(pt) && memcmp(pt, pt2, sizeof(pt)) == 0);
+    }();
+    return s_supported;
+#else
+    return false;
+#endif
+}
+
+// 运行时探测 OpenSSL 是否提供后量子密码（ML-KEM-768 密钥交换 + ML-DSA-65 签名）。
+// 实测 OpenSSL 4.1 的头文件未导出 EVP_PKEY_ML_KEM_768 宏，只能按 NID 建上下文探测。
+bool pqc_supported() {
+#ifdef FE_WITH_OPENSSL
+    static const bool s_supported = []() -> bool {
+        return EVP_PKEY_CTX_new_id(NID_ML_KEM_768, nullptr) != nullptr;
+    }();
+    return s_supported;
+#else
+    return false;
+#endif
+}
+
 bool stdin_is_interactive() {
 #ifdef _WIN32
     return _isatty(_fileno(stdin)) != 0;
@@ -447,7 +496,7 @@ static bool truncate_file(const std::string& path,uint64_t size) {
 }
 
 // 判断路径是否为符号链接 / 重解析点（已存在才报告，不存在返回 false）。
-// v2.1.2：去掉 static `-m rage` 分支（run_asym）需要同样的守卫。
+// v2.1.2：去掉 static，供非对称分支（run_asym）复用同样的守卫。
 bool path_is_symlink(const std::string& path) {
 #ifdef _WIN32
     std::wstring w=utf8_to_wstring(path);
@@ -493,16 +542,11 @@ static std::string resolve_real_path(const std::string& p) {
 }
 
 // 依据 YAML 配置校验输入输出路径（长度上限/白名单根目录）；true 允许，false 拒绝。
-// v2.1.2 去掉 static，供非对称（rage）分支复用。
+// v2.1.2 去掉 static，供非对称分支复用。
 bool validate_io_paths(const std::string& in_path,const std::string& out_path,bool silent) {
     const Config& cfg=global_config();
-    // 1.5.2：原始路径含 ".." 组件一律拒绝（须在规范化前检查，否则 lexically_normal
-    // 会折叠 ".." 而漏掉 "C:/allowed/../../outside/x" 类绕过）。
-    if(path_has_traversal(in_path)||path_has_traversal(out_path)) {
-        if(!silent) fprintf(stderr,"Path contains directory traversal (..): in=%s out=%s\n",
-            in_path.c_str(),out_path.c_str());
-        return false;
-    }
+    // ".." 不再按字面拒绝：C:/allowed/../../outside/x 规范化后是 C:/outside/x，
+    // 下面的白名单前缀比较同样能拦住，而 ../rel.txt 这类正常相对输入仍可用。
     // 规范化（解析 . 与 ..、统一分隔符）后的路径用于白名单前缀比较与长度上限，
     // 堵住基于路径别名的绕过（如 "C:/allowed/./x"、"C:/allowed//x" 等）。
     const std::string in_norm = normalize_path_lexical(in_path);
@@ -791,7 +835,7 @@ struct OutputLockGuard {
 };
 
 // UTF-8 安全的原子替换
-// v2.1.2：去掉 static run_asym 用「先写 .prt 再原子替换」实现 rage 输出落盘。
+// v2.1.2：去掉 static，非对称分支用「先写 .prt 再原子替换」落盘。
 bool replace_file_utf8(const std::string& from,const std::string& to) {
 #ifdef _WIN32
     std::wstring wf=utf8_to_wstring(from);
@@ -1004,7 +1048,18 @@ static bool is_complete_output(const std::string& out_path, bool encrypt, const 
         unsigned char ver=verbuf[4];
         uint64_t hdr_size=header_size_for_version(ver);
         uint64_t orig=0;
-        f.seekg((std::streamoff)(hdr_size+4+4),std::ios::beg);
+        // v6 非对称容器：块元数据之前还有收件人 blob，需先读出其长度再定位 orig_size
+        uint64_t recip_len_meta=0;
+        if(ver==6) {
+            unsigned char h6[HEADER_SIZE_V6];
+            f.seekg(0,std::ios::beg);
+            if(f.read(reinterpret_cast<char*>(h6),HEADER_SIZE_V6)&&
+               (size_t)f.gcount()==HEADER_SIZE_V6) {
+                FileHeaderV6 hv=load_header<FileHeaderV6>(h6);
+                recip_len_meta=get_recip_len(hv.reserved);
+            }
+        }
+        f.seekg((std::streamoff)(hdr_size+recip_len_meta+4+4),std::ios::beg);
         if(!f.read(reinterpret_cast<char*>(&orig),8)) return false;
         return (uint64_t)cur==orig;
     }
@@ -1167,13 +1222,9 @@ static void print_progress(size_t processed,size_t total,
 }
 
 // 文件名 / 扩展名混淆（v1.7.0）
-// 输出 <16hex>.<混淆扩展名>.ptd；混淆名=Blake2b(Blake2b(口令),路径) 确定性，续传命中同一文件且不泄露原名。
-static const char* const OBFUSCATED_EXTS[] = {
-    "png","jpg","jpeg","apng","mp4","mp3","aac","avi","bmp","txt","yaml",
-    "json","js","cpp","hpp","c","md","pdf","doc","docx","ppt","pptx","xls",
-    "xlsx","gif","zip","rar","iso","htm","html","css"
-};
-static constexpr size_t OBFUSCATED_EXT_COUNT=sizeof(OBFUSCATED_EXTS)/sizeof(OBFUSCATED_EXTS[0]);
+// 输出 <16hex>.<3 位小写字母>.ptd；混淆名=Blake2b(Blake2b(口令),路径) 确定性，续传命中同一文件且不泄露原名。
+// 伪扩展名固定 3 位纯小写字母（由 seed 字节取模字母表），不复用真实后缀表，避免误判文件类型。
+static constexpr char OBFUSCATED_ALPHA[] = "abcdefghijklmnopqrstuvwxyz";
 
 // 原始文件名加密存储（v1.7.1）
 // 原名以 XChaCha20-Poly1305 信封追加密文末尾；尾部 [加密名 n+16B][magic "FENX"][len 4B]，最末 8 字节可直接定位；兼容旧 FENM 读取。
@@ -1222,7 +1273,10 @@ std::string make_obfuscated_basename(const std::string& in_path,const SecureBuff
     crypto_generichash(seed,sizeof(seed),
         reinterpret_cast<const unsigned char*>(in_path.data()),in_path.size(),
         key,sizeof(key));
-    std::string result=fe::util::to_hex(seed, 8) + "." + OBFUSCATED_EXTS[seed[8] % OBFUSCATED_EXT_COUNT];
+    std::string ext;
+    ext.reserve(3);
+    for(int i=8;i<11;++i) ext.push_back(OBFUSCATED_ALPHA[seed[i]%26]);
+    std::string result=fe::util::to_hex(seed, 8) + "." + ext;
     // key 为口令派生密钥材料、seed 由其派生：用毕清零栈上残留
     sodium_memzero(key,sizeof(key));
     sodium_memzero(seed,sizeof(seed));
@@ -1311,8 +1365,10 @@ static bool sanitize_restored_name(const std::string& n) {
 
 // 仅读取尾部结构长度（无需密钥），供解密时的文件大小校验使用；
 // 兼容加密尾部(FENX, 含 16 字节 tag)与旧版明文尾部(FENM)。
-static bool peek_name_footer_len(const std::string& ptd_path, uint64_t& footer_len) {
+static bool peek_name_footer_len(const std::string& ptd_path, uint64_t& footer_len,
+                                 uint32_t* wm_len_out) {
     footer_len=0;
+    if(wm_len_out) *wm_len_out=0;
     int64_t sz=get_file_size_utf8(ptd_path);
     if(sz<(int64_t)(NAME_FOOTER_HDR+16)) return false;
     std::ifstream f;
@@ -1329,8 +1385,64 @@ static bool peek_name_footer_len(const std::string& ptd_path, uint64_t& footer_l
     uint64_t env = enc ? (uint64_t)n + NAME_ENV_TAG : (uint64_t)n;
     uint64_t total = env + NAME_FOOTER_HDR;
     if((uint64_t)sz < total) return false;
+    // 尾部布局 [wm_len(4)][水印记录][FENX...]：wm_len 必须计入总长，否则文件被判为截断。
+    // wm_len 位于 FENX 信封起点前 4 字节；越界或与信封重叠的值一律按无水印处理。
+    const uint64_t tail_start = (uint64_t)sz - total;
+    if(tail_start >= 4) {
+        unsigned char wm4[4] = {0};
+        if(f.seekg((std::streamoff)(tail_start-4), std::ios::beg) &&
+           f.read(reinterpret_cast<char*>(wm4), 4) &&
+           (wm4[0]|wm4[1]|wm4[2]|wm4[3]) != 0) {
+            uint32_t wm = ((uint32_t)wm4[0]<<24)|((uint32_t)wm4[1]<<16)|
+                          ((uint32_t)wm4[2]<<8)|(uint32_t)wm4[3];
+            if(wm > 0 && wm <= tail_start - 4 - total) {
+                total += (uint64_t)4 + (uint64_t)wm;
+                if(wm_len_out) *wm_len_out = wm;
+            }
+        }
+    }
     footer_len=total;
     return true;
+}
+
+// 读取尾部水印记录（无需口令）：尾部 [wm_len(4)][记录][FENX...]，wm_len 位于信封起点前 4 字节。
+bool read_watermark(const std::string& ptd_path, WatermarkInfo& out, const std::string& pub_pem,
+                    bool pqc) {
+    out = WatermarkInfo();
+    uint64_t footer=0;
+    uint32_t wm=0;
+    if(!peek_name_footer_len(ptd_path, footer, &wm) || wm==0) return false;
+    const int64_t sz=get_file_size_utf8(ptd_path);
+    if(sz<0 || (uint64_t)sz < footer) return false;
+    // footer 已把 [wm_len(4)][记录] 计入，故 blob 直接从尾部回退 footer 字节处定位
+    const uint64_t blob_start=(uint64_t)sz-footer;
+    std::ifstream f;
+    if(!open_stream(f,ptd_path,std::ios::binary)) return false;
+    std::vector<unsigned char> blob((size_t)wm);
+    f.seekg((std::streamoff)blob_start, std::ios::beg);
+    if(!f.read(reinterpret_cast<char*>(blob.data()),(std::streamsize)wm)) return false;
+    return wm_parse_blob(blob.data(), blob.size(), pqc, pub_pem.empty()?nullptr:&pub_pem, out);
+}
+
+// 追加水印区到文件尾（须在名字尾部之前写，尾部总长由 peek_name_footer_len 统一计算）。
+static bool append_watermark_tail(std::fstream& fout, const WatermarkSpec& spec) {
+    const MachineId mid = collect_machine_id();
+    std::vector<unsigned char> blob;
+    std::string err;
+    if(!wm_sign_and_serialize((uint64_t)std::time(nullptr), mid.id, mid.flags,
+            spec.sign_key, spec.pqc, blob, err)) {
+        fprintf(stderr,"%s\n", err.c_str());
+        return false;
+    }
+    // 尾部顺序：blob → wm_len(4) → 名字信封；长度字段放 blob 之后，
+    // 解密侧仅凭末尾 8 字节就能定位它（无需重算密文长度）
+    fout.seekp(0,std::ios::end);
+    fout.write(reinterpret_cast<const char*>(blob.data()),(std::streamsize)blob.size());
+    unsigned char len4[4];
+    for(int i=0;i<4;++i) len4[i]=(unsigned char)((blob.size()>>(24-8*i))&0xff);
+    fout.write(reinterpret_cast<const char*>(len4),4);
+    fout.flush();
+    return fout.good();
 }
 
 // 解密尾部（需主密钥 + salt）。成功返回原始文件名；失败（密钥错/被篡改/无尾部）返回 false。
@@ -1385,10 +1497,35 @@ static bool decrypt_name_footer(const std::string& ptd_path,
 
 // 公开接口：从密文末尾的加密信封恢复原始文件名。需口令以派生主密钥并解密尾部。
 // 解密失败（密钥错/无尾部）返回 false，调用方回退到基于 .ptd 文件名的命名。
+// v6 非对称容器：从头部后的收件人 blob 取出 stanza，用身份私钥直接解出 DEK
+// （非对称下 dek_box 为空，口令解裹通道不可用，故必须走收件人 stanza）。
+static bool recover_dek_v6_asym(const std::string& ptd_path,
+    const std::string& asym_identity, unsigned char* dek_out) {
+    std::ifstream f;
+    if(!open_stream(f,ptd_path,std::ios::binary)) return false;
+    unsigned char hdrbuf[320];
+    if(!f.read(reinterpret_cast<char*>(hdrbuf),5)) return false;
+    if(memcmp(hdrbuf,MAGIC,4)!=0) return false;
+    unsigned char ver=hdrbuf[4];
+    // VERSION 是 v4 基础布局常量（非最新格式版本），v6 容器必须显式放行，否则非对称 -R 会被误拒。
+    if(ver!=VERSION&&ver!=6) return false;
+    size_t hdr_size=header_size_for_version(ver);
+    if(!f.read(reinterpret_cast<char*>(hdrbuf+5),(std::streamoff)(hdr_size-5))) return false;
+    FileHeaderV6 h6=load_header<FileHeaderV6>(hdrbuf);
+    const uint32_t recip_len=get_recip_len(h6.reserved);
+    if(recip_len==0) return false;
+    std::vector<unsigned char> blob(recip_len);
+    if(!f.read(reinterpret_cast<char*>(blob.data()),recip_len)) return false;
+    std::vector<RecipientStanza> stanzas;
+    if(!parse_recipients(blob.data(),recip_len,stanzas)) return false;
+    return fe_recover_dek_from_stanzas(stanzas, asym_identity, dek_out).ok;
+}
+
 bool read_original_name(const std::string& ptd_path, std::string& out_name,
     const SecureBuffer& password,
     const unsigned char* pre_kek, size_t pre_kek_len,
-    std::vector<unsigned char>* out_kek) {
+    std::vector<unsigned char>* out_kek,
+    const std::string& asym_identity) {
     out_name.clear();
     std::ifstream f;
     if(!open_stream(f,ptd_path,std::ios::binary)) return false;
@@ -1410,19 +1547,25 @@ bool read_original_name(const std::string& ptd_path, std::string& out_name,
     else if(ver==6) { FileHeaderV6 h=load_header<FileHeaderV6>(hdrbuf); memcpy(salt_buf,h.salt,ARGON2_SALT_LEN); salt_ptr=salt_buf; kdf_ops=h.opslimit; kdf_mem=(size_t)h.memlimit_kb*1024; }
     else            { FileHeaderV4 h=load_header<FileHeaderV4>(hdrbuf); memcpy(salt_buf,h.salt,ARGON2_SALT_LEN); salt_ptr=salt_buf; kdf_ops=h.opslimit; kdf_mem=(size_t)h.memlimit_kb*1024; }
     SecureBuffer kek(ARGON2_OUTPUT_LEN);
-    if(pre_kek && pre_kek_len >= ARGON2_OUTPUT_LEN) {
-        std::memcpy(kek.data(), pre_kek, ARGON2_OUTPUT_LEN);
-    } else if(!derive_key(password.data(),password.size(),salt_ptr,kek.data(),kdf_ops,kdf_mem)) {
-        return false;
+    if(asym_identity.empty()) {
+        // 非对称容器口令通道不参与：跳过 Argon2，DEK 从收件人 stanza 直接恢复
+        if(pre_kek && pre_kek_len >= ARGON2_OUTPUT_LEN) {
+            std::memcpy(kek.data(), pre_kek, ARGON2_OUTPUT_LEN);
+        } else if(!derive_key(password.data(),password.size(),salt_ptr,kek.data(),kdf_ops,kdf_mem)) {
+            return false;
+        }
+        if(out_kek) out_kek->assign(kek.data(), kek.data()+ARGON2_OUTPUT_LEN);
     }
-    if(out_kek) out_kek->assign(kek.data(), kek.data()+ARGON2_OUTPUT_LEN);
 
     // v6 容器：文件名信封由 DEK 加密（与载荷一致），KEK 仅用于解裹 DEK。
     // 故 v6 须先解裹出 DEK，再以 DEK 还原文件名；v1-v5 直接以 KEK（载荷密钥）解密。
     if(ver==6) {
         FileHeaderV6 h6=load_header<FileHeaderV6>(hdrbuf);
         unsigned char dek[32];
-        if(!unwrap_dek(h6.dek_box, kek.data(), h6.dek_nonce, dek)) return false;
+        if(!asym_identity.empty() && !recover_dek_v6_asym(ptd_path, asym_identity, dek))
+            return false;
+        else if(asym_identity.empty() &&
+                !unwrap_dek(h6.dek_box, kek.data(), h6.dek_nonce, dek)) return false;
         bool ok=decrypt_name_footer(ptd_path, out_name, dek, salt_ptr);
         sodium_memzero(dek, sizeof(dek));
         return ok;
@@ -1448,6 +1591,7 @@ bool read_ptd_metadata(const std::string& ptd_path, PtdMeta& meta) {
     unsigned char salt_buf[ARGON2_SALT_LEN];
     const unsigned char* salt_ptr=nullptr;
     size_t iv_len=0;
+    size_t recip_len_meta=0;   // v6 非对称容器：收件人 blob 字节数（位于固定头与块元数据之间）
     if(ver==1)      { FileHeaderV1 h=load_header<FileHeaderV1>(hdr); memcpy(salt_buf,h.salt,ARGON2_SALT_LEN); salt_ptr=salt_buf; meta.mode=static_cast<CryptoMode>(h.mode); iv_len=h.iv_len;
                      char hex[65]; sodium_bin2hex(hex,sizeof(hex),h.iv,std::min<size_t>(h.iv_len,24)); meta.iv_hex=hex; }
     else if(ver==2) { FileHeaderV2 h=load_header<FileHeaderV2>(hdr);  memcpy(salt_buf,h.salt,ARGON2_SALT_LEN); salt_ptr=salt_buf; meta.mode=static_cast<CryptoMode>(h.mode); meta.opslimit=h.opslimit; meta.memlimit_kb=h.memlimit_kb; iv_len=h.iv_len;
@@ -1463,6 +1607,7 @@ bool read_ptd_metadata(const std::string& ptd_path, PtdMeta& meta) {
     else if(ver==6) { FileHeaderV6 h=load_header<FileHeaderV6>(hdr); memcpy(salt_buf,h.salt,ARGON2_SALT_LEN); salt_ptr=salt_buf; meta.mode=static_cast<CryptoMode>(h.mode); meta.opslimit=h.opslimit; meta.memlimit_kb=h.memlimit_kb; iv_len=h.iv_len;
                      meta.compression=h.compression; meta.comp_level=h.comp_level;
                      meta.dek_wrapped=true; meta.key_version=get_be32(reinterpret_cast<const unsigned char*>(&h.key_version));
+                     recip_len_meta=get_recip_len(h.reserved);
                      char hex[65]; sodium_bin2hex(hex,sizeof(hex),h.iv,32); meta.iv_hex=hex;
                      char hx2[65]; sodium_bin2hex(hx2,sizeof(hx2),h.plaintext_hash,HASH_SIZE); meta.plaintext_hash_hex=hx2; }
     else            { FileHeaderV4 h=load_header<FileHeaderV4>(hdr); memcpy(salt_buf,h.salt,ARGON2_SALT_LEN); salt_ptr=salt_buf; meta.mode=static_cast<CryptoMode>(h.mode); meta.opslimit=h.opslimit; meta.memlimit_kb=h.memlimit_kb; iv_len=h.iv_len;
@@ -1472,6 +1617,8 @@ bool read_ptd_metadata(const std::string& ptd_path, PtdMeta& meta) {
     // （不在任何版本的头部结构内，故需单独读取）
     uint32_t meta_chunk=0, meta_chunks=0;
     uint64_t meta_orig=0;
+    // 非对称容器：先跳过收件人 blob，再读块元数据
+    if(recip_len_meta>0) f.seekg((std::streamoff)recip_len_meta,std::ios::cur);
     if(f.read(reinterpret_cast<char*>(&meta_chunk),4)&&
        f.read(reinterpret_cast<char*>(&meta_chunks),4)&&
        f.read(reinterpret_cast<char*>(&meta_orig),8)) {
@@ -1489,11 +1636,13 @@ bool read_ptd_metadata(const std::string& ptd_path, PtdMeta& meta) {
 }
 
 // 完整性校验（功能3：只验不解）
-bool verify_ptd(const std::string& ptd_path, const SecureBuffer& password) {
+bool verify_ptd(const std::string& ptd_path, const SecureBuffer& password,
+                const std::string& asym_identity) {
     // 自校验：直接流式解密并计算明文哈希，不再落盘 .verify.tmp（消除 4 倍 I/O）。
-    // decrypt_file 在 verify_only 模式下当且仅当明文长度与存储哈希均匹配时返回 true。
+    // decrypt_file 在 verify_only 模式下当且仅当明文长度与存储哈希均匹配时返回 true；
+    // asym_identity 非空时按非对称容器用身份私钥解裹 DEK，故 -V 不再只支持对称口令文件。
     return decrypt_file(ptd_path, ptd_path, password,
-        nullptr, false, false, nullptr, nullptr, 0, true);
+        nullptr, false, false, nullptr, nullptr, 0, true, 0, asym_identity);
 }
 
 // 密钥轮换 / rewrap（v6 容器）
@@ -1616,9 +1765,16 @@ bool encrypt_file(const std::string& in_path,
     CryptoMode mode,
     std::function<void(size_t,size_t)> progress_callback,
     bool resume,
-    int compress_level) {
+    int compress_level,
+    bool asym_mode,
+    const std::vector<std::string>* asym_recipients,
+    const WatermarkSpec* wm) {
 
     disable_core_dump();
+
+    // 非对称加密：DEK 仅由收件人包装，不经口令，且暂不支持断点续传（强制全新写入）。
+    std::vector<unsigned char> recip_blob_out;
+    if(asym_mode) resume=false;
 
     // 依据 YAML 配置校验输入/输出路径（长度上限 / 白名单）
     if(!validate_io_paths(in_path,out_path,false)) {
@@ -1631,7 +1787,9 @@ bool encrypt_file(const std::string& in_path,
         fprintf(stderr,"Output path contains directory traversal\n");
         return false;
     }
-    if(password.size()<PASSWORD_MIN_LEN) {
+    // 非对称模式：DEK 仅由收件人公钥包装，不依赖口令，故不做口令长度下限校验。
+    const bool asym_active = asym_mode && asym_recipients && !asym_recipients->empty();
+    if(password.size()<PASSWORD_MIN_LEN && !asym_active) {
         fprintf(stderr,"Password too short (min %zu characters)\n",PASSWORD_MIN_LEN);
         return false;
     }
@@ -1663,7 +1821,8 @@ bool encrypt_file(const std::string& in_path,
     uint64_t orig_size=total_size;
 
     size_t iv_len=(mode==CryptoMode::AES_GCM)?AES_GCM_IV_LEN
-                 :(mode==CryptoMode::AEGIS256)?AEGIS256_IV_LEN:XCHACHA20_IV_LEN;
+                 :(mode==CryptoMode::AEGIS256)?AEGIS256_IV_LEN
+                 :(mode==CryptoMode::SM4)?SM4_IV_LEN:XCHACHA20_IV_LEN;
     size_t tag_size=tag_size_for_mode(mode);
 
     // 续传检测：先读已存在输出的头部获取 salt，派生密钥后才能验证 .prs 的 HMAC
@@ -1935,6 +2094,8 @@ bool encrypt_file(const std::string& in_path,
 
     FileHeaderV6 header{};
     bool ok=true;
+    std::unique_ptr<Cipher> ciph=create_cipher(mode);
+    if(!ciph) { fprintf(stderr,"Unsupported encryption mode\n"); return false; }
     std::vector<unsigned char> aad;
     std::vector<unsigned char> plaintext_chunk(CHUNK_SIZE);
     // 压缩帧缓冲（仅压缩模式使用，固定上界 ZSTD_compressBound(CHUNK_SIZE)；无 zstd 时退化为 CHUNK_SIZE）
@@ -1973,8 +2134,11 @@ bool encrypt_file(const std::string& in_path,
 
         // v6 容器：派生 KEK（Argon2id(password,salt)），生成随机 DEK，以德克包裹进容器；
         // 载荷 AEAD 密钥 = DEK，KEK 仅用于包裹/解裹（密钥轮换零重加密的基础）。
+        // 非对称模式：DEK 仅经收件人公钥包装进容器 blob，KEK 不派生（允许空口令）。
         SecureBuffer kek(ARGON2_OUTPUT_LEN);
-        if(!derive_key(password.data(),password.size(),header.salt,kek.data(),
+        if(asym_active) {
+            sodium_memzero(kek.data(), kek.size());
+        } else if(!derive_key(password.data(),password.size(),header.salt,kek.data(),
                 header.opslimit,(size_t)header.memlimit_kb*1024)) {
             ok=false; goto cleanup;
         }
@@ -1982,11 +2146,28 @@ bool encrypt_file(const std::string& in_path,
             unsigned char dek[32];
             randombytes_buf(dek,sizeof(dek));
             put_be32(reinterpret_cast<unsigned char*>(&header.container_len), V6_CONTAINER_LEN);
-            if(!wrap_dek(dek, kek.data(), header.dek_nonce, header.dek_box)) {
-                fprintf(stderr,"DEK wrap failed\n"); ok=false; goto cleanup;
+            if(asym_active) {
+                // 非对称：DEK 以收件人公钥包装进容器收件人 blob，不再经口令 KEK。
+                std::vector<RecipientStanza> stanzas;
+                AsymOutcome aw=fe_wrap_dek_to_recipients(dek,*asym_recipients,stanzas);
+                if(!aw.ok) {
+                    fprintf(stderr,"Recipient wrap failed: %s\n",aw.error.c_str());
+                    sodium_memzero(dek,sizeof(dek)); ok=false; goto cleanup;
+                }
+                if(!serialize_recipients(stanzas, recip_blob_out)) {
+                    fprintf(stderr,"Recipient blob serialize failed\n");
+                    sodium_memzero(dek,sizeof(dek)); ok=false; goto cleanup;
+                }
+                put_recip_len(header.reserved, (uint32_t)recip_blob_out.size());
+                // dek_box 留零：对称口令路径不使用，DEK 仅存于收件人 blob
+                memset(header.dek_box, 0, sizeof(header.dek_box));
+            } else {
+                if(!wrap_dek(dek, kek.data(), header.dek_nonce, header.dek_box)) {
+                    fprintf(stderr,"DEK wrap failed\n"); ok=false; goto cleanup;
+                }
             }
             put_be32(reinterpret_cast<unsigned char*>(&header.key_version), 0);
-            sodium_memzero(header.reserved, sizeof(header.reserved));
+            sodium_memzero(header.reserved + 4, sizeof(header.reserved) - 4);
             memcpy(key.data(), dek, 32);          // 载荷密钥 = DEK
             sodium_memzero(dek, sizeof(dek));
         } else {
@@ -2012,6 +2193,13 @@ bool encrypt_file(const std::string& in_path,
         if(!fout.write(reinterpret_cast<const char*>(&header),
                 use_v6 ? HEADER_SIZE_V6 : (do_compress?HEADER_SIZE_V5:HEADER_SIZE_V4))) {
             fprintf(stderr,"Write header failed\n"); ok=false; goto cleanup;
+        }
+        // 非对称：固定头之后、16 字节块元数据之前写入收件人 blob（recip_len 已记入 reserved）
+        if(asym_mode && !recip_blob_out.empty()) {
+            if(!fout.write(reinterpret_cast<const char*>(recip_blob_out.data()),
+                    (std::streamsize)recip_blob_out.size())) {
+                fprintf(stderr,"Write recipient blob failed\n"); ok=false; goto cleanup;
+            }
         }
         if(!fout.write(reinterpret_cast<const char*>(&chunk_size),4)||
             !fout.write(reinterpret_cast<const char*>(&total_chunks),4)||
@@ -2116,23 +2304,12 @@ bool encrypt_file(const std::string& in_path,
         }
 
         unsigned long long ciphertext_len=0;
-        int rc;
-        if(mode==CryptoMode::AES_GCM) {
-            rc=crypto_aead_aes256gcm_encrypt(ciphertext_chunk.data(),&ciphertext_len,
-                aead_in,aead_in_len,aad.data(),aad.size(),NULL,nonce,key.data());
-            if(rc!=0) fprintf(stderr,"AES-GCM encryption failed at chunk %u\n",i);
+        int rc=ciph->encrypt(aead_in,aead_in_len,aad.data(),aad.size(),
+            nonce,key.data(),ciphertext_chunk.data(),ciphertext_len);
+        if(rc!=0) {
+            fprintf(stderr,"Encryption failed at chunk %u\n",i);
+            ok=false; break;
         }
-        else if(mode==CryptoMode::AEGIS256) {
-            rc=crypto_aead_aegis256_encrypt(ciphertext_chunk.data(),&ciphertext_len,
-                aead_in,aead_in_len,aad.data(),aad.size(),NULL,nonce,key.data());
-            if(rc!=0) fprintf(stderr,"AEGIS-256 encryption failed at chunk %u\n",i);
-        }
-        else {
-            rc=crypto_aead_xchacha20poly1305_ietf_encrypt(ciphertext_chunk.data(),&ciphertext_len,
-                aead_in,aead_in_len,aad.data(),aad.size(),NULL,nonce,key.data());
-            if(rc!=0) fprintf(stderr,"XChaCha20 encryption failed at chunk %u\n",i);
-        }
-        if(rc!=0) { ok=false; break; }
 
         if(do_compress) {
             unsigned char lenbuf[4];
@@ -2182,7 +2359,11 @@ bool encrypt_file(const std::string& in_path,
         fout.write(reinterpret_cast<const char*>(header.plaintext_hash),HASH_SIZE);
         fout.write(reinterpret_cast<const char*>(header.header_hmac),HEADER_HMAC_SIZE);
         fout.flush();
-        if(!append_encrypted_name_footer(fout,in_path,key.data(),header.salt)) {
+        if(wm && wm->enabled && !append_watermark_tail(fout,*wm)) {
+            fprintf(stderr,"Failed to append watermark tail.\n");
+            ok=false;
+        }
+        if(ok && !append_encrypted_name_footer(fout,in_path,key.data(),header.salt)) {
             fprintf(stderr,"Failed to append encrypted original-name footer.\n");
             ok=false;
         }
@@ -2233,8 +2414,17 @@ bool decrypt_file(const std::string& in_path,
     bool resume,
     const unsigned char* ext_key,
     const unsigned char* ext_kek, size_t ext_kek_len,
-    bool verify_only) {
+    bool verify_only,
+    size_t preview_bytes,
+    const std::string& asym_identity) {
     size_t force_skipped_chunks=0;
+    bool preview_only=(preview_bytes>0);
+    if(preview_only) {
+        // 预览输出走二进制 stdout，避免 Windows 文本模式把 0x0A 翻译成 CRLF 破坏内容。
+#ifdef _WIN32
+        (void)_setmode(_fileno(stdout), _O_BINARY);
+#endif
+    }
     disable_core_dump();
 
     // 依据 YAML 配置校验输入/输出路径（长度上限 / 白名单）
@@ -2248,7 +2438,8 @@ bool decrypt_file(const std::string& in_path,
         if(!silent) fprintf(stderr,"Output path contains directory traversal\n");
         return false;
     }
-    if(password.size()<PASSWORD_MIN_LEN) {
+    // 口令仅在「无外部密钥且非非对称恢复」时才必需：ext_key 供加密端自校验直接复用 DEK。
+    if(password.size()<PASSWORD_MIN_LEN && asym_identity.empty() && !ext_key) {
         if(!silent) fprintf(stderr,"Password too short (min %zu characters)\n",PASSWORD_MIN_LEN);
         return false;
     }
@@ -2284,6 +2475,8 @@ bool decrypt_file(const std::string& in_path,
     bool comp_on=false;        // 本文件已启用 zstd 压缩（v5 + compression==1）
     int comp_level_val=0;      // 已编码的 zstd 压缩级别（有符号，支持负快速档）
     uint32_t v6_key_version=0; // v6 密钥版本（仅 is_v6 时有效）
+    uint32_t recip_len=0;      // v6 收件人 blob 字节数（reserved[0..3]）；0=纯对称
+    std::vector<RecipientStanza> recip_stanzas;  // v6 非对称收件人条目（asym 解密时恢复 DEK）
 
     // strict-aliasing 安全：头部由字节缓冲 memcpy 到函数级局部结构再读字段；
     // salt/iv 指针指向这些结构（生命周期覆盖整个函数，避免分支作用域悬挂指针）。
@@ -2305,7 +2498,7 @@ bool decrypt_file(const std::string& in_path,
     unsigned char ver=hdrbuf[4];
     if(ver==1) {
         hdr_size=HEADER_SIZE_V1;
-        if(file_size<(std::streampos)(hdr_size+4+4+8)) {
+        if(file_size<(std::streampos)(hdr_size+recip_len+4+4+8)) {
             if(!silent) fprintf(stderr,"File too small (corrupted?)\n");
             return false;
         }
@@ -2323,7 +2516,7 @@ bool decrypt_file(const std::string& in_path,
     }
     else if(ver==2) {
         hdr_size=HEADER_SIZE_V2;
-        if(file_size<(std::streampos)(hdr_size+4+4+8)) {
+        if(file_size<(std::streampos)(hdr_size+recip_len+4+4+8)) {
             if(!silent) fprintf(stderr,"File too small (corrupted?)\n");
             return false;
         }
@@ -2341,7 +2534,7 @@ bool decrypt_file(const std::string& in_path,
     }
     else if(ver==3) {
         hdr_size=HEADER_SIZE_V3;
-        if(file_size<(std::streampos)(hdr_size+4+4+8)) {
+        if(file_size<(std::streampos)(hdr_size+recip_len+4+4+8)) {
             if(!silent) fprintf(stderr,"File too small (corrupted?)\n");
             return false;
         }
@@ -2362,7 +2555,7 @@ bool decrypt_file(const std::string& in_path,
     else if(ver==VERSION) {
         // v4：v3 前缀 + 32 字节 header_hmac（独立密钥认证文件头，防篡改）
         hdr_size=HEADER_SIZE_V4;
-        if(file_size<(std::streampos)(hdr_size+4+4+8)) {
+        if(file_size<(std::streampos)(hdr_size+recip_len+4+4+8)) {
             if(!silent) fprintf(stderr,"File too small (corrupted?)\n");
             return false;
         }
@@ -2385,7 +2578,7 @@ bool decrypt_file(const std::string& in_path,
     else if(ver==5) {
         // v5：v4 基础上追加 2 字节压缩描述（compression / comp_level），磁盘为变长块
         hdr_size=HEADER_SIZE_V5;
-        if(file_size<(std::streampos)(hdr_size+4+4+8)) {
+        if(file_size<(std::streampos)(hdr_size+recip_len+4+4+8)) {
             if(!silent) fprintf(stderr,"File too small (corrupted?)\n");
             return false;
         }
@@ -2410,7 +2603,7 @@ bool decrypt_file(const std::string& in_path,
     else if(ver==6) {
         // v6 容器：前缀与 v5 完全一致（magic..comp_level），其后是 DEK 包裹容器区
         hdr_size=HEADER_SIZE_V6;
-        if(file_size<(std::streampos)(hdr_size+4+4+8)) {
+        if(file_size<(std::streampos)(hdr_size+recip_len+4+4+8)) {
             if(!silent) fprintf(stderr,"File too small (corrupted?)\n");
             return false;
         }
@@ -2432,6 +2625,7 @@ bool decrypt_file(const std::string& in_path,
         comp_on=(hv6.compression==1);
         comp_level_val=(int)(signed char)hv6.comp_level;
         v6_key_version=get_be32(reinterpret_cast<const unsigned char*>(&hv6.key_version));
+        recip_len=get_recip_len(hv6.reserved);
     }
     else {
         if(!silent) fprintf(stderr,"Unsupported file version: %u\n",ver);
@@ -2439,7 +2633,7 @@ bool decrypt_file(const std::string& in_path,
     }
 
     // 严格校验加密模式：仅允许已知枚举值，未知值直接拒绝（否则后续的 IV 长度校验会被整体短路跳过）
-    if(mode!=CryptoMode::AES_GCM&&mode!=CryptoMode::XCHACHA20&&mode!=CryptoMode::AEGIS256) {
+    if(mode!=CryptoMode::AES_GCM&&mode!=CryptoMode::XCHACHA20&&mode!=CryptoMode::AEGIS256&&mode!=CryptoMode::SM4) {
         if(!silent) fprintf(stderr,"Invalid encryption mode in header\n");
         return false;
     }
@@ -2460,6 +2654,21 @@ bool decrypt_file(const std::string& in_path,
         (mode==CryptoMode::AEGIS256&&iv_len!=AEGIS256_IV_LEN)) {
         if(!silent) fprintf(stderr,"Invalid IV length\n");
         return false;
+    }
+
+    // v6 非对称容器：在 256 字节固定头之后、16 字节块元数据之前读取收件人 blob。
+    // recip_len 已在头部解析阶段从 reserved[0..3] 取出，偏移已计入文件大小校验。
+    if(is_v6 && recip_len>0) {
+        std::vector<unsigned char> blob(recip_len);
+        if(!fin.read(reinterpret_cast<char*>(blob.data()), (std::streamsize)recip_len) ||
+           (size_t)fin.gcount()!=recip_len) {
+            if(!silent) fprintf(stderr,"Read recipient blob failed\n");
+            return false;
+        }
+        if(!parse_recipients(blob.data(), recip_len, recip_stanzas)) {
+            if(!silent) fprintf(stderr,"Parse recipient blob failed\n");
+            return false;
+        }
     }
 
     uint32_t chunk_size=0,total_chunks=0;
@@ -2486,8 +2695,23 @@ bool decrypt_file(const std::string& in_path,
     // ext_key：外部最终密钥（自校验用），直接复用跳过 KDF 与解裹。
     const bool have_kek = (ext_kek && ext_kek_len >= ARGON2_OUTPUT_LEN);
     if(is_v6) {
+        // v6 非对称容器：以身份私钥从收件人 stanza 恢复 DEK，跳过口令 KEK 派生。
+        if(!asym_identity.empty()) {
+            if(recip_stanzas.empty()) {
+                report_auth_error(silent, "Asymmetric container has no recipient entries.");
+                return false;
+            }
+            unsigned char dek[32];
+            if(!fe_recover_dek_from_stanzas(recip_stanzas, asym_identity, dek).ok) {
+                report_auth_error(silent, "Failed to recover DEK (no matching identity or corrupted container).");
+                sodium_memzero(dek, sizeof(dek));
+                return false;
+            }
+            memcpy(key.data(), dek, 32);
+            sodium_memzero(dek, sizeof(dek));
+        }
         // v6 容器：KEK 解裹 DEK（同时校验口令正确性），DEK 即载荷密钥。
-        if(have_kek) {
+        else if(have_kek) {
             unsigned char dek[32];
             if(!unwrap_dek(hv6.dek_box, ext_kek, hv6.dek_nonce, dek)) {
                 report_auth_error(silent, "Failed to unwrap DEK (wrong password or corrupted container).");
@@ -2541,13 +2765,13 @@ bool decrypt_file(const std::string& in_path,
     // 跨进程锁 + 临时文件：解密先将明文写入 <out>.prt，全部校验通过后再原子重命名
     std::string part_path=out_path+".prt";
     // 防符号链接劫持：若 .prt 半成品已存在且为符号链接/重解析点，拒绝写入，避免清空被指向的敏感文件
-    if(!verify_only && path_is_symlink(part_path)) {
+    if(!verify_only && !preview_only && path_is_symlink(part_path)) {
         if(!silent) fprintf(stderr,"Refusing to write through existing symlink: %s\n",part_path.c_str());
         return false;
     }
     std::string lock_path;
-    OutputLockGuard lock_guard;   // 函数作用域 RAII；verify_only 下不取锁、不写文件
-    if(!verify_only) {
+    OutputLockGuard lock_guard;   // 函数作用域 RAII；verify_only / preview_only 下不取锁、不写文件
+    if(!verify_only && !preview_only) {
         LockResult lr=acquire_output_lock(out_path,lock_path);
         if(lr!=LockResult::OK) {
             if(!silent) {
@@ -2568,13 +2792,13 @@ bool decrypt_file(const std::string& in_path,
 
     uint64_t total_size=orig_size;
     if(total_chunks==0) {
-        if((size_t)file_size!=hdr_size+4+4+8+footer_len) {
+        if((size_t)file_size!=hdr_size+recip_len+4+4+8+footer_len) {
             if(!silent) fprintf(stderr,"File size mismatch for empty file.\n");
             return false;
         }
-        if(verify_only) {
-            // 自校验空文件：不落盘，仅比对空哈希（无明文内容）
-            if(have_hash) {
+        if(verify_only || preview_only) {
+            // 自校验 / 预览空文件：不落盘，无明文内容可输出
+            if(have_hash && !preview_only) {
                 unsigned char empty_hash[HASH_SIZE];
                 crypto_generichash(empty_hash,HASH_SIZE,nullptr,0,nullptr,0);
                 if(sodium_memcmp(empty_hash,stored_hash,HASH_SIZE)!=0) return false;
@@ -2620,7 +2844,7 @@ bool decrypt_file(const std::string& in_path,
     uint64_t last_chunk_len=orig_size-(uint64_t)(total_chunks-1)*chunk_size;
     // 压缩文件（v5+压缩）为变长块，无法在解密前从文件头推断总密文长度，跳过此固定校验
     if(!comp_on) {
-        uint64_t expected_size=(uint64_t)hdr_size+4+4+8
+        uint64_t expected_size=(uint64_t)hdr_size+recip_len+4+4+8
             +(uint64_t)(total_chunks-1)*(uint64_t)(chunk_size+tag_size)
             +(uint64_t)last_chunk_len+tag_size+footer_len;
         if((uint64_t)file_size!=expected_size) {
@@ -2651,8 +2875,8 @@ bool decrypt_file(const std::string& in_path,
 
     // 解密续传：明文半成品（.prt）可能残留未完成块的残片，截断到已确认写入的明文长度
     std::fstream fout;
-    if(verify_only) {
-        // 自校验模式：不创建/写入任何明文文件，仅流式计算哈希
+    if(verify_only || preview_only) {
+        // 自校验 / 预览模式：不创建/写入任何明文文件；预览改向 stdout 输出前缀
     }
     else if(has_progress&&start_chunk>0) {
         if(!truncate_file(part_path,start_bytes)) {
@@ -2685,7 +2909,7 @@ bool decrypt_file(const std::string& in_path,
 
     // 4 MiB 聚合写出缓冲：明文块写入 outbuf，攒满 4 MiB 再写盘（verify_only 下不绑定，空操作）
     AggWriter outbuf;
-    if(!verify_only) outbuf.bind(fout);
+    if(!verify_only && !preview_only) outbuf.bind(fout);
 
     // 密钥已在前面（空文件短路之前）派生到 key / auth_key，此处无需重复派生。
 
@@ -2693,6 +2917,12 @@ bool decrypt_file(const std::string& in_path,
     // v6 只到稳定前缀（不含容器区，rewrap 改写容器不使载荷 AAD 失效）。
     size_t aad_hdr_len=(ver==6) ? HEADER_AAD_COVER_V6 : header_hmac_cover(ver);
     std::vector<unsigned char> aad=build_aad_with_metadata(hdrbuf,aad_hdr_len,chunk_size,total_chunks,orig_size);
+
+    std::unique_ptr<Cipher> ciph=create_cipher(mode);
+    if(!ciph) {
+        if(!silent) fprintf(stderr,"Unsupported encryption mode in header\n");
+        return false;
+    }
 
     auto start_time=std::chrono::steady_clock::now();
     // .prs 节流基点：进度文件只服务"进程被强杀后的断点续传"，无需逐块落盘。
@@ -2704,6 +2934,7 @@ bool decrypt_file(const std::string& in_path,
     unsigned char nonce[32]={0};
     bool ok=true;
     uint64_t processed_bytes=start_bytes;
+    uint64_t preview_written=0;   // 预览模式已写出 stdout 的明文字节数
     // 小于 64 MiB 的文件跳过进度文件写入（见 encrypt_file 同款说明）
     bool persistent_progress=(total_size>=64ULL*1024*1024);
 
@@ -2714,7 +2945,8 @@ bool decrypt_file(const std::string& in_path,
     // 防整数溢出 / 越界：input_offset 来自文件头（v3 未被 HMAC 认证）或续传进度，
     // 须边界校验后再 seekg。先以 uint64_t 做乘法溢出检查，再确认落在文件范围内。
     {
-        const uint64_t base = (uint64_t)hdr_size + 4 + 4 + 8;
+        // 非对称容器的收件人 blob 位于固定头之后、块元数据之前，密文起点必须计入 recip_len。
+        const uint64_t base = (uint64_t)hdr_size + (uint64_t)recip_len + 4 + 4 + 8;
         if(comp_on && start_chunk>0) {
             // 变长块（v5+压缩）：扫描每块的 4 字节压缩帧长度前缀求断点偏移
             uint64_t off=0; bool scan_ok=true;
@@ -2821,22 +3053,9 @@ bool decrypt_file(const std::string& in_path,
         }
 
         unsigned long long frame_len=0;   // AEAD 输出长度（压缩帧或未压缩明文）
-        int rc;
-        if(mode==CryptoMode::AES_GCM) {
-            rc=crypto_aead_aes256gcm_decrypt(plaintext_chunk.data(),&frame_len,NULL,
-                ciphertext_chunk.data(),expected_cipher_len,aad.data(),aad.size(),nonce,key.data());
-            if(rc!=0) report_auth_error(silent, "AES-GCM decryption failed at chunk " + std::to_string(i) + " (invalid key or corrupted data).");
-        }
-        else if(mode==CryptoMode::AEGIS256) {
-            rc=crypto_aead_aegis256_decrypt(plaintext_chunk.data(),&frame_len,NULL,
-                ciphertext_chunk.data(),expected_cipher_len,aad.data(),aad.size(),nonce,key.data());
-            if(rc!=0) report_auth_error(silent, "AEGIS-256 decryption failed at chunk " + std::to_string(i) + " (invalid key or corrupted data).");
-        }
-        else {
-            rc=crypto_aead_xchacha20poly1305_ietf_decrypt(plaintext_chunk.data(),&frame_len,NULL,
-                ciphertext_chunk.data(),expected_cipher_len,aad.data(),aad.size(),nonce,key.data());
-            if(rc!=0) report_auth_error(silent, "XChaCha20 decryption failed at chunk " + std::to_string(i) + " (invalid key or corrupted data).");
-        }
+        int rc=ciph->decrypt(ciphertext_chunk.data(),expected_cipher_len,aad.data(),aad.size(),
+            nonce,key.data(),plaintext_chunk.data(),frame_len);
+        if(rc!=0) report_auth_error(silent, "Decryption failed at chunk " + std::to_string(i) + " (invalid key or corrupted data).");
         if(rc!=0) {
             if(!g_force_decrypt) { ok=false; break; }
             if(!silent) fprintf(stderr,"[force] chunk %u failed, zero-filled\n",i);
@@ -2871,12 +3090,24 @@ bool decrypt_file(const std::string& in_path,
 #endif
         }
 
-        if(!verify_only && !outbuf.put(out_ptr,out_len)) {
+        if(preview_only) {
+            // 预览：仅向 stdout 写出明文前 preview_bytes 字节，达到上限即停止；
+            // 已解密的块仍经过 AEAD 认证，故前缀保证与原文一致。
+            uint64_t remain=(uint64_t)preview_bytes - preview_written;
+            size_t take=(size_t)std::min<uint64_t>(out_len,remain);
+            if(take>0) {
+                size_t wrote=(size_t)fwrite(out_ptr,1,take,stdout);
+                if(wrote!=take) { if(!silent) fprintf(stderr,"Preview stdout write failed\n"); ok=false; break; }
+                preview_written+=wrote;
+            }
+            if(preview_written>=(uint64_t)preview_bytes) break;
+        }
+        else if(!verify_only && !outbuf.put(out_ptr,out_len)) {
             if(!silent) fprintf(stderr,"Write plaintext chunk %u failed\n",i);
             ok=false;
             break;
         }
-        if(have_hash || verify_only) crypto_generichash_update(&hstate,out_ptr,out_len);
+        if((have_hash && !preview_only) || verify_only) crypto_generichash_update(&hstate,out_ptr,out_len);
 
         processed_bytes+=out_len;
         throttle_consume(out_len);
@@ -2906,7 +3137,7 @@ bool decrypt_file(const std::string& in_path,
     }
 
     // 明文完整性校验：恢复的明文 Blake2b 必须与存储哈希一致
-    if(have_hash || verify_only) {
+    if((have_hash && !preview_only) || verify_only) {
         unsigned char final_hash[HASH_SIZE];
         crypto_generichash_final(&hstate,final_hash,HASH_SIZE);
         if(ok && have_hash && sodium_memcmp(final_hash,stored_hash,HASH_SIZE)!=0) {
@@ -2934,8 +3165,9 @@ dec_cleanup:
     outbuf.flush();   // 把缓冲的明文落盘（verify_only 下为空操作）
     fout.close();
 
-    if(verify_only) {
-        // 自校验模式：不落盘、不替换、不删除任何文件，仅返回校验结果
+    if(verify_only || preview_only) {
+        // 自校验 / 预览模式：不落盘、不替换、不删除任何文件
+        if(preview_only) fflush(stdout);
         return ok;
     }
     if(ok) {
@@ -3082,7 +3314,8 @@ bool process_files(const std::vector<std::string>& input_paths,
     bool force_overwrite,
     int num_threads,
     bool restore_name,
-    int compress_level) {
+    int compress_level,
+    const WatermarkSpec* wm) {
     // 批量入口兜底：main.cpp 已处理 AEGIS-256 缺 AES-NI 的降级；若仍直达传入，
     // 不自动降级仅警告，交由调用方显式决定（避免自动化任务静默行为变更）。
     if(encrypt&&mode==CryptoMode::AEGIS256&&!aegis256_supported()) {
@@ -3382,7 +3615,7 @@ bool process_files(const std::vector<std::string>& input_paths,
                             std::lock_guard<std::mutex> lock(print_mutex);
                             print_progress(global_processed.load(),total_bytes,start_time,false);
                         }
-                    },true,compress_level);
+                    },true,compress_level,false,nullptr,wm);
                 if(ok && source_action!=0) {
                     if(!secure_handle_source(in_path, static_cast<SourceDisposition>(source_action))) {
                         std::lock_guard<std::mutex> lock(error_mutex);

@@ -1,6 +1,19 @@
 cmake_minimum_required(VERSION 3.16)
 
-project(FileEncryptorGUI VERSION 2.0.3 LANGUAGES CXX)
+# 必须在 project() 之前钉住链接器：CMakeFindBinUtils 会在 project() 里搜 CMAKE_LINKER，
+# 若 PATH 里混着 MinGW/Strawberry 的 ld.exe（Git Bash 起 VS 常有），CMake 会把它当 MSVC
+# 链接器，随后每一次链接测试都拿 /nologo 去问 ld，报一堆 "cannot find /nologo" 直接 configure 失败。
+find_program(FE_CL_EXECUTABLE NAMES cl.exe
+             HINTS "$ENV{VCToolsInstallDir}/bin/Hostx64/x64"
+                   "$ENV{VCToolsInstallDir}/bin/Hostx86/x64"
+                   "$ENV{VCINSTALLDIR}Tools/MSVC")
+if(FE_CL_EXECUTABLE)
+  get_filename_component(FE_CL_DIR "${FE_CL_EXECUTABLE}" DIRECTORY)
+  set(CMAKE_LINKER "${FE_CL_DIR}/link.exe"
+      CACHE FILEPATH "MSVC 链接器（不按 PATH 搜索）" FORCE)
+endif()
+
+project(FileEncryptorGUI VERSION 2.1.0 LANGUAGES CXX)
 
 # FileEncryptor GUI - Qt6 图形界面（Windows + Linux 双平台；Windows 另有 WinUI3 版本）
 
@@ -219,5 +232,29 @@ set(CPACK_RPM_PACKAGE_AUTOREQPROV OFF)
 
 set(CPACK_STRIP_FILES ON)
 set(CPACK_PACKAGE_RELEASE "1")
+
+# ---------- Windows 安装包（MSI） ----------
+# 「打开文件夹」模式不会把 wixproj 当工程加载，VS 里点不到打包入口，
+# 所以在 CMake 目标树里再挂一个 package-msi：构建它就出 .msi。
+if(WIN32 AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/installer/FileEncryptorGUI.Installer.wixproj")
+  find_program(FE_MSBUILD_EXECUTABLE NAMES MSBuild.exe MSBuild
+               HINTS "$ENV{MSBUILD_EXE_PATH}"
+                     "E:/Microsoft Visual Studio/MSBuild/Current/Bin/amd64"
+                     "E:/Microsoft Visual Studio/MSBuild/Current/Bin")
+  if(FE_MSBUILD_EXECUTABLE)
+    add_custom_target(package-msi
+      COMMAND "${FE_MSBUILD_EXECUTABLE}"
+              "${CMAKE_CURRENT_SOURCE_DIR}/installer/FileEncryptorGUI.Installer.wixproj"
+              -t:Restore -p:Configuration=$<CONFIG> -p:Platform=x64 -nologo -v:m
+      COMMAND "${FE_MSBUILD_EXECUTABLE}"
+              "${CMAKE_CURRENT_SOURCE_DIR}/installer/FileEncryptorGUI.Installer.wixproj"
+              -t:Build -p:Configuration=$<CONFIG> -p:Platform=x64 -nologo -v:m
+      COMMENT "生成 Qt GUI 的 MSI 安装包"
+      WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+      VERBATIM)
+  else()
+    message(STATUS "[msi] 未找到 MSBuild：跳过 package-msi 目标，改用 scripts/build_qt_msi.ps1")
+  endif()
+endif()
 
 include(CPack)

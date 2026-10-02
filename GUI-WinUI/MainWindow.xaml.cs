@@ -48,8 +48,13 @@ public sealed partial class MainWindow : Window
         // 16:9 窗口比例
         AppWindow.Resize(new Windows.Graphics.SizeInt32(1280, 720));
 
+        // 勾选框初值一律在代码里设：XAML 里写 IsChecked="..." 会让 XamlCompiler 生成
+        // 对 Primitives.ToggleButton.IsChecked 的赋值，运行时对 CheckBox 赋值抛
+        // XamlParseException，InitializeComponent 阶段直接把进程干掉（0xC000027B）。
         ChkForce.IsChecked = true;
+        ChkPqc.IsChecked = true;
         RbEncrypt.IsChecked = true;
+        FileCipherCombo.SelectedIndex = 0;
 
         // 背景优先级：图片 > Acrylic
         RootGrid.Background = _backgroundBrush;
@@ -213,9 +218,25 @@ public sealed partial class MainWindow : Window
             ViewModel.RefreshCommandPreview();
     }
 
-    // ===== 密钥管理 =====
+    // ===== 动作 / 密钥管理 =====
+    // 两组单选分属不同 GroupName，选中态互不干扰；这里显式互斥，避免同时点亮两组
+    private void ExclusiveGroup(bool keyMgmtGroup)
+    {
+        if (keyMgmtGroup)
+        {
+            RbEncrypt.IsChecked = false; RbDecrypt.IsChecked = false;
+            RbBatchEncrypt.IsChecked = false; RbBatchDecrypt.IsChecked = false;
+        }
+        else
+        {
+            RbKeyGen.IsChecked = false; RbDerive.IsChecked = false; RbPubKey.IsChecked = false;
+        }
+    }
+
     private void OnKeyMgmtRadioChecked(object sender, RoutedEventArgs e)
     {
+        if (RbKeyGen.IsChecked != true && RbDerive.IsChecked != true && RbPubKey.IsChecked != true) return;
+        ExclusiveGroup(keyMgmtGroup: true);
         if (RbKeyGen.IsChecked == true) ViewModel.ActionIndex = 4;
         else if (RbDerive.IsChecked == true) ViewModel.ActionIndex = 5;
         else if (RbPubKey.IsChecked == true) ViewModel.ActionIndex = 6;
@@ -453,6 +474,9 @@ public sealed partial class MainWindow : Window
     // ===== 选项变更 =====
     private void OnActionRadioChecked(object sender, RoutedEventArgs e)
     {
+        if (RbEncrypt.IsChecked != true && RbDecrypt.IsChecked != true
+            && RbBatchEncrypt.IsChecked != true && RbBatchDecrypt.IsChecked != true) return;
+        ExclusiveGroup(keyMgmtGroup: false);
         if (RbEncrypt.IsChecked == true) ViewModel.ActionIndex = 0;
         else if (RbDecrypt.IsChecked == true) ViewModel.ActionIndex = 1;
         else if (RbBatchEncrypt.IsChecked == true) ViewModel.ActionIndex = 2;
@@ -466,17 +490,44 @@ public sealed partial class MainWindow : Window
         UpdateVisibility();
     }
 
+    private void OnFileCipherChanged(object sender, SelectionChangedEventArgs e)
+    {
+        ViewModel.FileCipherIndex = FileCipherCombo.SelectedIndex;
+        UpdateVisibility();
+    }
+
     private void OnSourceChanged(object sender, SelectionChangedEventArgs e)
     {
         if (SourceCombo.SelectedIndex >= 0) ViewModel.SourceIndex = SourceCombo.SelectedIndex;
     }
 
+    private bool _optionSyncing;
+
     private void OnOptionChanged(object sender, RoutedEventArgs e)
     {
-        ViewModel.Force = ChkForce.IsChecked == true;
-        ViewModel.Sha256 = ChkSha256.IsChecked == true;
-        ViewModel.Compress = ChkCompress.IsChecked == true;
-        ViewModel.RestoreName = ChkRestoreName.IsChecked == true;
+        // 下面的可见性同步会改勾选状态，会再次触发本回调
+        if (_optionSyncing) return;
+        _optionSyncing = true;
+        try
+        {
+            ViewModel.Force = ChkForce.IsChecked == true;
+            ViewModel.Sha256 = ChkSha256.IsChecked == true;
+            ViewModel.Compress = ChkCompress.IsChecked == true;
+            ViewModel.RestoreName = ChkRestoreName.IsChecked == true;
+            ViewModel.UseX448 = ChkX448.IsChecked == true;
+            ViewModel.Pqc = ChkPqc.IsChecked == true;
+            ViewModel.Watermark = ChkWatermark.IsChecked == true;
+            ViewModel.WatermarkKey = WatermarkKeyEdit.Password;
+            UpdateVisibility();
+        }
+        finally { _optionSyncing = false; }
+    }
+
+    // 文件列表勾选框：DataContext 即 SelectablePath 项，不走 {x:Bind} 以免触发附加属性赋值崩溃
+    private void OnItemCheckedChanged(object sender, RoutedEventArgs e)
+    {
+        if (sender is CheckBox cb && cb.DataContext is Models.SelectablePath sp)
+            sp.IsSelected = cb.IsChecked == true;
     }
 
     private void OnCompressLevelChanged(NumberBox sender, NumberBoxValueChangedEventArgs args)
@@ -533,23 +584,68 @@ public sealed partial class MainWindow : Window
         } catch (Exception ex) { ViewModel.SetStatus("[身份文件] 错误: {0}", ex.Message); }
     }
 
+    private async void OnBrowseWatermarkKey(object sender, RoutedEventArgs e)
+    {
+        try {
+            var picker = new FileOpenPicker();
+            WinRT.Interop.InitializeWithWindow.Initialize(picker, WinRT.Interop.WindowNative.GetWindowHandle(this));
+            picker.FileTypeFilter.Add(".pem");
+            var file = await picker.PickSingleFileAsync();
+            if (file == null) return;
+            // 密钥内容直接进密码框，界面不回显明文
+            WatermarkKeyEdit.Password = await FileIO.ReadTextAsync(file);
+            ViewModel.SetStatus("[水印私钥] 已载入: {0}", file.Name);
+        } catch (Exception ex) { ViewModel.SetStatus("[水印私钥] 错误: {0}", ex.Message); }
+    }
+
     private void UpdateVisibility()
     {
         bool isEncrypt = ViewModel.IsEncryptMode;
         bool isAsym = ViewModel.IsAsymmetric;
         bool isKeyGen = ViewModel.IsKeyGenMode;
 
-        ModeCombo.Visibility = isKeyGen ? Visibility.Collapsed : Visibility.Visible;
-        SourceCombo.Visibility = isEncrypt && !isKeyGen ? Visibility.Visible : Visibility.Collapsed;
-        ChkCompress.Visibility = isEncrypt && !isAsym && !isKeyGen ? Visibility.Visible : Visibility.Collapsed;
-        CompressLevel.Visibility = ChkCompress.Visibility;
+        // 非对称（X25519 / X448）模式下「文件算法」与曲线开关才有意义
+        bool asymMode = ModeCombo.SelectedIndex == 3;
+        bool isKeyGenOnly = ViewModel.ActionIndex == 4;   // -x448 只对「生成密钥对」有意义
+
+        // 加密模式整行只服务加密动作：解密 / 批量解密 / 密钥管理三项下一律连左侧标签一起收起
+        EncryptModeRow.Visibility = (isEncrypt && !isKeyGen) ? Visibility.Visible : Visibility.Collapsed;
+        // 文件算法只在非对称模式露出；露出时模式下拉退回半宽，两个选择框等分同一行
+        var fileCipherVisible = asymMode && isEncrypt && !isKeyGen;
+        FileCipherCell.Visibility = fileCipherVisible ? Visibility.Visible : Visibility.Collapsed;
+        FileCipherLabel.Visibility = fileCipherVisible ? Visibility.Visible : Visibility.Collapsed;
+        ModeCombo.SetValue(Microsoft.UI.Xaml.Controls.Grid.ColumnSpanProperty, fileCipherVisible ? 1 : 2);
+        // 曲线开关：非对称模式下控制封装曲线；生成密钥对时控制 -x448（CLI 只认这条）
+        ChkX448.Visibility = (asymMode || isKeyGenOnly) ? Visibility.Visible : Visibility.Collapsed;
+
+        // 加密专属选项：密钥管理三项目（生成密钥对 / 口令派生 / 导出公钥）下一律不出现
+        bool encOptionVisible = isEncrypt && !isKeyGen;
+        // 藏起来的开关先取消勾选，免得 CLI 收到对当前动作无意义的开关
+        if (!encOptionVisible)
+        {
+            if (ChkCompress.IsChecked == true) ChkCompress.IsChecked = false;
+            if (ChkWatermark.IsChecked == true) ChkWatermark.IsChecked = false;
+        }
+        SourceCombo.Visibility = encOptionVisible ? Visibility.Visible : Visibility.Collapsed;
+        // 压缩整行（含标签与级别输入）同样只在加密动作出现，解密 / 批量解密 / 密钥管理下连行一起收起
+        CompressionRow.Visibility = encOptionVisible ? Visibility.Visible : Visibility.Collapsed;
+        ChkSha256.Visibility = encOptionVisible ? Visibility.Visible : Visibility.Collapsed;
+        // 签名水印只服务于加密动作
+        ChkWatermark.Visibility = encOptionVisible ? Visibility.Visible : Visibility.Collapsed;
         KeyfileEdit.Visibility = !isAsym && !isKeyGen ? Visibility.Visible : Visibility.Collapsed;
         RecipientPanel.Visibility = isAsym && isEncrypt ? Visibility.Visible : Visibility.Collapsed;
         IdentityPanel.Visibility = isAsym && !isEncrypt ? Visibility.Visible : Visibility.Collapsed;
         ChkRestoreName.Visibility = ViewModel.ActionIndex == 3 ? Visibility.Visible : Visibility.Collapsed;
-        ChkSha256.Visibility = isEncrypt ? Visibility.Visible : Visibility.Collapsed;
+        // PQC 在密钥生成时仍有意义（CLI 的 -g 读 --no-pqc），X448 由上一行单独控制；
+        // 签名水印只在加密动作下露出（见上）。
+        UpdateWatermarkKeyRow();
         BtnRewrap.Visibility = isEncrypt ? Visibility.Visible : Visibility.Collapsed;
     }
+
+    // 水印私钥行：勾选「签名水印」后才显示（该行不改变动作语义，任何加密模式都可用）
+    private void UpdateWatermarkKeyRow()
+        => WatermarkKeyRow.Visibility =
+            (ChkWatermark.IsChecked == true && ViewModel.IsEncryptMode) ? Visibility.Visible : Visibility.Collapsed;
 
     // ===== 运行 =====
     private void OnRunClicked(object sender, RoutedEventArgs e)
@@ -629,16 +725,39 @@ public sealed partial class MainWindow : Window
         }
         try
         {
-            var start = new ProcessStartInfo(updater,
-                $"--check --current {FileEncryptorLocator.GuiVersion} --type winui --platform windows")
+            // 参数逐项传，避免拼字符串时空格/引号把命令行截断
+            var start = new ProcessStartInfo(updater)
             {
                 RedirectStandardOutput = true,
                 UseShellExecute = false,
                 CreateNoWindow = true,
             };
+            start.ArgumentList.Add("--check");
+            start.ArgumentList.Add("--current");
+            start.ArgumentList.Add(FileEncryptorLocator.GuiVersion);
+            start.ArgumentList.Add("--type");
+            start.ArgumentList.Add("winui");
+            start.ArgumentList.Add("--platform");
+            start.ArgumentList.Add("windows");
             using var proc = Process.Start(start);
-            var outJson = await proc.StandardOutput.ReadToEndAsync();
-            await proc.WaitForExitAsync();
+            if (proc == null)
+            {
+                await ShowMessageAsync(L10n.T("检查更新"), L10n.T("无法启动更新器，请确认程序安装完整。"));
+                return;
+            }
+            var readTask = proc.StandardOutput.ReadToEndAsync();
+            var doneTask = proc.WaitForExitAsync();
+            var finished = await System.Threading.Tasks.Task.WhenAny(readTask, doneTask, Task.Delay(TimeSpan.FromSeconds(60)));
+            if (finished != readTask)
+            {
+                // 超时或更新器起不来：读不到 JSON 就别拿空串去解析
+                try { proc.Kill(); } catch { }
+                try { await doneTask; } catch { }
+                await ShowMessageAsync(L10n.T("检查更新"), L10n.T("检查更新未返回结果（可能已超时）。请稍后再试。"));
+                return;
+            }
+            var outJson = await readTask;
+            await doneTask;
             using var doc = System.Text.Json.JsonDocument.Parse(outJson);
             var root = doc.RootElement;
             if (!root.GetProperty("ok").GetBoolean())
@@ -665,7 +784,8 @@ public sealed partial class MainWindow : Window
                     var url = root.GetProperty("download_url").GetString();
                     var sha = root.TryGetProperty("sha256", out var s) ? s.GetString() : "";
                     var sig = root.TryGetProperty("sig_url", out var g) ? g.GetString() : "";
-                    await RunUpdaterUpdate(updater, url, sha, sig);
+                    long size = root.TryGetProperty("size", out var sz) && sz.TryGetInt64(out long szv) ? szv : 0;
+                    await RunUpdaterUpdate(updater, url, sha, sig, size);
                 }
             }
             else
@@ -680,7 +800,7 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private async System.Threading.Tasks.Task RunUpdaterUpdate(string updater, string url, string sha, string sig)
+    private async System.Threading.Tasks.Task RunUpdaterUpdate(string updater, string url, string sha, string sig, long size)
     {
         if (string.IsNullOrEmpty(url))
         {
@@ -689,9 +809,10 @@ public sealed partial class MainWindow : Window
         }
         var staging = Path.Combine(AppContext.BaseDirectory, "update_staging");
         Directory.CreateDirectory(staging);
-        var args = $"--update --url \"{url}\" --install-dir \"{staging}\"";
-        if (!string.IsNullOrEmpty(sha)) args += $" --sha256 {sha}";
-        if (!string.IsNullOrEmpty(sig)) args += $" --sig-url \"{sig}\"";
+        var args = new List<string> { "--update", "--url", url, "--install-dir", staging };
+        if (!string.IsNullOrEmpty(sha)) args.AddRange(new[] { "--sha256", sha });
+        if (size > 0) args.AddRange(new[] { "--size", size.ToString() });
+        if (!string.IsNullOrEmpty(sig)) args.AddRange(new[] { "--sig-url", sig });
 
         var statusText = new TextBlock { Text = L10n.T("准备下载…"), TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 8, 0, 0), Foreground = new SolidColorBrush(Microsoft.UI.Colors.Gray) };
         var progress = new ProgressBar { Minimum = 0, Maximum = 100, Value = 0, Margin = new Thickness(0, 4, 0, 0) };
@@ -708,14 +829,22 @@ public sealed partial class MainWindow : Window
         await dlg.ShowAsync();
     }
 
-    private async System.Threading.Tasks.Task UpdateWorker(string updater, string args, TextBlock statusText, ProgressBar progress)
+    private async System.Threading.Tasks.Task UpdateWorker(string updater, List<string> args, TextBlock statusText, ProgressBar progress)
     {
         try
         {
             statusText.Text = L10n.T("正在下载并校验…");
-            var start = new ProcessStartInfo(updater, args) { RedirectStandardOutput = true, UseShellExecute = false, CreateNoWindow = true };
+            var start = new ProcessStartInfo(updater) { RedirectStandardOutput = true, UseShellExecute = false, CreateNoWindow = true };
+            foreach (var a in args) start.ArgumentList.Add(a);
             using var proc = Process.Start(start);
             if (proc == null) { statusText.Text = L10n.T("无法启动更新器。"); return; }
+            var exited = System.Threading.Tasks.Task.Run(async () =>
+            {
+                var done = proc.WaitForExitAsync();
+                var timeout = Task.Delay(TimeSpan.FromMinutes(5));
+                return await Task.WhenAny(done, timeout) == done;
+            });
+            if (!await exited) { try { proc.Kill(); } catch { } statusText.Text = L10n.T("下载超时，请稍后再试。"); return; }
             while (!proc.StandardOutput.EndOfStream)
             {
                 var line = await proc.StandardOutput.ReadLineAsync();
@@ -740,7 +869,7 @@ public sealed partial class MainWindow : Window
                 }
                 catch {  }
             }
-            await proc.WaitForExitAsync();
+            if (!proc.HasExited) { await proc.WaitForExitAsync(); }
             if (proc.ExitCode == 0)
                 statusText.Text = L10n.F("更新包已就绪，存放于：\n{0}\n请关闭程序后以该文件替换当前程序并重新启动。", Path.Combine(AppContext.BaseDirectory, "update_staging"));
             else
@@ -860,9 +989,23 @@ public sealed partial class MainWindow : Window
         {
             "xchacha20" => 0,
             "aegis256" => 1,
-            "rage" => 2,
+            "sm4" => 2,
+            "x25519" => 3,
+            "x448" => 3,
+            "asymmetric" => 3,
             _ => ViewModel.ModeIndex
         };
+        // 非对称模式的文件算法一并回填，否则下拉会停在默认项却回放出对应的 -m
+        ModeCombo.SelectedIndex = ViewModel.ModeIndex;
+        FileCipherCombo.SelectedIndex = rec.FileCipher switch
+        {
+            "aegis256" => 1,
+            "sm4" => 2,
+            _ => 0
+        };
+        ViewModel.FileCipherIndex = FileCipherCombo.SelectedIndex;
+        ChkX448.IsChecked = rec.Mode == "x448";
+        ViewModel.UseX448 = rec.Mode == "x448";
         if (!string.IsNullOrEmpty(rec.OutputDir))
             OutDirEdit.Text = rec.OutputDir;
         ViewModel.ClearInputPaths();
@@ -872,6 +1015,11 @@ public sealed partial class MainWindow : Window
         ViewModel.Sha256 = rec.Sha256;
         ViewModel.Compress = rec.Compress;
         ViewModel.CompressLevel = rec.CompressionLevel;
+        ViewModel.Pqc = rec.Pqc;
+        ViewModel.Watermark = rec.Watermark;
+        ViewModel.WatermarkKey = rec.WatermarkKey ?? "";
+        ChkPqc.IsChecked = rec.Pqc;
+        ChkWatermark.IsChecked = rec.Watermark;
         if (!string.IsNullOrEmpty(rec.Keyfile)) KeyfileEdit.Text = rec.Keyfile;
         if (!string.IsNullOrEmpty(rec.Recipient)) RecipientEdit.Text = rec.Recipient;
         if (!string.IsNullOrEmpty(rec.Identity)) IdentityEdit.Text = rec.Identity;
@@ -881,6 +1029,10 @@ public sealed partial class MainWindow : Window
         ChkCompress.IsChecked = rec.Compress;
         CompressLevel.Value = rec.CompressionLevel;
         SourceCombo.SelectedIndex = rec.SourceIndex;
+        // 历史里只存占位符，私钥需重新输入
+        var wmKey = rec.WatermarkKey ?? "";
+        WatermarkKeyEdit.Password = wmKey.StartsWith("<") ? "" : wmKey;
+        ViewModel.WatermarkKey = WatermarkKeyEdit.Password;
         UpdateVisibility();
         ViewModel.SetStatus("已恢复任务: {0}", rec.ActionLabel);
     }

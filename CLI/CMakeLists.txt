@@ -1,5 +1,18 @@
 cmake_minimum_required(VERSION 3.15)
-project(FileEncryptorCLI VERSION 2.4.5 LANGUAGES CXX)
+
+# 必须在 project() 之前钉住链接器：project() 内部会搜 CMAKE_LINKER，若 PATH 里
+# 混着 MinGW/Strawberry 的 ld.exe，CMake 会拿 MSVC 的 /nologo 去问 GNU ld，直接 configure 失败。
+if(WIN32)
+  find_program(FE_CL_EXECUTABLE NAMES cl.exe
+               HINTS "$ENV{VCToolsInstallDir}/bin/Hostx64/x64"
+                     "$ENV{VCToolsInstallDir}/bin/Hostx86/x64")
+  if(FE_CL_EXECUTABLE)
+    get_filename_component(FE_CL_DIR "${FE_CL_EXECUTABLE}" DIRECTORY)
+    set(CMAKE_LINKER "${FE_CL_DIR}/link.exe" CACHE FILEPATH "MSVC 链接器" FORCE)
+  endif()
+endif()
+
+project(FileEncryptorCLI VERSION 2.7.0 LANGUAGES CXX)
 
 # FileEncryptor CLI - 命令行加密工具（独立项目），产出 FileEncryptorCLI(.exe)，GUI 经 QProcess 调用。
 # 静态链接 libsodium + yaml-cpp，二进制零外部依赖，可直接打包 DEB/RPM。
@@ -283,6 +296,7 @@ endif()
 # CLI 独立项目：core/（加密核心）+ cli/（命令行入口），GUI 通过 QProcess 调用本程序。
 set(SOURCES
   core/FileEncryptor.cpp
+  core/cipher.cpp
   core/ptd_format.cpp
   core/kdf.cpp
   core/source_handling.cpp
@@ -292,6 +306,8 @@ set(SOURCES
   core/asym_crypto.cpp
   core/mapped_file.cpp
   core/password_policy.cpp
+  core/machine_id.cpp
+  core/watermark.cpp
   cli/main.cpp)
 
 # Windows 图标资源（嵌入 exe；Linux/macOS 无 .rc）
@@ -380,6 +396,12 @@ else()
       # Windows 下静态链接 libsodium 需要这些系统库；
       # shell32.lib 提供 CommandLineToArgvW（main.cpp 用于 UTF-8 参数解析）
       target_link_libraries(FileEncryptor PRIVATE ws2_32 advapi32 bcrypt crypt32 shell32)
+      # iphlpapi 提供第一个网卡 MAC（machine_id）；WMI 库提供主板序列号查询（CLSID_WbemLocator）
+      target_link_libraries(FileEncryptor PRIVATE iphlpapi)
+      find_library(FE_WBEM_LIBRARY NAMES wbemuuid wbemidl)
+      if(FE_WBEM_LIBRARY)
+        target_link_libraries(FileEncryptor PRIVATE ${FE_WBEM_LIBRARY})
+      endif()
     endif()
     # 链接静态 libsodium 必须定义 SODIUM_STATIC，否则 sodium.h 把函数声明为
     # __declspec(dllimport)（产生 __imp_ 前缀），静态库报 LNK2019；定义后函数为普通 extern。
@@ -412,76 +434,121 @@ if(UNIX)
   target_link_libraries(FileEncryptor PRIVATE ${CMAKE_DL_LIBS})
 endif()
 
-# ---------- 非对称（混合）加密：集成 rage/age（C-ABI 静态库 fe_age） ----------
-# 需先用 age-ffi/build-win.ps1 或 build-linux.sh 编译出 fe_age 静态库放 age-ffi/lib/<platform>/；
-# 可用 -DFE_AGE_DIR=<age-ffi 目录> 显式指定。
-option(WITH_AGE "Enable asymmetric (age/rage) encryption support" ON)
-set(FE_AGE_FOUND FALSE)
-if(WITH_AGE)
-  # 库来源：默认随仓库分发的 third_party/rage/age-ffi（源码 + lib/<platform>/ 预编译静态库），
-  # 旧的本机安装路径仅作回退。-DFE_AGE_DIR=<age-ffi 目录> 可显式覆盖。
-  set(_age_ffi_root "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/rage/age-ffi")
-  if(WIN32)
-    # 全部走仓库相对路径：third_party/rage/age-ffi 为唯一默认来源，不再引用任何本机绝对路径
-    set(_age_hdr_hints "")
-    set(_age_lib_install "")
-    set(_age_lib_subdir "lib/windows")
-  else()
-    set(_age_hdr_hints "/usr/local/include")
-    set(_age_lib_install "/usr/local/lib")
-    set(_age_lib_subdir "lib/linux")
-  endif()
-  if(DEFINED FE_AGE_DIR AND FE_AGE_DIR)
-    set(_age_ffi_root "${FE_AGE_DIR}")
-  endif()
-  # header lives in the source tree; lib may sit in <root>/lib/<platform> under third_party/rage/age-ffi
-  find_path(FE_AGE_INCLUDE_DIR NAMES fe_age.h
-    HINTS "${_age_ffi_root}" "${_age_ffi_root}/include" ${_age_hdr_hints} "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/rage/age-ffi")
-  if(WIN32)
-    find_library(FE_AGE_LIBRARY NAMES fe_age
-      HINTS "${_age_ffi_root}/lib/windows" "${_age_ffi_root}/lib"
-            ${_age_lib_install}
-            "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/rage/age-ffi/lib/windows")
-  else()
-    find_library(FE_AGE_LIBRARY NAMES fe_age libfe_age
-      HINTS "${_age_ffi_root}/${_age_lib_subdir}" "${_age_ffi_root}/lib"
-            ${_age_lib_install}
-            "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/rage/age-ffi/${_age_lib_subdir}")
-  endif()
-  if(FE_AGE_INCLUDE_DIR AND FE_AGE_LIBRARY)
-    set(FE_AGE_FOUND TRUE)
-    target_include_directories(FileEncryptor PRIVATE ${FE_AGE_INCLUDE_DIR})
-    target_link_libraries(FileEncryptor PRIVATE ${FE_AGE_LIBRARY})
-    target_compile_definitions(FileEncryptor PRIVATE FE_WITH_AGE)
+# ---------- OpenSSL（SM4 分块密码 + X25519/X448 非对称，静态链接保持自包含） ----------
+# 优先复用仓库共享的静态 OpenSSL（Updater 已构建到 <repo>/Updater/out/openssl，
+# libcrypto.lib + include/openssl）；其次 find_package(OpenSSL) 静态；均不可得则 WARNING
+# 并回退为不含 SM4/非对称能力（相关调用返回明确错误，不中断构建）。
+option(WITH_OPENSSL "Enable OpenSSL-backed ciphers (SM4) and asymmetric (X25519/X448)" ON)
+set(FE_OPENSSL_FOUND FALSE)
+if(WITH_OPENSSL)
+  set(_ossl_repo_root "${CMAKE_CURRENT_SOURCE_DIR}/../Updater/out/openssl")
+  find_path(OPENSSL_INCLUDE_DIR NAMES openssl/ssl.h
+    HINTS "${_ossl_repo_root}/include" NO_DEFAULT_PATH)
+  find_library(OPENSSL_CRYPTO_LIBRARY NAMES libcrypto crypto
+    HINTS "${_ossl_repo_root}/lib" NO_DEFAULT_PATH)
+  if(OPENSSL_INCLUDE_DIR AND OPENSSL_CRYPTO_LIBRARY)
+    set(FE_OPENSSL_FOUND TRUE)
+    target_include_directories(FileEncryptor PRIVATE ${OPENSSL_INCLUDE_DIR})
+    target_link_libraries(FileEncryptor PRIVATE ${OPENSSL_CRYPTO_LIBRARY})
     if(WIN32)
-      # Rust staticlib (MSVC target) 运行所需的系统库
-      # ntdll: Rust std on Windows calls NtReadFile/NtWriteFile (LNK2019 __imp_NtReadFile / __imp_NtWriteFile)
-      target_link_libraries(FileEncryptor PRIVATE bcrypt advapi32 userenv kernel32 ws2_32 ncrypt crypt32 ntdll)
+      target_link_libraries(FileEncryptor PRIVATE crypt32 ws2_32)
     else()
-      target_link_libraries(FileEncryptor PRIVATE pthread dl m)
+      target_link_libraries(FileEncryptor PRIVATE ${CMAKE_DL_LIBS})
     endif()
-    message(STATUS "fe_age: 已集成 (${FE_AGE_LIBRARY})")
+    message(STATUS "OpenSSL: 静态复用仓库构建 (${OPENSSL_CRYPTO_LIBRARY})")
   else()
-    message(WARNING
-      "WITH_AGE=ON but fe_age was not found.\n"
-      "  header=${FE_AGE_INCLUDE_DIR}\n"
-      "  library=${FE_AGE_LIBRARY}\n"
-      "  searched root: ${_age_ffi_root}\n"
-      "Building WITHOUT asymmetric (rage) encryption. Run age-ffi/build-win.ps1 or build-linux.sh first,\n"
-      "or pass -DFE_AGE_DIR=<age-ffi dir>.")
+    # 回退：系统 OpenSSL（Linux 优先静态，Windows 通常动态）
+    if(NOT WIN32)
+      set(OPENSSL_USE_STATIC_LIBS ON)
+    endif()
+    find_package(OpenSSL QUIET)
+    if(OpenSSL_FOUND AND OPENSSL_CRYPTO_LIBRARY)
+      set(FE_OPENSSL_FOUND TRUE)
+      target_link_libraries(FileEncryptor PRIVATE OpenSSL::Crypto)
+      message(STATUS "OpenSSL: find_package (${OPENSSL_VERSION})")
+    else()
+      message(WARNING
+        "WITH_OPENSSL=ON but OpenSSL not found.\n"
+        "  Windows: 需先构建 Updater/out/openssl（libsodium/OpenSSL 静态构建已就绪）。\n"
+        "  Linux  : 安装 libssl-dev 或设置 OPENSSL_ROOT_DIR。\n"
+        "SM4 / X25519 / X448 将不可用。")
+    endif()
+  endif()
+  if(FE_OPENSSL_FOUND)
+    target_compile_definitions(FileEncryptor PRIVATE FE_WITH_OPENSSL)
+  endif()
+
+  # 静态 libcrypto.a 的传递依赖（动态版由 .so 自带）：zlib 用于 PEM / ASN.1，
+  # jitterentropy 是 jitter 熵源的实现；两者缺失都会在与 libcrypto.a 链接时 undefined reference
+  if(NOT WIN32 AND FE_OPENSSL_FOUND AND OPENSSL_CRYPTO_LIBRARY MATCHES "\\.a$")
+    set(_saved_suffixes ${CMAKE_FIND_LIBRARY_SUFFIXES})
+    set(CMAKE_FIND_LIBRARY_SUFFIXES ".a")
+    foreach(_dep z jitterentropy)
+      unset(FE_OPENSSL_DEP_${_dep} CACHE)   # 清掉上一轮缓存的 .so，强制按静态后缀重探
+      find_library(FE_OPENSSL_DEP_${_dep} NAMES ${_dep})
+      if(FE_OPENSSL_DEP_${_dep})
+        target_link_libraries(FileEncryptor PRIVATE ${FE_OPENSSL_DEP_${_dep}})
+      endif()
+    endforeach()
+    set(CMAKE_FIND_LIBRARY_SUFFIXES ${_saved_suffixes})
   endif()
 endif()
 
 # ---------- zstd 压缩支持 ----------
-# 优先从源码编译（与本工程工具链/CRT 一致，规避预编译库的 LNK2001）；预编译库作回退。
-# 两者皆缺时构建"无压缩"版（-z 运行时被拒）；可用 -DWITH_ZSTD=OFF 彻底关闭。
+# 查找顺序按平台分开：Linux/macOS 先找系统静态库（省去编译整棵源码树、也是包管理器的
+# 常规安装方式），再回退源码编译；Windows 先源码编译（与 MSVC 工具链 / /MT 一致），
+# 再回退 third_party 预编译库。
+# 静态链接是默认行为：只找到动态库会让 DEB/RPM 带上 libzstd.so 运行时依赖，
+# 与「零声明依赖、完全自包含」的目标冲突。ZSTD_STATIC=OFF 允许动态链接。
 option(WITH_ZSTD "Enable zstd compression support" ON)
+option(ZSTD_STATIC "Statically link zstd (recommended for self-contained packages)" ON)
 set(FE_ZSTD_FOUND FALSE)
+set(FE_ZSTD_STATIC FALSE)
 if(WITH_ZSTD)
   set(_zstd_root "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/zstd")
   set(_zstd_src "${_zstd_root}/src/lib")
-  if(EXISTS "${_zstd_src}/zstd.h")
-    # ---- 从源码构建 zstd 静态库（与本工程同工具链 / 同 /MT 运行时）----
+  # 每次配置重新探测：find_library 结果进缓存，沿用旧值会在换平台/换库后指向不匹配的库
+  unset(ZSTD_LIBRARY CACHE)
+  unset(ZSTD_INCLUDE_DIR CACHE)
+
+  # 命中预编译静态库后的统一处理（只挂依赖、不做查找）
+  function(fe_zstd_attach_prebuilt _lib _inc)
+    set(FE_ZSTD_FOUND TRUE PARENT_SCOPE)
+    set(FE_ZSTD_STATIC TRUE PARENT_SCOPE)
+    target_include_directories(FileEncryptor PRIVATE ${_inc})
+    target_link_libraries(FileEncryptor PRIVATE ${_lib})
+    target_compile_definitions(FileEncryptor PRIVATE FE_WITH_ZSTD)
+    if(WIN32)
+      target_link_libraries(FileEncryptor PRIVATE ws2_32)
+    else()
+      target_link_libraries(FileEncryptor PRIVATE pthread)
+    endif()
+    message(STATUS "zstd: 静态链接预编译库 (${_lib})")
+  endfunction()
+
+  # ---- 1) Linux/macOS：系统 / 仓库预编译静态库（libzstd.a）----
+  # 后缀锁死为 .a，否则 find_library 会先命中 libzstd.so 把动态依赖带进来。
+  if(NOT WIN32 AND ZSTD_STATIC)
+    set(_zstd_saved_suffixes ${CMAKE_FIND_LIBRARY_SUFFIXES})
+    set(CMAKE_FIND_LIBRARY_SUFFIXES ".a")
+    find_library(ZSTD_LIBRARY NAMES zstd libzstd_static
+      HINTS $ENV{ZSTD_ROOT} "${_zstd_root}/static/linux"
+            "/usr/lib/${CMAKE_LIBRARY_ARCHITECTURE}" /usr/local /usr
+      PATH_SUFFIXES lib lib64)
+    set(CMAKE_FIND_LIBRARY_SUFFIXES ${_zstd_saved_suffixes})
+  endif()
+  if(ZSTD_LIBRARY)
+    find_path(ZSTD_INCLUDE_DIR NAMES zstd.h
+      HINTS $ENV{ZSTD_ROOT} "${_zstd_root}/include" /usr/local/include /usr/include
+      PATH_SUFFIXES include)
+    if(ZSTD_INCLUDE_DIR)
+      fe_zstd_attach_prebuilt(${ZSTD_LIBRARY} ${ZSTD_INCLUDE_DIR})
+    endif()
+  endif()
+
+  # ---- 2) 回退：从源码编译静态库（与本工程同工具链 / 同 /MT 运行时）----
+  # Windows 上这是首选路径；源文件缺失时才落到下一步的预编译库
+  if(NOT FE_ZSTD_FOUND AND EXISTS "${_zstd_src}/zstd.h")
     set(FE_ZSTD_FOUND TRUE)
     enable_language(C)   # zstd 为 C 源码，工程默认仅启用 CXX
     file(GLOB _zstd_common     "${_zstd_src}/common/*.c")
@@ -507,40 +574,56 @@ if(WITH_ZSTD)
       target_link_libraries(FileEncryptor PRIVATE pthread)
     endif()
     message(STATUS "zstd: 已从源码编译集成 (${_zstd_src})")
-  else()
-    # ---- 回退：使用预编译静态库（需自行放置，且工具链须兼容）----
-    if(WIN32)
-      find_path(ZSTD_INCLUDE_DIR NAMES zstd.h
-        HINTS "${_zstd_root}/include" NO_DEFAULT_PATH)
-      find_library(ZSTD_LIBRARY NAMES zstd libzstd libzstd_static zstd_static
-        HINTS "${_zstd_root}/static" NO_DEFAULT_PATH)
-    else()
-      find_path(ZSTD_INCLUDE_DIR NAMES zstd.h
-        HINTS "${_zstd_root}/include" "/usr/local/include" "/usr/include")
-      find_library(ZSTD_LIBRARY NAMES zstd libzstd_static
-        HINTS "${_zstd_root}/static/linux" "/usr/local/lib" "/usr/lib" "/usr/lib64")
-    endif()
+  endif()
+
+  # ---- 3) Windows 兜底：third_party 预编译静态库（.lib）----
+  # 该库由 MinGW 构建，仅当源码树缺失、且链接器不报错时才可用；MSVC 下若报
+  # ___chkstk_ms unresolved 说明工具链不匹配，请保留 third_party/zstd/src/lib。
+  if(NOT FE_ZSTD_FOUND AND WIN32 AND ZSTD_STATIC)
+    find_path(ZSTD_INCLUDE_DIR NAMES zstd.h
+      HINTS "$ENV{ZSTD_ROOT}" "${_zstd_root}/include" NO_DEFAULT_PATH)
+    find_library(ZSTD_LIBRARY NAMES libzstd_static
+      HINTS "$ENV{ZSTD_ROOT}" "${_zstd_root}/static" NO_DEFAULT_PATH)
     if(ZSTD_INCLUDE_DIR AND ZSTD_LIBRARY)
-      set(FE_ZSTD_FOUND TRUE)
-      target_include_directories(FileEncryptor PRIVATE ${ZSTD_INCLUDE_DIR})
-      target_link_libraries(FileEncryptor PRIVATE ${ZSTD_LIBRARY})
-      target_compile_definitions(FileEncryptor PRIVATE FE_WITH_ZSTD)
-      if(WIN32)
-        target_link_libraries(FileEncryptor PRIVATE ws2_32)
-      else()
-        target_link_libraries(FileEncryptor PRIVATE pthread)
-      endif()
-      message(STATUS "zstd: 已集成预编译库 (${ZSTD_LIBRARY})")
+      fe_zstd_attach_prebuilt(${ZSTD_LIBRARY} ${ZSTD_INCLUDE_DIR})
+    endif()
+  endif()
+
+  # ---- 4) 都不可用 ----
+  if(NOT FE_ZSTD_FOUND)
+    if(ZSTD_STATIC)
+      # 默认不允许动态链接：只会产出带 libzstd.so 依赖的包，静默通过会掩盖问题
+      message(FATAL_ERROR
+        "WITH_ZSTD=ON 且 ZSTD_STATIC=ON，但未找到 zstd 静态库（libzstd.a / libzstd_static.lib）。\n"
+        "  安装静态库后重试：\n"
+        "    Debian/Ubuntu: sudo apt install libzstd-dev\n"
+        "    Fedora        : sudo dnf install libzstd-static\n"
+        "    macOS         : brew install zstd\n"
+        "  或直接沿用仓库内的源码树 third_party/zstd/src/lib 走源码编译。\n"
+        "  确需动态链接请用 -DZSTD_STATIC=OFF。")
     else()
       message(WARNING
-        "WITH_ZSTD=ON 但未找到 zstd 源码或预编译库，将构建为“无压缩”版本。\n"
-        "  请将 zstd 源码放到 third_party/zstd/src/lib，或放置预编译静态库。\n"
+        "WITH_ZSTD=ON 但未找到 zstd（静态库关闭查找、源码树也不在），将构建为“无压缩”版本。\n"
+        "  安装 libzstd-dev（Ubuntu）或从源码放置 third_party/zstd/src/lib。\n"
         "CLI 的 -z / --compression-level 会在运行时被拒绝。")
     endif()
   endif()
 endif()
 if(NOT FE_ZSTD_FOUND)
   target_compile_definitions(FileEncryptor PRIVATE FE_WITHOUT_ZSTD)
+endif()
+
+# 构建期静态链接校验（Linux/macOS）：确认 zstd 已静态打进可执行文件，而非动态依赖 libzstd.so。
+if(UNIX AND NOT APPLE AND FE_ZSTD_STATIC)
+  find_program(OBJDUMP_EXECUTABLE NAMES objdump)
+  if(OBJDUMP_EXECUTABLE)
+    add_custom_command(TARGET FileEncryptor POST_BUILD
+      COMMENT "校验 zstd 已静态链接（无动态 NEEDED）"
+      COMMAND ${CMAKE_COMMAND} -P
+              "${CMAKE_CURRENT_SOURCE_DIR}/cmake/CheckStaticZstd.cmake"
+              "$<TARGET_FILE:FileEncryptor>" "${OBJDUMP_EXECUTABLE}"
+      VERBATIM)
+  endif()
 endif()
 
 # Windows 动态链接时，把 libsodium.dll 复制到 exe 所在目录，保证直接运行
@@ -657,6 +740,19 @@ install(TARGETS FileEncryptor RUNTIME DESTINATION bin
         PERMISSIONS OWNER_EXECUTE OWNER_READ
                     GROUP_EXECUTE GROUP_READ
                     WORLD_EXECUTE WORLD_READ)
+
+# 附带自动更新器：Updater 是独立工程，Linux 产物由它自己的 POST_BUILD 暂存到约定目录；
+# 打包时直接取这份已构建好的产物，免得 CLI 包去编译 curl。
+set(FE_UPDATER_STAGE "${CMAKE_SOURCE_DIR}/../Updater/out/Ubuntu-26.04/build/linux-release/bin/Updater")
+if(EXISTS "${FE_UPDATER_STAGE}")
+  install(PROGRAMS "${FE_UPDATER_STAGE}" DESTINATION bin RENAME Updater
+          PERMISSIONS OWNER_EXECUTE OWNER_READ
+                      GROUP_EXECUTE GROUP_READ
+                      WORLD_EXECUTE WORLD_READ)
+else()
+  message(STATUS "[package] 未找到 Updater（${FE_UPDATER_STAGE}）：DEB/RPM 不含自动更新器。"
+                 "先构建 Updater 再打包即可得到它。")
+endif()
 
 set(CPACK_PACKAGE_NAME "file-encryptor-cli")
 set(CPACK_PACKAGE_VERSION "${PROJECT_VERSION}")   # 与 project(VERSION) 同步

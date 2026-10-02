@@ -19,6 +19,7 @@ enum class CryptoAction {
 enum class CryptoMode {
     XChaCha20,
     Aegis256,
+    Sm4,
     Asymmetric
 };
 
@@ -26,6 +27,8 @@ enum class CryptoMode {
 struct ShellOptions {
     CryptoAction action = CryptoAction::Encrypt;
     CryptoMode mode = CryptoMode::XChaCha20;
+    // 非对称模式下加密文件载荷的对称算法（会话密钥由它产生，非对称只包裹该密钥）
+    CryptoMode fileMode = CryptoMode::XChaCha20;
 
     // 单模式取首个，批模式全部
     QStringList inputPaths;
@@ -43,9 +46,20 @@ struct ShellOptions {
 
     bool writeSha256 = false;
 
+    // 非对称曲线：false=X25519，true=X448（非对称封装与 -g 生成密钥对都走该曲线）
+    bool useX448 = false;
+
     // zstd 开关与级别分离
     bool compress = false;
     int compressionLevel = 0;
+
+    // 后量子：true=X25519+ML-KEM-768 混合收件人 / ML-DSA-65 水印签名；false=经典 X25519、X448 + RSA
+    bool pqc = true;
+
+    // 尾部水印（仅加密动作）：开启后在密文尾部追加签名水印记录
+    bool watermark = false;
+    // 水印签名私钥 PEM；为空时仍写未签名记录，CLI 不阻断加密
+    QString watermarkKeyPath;
 };
 
 class CliArgBuilder {
@@ -57,4 +71,10 @@ public:
 
     // 命令预览文本构建
     static QString buildPreview(const QString& programPath, const ShellOptions& options);
+
+    // 水印签名私钥：界面里存的是 PEM 明文，判断它是否是密钥材料
+    static bool isPrivateKeyMaterial(const QString& key);
+
+    // 任务结束后删掉为 CLI 落的那份临时私钥
+    static void cleanupWatermarkTemp();
 };

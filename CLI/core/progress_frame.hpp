@@ -40,6 +40,10 @@ struct ProgressSlot {
     uint64_t    total = 0;                             // 当前文件总字节
     bool        active = false;                        // false = 空闲（占位渲染）
     std::chrono::steady_clock::time_point started{};   // 当前文件起始时刻
+    // 路径截断缓存：同一路径连续多帧重算 CJK 宽度是浪费（列宽不变时结果相同）
+    std::string cache_path;                            // 上次截断的路径
+    std::string cache_trunc;                           // 截断结果
+    int         cache_w = 0;                           // 截断时的列宽（宽度变化时失效）
 };
 
 // 批量进度帧显示器（线程安全：worker 调 setSlot，显示线程调 render）
@@ -66,7 +70,7 @@ public:
     void finish();
 
 private:
-    std::vector<std::string> build_lines(int width) const;
+    std::vector<std::string> build_lines(int width);
     void emit_frame(const std::vector<std::string>& lines, bool final_frame);
 
     mutable std::mutex       m_mutex;
@@ -83,6 +87,7 @@ private:
     int                      m_written = 0;            // 已写出的帧行数（用于光标上移）
     std::chrono::steady_clock::time_point m_started{};
     std::chrono::steady_clock::time_point m_last_render{};
+    uint64_t                 m_last_proc = 0;          // 上次渲染时的已处理字节（无增量检测）
 };
 
 } // namespace feui

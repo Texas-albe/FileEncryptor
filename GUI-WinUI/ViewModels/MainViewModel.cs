@@ -44,10 +44,15 @@ public class MainViewModel : ObservableObject
     private int _actionIndex;
     public int ActionIndex { get => _actionIndex; set { SetProperty(ref _actionIndex, value); OnPropertyChanged(nameof(IsAsymmetric)); OnPropertyChanged(nameof(IsEncryptMode)); OnPropertyChanged(nameof(IsKeyGenMode)); RefreshCommandPreview(); } }
 
+    // 模式索引与 ModeCombo 对齐：0=XChaCha20 1=AEGIS-256 2=SM4-GCM 3=X25519 非对称
     private int _modeIndex;
     public int ModeIndex { get => _modeIndex; set { SetProperty(ref _modeIndex, value); OnPropertyChanged(nameof(IsAsymmetric)); RefreshCommandPreview(); } }
 
-    public bool IsAsymmetric => ModeIndex == 2;
+    // 非对称模式下文件载荷的对称算法（0=XChaCha20 1=AEGIS-256 2=SM4-GCM）
+    private int _fileCipherIndex;
+    public int FileCipherIndex { get => _fileCipherIndex; set { SetProperty(ref _fileCipherIndex, value); RefreshCommandPreview(); } }
+
+    public bool IsAsymmetric => ModeIndex == 3;
     public bool IsEncryptMode => ActionIndex is 0 or 2;
     public bool IsKeyGenMode => ActionIndex is 4 or 5 or 6;
 
@@ -65,6 +70,20 @@ public class MainViewModel : ObservableObject
 
     private int _compressLevel = 1;
     public int CompressLevel { get => _compressLevel; set { SetProperty(ref _compressLevel, value); RefreshCommandPreview(); } }
+
+    // 生成密钥对时的曲线选择（默认 X25519）
+    private bool _useX448;
+    public bool UseX448 { get => _useX448; set { SetProperty(ref _useX448, value); RefreshCommandPreview(); } }
+
+    // 后量子：默认开启，取消勾选时 CliArgBuilder 才下发 --no-pqc
+    private bool _pqc = true;
+    public bool Pqc { get => _pqc; set { SetProperty(ref _pqc, value); RefreshCommandPreview(); } }
+
+    private bool _watermark;
+    public bool Watermark { get => _watermark; set { SetProperty(ref _watermark, value); RefreshCommandPreview(); } }
+
+    private string _watermarkKey = "";
+    public string WatermarkKey { get => _watermarkKey; set { SetProperty(ref _watermarkKey, value); RefreshCommandPreview(); } }
 
     private string _outputDir = "";
     public string OutputDir { get => _outputDir; set { SetProperty(ref _outputDir, value); RefreshCommandPreview(); } }
@@ -221,6 +240,7 @@ public class MainViewModel : ObservableObject
             Action = ActionKey(opts.Action),
             ActionLabel = ActionLabel(opts.Action),
             Mode = ModeKey(opts.Mode),
+            FileCipher = opts.Mode == CryptoMode.Asymmetric ? ModeKey(opts.FileMode) : "",
             InputCount = opts.InputPaths.Count,
             InputPaths = new List<string>(opts.InputPaths),
             TotalBytes = totalBytes,
@@ -234,6 +254,10 @@ public class MainViewModel : ObservableObject
             Recipient = Recipient ?? "",
             Identity = Identity ?? "",
             RestoreName = RestoreName,
+            Pqc = Pqc,
+            Watermark = Watermark,
+            // 私钥明文不落盘任务历史，只留占位（恢复任务时提示重新输入）
+            WatermarkKey = CliArgBuilder.IsPrivateKeyMaterial(WatermarkKey) ? "<protected>" : (WatermarkKey ?? ""),
         };
 
         _cli.Execute(req);
@@ -291,6 +315,7 @@ public class MainViewModel : ObservableObject
                 _currentTask.TotalBytes = _cli.TotalBytes > 0 ? _cli.TotalBytes : _currentTask.TotalBytes;
                 TaskHistoryService.Append(_currentTask, out _);
             }
+            CliArgBuilder.CleanupWatermarkTemp();
 
             // 构建汇总
             var summary = new TaskSummaryInfo
@@ -380,13 +405,22 @@ public class MainViewModel : ObservableObject
         {
             0 => CryptoMode.XChaCha20,
             1 => CryptoMode.Aegis256,
-            2 => CryptoMode.Asymmetric,
+            2 => CryptoMode.Sm4,
+            3 => CryptoMode.Asymmetric,
+            _ => CryptoMode.XChaCha20
+        };
+        // 非对称模式下会话密钥由文件算法产生，非对称部分只负责包裹它
+        var fileMode = FileCipherIndex switch
+        {
+            1 => CryptoMode.Aegis256,
+            2 => CryptoMode.Sm4,
             _ => CryptoMode.XChaCha20
         };
         return new ShellOptions
         {
             Action = action,
             Mode = mode,
+            FileMode = fileMode,
             InputPaths = new List<string>(InputPaths.Where(p => p.IsSelected).Select(p => p.Path)),
             OutputDir = OutputDir,
             SourceDisposition = (SourceDisposition)SourceIndex,
@@ -398,7 +432,11 @@ public class MainViewModel : ObservableObject
             WriteSha256 = Sha256,
             Compress = Compress,
             CompressionLevel = Compress ? CompressLevel : 0,
+            UseX448 = UseX448,
             ConsoleMode = UseSystemConsole,
+            Pqc = Pqc,
+            Watermark = Watermark,
+            WatermarkKeyPath = WatermarkKey ?? "",
         };
     }
 
@@ -406,7 +444,10 @@ public class MainViewModel : ObservableObject
     {
         var opts = CollectOptions();
         var args = CliArgBuilder.BuildArguments(opts);
-        var argStr = string.Join(" ", args.Select(a => a.StartsWith("-") ? a : "\"" + a.Replace("\"", "\\\"") + "\""));
+        var argStr = string.Join(" ", args.Select(a =>
+            CliArgBuilder.IsPrivateKeyMaterial(a) ? "<private-key>"
+            : a.StartsWith("-") ? a
+            : "\"" + a.Replace("\"", "\\\"") + "\""));
         if (_cliPath == null)
         {
             CommandPreview = argStr;
@@ -468,7 +509,8 @@ public class MainViewModel : ObservableObject
     {
         CryptoMode.XChaCha20 => "xchacha20",
         CryptoMode.Aegis256 => "aegis256",
-        CryptoMode.Asymmetric => "asymmetric",
+        CryptoMode.Sm4 => "sm4",
+        CryptoMode.Asymmetric => "x25519",
         _ => "xchacha20"
     };
 }

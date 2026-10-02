@@ -3,7 +3,7 @@
 跨平台（Windows / Linux / macOS）文件加密命令行工具，基于 [libsodium](https://doc.libsodium.org/) 实现高强度、抗篡改、可续传的分块加密。
 
 - 磁盘文件格式默认版本 **v6**（可扩展加密容器；v4/v5 按需写出，v1~v6 全部可直接解密，旧文件无需重加密）。
-- 程序版本 **2.4.5**。
+- 程序版本 **2.7.0**。
 
 ---
 
@@ -28,7 +28,8 @@
   - `XChaCha20-Poly1305`（默认，IETF 变体）—— 无需硬件加速，移动端 / 服务器通用。
   - `AEGIS-256` —— 在支持 **AES-NI** 的 CPU 上性能极高（32 字节 nonce / 32 字节 tag 的 AEAD）。
   - `AES-256-GCM` 仅用于**解密旧版 v1/v2 文件**，新加密不再使用。
-  - `age`（非对称混合加密，`-m age`）—— 基于 [rage/age](https://github.com/str4d/rage) 的 X25519 + ChaCha20-Poly1305：每个文件用随机对称文件密钥加密，再用收件人 X25519 公钥包装该密钥，支持多收件人、无需共享口令。
+  - `SM4-GCM`（`-m sm4`）—— 16 字节密钥 / 12 字节 nonce / 16 字节 tag，由 OpenSSL 提供，需构建时启用 OpenSSL。
+  - 非对称（`-m x25519` / `-m x448`）—— 随机 DEK 经收件人公钥（X25519 / X448）ECDH 封装后写入 `.ptd` 容器，支持多收件人、无需共享口令。
 - **密钥派生**：Argon2id（默认 `opslimit=4` / `memlimit=128 MB`），参数随文件头持久化，未来可无损增强。
 - **完整性保护**
   - 每文件 `salt` + `iv` 随机生成；每块 `nonce = sodium_increment(iv)` 逐块自增，杜绝 nonce 复用。
@@ -41,7 +42,9 @@
 - **续传进度文件双重保护（防重放）**：`.progress` 的 HMAC 额外绑定"源文件标识" `compute_progress_binding`（规范化路径 + 大小 + mtime），旧的有效 `.progress` 无法被重放到不同文件（路径 / mtime / size 任一变化即 HMAC 失配），合法中断续传则可正常恢复。
 - **精确错误处理与信息泄露防护（`-v`）**：默认（非 `-v` 且非 DEBUG 日志）所有认证失败（密码错误 / 文件头被改 / 明文哈希不符 / 进度损坏）只返回通用错误；仅 `-v` 才在 stderr 暴露具体原因。
 - **路径处理与资源耗尽防御**：`validate_io_paths` 先 `path_has_traversal` 拒绝任何 `..` 组件，再 `normalize_path_lexical`（解析 `.` / `..`、统一分隔符）做白名单前缀与长度比较；新增 YAML `max_open_files`（默认 256），批量 / 高并发时并发线程数上限 = `max_open_files / 3`。
-- **输出文件名混淆（v1.7.0+ 默认开启）**：加密产出形如 `<16位十六进制>.<伪扩展名>.ptd`，原始文件名加密追加到密文末尾（`FENX` 信封），多语言文件名可正确还原；可通过 YAML `obfuscate_names: false` 关闭。
+- **文件尾部水印（可选，`--watermark` 默认关闭）**：密文末尾追加一条「机器指纹（MAC + 主板序列号哈希）+ 时间戳 + 随机 nonce + 后量子签名（ML-DSA-65，经典模式为 RSA）」记录，泄露后可用公钥验签溯源；机器指纹不含明文主机标识，详见 [文件尾部水印](#文件尾部水印---watermark)。
+- **后量子密码（默认开启，`--pqc` / `--no-pqc`）**：非对称收件人密钥改为「X25519 ‖ ML-KEM-768」混合密钥（抗量子 + 经典兜底），水印签名改为 ML-DSA-65；`--no-pqc` 回退到 X25519/X448 + RSA，旧文件与旧密钥串照常可解密，详见 [后量子密码（PQC）](#后量子密码pqc)。
+- **输出文件名混淆（v1.7.0+ 默认开启）**：加密产出形如 `<16位十六进制>.<3 位小写字母>.ptd`，原始文件名加密追加到密文末尾（`FENX` 信封），多语言文件名可正确还原；可通过 YAML `obfuscate_names: false` 关闭。
 
 ---
 
@@ -74,8 +77,8 @@ rm -rf out/build/linux-release
 cmake --preset linux-release
 cmake --build --preset linux-release
 # 构建完成后自动：
-#   - 拷到 out/Ubuntu-26.04/build/linux-release/bin/FileEncryptorCLI-2.4.5-cmd-Linux
-#   - cpack 生成 out/packages/file-encryptor-cli-2.4.5-Linux.deb 和 .rpm
+#   - 拷到 out/Ubuntu-26.04/build/linux-release/bin/FileEncryptorCLI-2.7.0-cmd-Linux
+#   - cpack 生成 out/packages/file-encryptor-cli-2.7.0-Linux.deb 和 .rpm
 ```
 
 > 若系统中同时存在多个 libsodium（如 apt 旧版 + `/usr/local` 新版），可显式指定：
@@ -84,9 +87,9 @@ cmake --build --preset linux-release
 最终用户安装：
 
 ```bash
-sudo dpkg -i file-encryptor-cli-2.4.5-Linux.deb
+sudo dpkg -i file-encryptor-cli-2.7.0-Linux.deb
 # 或
-sudo rpm -ivh file-encryptor-cli-2.4.5-Linux.rpm
+sudo rpm -ivh file-encryptor-cli-2.7.0-Linux.rpm
 ```
 
 ### Windows（预编译 libsodium + MSVC）
@@ -129,7 +132,7 @@ cmake --build out/build/pgo-windows
 **训练数据**：项目提供 `scripts/pgo_train.ps1`，执行 50 次代表性运行以模拟普通用户
 经 GUI `QProcess` 调用 CLI 的真实路径（密钥经 stdin 注入、参数与 `CliArgBuilder::buildArguments`
 一致）。覆盖单文件加/解密（小/中/大文件）、批量加/解密（含文件名还原）、zstd 压缩
-（多级别）、AEGIS-256、非对称 rage、密钥管理、rewrap、verify、源文件处置等高频场景。
+（多级别）、AEGIS-256、非对称、密钥管理、rewrap、verify、源文件处置等高频场景。
 训练后优化二进制约 2.59 MB（普通 Release 约 2.70 MB），核心热路径（KDF / AEAD / 块循环）
 经 profile 引导布局与内联调整。插桩运行时需 `pgort140.dll`（CMake 自动复制到 exe 同目录）。
 
@@ -156,44 +159,46 @@ FileEncryptorCLI <动作> <输入路径...> [选项]
     -be               批量加密目录/文件
     -bd               批量解密目录/文件
     -h / --help / -?  显示帮助
-  密钥管理（rage/age）：
-    -g                随机生成 X25519（rage）密钥对（公钥→stdout，私钥→<dir>/rage_private.txt）
+  密钥管理（非对称）：
+    -g                随机生成密钥对（-x448 用 X448）（公钥→stdout 并写 <dir>/rage_public.txt，私钥→<dir>/rage_private.txt）
     -G                由口令确定性派生 X25519 密钥对（Argon2id），输出同 -g，另写 <dir>/rage_derive_salt.txt
-    -Y                由私钥文件（-k）反推并打印对应公钥（等价 rage-keygen -y）
+    -Y                由私钥文件（-k）反推并打印对应公钥
     -L / --keylib     管理本机密钥库：list | add | remove | show | pub | export
     --salt <hex|file> -G 使用的盐（16 字节；省略则随机）
   只读 / 运维：
     -H / --info          只读查看密文头元数据（版本 / 算法 / Argon2 参数 / salt / iv / 明文哈希 / 是否带文件名信封），不解密、不校验密钥正确性
-    -V / --verify        完整性校验（只验不解，不落盘明文）；通过输出 OK、失败输出 FAILED
-    -R / --recover-name  由口令离线还原混淆文件名（打印原始名；配合 --rename 把 .ptd 原地重命名为 <原始名>.ptd）
+    -V / --verify        完整性校验（只验不解，不落盘明文）；对称用口令文件、非对称（-m x25519/x448）用身份私钥；通过输出 OK、失败输出 FAILED
+    -R / --recover-name  由口令（非对称用身份私钥；私钥串以 AGE-SECRET-KEY- / MLKEM1SEC- / X448SEC- 开头即自动按非对称处理）离线还原混淆文件名（打印原始名；配合 --rename 把 .ptd 原地重命名为 <原始名>.ptd）
+    --watermark-extract  只读提取水印记录（不需口令）：打印机器指纹 / 指纹来源 / 时间戳 / nonce，
+                         带 --wm-verify 时同步验签（通过退出码 0，失败 / 无水印为 1）
 
 选项：
   <输入路径>         单文件：一个位置参数；批量：用 -i <目录> 指定（可多次）
   -o <dir>          输出目录（默认：输入同级目录）
   -i <dir>          批量输入目录（可多次，仅 -be/-bd 使用）
-  -m <mode>         加密模式：xchacha20（默认）| aegis256 | rage（非对称混合；age 为兼容别名）
+  -m <mode>         加密模式：xchacha20（默认）| aegis256 | sm4 | x25519 | x448（后两者为非对称）
   -z / --compress   对称加密（-e/-be）启用逐块 zstd 压缩（磁盘格式 v5；不压缩仍为 v4）。
                     未显式给 --compression-level 时默认级别 1
   --compression-level <N>, -cl <N>
                     zstd 压缩级别：1..22 常规（越大越慢、压缩率越高），-1..-5 快速档；
-                    单独出现即启用压缩。仅对称加密有效，非对称（rage）与解密方向会拒绝；
+                    单独出现即启用压缩；解密方向会拒绝。
                     未集成 zstd 的构建请求压缩时报错退出。
                     解密无需任何参数：按密文头自动识别并解压，旧格式（v1~v4）不受影响。
-  -r <pub|file>     非对称加密（rage）的收件人公钥：可直接给 age1... 公钥字符串，
+  -r <pub|file>     非对称加密的收件人公钥：可直接给 age1... / X448-... 公钥字符串，
                     或给公钥文件（每行一个，支持 # 注释 / 空行 / publickey: 前缀）
-  -K <name>[,...]   按名称引用密钥库（-L 管理）中的密钥，仅 -m rage：
+  -K <name>[,...]   按名称引用密钥库（-L 管理）中的密钥，仅非对称模式：
                     加密时为收件人名称列表（逗号分隔，可与 -r 叠加，重复公钥自动去重）；
                     解密时为一个身份名称（等价 -k <库内私钥文件>）
   --key-stdin       从 stdin 读取密码直到 EOF（二进制安全，仅对称模式）；GUI 对称模式默认走此通道
   -de               加密成功后删除源文件（仅加密）
   -y / --force      覆盖已存在的输出（不再询问）
   -k <keyfile>      从文件读取密钥材料（非交互；替代：ENCRYPTOR_KEY 环境变量）；
-                    -m rage 解密时该文件必须是身份私钥文件（AGE-SECRET-KEY-...）
+                    非对称解密时该文件必须是身份私钥文件（AGE-SECRET-KEY-... / X448SEC-...）
   -v / --verbose    显示认证失败的详细原因（默认仅返回通用错误，防信息泄露）
   --restore-name, -rn  批量解密（含 -d）时还原完整原始文件名；默认关闭，仅保留扩展名
                     （关闭可省去每文件一次 Argon2id KDF，批量解密显著加快）
-  --obfuscate-name, -on  -m rage 专用：把输出文件名混淆为 <16 位十六进制>.<混淆扩展名>.age。
-                    注意：rage 模式没有加密文件名信封，混淆后原始文件名**不可恢复**，
+  --obfuscate-name, -on  非对称专用：把输出文件名混淆为 <16 位十六进制>.<混淆扩展名>.ptd。
+                    注意：非对称模式没有加密文件名信封，混淆后原始文件名**不可恢复**，
                     因此需显式开启（不跟随 YAML 的 obfuscate_names）；不开启时输出名为明文。
   --sha256           加密成功后额外生成 <out>.ptd.sha256 校验单（密文 SHA-256 十六进制 + 文件名）；
                     等价 YAML 开关 write_sha256（默认关闭），本选项针对单次任务强制开启。
@@ -201,9 +206,16 @@ FileEncryptorCLI <动作> <输入路径...> [选项]
   --as <name>        -L add 配合：导入密钥的库内唯一名称
   --alias <text>     -L add 配合：展示用别名
   --notes <text>     -L add 配合：单行备注（存入索引）
+  --watermark        加密时追加尾部水印（默认关闭）
+  --no-watermark     显式关闭水印（默认行为）
+  --wm-sign <file>   --watermark 配合：ML-DSA-65 私钥 PEM（--no-pqc 为 RSA），对水印做签名；
+                     不给私钥只写未签名记录，不会因缺少私钥而加密失败
+  --wm-verify <file> --watermark-extract 配合：对应公钥 PEM，用于验签（自动识别 ML-DSA / RSA）
+  --pqc             使用后量子密码（默认，等价于不写）
+  --no-pqc           经典算法：X25519/X448 收件人 + RSA 水印签名
 
 密钥来源优先级（对称模式）：-k 密钥文件 > --key-stdin（stdin 管道） > ENCRYPTOR_KEY 环境变量 > 交互式输入（须 ≥6 字符）。
-非对称模式（rage）：加密用 -r 收件人公钥（公钥字符串或公钥文件）；解密用 -k <私钥文件> 传入身份私钥，**绝不走环境变量 / stdin**。
+非对称模式：加密用 -r 收件人公钥（公钥字符串或公钥文件）；解密用 -k <私钥文件> 传入身份私钥，**绝不走环境变量 / stdin**。
 
 # 生成 X25519 密钥对：公钥打到 stdout（可重定向），私钥落到文件
 FileEncryptorCLI -g -o ./keys > pubkey.txt
@@ -216,19 +228,19 @@ FileEncryptorCLI -G -o ./keys --key-stdin --salt ./keys/rage_derive_salt.txt
 # 由私钥反推公钥
 FileEncryptorCLI -Y -k ./keys/rage_private.txt
 
-# 非对称（rage）混合加密：直接用公钥字符串，或给公钥文件
-FileEncryptorCLI -e secret.docx -m rage -r age1... -o ./out
-FileEncryptorCLI -e secret.docx -m rage -r ./recipients.txt -o ./out
+# 非对称加密：直接用公钥字符串，或给公钥文件
+FileEncryptorCLI -e secret.docx -m x25519 -r age1... -o ./out
+FileEncryptorCLI -e secret.docx -m x25519 -r ./recipients.txt -o ./out
 
 # 解密：私钥以文件形式经 -k 传入（不走 stdin / 环境变量）
-FileEncryptorCLI -d secret.docx.age -m rage -k ./keys/rage_private.txt -o ./out
+FileEncryptorCLI -d secret.docx.ptd -m x25519 -k ./keys/rage_private.txt -o ./out
 
 # 密钥库：导入 / 查看 / 派生缓存公钥 / 按名称使用
 FileEncryptorCLI -L add ./keys/rage_private.txt --as backup --alias "异地备份" --notes "offsite"
 FileEncryptorCLI -L list
 FileEncryptorCLI -L pub backup                 # 派生并缓存公钥（索引可见）
-FileEncryptorCLI -e secret.docx -m rage -K backup -o ./out
-FileEncryptorCLI -d secret.docx.age -m rage -K backup -o ./out
+FileEncryptorCLI -e secret.docx -m x25519 -K backup -o ./out
+FileEncryptorCLI -d secret.docx.ptd -m x25519 -K backup -o ./out
 FileEncryptorCLI -L export backup ./out        # 导出材料文件（仅拥有者可读）
 FileEncryptorCLI -L remove backup
 
@@ -294,24 +306,24 @@ FileEncryptorCLI -bd ./encrypted_dir -o ./decrypted
 
 ---
 
-## 非对称（混合）加密：集成 rage/age（X25519 + ChaCha20-Poly1305）
+## 非对称加密（X25519 / X448）
 
-非对称模式（`-m rage`，兼容别名 `age`）采用**混合加密**：每个文件用随机生成的对称文件密钥（ChaCha20-Poly1305）加密，再用收件人的 **X25519** 公钥包装该文件密钥。无需与对方共享口令，只需交换公钥；可指定多个收件人（每人都能独立解密）。底层复用 [rage/age](https://github.com/str4d/rage) 的 C-ABI 静态库 `fe_age`（封装 `age` crate v0.12.1）。
+非对称模式（`-m x25519` / `-m x448`）采用**混合加密**：每个文件用随机 DEK 加密，再用收件人公钥（X25519 或 X448）把 DEK 封装进 `.ptd` v6 容器的收件人条目区。无需与对方共享口令，只需交换公钥；可指定多个收件人（每人都能独立解密），同一容器可混合两种曲线。底层由 OpenSSL `EVP_PKEY` 完成 ECDH。
 
-- **密钥对生成**：`-g` 直接生成——**公钥打印到 stdout**（便于重定向 / 管道给 `-r`），**私钥写入 `-o <dir>/rage_private.txt`**；提示信息一律走 stderr，保证 stdout 是干净的一行公钥。
-- **加密**：`-r <pub|file>` 给收件人公钥——可直接是 `age1...` 字符串，也可以是公钥文件（每行一个，可空行 / `#` 注释 / `publickey:` 前缀），输出 `<名>.age`。
-- **解密**：**必须**用私钥文件：`-k <私钥文件>`（内容为 `AGE-SECRET-KEY-...`，自动去除首尾空白 / 换行）。身份私钥不再经 stdin 传入，**绝不走环境变量**。
+- **密钥对生成**：`-g`（`-x448` 切到 X448）——**公钥打印到 stdout**（便于重定向 / 管道给 `-r`），**公钥同时写入 `-o <dir>/rage_public.txt`**、**私钥写入 `-o <dir>/rage_private.txt`**（同名覆盖保护同私钥）；提示信息一律走 stderr，保证 stdout 是干净的一行公钥。
+- **加密**：`-r <pub|file>` 给收件人公钥——可直接是 `age1...` / `X448-...` 字符串，也可以是公钥文件（每行一个，可空行 / `#` 注释 / `publickey:` 前缀），输出 `<名>.ptd`。
+- **解密**：**必须**用私钥文件：`-k <私钥文件>`（内容为 `AGE-SECRET-KEY-...` / `X448SEC-...`，自动去除首尾空白 / 换行）。身份私钥不再经 stdin 传入，**绝不走环境变量**。
 
 ### 密钥派生（`-G`）与公钥导出（`-Y`）
 
-这两个动作是纯本地计算（Argon2id + X25519 + Bech32），**不依赖 `fe_age` 静态库**，因此在未集成为非对称加密的构建里同样可用。
+这两个动作是纯本地计算（Argon2id + X25519 + Bech32），不依赖非对称加密是否启用。
 
 - **`-G` 口令派生**：`Argon2id(口令, 盐) → 32 字节 → X25519 钳位 → 密钥对`。
   输出与 `-g` 一致（公钥到 stdout、私钥到 `<dir>/rage_private.txt`），额外写出 **`<dir>/rage_derive_salt.txt`**（16 字节随机盐的 hex）。
   **同一口令 + 同一盐永远得到同一对密钥**，所以记住口令即可代替保存私钥文件；但**盐必须一并保存**，否则无法再次派生。
   用 `--salt <hex|file>` 传入已保存的盐即可复现；口令可来自 `--key-stdin`（推荐，GUI 走此通道）、`-k <文件>`、`ENCRYPTOR_KEY` 或交互输入（≥6 字符）。
   已存在同名密钥文件时拒绝覆盖，除非带 `-y`。
-- **`-Y` 公钥导出**：读取 `-k <私钥文件>` 中的 `AGE-SECRET-KEY-...`，做一次 X25519 基点乘法反推出 `age1...` 公钥并打印到 stdout。用于私钥还在、公钥丢失的场景（等价 `rage-keygen -y`）。
+- **`-Y` 公钥导出**：读取 `-k <私钥文件>` 中的 `AGE-SECRET-KEY-...`，反推出 `age1...` 公钥并打印到 stdout。用于私钥还在、公钥丢失的场景。
 - **Bech32 实现注意事项**：age 的身份私钥串是 `bech32_encode(HRP="AGE-SECRET-KEY-")` 之后整体大写，其**校验和按小写 HRP 展开计算**。若按大写 HRP 展开，age 会拒绝该串（`invalid Bech32 encoding`）。
 
 ### 密钥库（`-L` / `-K`）
@@ -326,25 +338,55 @@ FileEncryptorCLI -bd ./encrypted_dir -o ./decrypted
 - **加密用 `-K <name>[,...]`**：按名称把库内条目解析为收件人（身份条目用缓存公钥，收件人条目读材料文件），可与 `-r` 叠加使用，重复公钥自动去重。
 - **解密用 `-K <name>`**：等价于 `-k <库内私钥文件>`，脚本化调用不必再手写长路径。
 
-### 构建 fe_age 静态库（Windows / Linux）
+### OpenSSL 依赖
 
-`fe_age` 源码与两平台预编译静态库随仓库放于 `../third_party/rage/age-ffi/`（Rust crate，C-ABI `staticlib`）。预编译库缺失时按下面步骤重编：
+X25519 / X448、ML-KEM-768、ML-DSA-65 与 SM4-GCM 由静态链接的 OpenSSL（`third_party/openssl/`）提供。构建时未找到 OpenSSL 不会中断，`FE_WITH_OPENSSL` 不定义，非对称与 SM4 相关调用返回明确错误，`--features` 报告 `sm4=0`（PQC 不在 `-features` 里显式分档时按 OpenSSL 可用性判定，见 [后量子密码（PQC）](#后量子密码pqc)）。
 
-```powershell
-# Windows（MSVC，x64）
-cd ../third_party/rage/age-ffi
-./build-win.ps1          # 产出 age-ffi/lib/windows/fe_age.lib
-```
+---
+
+## 后量子密码（PQC）
+
+OpenSSL 4.x 自带 ML-KEM / ML-DSA，**默认开启**（等价于显式写 `--pqc`）；`--no-pqc` 退回经典算法。
+`--features` 输出 `pqc=1` 表示当前构建支持 PQC，`pqc=0` 时 `MLKEM1-` 串会被判为非法公钥。
+
+- **收件人密钥（X25519 ‖ ML-KEM-768）**：`RECIP_ALGO_MLKEM`（盘面算法号 3）。公钥 1216 字节、私钥 2432 字节（= X25519 的 32 字节前缀 ‖ ML-KEM 段），串前缀 `MLKEM1-` / `MLKEM1SEC-` + base64。封装时 ML-KEM 侧取共享密钥、X25519 侧用临时密钥对做 ECDH，两个 32 字节共享密钥经 HMAC-SHA256 合流出 KEK，再以零 nonce 的 XChaCha20-Poly1305 封装 DEK；解密端反向解裹，盘面只多出一段 ML-KEM 封装密文。
+- **水印签名（ML-DSA-65）**：`--wm-keygen <priv.pem>` 一把生成密钥对（公钥走 stdout），`--wm-sign` 默认读 ML-DSA-65 私钥 PEM，`--no-pqc` 仍可给 RSA 私钥。签名长度约 3300 字节，记录长度字段按实际签名长度写入，验签端按公钥类型自动选择算法。
+- **兼容**：`age1...` / `AGE-SECRET-KEY-...`（X25519）与 `X448-` / `X448SEC-`（X448）原样可用；同一容器仍可混合多种收件人，经典产物用 `--no-pqc` 重新加密或照常解密均可。
 
 ```bash
-# Linux（x86_64）
-cd ../third_party/rage/age-ffi
-./build-linux.sh         # 产出 age-ffi/lib/linux/libfe_age.a
+# 默认：混合（抗量子）密钥对
+FileEncryptorCLI -g -o ./keys > pubkey.txt          # MLKEM1-...（公钥 1216B）
+FileEncryptorCLI -Y -k ./keys/rage_private.txt      # 由混合私钥反推公钥
+
+# 经典：X25519（--no-pqc 时 -g 输出的公钥是 age1...）
+FileEncryptorCLI -g --no-pqc -o ./keys > pubkey.txt
 ```
 
-也可显式指定 age-ffi 目录：`cmake -S . -B build -DFE_AGE_DIR=/path/to/age-ffi ...`。
+---
 
-> CMake 集成：`WITH_AGE`（默认 ON）。找到 `fe_age.h` + `fe_age.lib`/`libfe_age.a` 后定义 `FE_WITH_AGE` 并链接；**未找到时仅给出 WARNING，回退为不含非对称加密的版本**（相关调用返回明确错误，不中断构建）。详见 `../third_party/rage/age-ffi/README.md`。
+## 文件尾部水印（--watermark）
+
+加密时可在密文**末尾**追加一条水印记录，用于事后泄露溯源。**默认关闭**（`--watermark` 才启用，`--no-watermark` 显式关）。
+
+- **写在尾部而非头部**：不改动 256 字节固定头，`header_hmac` 覆盖范围不变；`peek_name_footer_len` 会把长度字段计入尾部总长，因此带水印的文件解密、`-H` 查看、`-V` 校验均与不带水印时一致。**水印不参与载荷认证**，删掉水印区不会影响文件解密（防篡改靠签名，不靠完整性校验）。
+- **机器指纹**：`网卡 MAC` + `主板序列号` 拼接后取 Blake2b 前 16 字节（hex 32 位）。Windows 主板串取 WMI `Win32_BaseBoard.SerialNumber`，失败回退 SMBIOS 注册表键；Linux 读 `/sys/class/dmi/id/*`。任一来源缺失只丢弃该项（flags 标位记录 MAC / 主板是否命中），指纹仍可生成。指纹不含任何可复原的明文主机标识。
+- **签名（`--wm-sign <ML-DSA-65 私钥.pem>`）**：默认 ML-DSA-65，加 `--no-pqc` 回到 RSA-3072（PKCS#1 v1.5 + SHA-256）；签名对象为 48 字节水印记录的 SHA-256 摘要（含签名长度字段，故改一个字节的指纹 / 时间戳 / 签名长度都会验签失败）。**私钥由调用方显式传入**（密钥对可长期复用、可用 HSM / KMS 托管，首次自动生成落盘不在本工具职责内）。**不给私钥时只写未签名记录，加密不会失败**。
+- **查看与验签**：`--watermark-extract <file>` 只读尾部，不需口令；加 `--wm-verify <公钥.pem>` 时验签（通过退出码 0，验签失败 / 无水印均为 1）。不给公钥则只展示内容（`signature: not checked`）。验签端按公钥实际类型选择算法，用 ML-DSA 公钥验 `--no-pqc` 签的文件同样成立。
+
+```bash
+# 生成签名密钥对（一次）
+FileEncryptorCLI --wm-keygen wm_priv.pem > wm_pub.pem        # ML-DSA-65
+FileEncryptorCLI --wm-keygen wm_rsa.pem --no-pqc > wm_rsa_pub.pem
+
+# 加密时带签名的水印
+FileEncryptorCLI -e secret.txt -o . --watermark --wm-sign wm_priv.pem
+
+# 事后追溯：验签 + 查看机器指纹
+FileEncryptorCLI --watermark-extract secret.txt.ptd --wm-verify wm_pub.pem
+```
+
+尾部布局（自后向前）：`[FENX 魔数 + name_len][加密名信封][水印长度 4B][水印记录 + 签名]`；
+水印长度位于加密名信封起点前 4 字节，故解析端仅靠末部 8 字节即可定位整段，无需重算密文长度。
 
 ---
 

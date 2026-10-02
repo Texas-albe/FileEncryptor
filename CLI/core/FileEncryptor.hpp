@@ -8,15 +8,16 @@
 #include <cstdio>
 #include "secure_buffer.hpp"
 #include "source_handling.hpp"
+#include "watermark.hpp"
 
 #ifdef _WIN32
 #include <windows.h>
 #endif
 
 #define FE_VERSION_MAJOR 2
-#define FE_VERSION_MINOR 4
-#define FE_VERSION_PATCH 5
-#define FE_VERSION_STRING "2.4.5"
+#define FE_VERSION_MINOR 7
+#define FE_VERSION_PATCH 0
+#define FE_VERSION_STRING "2.7.0"
 
 // --force-decrypt：解密时容忍块校验失败与明文哈希不匹配（强制恢复损坏数据）
 extern bool g_force_decrypt;
@@ -24,7 +25,8 @@ extern bool g_force_decrypt;
 enum class CryptoMode: unsigned char {
     AES_GCM=0,   // 仅用于解密旧格式（v1/v2）文件；新加密不再使用
     XCHACHA20=1, // 默认模式
-    AEGIS256=2   // 取代 AES-GCM 的新选项（AEAD，32 字节 nonce / 32 字节 tag）
+    AEGIS256=2,  // 取代 AES-GCM 的新选项（AEAD，32 字节 nonce / 32 字节 tag）
+    SM4=3        // 国密 SM4-GCM（OpenSSL EVP_sm4_gcm，16 字节密钥 / 12 字节 nonce / 16 字节 tag）
 };
 
 // 进程级限速器（v1.7.2）
@@ -38,7 +40,8 @@ std::string make_obfuscated_basename(const std::string& in_path,const SecureBuff
 // pre_kek：外部已派生 KEK 时传入跳过内部 KDF（批量复用）；out_kek 非空时拷回供缓存。
 bool read_original_name(const std::string& ptd_path,std::string& out_name,const SecureBuffer& password,
     const unsigned char* pre_kek = nullptr, size_t pre_kek_len = 0,
-    std::vector<unsigned char>* out_kek = nullptr);
+    std::vector<unsigned char>* out_kek = nullptr,
+    const std::string& asym_identity = std::string());  // 非对称容器用身份私钥恢复 DEK
 
 // 把路径的最后一段替换为 newbase（保留目录部分）
 std::string replace_basename(const std::string& path,const std::string& newbase);
@@ -54,11 +57,11 @@ bool fe_path_is_directory(const std::string& path);
 bool path_has_traversal(const std::string& p);
 
 // 判断路径是否为符号链接 / 重解析点（已存在才报告，不存在返回 false）。
-// 用于写入前拒绝"通过既有链接写穿到别处"（对称路径三处守卫 + v2.1.2 起 rage 路径）。
+// 用于写入前拒绝"通过既有链接写穿到别处"（对称与非对称路径共用）。
 bool path_is_symlink(const std::string& path);
 
 // 依据全局 YAML 配置校验输入输出路径（穿越/长度上限/白名单根目录）。true=允许，false=拒绝。
-// v2.1.2 起对外暴露：此前 rage 分支完全绕过白名单与长度策略（高危）。
+// v2.1.2 起对外暴露：此前非对称分支完全绕过白名单与长度策略（高危）。
 bool validate_io_paths(const std::string& in_path,const std::string& out_path,bool silent);
 
 // UTF-8 安全的原子替换（Windows: MoveFileExW REPLACE_EXISTING；POSIX: rename）。
@@ -81,10 +84,14 @@ bool encrypt_file(const std::string& in_path,
     CryptoMode mode,
     std::function<void(size_t,size_t)> progress_callback=nullptr,
     bool resume=false,
-    int compress_level=0);
+    int compress_level=0,
+    bool asym_mode=false,
+    const std::vector<std::string>* asym_recipients=nullptr,
+    const WatermarkSpec* wm=nullptr);   // 非空且 enabled：尾部追加机器指纹 + RSA 签名水印
 
 // 解密文件（支持续传）。ext_key：外部已派生最终密钥，传入则直接复用跳过 KDF/解裹；
 // ext_kek：外部已派生 KEK（批量每文件复用），传入则跳过 Argon2id，仍按版本解裹 DEK。
+// asym_identity：非对称容器以身份私钥恢复 DEK（非空时跳过口令 KEK 派生）。
 bool decrypt_file(const std::string& in_path,
     const std::string& out_path,
     const SecureBuffer& password,
@@ -93,7 +100,9 @@ bool decrypt_file(const std::string& in_path,
     bool resume=false,
     const unsigned char* ext_key=nullptr,
     const unsigned char* ext_kek=nullptr, size_t ext_kek_len=0,
-    bool verify_only=false);
+    bool verify_only=false,
+    size_t preview_bytes=0,
+    const std::string& asym_identity=std::string());  // >0 时进入预览解密；asym_identity 非空=非对称恢复
 
 // 只读元数据 / 校验（功能2 / 功能3）
 // 不解密、不校验密钥，纯元数据预览（功能2 文件头信息查看器）。
@@ -119,7 +128,12 @@ bool read_ptd_metadata(const std::string& ptd_path, PtdMeta& meta);
 
 // 完整性校验（功能3：只验不解）：解密到临时文件比对明文 Blake2b，不落盘最终明文。
 // 成功（密钥正确且内容完整）返回 true；密钥错/损坏/失败返回 false。
-bool verify_ptd(const std::string& ptd_path, const SecureBuffer& password);
+bool verify_ptd(const std::string& ptd_path, const SecureBuffer& password,
+                const std::string& asym_identity=std::string());
+
+// 读取尾部水印记录（无需口令）。pub_pem 非空时按 pqc 指定的算法验签；无水印返回 false。
+bool read_watermark(const std::string& ptd_path, WatermarkInfo& out, const std::string& pub_pem,
+                    bool pqc=true);
 
 // SHA-256 校验单（功能10）：启用后加密成功生成 <out>.ptd.sha256。
 void set_write_sha256(bool b);
@@ -137,7 +151,8 @@ bool process_files(const std::vector<std::string>& input_paths,
     bool force_overwrite=false,
     int num_threads=0,
     bool restore_name=false,
-    int compress_level=0);
+    int compress_level=0,
+    const WatermarkSpec* wm=nullptr);   // 批量加密时每个文件都带水印
 
 // 认证失败详细输出开关（由 CLI -v/--verbose 设置）。
 // 关闭时所有认证失败只输出通用错误，避免向潜在攻击者泄露细节（最小信息泄露原则）。
@@ -147,6 +162,12 @@ void anti_debug_check();
 
 // 运行时探测 AEGIS-256 是否可用（缺 AES-NI 的 CPU 上不可用）
 bool aegis256_supported();
+
+// 运行时探测 SM4-GCM 是否可用（依赖 OpenSSL 静态链接，FE_WITH_OPENSSL 未开启时恒 false）
+bool sm4_supported();
+
+// 运行时探测后量子密码是否可用（ML-KEM-768 封装 / ML-DSA-65 签名，依赖 OpenSSL）
+bool pqc_supported();
 
 // 判断标准输入是否为交互终端（用于决定是否就 AEGIS-256 降级询问用户）。
 // GUI 经管道传参、--key-stdin、cron 等非 TTY 场景均返回 false。

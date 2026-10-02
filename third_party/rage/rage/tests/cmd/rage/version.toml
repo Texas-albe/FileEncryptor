@@ -1,6 +1,0 @@
-bin.name = "rage"
-args = "--version"
-stdout = """
-rage 0.12.1
-"""
-stderr = ""

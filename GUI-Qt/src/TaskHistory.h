@@ -12,6 +12,8 @@ struct TaskRecord {
     QString action;
     QString actionLabel;
     QString mode;
+    // 非对称模式下的文件载荷算法（xchacha20 / aegis256 / sm4），空 = 非非对称任务
+    QString fileCipher;
     int     inputCount=0;
     QStringList inputPaths;
     qint64  totalBytes=0;
@@ -28,6 +30,9 @@ struct TaskRecord {
     bool    sha256=false;
     bool    compress=false;
     int     compressionLevel=0;
+    bool    pqc=true;
+    bool    watermark=false;
+    QString watermarkKey;
     QString keyfile;
     QString recipient;
     QString identity;

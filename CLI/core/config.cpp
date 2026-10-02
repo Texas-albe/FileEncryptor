@@ -191,6 +191,24 @@ bool parse_yaml_config(const std::string& text, Config& cfg, std::string& err, s
     }
     after_preset:;
 
+    // 加密默认算法（crypto.default_cipher，多算法架构）：xchacha20 / aegis256。
+    // 空或缺省 = xchacha20；未知值告警并忽略（保持默认）。
+    {
+        const YAML::Node& crypto = root["crypto"];
+        if (crypto && !crypto.IsNull()) {
+            if (!crypto.IsMap()) note("crypto", "expected a mapping");
+            else {
+                const YAML::Node& n = crypto["default_cipher"];
+                if (n && n.IsScalar()) {
+                    std::string v = n.as<std::string>();
+                    if (v == "xchacha20" || v == "aegis256") cfg.default_cipher = v;
+                    else note("crypto.default_cipher", "must be xchacha20 or aegis256");
+                }
+                else if (n) note("crypto.default_cipher", "expected a scalar string");
+            }
+        }
+    }
+
     // path_whitelist：序列；仅显式列出至少一项才启用，空列表不启用
     {
         const YAML::Node& n = root["path_whitelist"];
@@ -317,7 +335,9 @@ static const char* DEFAULT_CONFIG_YAML =
 "path_whitelist_enabled: false\n"
 "# path_whitelist:\n"
 "#   - C:/Data/In\n"
-"obfuscate_names: true     # 混淆输出文件名（<名>.<伪扩展名>.ptd）\n";
+"obfuscate_names: true     # 混淆输出文件名（<16hex>.<3 位小写字母>.ptd）；两条加密路径一致\n"
+"crypto:\n"
+"  default_cipher: xchacha20   # xchacha20 / aegis256（CLI 未指定 -m 时生效；解密以文件头为准）\n";
 
 // YAML 别名炸弹（Billion Laughs）防护：yaml-cpp 默认不限制别名展开，极小输入可膨胀成
 // GB 级内存。硬性限制配置文件 1 MB，超过直接拒绝回退默认（运维参数无需如此之大）。
