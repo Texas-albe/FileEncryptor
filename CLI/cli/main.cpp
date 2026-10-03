@@ -3,6 +3,7 @@
 #include "asym_crypto.hpp"
 #include "keylib.hpp"
 #include "password_policy.hpp"
+#include "split_volumes.hpp"
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -167,6 +168,10 @@ static void print_usage() {
         <<"  --salt <hex|file> Salt for -G: 32 hex chars, or a file holding them (default: random 16B)\n"
         <<"  --restore-name, -rn  Batch decrypt: restore full original filenames (slow: one KDF per file)\n"
         <<"  --obfuscate-name, -on  force an obfuscated output filename (<16hex>.<3 letters>.ptd)\n"
+        <<"  --split <size>    Encrypt, then cut the .ptd into volumes of <size>:\n"
+        <<"                      2GB / 512MB / 100M / 1.5G / 4096 (1024-based; 1MB minimum)\n"
+        <<"                      Decryption auto-detects volumes: pass any one of them.\n"
+        <<"  --split-size <size>  Alias of --split\n"
         <<"  --sha256          Write a <out>.ptd.sha256 sidecar after successful encryption\n"
         <<"  --rename          With -R: rename the .ptd in place to its original name (content unchanged)\n"
         <<"  --as <name>       With -L add: library name for the imported key\n"
@@ -191,6 +196,7 @@ static void print_usage() {
         <<"    FileEncryptor -e/-d <FileName> [-o <Path>] [-de] [-m xchacha20|aegis256] [-y]\n"
         <<"    FileEncryptor -be/-bd <Path> [-o <Path>] [-de] [-m xchacha20|aegis256] [-y]\n"
         <<"    FileEncryptor -e/-be <File> [-zstd] [--compression-level <N>]   (zstd: 1..22 normal, -1..-5 fast)\n"
+        <<"    FileEncryptor -e <File> --split 4GB      (cut the .ptd into 4GB volumes)\n"
         <<"    FileEncryptor -e/-d -m x25519 -r <pub>|-k <priv> <File> [-o <Path>] [-y]\n"
         <<"  Key management (asymmetric):\n"
         <<"    FileEncryptor -g [-o <dir>] [-x448] [--no-pqc]\n"
@@ -302,7 +308,8 @@ static bool run_asym(const std::vector<std::string>& input_paths,
                      bool obfuscate_name=false,
                      const std::vector<std::string>& extra_recipients = {},
                      CryptoMode mode = CryptoMode::XCHACHA20,
-                     int compress_level = 0) {
+                     int compress_level = 0,
+                     uint64_t split_bytes = 0) {
     std::vector<std::string> recipients;
     if(is_encrypt) {
         // -r takes the public key itself ("age1..." / "X448-...") or a file of public keys;
@@ -339,6 +346,22 @@ static bool run_asym(const std::vector<std::string>& input_paths,
 
     bool all_ok=true;
     for(const std::string& in_path: input_paths) {
+        // 分卷输入先合并成完整件；解密输出的名字仍按原卷名推导，
+        // 所以只换读取源，不动 in_path 的展示名
+        SplitPlan plan;
+        MergedTemp merged;
+        std::string src_path=in_path;
+        if(!is_encrypt) {
+            std::string perr;
+            if(!resolve_decrypt_input(in_path,plan,perr)) {
+                std::cerr<<"Error: "<<perr<<"\n";
+                all_ok=false; continue;
+            }
+            if(plan.from_volumes) {
+                merged.path=plan.merged_path;
+                src_path=plan.merged_path;
+            }
+        }
         std::string out_path;
         if(is_encrypt) {
             std::string base=in_path;
@@ -424,7 +447,7 @@ static bool run_asym(const std::vector<std::string>& input_paths,
         if(is_encrypt) {
             std::cout<<"Asymmetric encrypting: "<<in_path<<" -> "<<out_path<<"\n";
             try {
-                ok=encrypt_file(in_path,part_path,SecureBuffer(),mode,nullptr,false,compress_level,
+                ok=encrypt_file(src_path,part_path,SecureBuffer(),mode,nullptr,false,compress_level,
                                 true,&recipients);
             } catch(const std::exception& e) {
                 fprintf(stderr,"Error: asymmetric encryption failed: %s\n",e.what());
@@ -444,7 +467,7 @@ static bool run_asym(const std::vector<std::string>& input_paths,
                 if(a>0)               identity.erase(0,a);
             }
             try {
-                ok=decrypt_file(in_path,part_path,SecureBuffer(),nullptr,
+                ok=decrypt_file(src_path,part_path,SecureBuffer(),nullptr,
                                 false,false,nullptr,nullptr,0,false,0,identity);
             } catch(const std::exception& e) {
                 fprintf(stderr,"Error: asymmetric decryption failed: %s\n",e.what());
@@ -470,6 +493,13 @@ static bool run_asym(const std::vector<std::string>& input_paths,
         if(is_encrypt && source_action!=0) {
             if(!secure_handle_source(in_path, static_cast<SourceDisposition>(source_action))) {
                 std::cerr<<"Error: could not process source file: "<<in_path<<"\n";
+                all_ok=false;
+            }
+        }
+        if(is_encrypt && split_bytes>0) {
+            std::string serr;
+            if(!finish_encrypt_split(out_path,split_bytes,write_sha256_enabled(),serr)) {
+                std::cerr<<"Error: split failed: "<<serr<<"\n";
                 all_ok=false;
             }
         }
@@ -1132,6 +1162,7 @@ int main(int argc,char* argv[]) {
     std::string keylib_alias;   // --alias <text>：-L add 的展示别名
     std::string keylib_notes;   // --notes <text>：-L add 的备注
     int compress_level=0;       // -z/--compress 或 --compression-level N：zstd 级别；0=不压缩
+    uint64_t split_bytes=0;     // --split <size>：加密后分卷大小（0=不分卷）；只走命令行，不进 yaml
     std::string new_keyfile_path; // --new-key-file <file>：rewrap 的新口令密钥文件
     bool new_key_from_stdin=false;// --new-key-stdin：rewrap 的新口令从 stdin 读取
     bool end_of_options=false;    // "--"：其后的参数一律作为输入路径
@@ -1294,6 +1325,19 @@ int main(int argc,char* argv[]) {
                 return 1;
             }
         }
+        // 分卷大小只接受显式命令行参数：进 yaml 的话每次加密都要回忆上次选了多少，
+        // 而分卷大小是随文件大小临时定的量，不该有持久默认值。
+        else if(arg=="--split"||arg=="--split-size") {
+            if(i+1>=argc) {
+                std::cerr<<arg<<" requires a size, e.g. --split 4GB\n";
+                return 1;
+            }
+            std::string serr;
+            if(!parse_split_size(argv[++i],split_bytes,serr)) {
+                std::cerr<<"Invalid --split size: "<<serr<<"\n";
+                return 1;
+            }
+        }
         else if(arg=="--features") {
             // 供 GUI 探测能力（如 zstd / aegis 是否可用）；每行 key=value
 #ifdef FE_WITH_ZSTD
@@ -1304,6 +1348,7 @@ int main(int argc,char* argv[]) {
             std::cout<<"aegis="<<(aegis256_supported()?1:0)<<"\n";
             std::cout<<"sm4="<<(sm4_supported()?1:0)<<"\n";
             std::cout<<"pqc="<<(pqc_supported()?1:0)<<"\n";
+            std::cout<<"split=1\n";
             return 0;
         }
         else if(arg=="--preview") {
@@ -1319,6 +1364,7 @@ int main(int argc,char* argv[]) {
             }
         }
         else if(arg=="--pqc") {
+            // 显式打开：与默认值一致，但让「用户主动要求」在参数回显里可见
             pqc_on=true;
             wm_spec.pqc=true;
         }
@@ -1335,6 +1381,9 @@ int main(int argc,char* argv[]) {
         }
         else if(arg=="--wm-sign"&&i+1<argc) {
             wm_spec.sign_key=argv[++i];
+            // 给了签名私钥就意味着要写水印，不必再要求用户重复 --watermark
+            wm_spec.enabled=true;
+            wm_spec.pqc=pqc_on;
         }
         else if(arg=="--wm-verify"&&i+1<argc) {
             wm_verify_pem=argv[++i];
@@ -1441,6 +1490,18 @@ int main(int argc,char* argv[]) {
         if(compress_level<-5 || compress_level>22) {
             std::cerr<<"Invalid compression level "<<compress_level
                 <<": zstd accepts 1..22 (normal) or -1..-5 (fast).\n";
+            return 1;
+        }
+    }
+
+    // 分卷校验：仅加密可用；下限 1MB（容器头 + 至少一个数据块）
+    if(split_bytes>0) {
+        if(!is_encrypt) {
+            std::cerr<<"--split is only valid for encryption (-e/-be).\n";
+            return 1;
+        }
+        if(split_bytes<(1ull<<20)) {
+            std::cerr<<"--split size must be at least 1MB.\n";
             return 1;
         }
     }
@@ -1626,7 +1687,7 @@ int main(int argc,char* argv[]) {
                 size_t min_len = (cfg.min_password_length > 0)
                     ? (size_t)cfg.min_password_length : 8;
                 int min_classes = (cfg.min_password_classes > 0) ? cfg.min_password_classes : 2;
-                if(!fe::password_policy::meets_policy(std::string(password.cdata(),password.size()), min_len, min_classes, preason)) {
+                if(!fe::password_policy::meets_policy(password.cdata(), password.size(), min_len, min_classes, preason)) {
                     std::cerr<<preason<<"\n";
                     return 1;
                 }
@@ -1672,7 +1733,7 @@ int main(int argc,char* argv[]) {
                 size_t min_len = (cfg.min_password_length > 0)
                     ? (size_t)cfg.min_password_length : 8;
                 int min_classes = (cfg.min_password_classes > 0) ? cfg.min_password_classes : 2;
-                if(!fe::password_policy::meets_policy(std::string(pw1.data(),pw1.size()), min_len, min_classes, preason)) {
+                if(!fe::password_policy::meets_policy(pw1.data(), pw1.size(), min_len, min_classes, preason)) {
                     std::cerr<<preason<<"\n";
                     sodium_memzero(pw1.data(),pw1.size()); pw1.clear();
                     return 1;
@@ -1726,10 +1787,10 @@ int main(int argc,char* argv[]) {
     if(asym_mode) {
         // 输出名策略与对称路径一致：配置 obfuscate_names 默认开启时非对称也混淆，-on 可强制
         all_ok=run_asym(input_paths,output_dir,is_encrypt,source_action,force_overwrite,recipient_spec,keyfile_path,password,
-            obfuscate_name||global_config().obfuscate_names,lib_recipients,mode,compress_level);
+            obfuscate_name||global_config().obfuscate_names,lib_recipients,mode,compress_level,split_bytes);
     }
     else if(is_batch) {
-        all_ok=process_files(input_paths,output_dir,password,mode,is_encrypt,source_action,force_overwrite,num_threads,restore_name,compress_level,wm_spec.enabled?&wm_spec:nullptr);
+        all_ok=process_files(input_paths,output_dir,password,mode,is_encrypt,source_action,force_overwrite,num_threads,restore_name,compress_level,wm_spec.enabled?&wm_spec:nullptr,split_bytes);
     }
     else {
         // 单文件处理放入 lambda：用 early-return 替代 goto cleanup_password，
@@ -1743,13 +1804,35 @@ int main(int argc,char* argv[]) {
                          <<"Use -be / -bd (batch) to process directories.\n";
                 return false;
             }
+            // 分卷输入（foo.ptd 不存在、只有 foo.001.ptd）先合并成完整件。
+            // 合并产物在本 lambda 结束时由 MergedTemp 删掉。
+            SplitPlan plan;
+            MergedTemp merged;
+            std::string src_path=in_path;
+            if(action==ACTION_DECRYPT) {
+                std::string perr;
+                if(!resolve_decrypt_input(in_path,plan,perr)) {
+                    std::cerr<<"Error: "<<perr<<"\n";
+                    return false;
+                }
+                if(plan.from_volumes) {
+                    merged.path=plan.merged_path;
+                    src_path=plan.merged_path;
+                    std::cout<<"Found "<<plan.volumes.size()
+                             <<" volume(s), merging before decryption.\n";
+                }
+            }
+            // 输出名按 base 推导：输入 foo.003.ptd 时应得 foo，而不是 foo.003
+            std::string name_path=plan.from_volumes ? base_ptd_of(in_path) : in_path;
+            if(name_path.empty()) name_path=in_path;
+
             std::string out_path;
             if(!output_dir.empty()) {
                 if(!create_directory_recursive(output_dir)) {
                     std::cerr<<"Cannot create output directory: "<<output_dir<<"\n";
                     return false;
                 }
-                std::string base=in_path;
+                std::string base=name_path;
                 size_t pos=base.find_last_of("/\\");
                 std::string fname=(pos!=std::string::npos) ? base.substr(pos+1) : base;
                 out_path=output_dir;
@@ -1758,7 +1841,7 @@ int main(int argc,char* argv[]) {
                 out_path+=fname;
             }
             else {
-                out_path=in_path;
+                out_path=name_path;
             }
             out_path=to_native_path(out_path);   // Windows 下把 '/' 统一为 '\'，避免 "E:\1/name.ptd" 混排
 
@@ -1779,7 +1862,7 @@ int main(int argc,char* argv[]) {
                 // 混淆文件名的逆过程：密文末尾若存有原始文件名，则还原它（兼容多语言文件名）
                 {
                     std::string orig_name;
-                    if(read_original_name(in_path,orig_name,password)&&!orig_name.empty()) {
+                    if(read_original_name(src_path,orig_name,password)&&!orig_name.empty()) {
                         out_path=replace_basename(out_path,orig_name);
                     }
                 }
@@ -1852,6 +1935,14 @@ int main(int argc,char* argv[]) {
                     }
                 }
                 if(ok && write_sha256_enabled()) write_sha256_sidecar(out_path); // 功能10：校验单
+                if(ok && split_bytes>0) {
+                    std::string serr;
+                    if(!finish_encrypt_split(out_path,split_bytes,
+                                             write_sha256_enabled(),serr)) {
+                        std::cerr<<"Error: split failed: "<<serr<<"\n";
+                        ok=false;
+                    }
+                }
             }
             else {
                 if(preview_mode) {
@@ -1862,7 +1953,7 @@ int main(int argc,char* argv[]) {
                 try {
                     // 预览：传入 preview_max，并用空回调抑制进度条（避免污染 stdout 的明文前缀）
                     std::function<void(size_t,size_t)> noop_cb=[](size_t,size_t){};
-                    ok=decrypt_file(in_path,out_path,password,
+                    ok=decrypt_file(src_path,out_path,password,
                         preview_mode?noop_cb:nullptr,false,true,
                         nullptr,nullptr,0,false,preview_mode?preview_max:0);
                 } catch(const std::exception& e) {
@@ -1875,9 +1966,20 @@ int main(int argc,char* argv[]) {
                 // 解密成功后同样按所选方式处理源文件（此处为 .ptd）：-de 删除、
                 // --wipe-source 安全擦除、--recycle-source 移入回收站。
                 if(ok && source_action!=0) {
-                    if(!secure_handle_source(in_path, static_cast<SourceDisposition>(source_action))) {
-                        std::cerr<<"Error: could not process source file: "<<in_path<<"\n";
-                        ok=false;
+                    // 输入来自分卷时，每一卷都要按所选方式处置；
+                    // 归一没认出分卷时按 base 名兜底枚举，避免只删掉被挑中的那一卷
+                    std::vector<std::string> victims=plan.from_volumes
+                        ? plan.volumes : std::vector<std::string>{in_path};
+                    if(!plan.from_volumes) {
+                        std::string vb=base_ptd_of(in_path);
+                        std::vector<std::string> vols=find_volumes(vb.empty()?in_path:vb);
+                        if(!vols.empty()) victims=vols;
+                    }
+                    for(const auto& v:victims) {
+                        if(!secure_handle_source(v, static_cast<SourceDisposition>(source_action))) {
+                            std::cerr<<"Error: could not process source file: "<<v<<"\n";
+                            ok=false;
+                        }
                     }
                 }
             }

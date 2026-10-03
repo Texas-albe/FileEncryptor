@@ -19,7 +19,13 @@ public sealed partial class TaskHistoryDialog : ContentDialog
 
     public TaskHistoryDialog(List<TaskRecord> records)
     {
-        RequestedTheme = ElementTheme.Dark;
+        // 跟随用户在「视图」菜单里的选择，不再写死深色
+        RequestedTheme = App.Settings.Current.Theme switch
+        {
+            Services.AppTheme.Light => ElementTheme.Light,
+            Services.AppTheme.Dark => ElementTheme.Dark,
+            _ => ElementTheme.Default
+        };
         _records = records;
         Title = L10n.T("任务历史（双击恢复，右键删除）");
         CloseButtonText = L10n.T("关闭");

@@ -6,6 +6,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Text;
 using System.Linq;
 using Windows.Storage;
 using Windows.Storage.Pickers;
@@ -29,6 +30,16 @@ public sealed partial class MainWindow : Window
     {
         InitializeComponent();
 
+        // 主题要在控件加载前定死：控件模板里的 {ThemeResource} 只在解析那一刻取值，
+        // 事后再改 RequestedTheme 只影响之后创建的控件，
+        // 表现就是「一部分控件换了配色，另一部分还是旧的」。
+        RootGrid.RequestedTheme = App.Settings.Current.Theme switch
+        {
+            Services.AppTheme.Light => ElementTheme.Light,
+            Services.AppTheme.Dark => ElementTheme.Dark,
+            _ => ThemeService.IsSystemDark() ? ElementTheme.Dark : ElementTheme.Light
+        };
+
         // 先初始化语言再翻译界面
         L10n.Init();
         ApplyLocalization();
@@ -39,14 +50,18 @@ public sealed partial class MainWindow : Window
         ExtendsContentIntoTitleBar = true;
         SetTitleBar(DragRegion);
         var tb = AppWindow.TitleBar;
+        // 标题栏必须整体透明，否则 SystemBackdrop 的Acrylic 只在内容区生效，
+        // 顶部会留一条不透明带，看起来就像「没生效」
         tb.ButtonBackgroundColor = Microsoft.UI.Colors.Transparent;
         tb.ButtonInactiveBackgroundColor = Microsoft.UI.Colors.Transparent;
         tb.ButtonHoverBackgroundColor = Windows.UI.Color.FromArgb(0x20, 0, 0, 0);
         tb.ButtonPressedBackgroundColor = Windows.UI.Color.FromArgb(0x30, 0, 0, 0);
         UpdateTitleBarButtonColors();
 
-        // 16:9 窗口比例
-        AppWindow.Resize(new Windows.Graphics.SizeInt32(1280, 720));
+        // 16:9 窗口比例。横向加宽给功能区更多余量，英文/俄文选项不再挤成滚动条
+        const int kWinW = 1440;
+        const int kWinH = kWinW * 9 / 16;
+        AppWindow.Resize(new Windows.Graphics.SizeInt32(kWinW, kWinH));
 
         // 勾选框初值一律在代码里设：XAML 里写 IsChecked="..." 会让 XamlCompiler 生成
         // 对 Primitives.ToggleButton.IsChecked 的赋值，运行时对 CheckBox 赋值抛
@@ -59,17 +74,9 @@ public sealed partial class MainWindow : Window
         // 背景优先级：图片 > Acrylic
         RootGrid.Background = _backgroundBrush;
         ApplySavedBackground();
-        if (_backgroundBrush.ImageSource == null)
-            SystemBackdrop = new DesktopAcrylicBackdrop();
 
-        // 国庆节覆盖主题色
-        if (NationalDayTheme.IsActive())
-        {
-            RootGrid.Background = new Microsoft.UI.Xaml.Media.SolidColorBrush(NationalDayTheme.WindowBg);
-            SystemBackdrop = null;
-            // 运行/取消按钮也走红系，否则绿色运行键是杂色
-            NationalDayTheme.ApplyButtonColors(BtnRun, BtnCancel);
-        }
+        // 国庆配色不在这里刷：面板 Acrylic 依赖窗口 backdrop，
+        // 构造函数阶段还没就绪，交给 ApplyBackdrop() 在 Activate() 之后统一做。
         ModeCombo.SelectedIndex = 0;
         SourceCombo.SelectedIndex = 0;
 
@@ -110,7 +117,26 @@ public sealed partial class MainWindow : Window
         ApplyMenuLocalization();
         // 中文时 T() 原样返回，遍历无害；保证从英文切回也能还原
         LocalizeTree(RootGrid);
+        ApplyRowOrientation();
+        RefreshBirthdayText();
         ViewModel.RefreshRuntimeTexts();
+    }
+
+    // 祝福语带 {0} 年龄占位，LocalizeTree 只能翻译出模板，
+    // 这里在遍历之后再把年龄填回去，否则界面会露出 {0}
+    private void RefreshBirthdayText()
+    {
+        BirthdayText.Text = NationalDayTheme.BirthdayMessage();
+    }
+
+    // 同一行控件在英/俄文下比中文长得多，横排时给容器开横向滚动而不是改成竖排：
+// 竖排会把选项挤成一条长列，比被裁更难看。中文窄文本下不会有滚动条。
+    private void ApplyRowOrientation()
+    {
+        var h = Microsoft.UI.Xaml.Controls.Orientation.Horizontal;
+        ActionRow.Orientation = h;
+        KeyMgmtRow.Orientation = h;
+        OptionsRow.Orientation = h;
     }
 
     private void ApplyMenuLocalization()
@@ -128,6 +154,11 @@ public sealed partial class MainWindow : Window
         MenuLangZh.IsChecked = L10n.Current == L10n.Zh;
         MenuLangEn.IsChecked = L10n.Current == L10n.En;
         MenuLangRu.IsChecked = L10n.Current == L10n.Ru;
+        MenuTheme.Text = L10n.T("主题");
+        MenuThemeLight.Text = L10n.T("浅色");
+        MenuThemeDark.Text = L10n.T("深色");
+        MenuThemeSystem.Text = L10n.T("跟随系统");
+        SyncThemeMenuState();
     }
 
     // 视觉树走不到折叠元素，需按逻辑树下钻，否则英文下重启会中英混杂
@@ -177,7 +208,7 @@ public sealed partial class MainWindow : Window
                 case Microsoft.UI.Xaml.Controls.ContentControl cc when cc.Content is string s:
                     cc.Content = L10n.T(s);
                     break;
-                // 下拉项未展开时不在视觉树中，需单独遍历 Items
+                // 下拉项未展开时不在视觉树中，需单独遍历 Items（须排在 FrameworkElement 之前）
                 case Microsoft.UI.Xaml.Controls.ComboBox cb:
                     foreach (var item in cb.Items)
                     {
@@ -185,12 +216,75 @@ public sealed partial class MainWindow : Window
                             cbi.Content = L10n.T(cs);
                     }
                     break;
+                // 悬停提示是附加属性，走不到 Content，中文界面下也要跟着切（放最后兜底）
+                case Microsoft.UI.Xaml.FrameworkElement fe:
+                {
+                    var tip = fe.GetValue(Microsoft.UI.Xaml.Controls.ToolTipService.ToolTipProperty);
+                    if (tip is string ts)
+                        fe.SetValue(Microsoft.UI.Xaml.Controls.ToolTipService.ToolTipProperty, L10n.T(ts));
+                    break;
+                }
         }
     }
 
     private void OnLangZh(object sender, RoutedEventArgs e) => ChangeLanguage(L10n.Zh);
     private void OnLangEn(object sender, RoutedEventArgs e) => ChangeLanguage(L10n.En);
     private void OnLangRu(object sender, RoutedEventArgs e) => ChangeLanguage(L10n.Ru);
+
+    // 两个面板用 AcrylicBrush 做底：TintOpacity 比窗口底高，
+    // 面板之间与窗口之间才有层次，但整体仍然通透。
+    // 两个面板必须各拿一个独立实例：共用同一个 Brush 会被资源系统按共享引用处理，
+    // 第二个面板拿不到自己的 Acrylic 采样，看起来就是「只有左panel 生效」。
+    private void ApplyPanelBackdrops()
+    {
+        LeftPanel.Background = NationalDayTheme.PanelBackdropBrush();
+        CenterPanel.Background = NationalDayTheme.PanelBackdropBrush();
+    }
+
+    // 标题红条：节日窗口上国旗红，平时透明
+    private void ApplyTitleAccent()
+    {
+        TitleAccentBar.Background = NationalDayTheme.IsActive()
+            ? new Microsoft.UI.Xaml.Media.SolidColorBrush(NationalDayTheme.AccentBar)
+            : new Microsoft.UI.Xaml.Media.SolidColorBrush(Microsoft.UI.Colors.Transparent);
+    }
+
+    // ===== 主题 =====
+    private void OnThemeLight(object sender, RoutedEventArgs e) => ChangeTheme(Services.AppTheme.Light);
+    private void OnThemeDark(object sender, RoutedEventArgs e) => ChangeTheme(Services.AppTheme.Dark);
+    private void OnThemeSystem(object sender, RoutedEventArgs e) => ChangeTheme(Services.AppTheme.System);
+
+    private void ChangeTheme(Services.AppTheme theme)
+    {
+        if (App.Settings.Current.Theme == theme) { SyncThemeMenuState(); return; }
+        App.Settings.Current.Theme = theme;
+        App.Settings.Save();
+        // 国庆配色按深浅档取值，切主题要重新覆盖资源并重刷按钮
+        NationalDayTheme.Refresh();
+        if (NationalDayTheme.IsActive())
+        {
+            NationalDayTheme.ApplyButtonColors(BtnRun, BtnCancel);
+            ApplyTitleAccent();
+            NationalDayTheme.ApplyControlColors(RootGrid);
+        }
+        // 面板与窗口底都随深浅档换tint
+        ApplyPanelBackdrops();
+        if (_backgroundBrush.ImageSource == null)
+            RootGrid.Background = NationalDayTheme.WindowBackdropBrush();
+        App.Theme.ApplyTheme(theme);
+        // 预览窗是独立 Window，得单独跟着换（对话框都是新建时传 RequestedTheme，不受影响）
+        _previewWindow?.ApplyTheme(CurrentTheme);
+        SyncThemeMenuState();
+        UpdateTitleBarButtonColors();
+    }
+
+    private void SyncThemeMenuState()
+    {
+        var cur = App.Settings.Current.Theme;
+        MenuThemeLight.IsChecked = cur == Services.AppTheme.Light;
+        MenuThemeDark.IsChecked = cur == Services.AppTheme.Dark;
+        MenuThemeSystem.IsChecked = cur == Services.AppTheme.System;
+    }
 
     private async void ChangeLanguage(string lang)
     {
@@ -291,16 +385,19 @@ public sealed partial class MainWindow : Window
         var statusText = new TextBlock { Text = "", Margin = new Thickness(0,8,0,0), Foreground = new SolidColorBrush(Microsoft.UI.Colors.Gray) };
         var progress = new ProgressBar { Minimum = 0, Maximum = 100, Value = 0, Visibility = Visibility.Collapsed, Margin = new Thickness(0,4,0,0) };
         panel.Children.Add(infoText); panel.Children.Add(statusText); panel.Children.Add(progress);
+        // 三键：重试 / 下载 CLI / 关闭。ContentDialog 的排列固定是
+        // Primary → Secondary → Close，所以下载键自然落在重试与关闭中间。
         var dlg = new ContentDialog { Title = L10n.T("FileEncryptor CLI 未找到"), Content = panel, PrimaryButtonText = L10n.T("重试"), SecondaryButtonText = L10n.T("下载 CLI"), CloseButtonText = L10n.T("关闭"), XamlRoot = Content.XamlRoot, RequestedTheme = CurrentTheme };
         var result = await dlg.ShowAsync();
         if (result == ContentDialogResult.Primary) { if (ViewModel.DetectCli(out _)) ViewModel.RefreshCommandPreview(); else ShowCliNotFoundDialog(); }
         else if (result == ContentDialogResult.Secondary) { await ShowDownloadCliDialog(); }
     }
 
+    // 下载对话框：下载中不给任何按钮，装完自己关。
     private async System.Threading.Tasks.Task ShowDownloadCliDialog()
     {
         var statusText = new TextBlock { Text = L10n.T("准备下载…"), TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 8, 0, 0), Foreground = new SolidColorBrush(Microsoft.UI.Colors.Gray) };
-        var progress = new ProgressBar { Minimum = 0, Maximum = 100, Value = 0, Margin = new Thickness(0, 4, 0, 0) };
+        var progress = new ProgressBar { Minimum = 0, Maximum = 100, Value = 0, Visibility = Visibility.Collapsed, Margin = new Thickness(0, 4, 0, 0) };
         var panel = new StackPanel();
         panel.Children.Add(statusText); panel.Children.Add(progress);
         var dlg = new ContentDialog
@@ -311,11 +408,19 @@ public sealed partial class MainWindow : Window
             XamlRoot = Content.XamlRoot,
             RequestedTheme = CurrentTheme
         };
-        _ = DownloadCliFromGithub(statusText, progress);
+        var downloading = DownloadCliFromGithub(statusText, progress);
         await dlg.ShowAsync();
+        // 关窗往往早于下载完成，这里只顺手补一次检测：
+        // 赶上了就刷新命令预览，没赶上用户再点一次「重新检测 CLI 程序」
+        if (ViewModel.DetectCli(out var path))
+        {
+            ViewModel.SetStatus("已检测到 CLI: {0}", path);
+            ViewModel.RefreshCommandPreview();
+        }
+        _ = downloading;
     }
 
-    // 在 tag 列表中定位精确 tag：命中返回索引，未找到返回 -1
+    // 在tag 列表中定位精确 tag：命中返回索引，未找到返回 -1
     private static int IndexOfTag(System.Text.Json.JsonElement tags, string want)
     {
         var i = 0;
@@ -328,6 +433,8 @@ public sealed partial class MainWindow : Window
         return -1;
     }
 
+    // 从 GitHub 拉取配套 CLI 并落到程序目录：
+    // 精确 tag → 平台匹配 → 域名白名单 → 文件名净化 → SHA256 → 落盘
     private async System.Threading.Tasks.Task DownloadCliFromGithub(TextBlock statusText, ProgressBar progress)
     {
         string? tempPath = null;
@@ -338,56 +445,78 @@ public sealed partial class MainWindow : Window
             http.DefaultRequestHeaders.UserAgent.ParseAdd("FileEncryptorGUI");
             var tagsJson = await http.GetStringAsync("https://api.github.com/repos/Texas-albe/FileEncryptor/tags");
             using var tagsDoc = System.Text.Json.JsonDocument.Parse(tagsJson);
-            // 只接受与预期版本精确配套的 tag；取“最大版本”会下到不匹配的 CLI
+            // 只接受与预期版本精确配套的 tag；取「最大版本」会下到不匹配的 CLI
             var guiVer = FileEncryptorLocator.GuiVersion;
             var cliVer = FileEncryptorLocator.ExpectedCliVersion;
             var want = $"GUI{guiVer}_CLI{cliVer}";
-            var idx = IndexOfTag(tagsDoc.RootElement, want);
-            if (idx < 0)
+            if (IndexOfTag(tagsDoc.RootElement, want) < 0)
             {
-                statusText.Text = L10n.F("未找到预期的 CLI {0}（要求 tag GUI{1}_CLI{0}），已中止下载",
-                    cliVer, guiVer);
+                statusText.Text = L10n.F("未找到预期的 CLI {0}（要求 tag GUI{1}_CLI{0}），已中止下载", cliVer, guiVer);
                 return;
             }
             statusText.Text = L10n.F("找到 {0}，正在获取下载链接…", want);
             var relJson = await http.GetStringAsync($"https://api.github.com/repos/Texas-albe/FileEncryptor/releases/tags/{want}");
             using var relDoc = System.Text.Json.JsonDocument.Parse(relJson);
-            string downloadUrl = null; string fileName = null;
-            var suffix = OperatingSystem.IsWindows() ? ".exe" : "";
+            string? downloadUrl = null;
+            string? fileName = null;
             foreach (var a in relDoc.RootElement.GetProperty("assets").EnumerateArray())
             {
                 var an = a.GetProperty("name").GetString();
-                if (an != null && an.StartsWith("FileEncryptorCLI-") && (suffix == "" || an.EndsWith(suffix)))
+                if (an != null && an.StartsWith("FileEncryptorCLI-", StringComparison.Ordinal)
+                    && an.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
                 { downloadUrl = a.GetProperty("browser_download_url").GetString(); fileName = an; break; }
             }
-            if (downloadUrl == null) { statusText.Text = L10n.T("未找到当前平台的 CLI 包"); return; }
-
+            if (downloadUrl == null || fileName == null) { statusText.Text = L10n.T("未找到当前平台的 CLI 包"); return; }
             if (!IsAllowedDownloadHost(downloadUrl))
             {
                 statusText.Text = L10n.T("下载链接域名不在白名单内，已中止");
                 return;
             }
-            fileName = Path.GetFileName(fileName.Trim());
-            if (string.IsNullOrEmpty(fileName) || fileName.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0)
+
+            // URL 不可信，文件名只取末段并查非法字符
+            var safeName = Path.GetFileName(fileName.Trim());
+            if (string.IsNullOrEmpty(safeName) || safeName.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0)
             {
                 statusText.Text = L10n.T("下载文件名非法，已中止");
                 return;
             }
+            fileName = safeName;
 
             statusText.Text = L10n.F("下载中：{0}", fileName);
             progress.Visibility = Visibility.Visible;
-
             tempPath = Path.Combine(Path.GetTempPath(), $"fe_cli_{Guid.NewGuid():N}.tmp");
-            var bytes = await http.GetByteArrayAsync(downloadUrl);
-            progress.Value = 60;
+            // 边下边写盘：几百 MB 的 CLI 全塞内存没必要，
+            // 顺带让进度条是真的而不是先跳到 60% 再一次性到 100%
+            using (var resp = await http.GetAsync(downloadUrl, System.Net.Http.HttpCompletionOption.ResponseHeadersRead))
+            {
+                resp.EnsureSuccessStatusCode();
+                var total = resp.Content.Headers.ContentLength ?? 0L;
+                if (total <= 0) progress.IsIndeterminate = true;
+                using var src = await resp.Content.ReadAsStreamAsync();
+                using var dst = new FileStream(tempPath, FileMode.Create, FileAccess.Write, FileShare.None);
+                var buf = new byte[131072];
+                long got = 0;
+                var shownPct = -1;
+                int n;
+                while ((n = await src.ReadAsync(buf)) > 0)
+                {
+                    await dst.WriteAsync(buf.AsMemory(0, n));
+                    got += n;
+                    if (total <= 0) continue;
+                    var pct = (int)(got * 100 / total);
+                    if (pct != shownPct) { shownPct = pct; progress.Value = pct; }
+                }
+            }
 
             var expectedHash = await TryFetchSha256(http, downloadUrl);
             if (expectedHash != null)
             {
                 using var sha = System.Security.Cryptography.SHA256.Create();
-                var actualHash = Convert.ToHexString(sha.ComputeHash(bytes)).ToLowerInvariant();
+                using var fs = new FileStream(tempPath, FileMode.Open, FileAccess.Read, FileShare.Read);
+                var actualHash = Convert.ToHexString(await sha.ComputeHashAsync(fs)).ToLowerInvariant();
                 if (!string.Equals(actualHash, expectedHash, StringComparison.OrdinalIgnoreCase))
                 {
+                    File.Delete(tempPath); tempPath = null;
                     statusText.Text = L10n.T("SHA256 校验失败，下载内容已被丢弃");
                     return;
                 }
@@ -397,10 +526,19 @@ public sealed partial class MainWindow : Window
                 System.Diagnostics.Debug.WriteLine("CLI release 未提供 .sha256 清单，跳过完整性校验");
             }
 
-            await File.WriteAllBytesAsync(tempPath, bytes);
             var savePath = Path.Combine(AppContext.BaseDirectory, fileName);
-            File.Move(tempPath, savePath, overwrite: true);
+            try
+            {
+                File.Move(tempPath, savePath, overwrite: true);
+            }
+            catch (UnauthorizedAccessException)
+            {
+                // 装在 Program Files 下时没管理员权限就是这个异常
+                statusText.Text = L10n.F("安装失败：程序目录不可写，请以管理员身份运行，或手动把文件放到：{0}", savePath);
+                return;
+            }
             tempPath = null;
+            progress.IsIndeterminate = false;
             progress.Value = 100;
             statusText.Text = L10n.F("下载完成：{0}", fileName);
         }
@@ -456,6 +594,82 @@ public sealed partial class MainWindow : Window
     }
 
     private void OnClearFiles(object sender, RoutedEventArgs e) => ViewModel.ClearInputPaths();
+
+    private PreviewWindow? _previewWindow;
+
+    private async void OnPreviewClicked(object sender, RoutedEventArgs e)
+    {
+        if (FileList.SelectedItem is null)
+        {
+            await new ContentDialog
+            {
+                Title = L10n.T("未选择文件"),
+                Content = L10n.T("请先在列表里选中一个要预览的密文文件。"),
+                CloseButtonText = L10n.T("关闭"),
+                XamlRoot = Content.XamlRoot,
+                RequestedTheme = CurrentTheme,
+            }.ShowAsync();
+            return;
+        }
+
+        var path = FileList.SelectedItem as string ?? FileList.SelectedItem.ToString();
+        if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+        {
+            await new ContentDialog
+            {
+                Title = L10n.T("文件不存在"),
+                Content = L10n.F("找不到该文件：\n{0}", path),
+                CloseButtonText = L10n.T("关闭"),
+                XamlRoot = Content.XamlRoot,
+                RequestedTheme = CurrentTheme,
+            }.ShowAsync();
+            return;
+        }
+
+        // 预览是解密行为：加密/密钥动作下没有预览语义
+        if (ViewModel.ActionIndex is not (1 or 3))
+        {
+            await new ContentDialog
+            {
+                Title = L10n.T("无法预览"),
+                Content = L10n.T("预览只对解密动作有效，请先把动作切到「解密」或「批量解密」。"),
+                CloseButtonText = L10n.T("关闭"),
+                XamlRoot = Content.XamlRoot,
+                RequestedTheme = CurrentTheme,
+            }.ShowAsync();
+            return;
+        }
+
+        // 与 Qt 侧同一判据：解密时填了私钥文件即非对称，不需要口令
+        var identity = ViewModel.Identity?.Trim();
+        byte[] password = Array.Empty<byte>();
+        if (string.IsNullOrEmpty(identity))
+        {
+            var pwd = new PasswordDialog { XamlRoot = Content.XamlRoot, RequestedTheme = CurrentTheme };
+            if (await pwd.ShowAsync() != ContentDialogResult.Primary) return;
+            password = Encoding.UTF8.GetBytes(pwd.Password);
+        }
+
+        if (_previewWindow == null)
+        {
+            _previewWindow = new PreviewWindow();
+            _previewWindow.NextRequested += () => PreviewNextFile();
+        }
+        _previewWindow.ShowFor(
+            ViewModel.CliPath ?? "",
+            path,
+            password,
+            System.IO.Path.GetFileName(path));
+    }
+
+    private void PreviewNextFile()
+    {
+        // 选中下一项再预览，让列表高亮跟着走
+        var idx = FileList.SelectedIndex;
+        if (idx < 0 || idx + 1 >= FileList.Items.Count) return;
+        FileList.SelectedIndex = idx + 1;
+        OnPreviewClicked(this, new RoutedEventArgs());
+    }
 
     private void OnFileListDragOver(object sender, DragEventArgs e)
     {
@@ -922,16 +1136,17 @@ public sealed partial class MainWindow : Window
 
         panel.Children.Add(new TextBlock { Text = L10n.T("\n本项目基于 libsodium 实现文件加密（XChaCha20-Poly1305 / AEGIS-256），采用 C++17 编写，跨平台运行于 Windows / Linux / macOS。"), TextWrapping = TextWrapping.Wrap, Foreground = new Microsoft.UI.Xaml.Media.SolidColorBrush(Microsoft.UI.Colors.Gray), FontSize = 12 });
 
-        // 国庆节窗口内追加祝福语
+        // 国庆节窗口内追加祝福语（主窗功能区底部也有一处常驻展示）
         if (NationalDayTheme.IsActive())
         {
             panel.Children.Add(new TextBlock
             {
                 Text = NationalDayTheme.BirthdayMessage(),
                 TextWrapping = TextWrapping.Wrap,
-                FontWeight = Microsoft.UI.Text.FontWeights.Bold,
-                FontSize = 16,
-                Margin = new Thickness(0, 12, 0, 0),
+                TextAlignment = TextAlignment.Center,
+                FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+                FontSize = 15,
+                Margin = new Thickness(0, 14, 0, 0),
                 Foreground = new Microsoft.UI.Xaml.Media.SolidColorBrush(NationalDayTheme.ChinaRed)
             });
         }
@@ -1051,14 +1266,81 @@ public sealed partial class MainWindow : Window
         }
     }
 
+    // 窗口背景：Mica。
+    // 注意两处都要动：
+    // 1) 只设托管属性 SystemBackdrop 时DWM 侧读出来仍是 0(NONE)，
+    //    WinUI 的 setter 没递交到 DWM，窗口会全不透明，必须 P/Invoke 补一刀；
+    // 2) DWM 的 Mica tint 跟随**系统**深浅，不跟随应用主题。
+    //    深色系统 + 浅色应用时，系统给的是暗 Mica，叠上浅色遮罩就成了
+    //    「黑白不一」。所以浅色档干脆不用系统 Mica，改纯色底。
+    public void ApplyBackdrop()
+    {
+        var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
+        var mode = App.Settings.Current.BackgroundMode;
+        // 应用实际生效的深浅（System 档看注册表）
+        var dark = CurrentTheme != ElementTheme.Light;
+
+        if (_backgroundBrush.ImageSource != null)
+        {
+            // 有背景图就不开系统背景，图片自己铺满
+            SystemBackdrop = null;
+        }
+        else if (mode == BackgroundMode.Flat)
+        {
+            SystemBackdrop = null;
+        }
+        else
+        {
+            // MicaBackdrop.Kind 只读且跟随系统深浅：Dark 用默认档，
+            // Light 强制 MicaKind.Base（浅色 Mica），这样浅色应用不会拿到暗 Mica。
+            var mica = new MicaBackdrop();
+            if (!dark) mica.Kind = Microsoft.UI.Composition.SystemBackdrops.MicaKind.Base;
+            SystemBackdrop = mica;
+            int hr = DwmBackdrop.SetMica(hwnd);
+            Debug.WriteLine($"DwmSetWindowAttribute(Mica) hr={hr} readback={DwmBackdrop.Query(hwnd)}");
+        }
+
+        // 背景就绪后再上节日配色：面板的 Mica 依赖窗口底这层采样源已就绪
+        ApplyNationalDayVisuals();
+    }
+
+    // 国庆主题的界面配色：底色染色、面板 Mica、按钮、控件、祝福语
+    private void ApplyNationalDayVisuals()
+    {
+        // 窗口底：非国庆也走同一套，按背景模式分派
+        if (_backgroundBrush.ImageSource == null)
+            RootGrid.Background = NationalDayTheme.WindowBackdropBrush();
+        else
+            _backgroundBrush.Opacity = 0.88;
+
+        if (!NationalDayTheme.IsActive())
+        {
+            // 非国庆：面板跟着窗口走同样那层 Mica，保证整体一致
+            ApplyPanelBackdrops();
+            return;
+        }
+        // 运行/取消按钮也走红系，否则绿色运行键是杂色
+        NationalDayTheme.ApplyButtonColors(BtnRun, BtnCancel);
+        ApplyTitleAccent();
+        // 浅色下按钮/输入框沿用系统浅灰会看不见，逐个下压配色
+        NationalDayTheme.ApplyControlColors(RootGrid);
+        // 功能区 / 文件选择区：换成自身的 Mica 底，与窗口底两层采样叠出层次
+        ApplyPanelBackdrops();
+        // 祝福语常驻功能区底部
+        BirthdayBar.Visibility = Visibility.Visible;
+        RefreshBirthdayText();
+    }
+
     private async void OnViewSettings(object sender, RoutedEventArgs e)
     {
         var dlg = new ViewSettingsDialog(_backgroundBrush) { XamlRoot = Content.XamlRoot, RequestedTheme = CurrentTheme };
         await dlg.ShowAsync();
-        if (_backgroundBrush.ImageSource == null && SystemBackdrop == null)
-            SystemBackdrop = new DesktopAcrylicBackdrop();
+        // 换过背景后要重刷：ApplyBackdrop 内部按有无图片决定开不开系统背景
+        ApplyBackdrop();
+        if (_backgroundBrush.ImageSource == null && NationalDayTheme.IsActive())
+            RootGrid.Background = NationalDayTheme.WindowBackdropBrush();
         else if (_backgroundBrush.ImageSource != null)
-            SystemBackdrop = null;
+            RootGrid.Background = _backgroundBrush;
     }
 
     private void ApplySavedBackground()

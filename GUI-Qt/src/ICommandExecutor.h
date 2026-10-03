@@ -50,5 +50,7 @@ public:
 
 signals:
     void outputLine(const OutputLine& line);
+    // raw 模式下的 stdout 原始字节（不经行解析），供预览解密显示二进制明文前缀
+    void rawStdout(const QByteArray& chunk);
     void finished(const CommandResult& result);
 };

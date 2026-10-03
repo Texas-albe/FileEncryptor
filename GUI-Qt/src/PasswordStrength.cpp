@@ -91,11 +91,19 @@ bool PasswordStrength::meetsPolicy(const QString& password, QString& reason) {
             non_ascii = true;
         }
     }
-    if (non_ascii) return true;
-
+    // 非 ASCII（CJK 等）只算一类字符：此前「含非 ASCII 即放行」会让
+    // 「的的的的的的的的」这类重复汉字被判为合格，实际熵近乎为零。
     const int kinds = (lower ? 1 : 0) + (upper ? 1 : 0) +
-                      (digit ? 1 : 0) + (symbol ? 1 : 0);
-    if (kinds >= 2 || len >= 16) return true;
+                      (digit ? 1 : 0) + (symbol ? 1 : 0) + (non_ascii ? 1 : 0);
+    if (kinds >= 2 || len >= 16) {
+        bool allSame = true;
+        for (const QChar& ch : password) {
+            if (ch != password.at(0)) { allSame = false; break; }
+        }
+        if (!allSame) return true;
+        reason = ps("口令过弱：请不要使用重复字符。");
+        return false;
+    }
 
     reason = ps("口令过弱：请至少含 2 类字符（小写/大写/数字/符号），或长度 >= 16。");
     return false;

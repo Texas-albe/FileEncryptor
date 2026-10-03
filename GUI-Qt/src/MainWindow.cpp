@@ -6,6 +6,7 @@
 #include "PasswordStrength.h"
 #include "ProcessCommandExecutor.h"
 #include "ViewSettingsDialog.h"
+#include "PreviewDialog.h"
 #include "CliNotFoundDialog.h"
 #include "MsgBox.h"
 #include "PasswordDialog.h"
@@ -91,6 +92,13 @@
 #include <atomic>
 #include <memory>
 
+namespace {
+// 中文一行排得下；英/俄文同一行文字长得多，横排会被列宽裁掉，改逐行显示
+bool rowStacksVertically() {
+    return I18n::instance().currentLanguage() != QStringLiteral("zh");
+}
+}
+
 MainWindow::MainWindow(QWidget* parent): QMainWindow(parent) {
     setWindowTitle(QStringLiteral("FileEncryptorGUI %1").arg(
         qApp->applicationVersion().isEmpty() ? FileEncryptorLocator::guiVersion()
@@ -116,7 +124,6 @@ MainWindow::MainWindow(QWidget* parent): QMainWindow(parent) {
     }
 
     buildMenu();
-    buildNavControls();
 
     auto* centralSplitter=new QSplitter(Qt::Horizontal);
 
@@ -200,6 +207,13 @@ void MainWindow::closeEvent(QCloseEvent* e) {
         QFile::remove(m_rewrapTempKey);
         m_rewrapTempKey.clear();
     }
+    // 水印私钥：中途退出时 finished() 未必跑完，这里同步兜底
+    CliArgBuilder::cleanupWatermarkTemp();
+    // 统计 JSON 同理（finishTaskRecord 没跑到就要删）
+    if(!m_statsFile.isEmpty()) {
+        QFile::remove(m_statsFile);
+        m_statsFile.clear();
+    }
     QSettings(QStringLiteral("FileEncryptor"),QStringLiteral("FileEncryptorGUI"))
         .setValue(QStringLiteral("geometry"),saveGeometry());
     e->accept();
@@ -218,14 +232,32 @@ void MainWindow::buildMenu() {
     auto* viewMenu=m_menuBar->addMenu(tr("视图(&V)"));
     auto* actViewSettings=viewMenu->addAction(tr("视图设置..."));
     connect(actViewSettings,&QAction::triggered,this,&MainWindow::onViewSettings);
+    viewMenu->addSeparator();
+
+    // 主题：浅色 / 深色 / 跟随系统，与 WinUI 的「视图」菜单一致
+    auto* themeMenu=viewMenu->addMenu(tr("主题"));
+    m_themeGroup=new QActionGroup(themeMenu);
+    m_themeGroup->setExclusive(true);
+    const struct { QAction** act; ThemeManager::Theme theme; const char* label; } kThemeItems[] = {
+        {&m_actThemeLight,   ThemeManager::Theme::Light, QT_TR_NOOP("浅色")},
+        {&m_actThemeDark,    ThemeManager::Theme::Dark,  QT_TR_NOOP("深色")},
+        {&m_actThemeSystem,  ThemeManager::Theme::System, QT_TR_NOOP("跟随系统")},
+    };
+    for(const auto& it : kThemeItems) {
+        auto* a=themeMenu->addAction(tr(it.label));
+        a->setCheckable(true);
+        a->setData(static_cast<int>(it.theme));
+        a->setChecked(ThemeManager::chosenTheme()==it.theme);
+        m_themeGroup->addAction(a);
+        connect(a,&QAction::triggered,this,&MainWindow::onThemeActionTriggered);
+        *it.act=a;
+    }
 
     auto* toolsMenu=m_menuBar->addMenu(tr("工具(&T)"));
     auto* actTaskHistory=toolsMenu->addAction(tr("任务历史..."));
     connect(actTaskHistory,&QAction::triggered,this,&MainWindow::onOpenTaskHistory);
     auto* actRetryCli=toolsMenu->addAction(tr("重新检测 CLI 程序"));
     connect(actRetryCli,&QAction::triggered,this,&MainWindow::onRetryCliDetection);
-    auto* actDownloadCli=toolsMenu->addAction(tr("下载 CLI..."));
-    connect(actDownloadCli,&QAction::triggered,this,&MainWindow::onDownloadCli);
     toolsMenu->addSeparator();
 
     auto* langMenu=toolsMenu->addMenu(tr("语言(&L)"));
@@ -237,6 +269,8 @@ void MainWindow::buildMenu() {
         langGroup->addAction(a);
         connect(a,&QAction::triggered,this,[this,id] {
             I18n::instance().changeLanguage(id,this);
+            // 祝福语是运行时拼的（tr() 不含年龄占位），语言切换后要重刷
+            applyBirthdayStyle();
         });
     };
     addLang(QStringLiteral("简体中文"),QStringLiteral("zh"));
@@ -454,48 +488,25 @@ void MainWindow::doUpdaterUpdate(const QString& updater, const QString& url,
     proc->start(updater, args);
 }
 
-// 主题与视图控件
-void MainWindow::buildNavControls() {
-    m_navWidget=new QWidget(this);
-    auto* lay=new QHBoxLayout(m_navWidget);
-    lay->setContentsMargins(0,0,0,0);
-    lay->setSpacing(6);
-
-    lay->addWidget(new QLabel(tr("主题：")));
-    m_themeCombo=new QComboBox;
-    m_themeCombo->addItem(tr("浅色"),static_cast<int>(ThemeManager::Theme::Light));
-    m_themeCombo->addItem(tr("深色"),static_cast<int>(ThemeManager::Theme::Dark));
-    const int idx=m_themeCombo->findData(static_cast<int>(ThemeManager::chosenTheme()));
-    m_themeCombo->setCurrentIndex(idx>=0 ? idx : 0);
-    connect(m_themeCombo,QOverload<int>::of(&QComboBox::currentIndexChanged),
-        this,&MainWindow::onThemeComboChanged);
-    lay->addWidget(m_themeCombo);
-
-    m_btnViewSettings=new QPushButton(tr("视图设置"));
-    connect(m_btnViewSettings,&QPushButton::clicked,this,&MainWindow::onViewSettings);
-    lay->addWidget(m_btnViewSettings);
-
-    m_menuBar->setCornerWidget(m_navWidget,Qt::TopRightCorner);
-
-    connect(&ThemeManager::instance(),&ThemeManager::themeChanged,
-        this,&MainWindow::onThemeDarkChanged);
-}
-
-void MainWindow::onThemeComboChanged(int idx) {
-    const auto t=static_cast<ThemeManager::Theme>(
-        m_themeCombo->itemData(idx).toInt());
-    ThemeManager::setTheme(t);
+// 主题菜单：勾选态跟随 ThemeManager 当前选择
+void MainWindow::onThemeActionTriggered() {
+    auto* a=qobject_cast<QAction*>(sender());
+    if(!a) return;
+    ThemeManager::setTheme(static_cast<ThemeManager::Theme>(a->data().toInt()));
     applyButtonStyles();
     applyPanelTransparency();
+    applyFlagRedTheme();
     refreshCommandPreview();
 }
 
 void MainWindow::onThemeDarkChanged(bool ) {
-    const int idx=m_themeCombo->findData(static_cast<int>(ThemeManager::chosenTheme()));
-    if(idx>=0) {
-        m_themeCombo->blockSignals(true);
-        m_themeCombo->setCurrentIndex(idx);
-        m_themeCombo->blockSignals(false);
+    const auto cur=ThemeManager::chosenTheme();
+    for(QAction* a : m_themeGroup->actions()) {
+        const bool on=a->data().toInt()==static_cast<int>(cur);
+        if(a->isChecked()!=on) {
+            a->setChecked(on);
+            break;  // exclusive group：设一个即取消其余
+        }
     }
     applyButtonStyles();
     applyPanelTransparency();
@@ -505,12 +516,97 @@ void MainWindow::onThemeDarkChanged(bool ) {
 // 底色随配色
 void MainWindow::applyFlagRedTheme() {
     const auto& r=ThemeManager::ui();
-    setStyleSheet(QStringLiteral("QMainWindow{background-color:%1;}")
-        .arg(QLatin1String(r.window)));
+    // 不能用 setStyleSheet 设窗口底色：Qt 给顶层窗口设样式表会重置整棵子控件树的
+    // 调色板，输入框/列表会退回系统默认（浅色主题下就成了黑底配白控件）。
+    // 改走 QPalette::Window 这一条正路。
     QPalette p=palette();
+    p.setColor(QPalette::Window, QColor(r.window));
+    p.setColor(QPalette::WindowText, QColor(r.text));
     p.setColor(QPalette::Highlight, QColor(r.highlight));
     p.setColor(QPalette::HighlightedText, Qt::white);
     setPalette(p);
+    applyButtonStyles();
+    applyBirthdayStyle();
+}
+
+// 祝福语固定国旗红，不随深浅档变化（跟 WinUI 侧一致）
+void MainWindow::applyBirthdayStyle() {
+    if(!m_birthdayLabel) return;
+    const bool active=ThemeManager::isNationalDay();
+    m_birthdayLabel->setVisible(active);
+    if(!active) return;
+    m_birthdayLabel->setText(ThemeManager::birthdayMessage());
+    m_birthdayLabel->setStyleSheet(QStringLiteral("QLabel{color:%1;font-weight:600;}")
+        .arg(QLatin1String(ThemeManager::chinaRedHex())));
+}
+
+// 预览解密：新开窗口显示明文前缀，不写出任何文件
+void MainWindow::onPreviewClicked() {
+    QListWidgetItem* cur = m_fileList ? m_fileList->currentItem() : nullptr;
+    if (!cur) {
+        MsgBox::warn(this, tr("未选择文件"),
+            tr("请先在列表里选中一个要预览的密文文件。"));
+        return;
+    }
+    openPreviewFor(cur->text());
+}
+
+void MainWindow::openPreviewFor(const QString& path) {
+    if (path.isEmpty() || !QFileInfo::exists(path)) {
+        MsgBox::warn(this, tr("文件不存在"), tr("找不到该文件：\n%1").arg(path));
+        return;
+    }
+    const int act = m_actionGroup->checkedId();
+    // 预览是解密行为：加密/密钥动作下没有预览语义
+    if (act != static_cast<int>(CryptoAction::Decrypt)
+        && act != static_cast<int>(CryptoAction::BatchDecrypt)) {
+        MsgBox::warn(this, tr("无法预览"),
+            tr("预览只对解密动作有效，请先把动作切到「解密」或「批量解密」。"));
+        return;
+    }
+
+    QByteArray pw;
+    // 与 updateAsymVisibility 同一判据：解密时填了私钥文件即走非对称，不需要口令
+    const bool asymDecrypt = (act == static_cast<int>(CryptoAction::Decrypt))
+        && m_identityEdit && !m_identityEdit->text().trimmed().isEmpty();
+    if (asymDecrypt) {
+        // 非对称解密靠私钥文件（CLI 自行识别），不问口令
+    } else {
+        PasswordDialog dlg(this);
+        dlg.setPurpose(tr("解密口令（用于预览）"));
+        dlg.setRequireConfirm(false);
+        if (dlg.exec() != QDialog::Accepted) return;
+        const std::vector<unsigned char> v = dlg.takePassword();
+        if (v.empty()) return;
+        pw = QByteArray(reinterpret_cast<const char*>(v.data()),
+                        static_cast<int>(v.size()));
+    }
+
+    if (!m_previewDlg) {
+        m_previewDlg = new PreviewDialog(this);
+        m_previewDlg->setAttribute(Qt::WA_DeleteOnClose, false);
+        connect(m_previewDlg, &PreviewDialog::nextRequested, this, [this] {
+            if (!m_fileList) return;
+            QListWidgetItem* it = m_fileList->currentItem();
+            if (!it) return;
+            const int row = m_fileList->row(it);
+            if (row + 1 < m_fileList->count())
+                m_fileList->setCurrentRow(row + 1);
+            if (m_fileList->currentItem())
+                openPreviewFor(m_fileList->currentItem()->text());
+        });
+    }
+
+    PreviewRequest req;
+    req.programPath = m_fileEncryptorPath;
+    req.filePath = path;
+    req.password = pw;
+    req.maxBytes = 4096;
+    m_previewDlg->setFileName(QFileInfo(path).fileName());
+    m_previewDlg->start(req);
+    m_previewDlg->show();
+    m_previewDlg->raise();
+    m_previewDlg->activateWindow();
 }
 
 void MainWindow::onViewSettings() {
@@ -683,7 +779,7 @@ void MainWindow::applyPanelTransparency() {
         "QComboBox QAbstractItemView{background:%1;color:%2;border:1px solid %3;"
         "selection-background-color:%4;selection-color:#FFFFFF;outline:0;}"
     ).arg(ctrlBg,ctrlFg,ctrlBor,fieldSel);
-    for(QComboBox* cb:{m_themeCombo, m_modeCombo, m_sourceCombo, m_fileCipherCombo}) {
+    for(QComboBox* cb:{m_modeCombo, m_sourceCombo, m_fileCipherCombo}) {
         if(cb) cb->setStyleSheet(comboStyle);
     }
 
@@ -699,8 +795,8 @@ void MainWindow::applyPanelTransparency() {
     ).arg(ctrlBg,ctrlFg,ctrlBor,ctrlHover,QLatin1String(r.placeholder));
     // 全部普通按钮共用同一套外观（含后加的「密钥轮换」「水印私钥浏览」）
     for(QPushButton* b:{m_btnAddFiles, m_btnAddDir, m_btnClearFiles,
-                           m_btnOutDirBrowse, m_btnKeyfileBrowse, m_btnViewSettings,
-                           m_btnRecipientBrowse, m_btnIdentityBrowse,
+                           m_btnOutDirBrowse, m_btnKeyfileBrowse,
+                           m_btnRecipientBrowse, m_btnIdentityBrowse, m_btnPreview,
                            m_btnTaskHistory, m_btnRewrap, m_btnWmKeyBrowse}) {
         if(b) b->setStyleSheet(btnStyle);
     }
@@ -833,13 +929,6 @@ void MainWindow::rescanCli() {
     }
 }
 
-void MainWindow::onDownloadCli() {
-    CliNotFoundDialog dlg(QString(),this);
-    const bool retry=dlg.exec()==QDialog::Accepted && dlg.retryPressed();
-    if(!retry && !dlg.downloaded()) return;
-    rescanCli();
-}
-
 // 能力探测
 void MainWindow::probeZstdSupport() {
     m_zstdAvailable=false;
@@ -872,8 +961,10 @@ void MainWindow::onProbeFinished(int, QProcess::ExitStatus) {
     else if(out.contains(QStringLiteral("aegis=1"))) m_aegisAvailable=true;
     if(out.contains(QStringLiteral("sm4=0"))) m_sm4Available=false;
     else if(out.contains(QStringLiteral("sm4=1"))) m_sm4Available=true;
-    // 旧 CLI 的 --features 没有 pqc 字段：按「不支持」处理，由勾选状态决定是否下发 --no-pqc
-    m_pqcAvailable=!out.contains(QStringLiteral("pqc=0"));
+    // 旧 CLI 的 --features 没有 pqc 字段：按「不支持」处理，由勾选状态决定是否下发 --no-pqc。
+    // fail-open 会把 --no-pqc 转给不认它的旧 CLI，导致任务直接被拒。
+    if(out.contains(QStringLiteral("pqc=1"))) m_pqcAvailable=true;
+    else if(out.contains(QStringLiteral("pqc=0"))) m_pqcAvailable=false;
     updateSm4Visibility();
     updateAsymVisibility();
 }
@@ -888,24 +979,26 @@ void MainWindow::applyButtonStyles() {
     // 国庆周走红色系
     const bool red=ThemeManager::isNationalDay();
     m_btnRun->setStyleSheet(red
-        ? (dark
-           ? QStringLiteral("QPushButton{background:#DE2910;color:#FFFFFF;padding:6px 18px;font-weight:bold;border-radius:4px;}"
-                            "QPushButton:hover{background:#EF4433;}")
-           : QStringLiteral("QPushButton{background:#C0392B;color:white;padding:6px 18px;font-weight:bold;border-radius:4px;}"
-                            "QPushButton:hover{background:#A93226;}"))
+        // 国庆：运行键用国旗红原色，深浅一致；深色下悬停往亮里走才看得出状态变化
+        ? QStringLiteral("QPushButton{background:#DE2910;color:#FFFFFF;padding:6px 18px;font-weight:bold;border-radius:4px;}"
+                         "QPushButton:hover{background:#F04A30;}"
+                         "QPushButton:pressed{background:#A81F0A;}")
         : (dark
            ? QStringLiteral("QPushButton{background:#43A047;color:#FFFFFF;padding:6px 18px;font-weight:bold;border-radius:4px;}"
                             "QPushButton:hover{background:#66BB6A;}")
            : QStringLiteral("QPushButton{background:#4A7C50;color:white;padding:6px 18px;font-weight:bold;border-radius:4px;}"
                             "QPushButton:hover{background:#3D6B4A;}")));
     m_btnCancel->setStyleSheet(red
+        // 国庆：取消键同为红但明显加深，与运行键拉开层级
         ? (dark
-           ? QStringLiteral("QPushButton{background:#7A1A12;color:#F2DAD6;padding:6px 18px;font-weight:bold;border-radius:4px;}"
-                            "QPushButton:hover{background:#95231A;}"
-                            "QPushButton:disabled{background:#4A1A16;color:#A87F79;}")
-           : QStringLiteral("QPushButton{background:#8A1E13;color:white;padding:6px 18px;font-weight:bold;border-radius:4px;}"
-                            "QPushButton:hover{background:#6E1810;}"
-                            "QPushButton:disabled{background:#D99A92;color:#FFF7F6;}"))
+           ? QStringLiteral("QPushButton{background:#8E2214;color:#FFFFFF;padding:6px 18px;font-weight:bold;border-radius:4px;}"
+                            "QPushButton:hover{background:#A82C1B;}"
+                            "QPushButton:pressed{background:#6E180E;}"
+                            "QPushButton:disabled{background:#242121;color:#6B605E;}")
+           : QStringLiteral("QPushButton{background:#9E2A1B;color:#FFFFFF;padding:6px 18px;font-weight:bold;border-radius:4px;}"
+                            "QPushButton:hover{background:#B83624;}"
+                            "QPushButton:pressed{background:#7C2014;}"
+                            "QPushButton:disabled{background:#D8D4D3;color:#8A8180;}"))
         : (dark
            ? QStringLiteral("QPushButton{background:#E53935;color:#FFFFFF;padding:6px 18px;font-weight:bold;border-radius:4px;}"
                             "QPushButton:hover{background:#EF5350;}"
@@ -939,6 +1032,9 @@ QWidget* MainWindow::buildLeftPanel() {
 
     auto* btnRow2=new QHBoxLayout;
     m_btnClearFiles=new QPushButton(tr("清空"));
+    m_btnPreview=new QPushButton(tr("预览..."));
+    m_btnPreview->setToolTip(tr("不解密到文件，先看看密文里的内容"));
+    btnRow2->addWidget(m_btnPreview);
     btnRow2->addStretch();
     btnRow2->addWidget(m_btnClearFiles);
     lay->addLayout(btnRow2);
@@ -976,6 +1072,7 @@ QWidget* MainWindow::buildCenterPanel() {
     m_rbEncrypt->setChecked(true);
 
     auto* encRow=new QHBoxLayout;
+    encRow->setDirection(rowStacksVertically() ? QBoxLayout::TopToBottom : QBoxLayout::LeftToRight);
     encRow->addWidget(m_rbEncrypt);
     encRow->addWidget(m_rbDecrypt);
     encRow->addWidget(m_rbBatchEncrypt);
@@ -987,6 +1084,7 @@ QWidget* MainWindow::buildCenterPanel() {
     auto* lblKeyMgmt=new QLabel(tr("密钥管理"));
     lay->addWidget(lblKeyMgmt,row,0);
     auto* keyMgmtRow=new QHBoxLayout;
+    keyMgmtRow->setDirection(rowStacksVertically() ? QBoxLayout::TopToBottom : QBoxLayout::LeftToRight);
     keyMgmtRow->addWidget(m_rbKeyGen);
     keyMgmtRow->addWidget(m_rbDerive);
     keyMgmtRow->addWidget(m_rbPubKey);
@@ -1035,7 +1133,7 @@ QWidget* MainWindow::buildCenterPanel() {
     m_chkCompress=new QCheckBox(tr("压缩数据"));
     m_chkCompress->setToolTip(tr("加密时逐块压缩，对称与非对称均生效"));
     m_compressTipTemplate=m_chkCompress->toolTip();   // 能力探测后要还原默认说明
-    m_compressLabel=new QLabel(tr("压缩级别（1-22）："));
+    m_compressLabel=new QLabel(tr("压缩级别（-5 到 22）："));
     m_compressLevel=new QSpinBox;
     m_compressLevel->setRange(-5,22);
     m_compressLevel->setValue(3);
@@ -1128,6 +1226,7 @@ QWidget* MainWindow::buildCenterPanel() {
     auto* lblOpts=new QLabel(tr("选项"));
     lay->addWidget(lblOpts,row,0);
     auto* optsRow=new QHBoxLayout;
+    optsRow->setDirection(rowStacksVertically() ? QBoxLayout::TopToBottom : QBoxLayout::LeftToRight);
     m_sourceCombo=new QComboBox;
     m_sourceCombo->addItem(tr("保留源文件"),0);
     m_sourceCombo->addItem(tr("完成后删除源文件"),1);
@@ -1189,6 +1288,18 @@ QWidget* MainWindow::buildCenterPanel() {
     applyButtonStyles();
 
     lay->setRowStretch(row,1);
+
+    // 国庆祝福：贴在功能区最下方，跟 WinUI 同位置。
+    // 非国庆窗口隐藏，不占布局空间。
+    m_birthdayLabel=new QLabel(ThemeManager::birthdayMessage());
+    m_birthdayLabel->setAlignment(Qt::AlignCenter);
+    m_birthdayLabel->setWordWrap(true);
+    m_birthdayLabel->setTextInteractionFlags(Qt::NoTextInteraction);
+    m_birthdayLabel->setVisible(ThemeManager::isNationalDay());
+    applyBirthdayStyle();
+    lay->addWidget(m_birthdayLabel,row,0,1,2);
+    row++;
+
     return w;
 }
 
@@ -1225,6 +1336,7 @@ void MainWindow::connectSignals() {
     connect(m_btnAddFiles,&QPushButton::clicked,this,&MainWindow::onAddFiles);
     connect(m_btnAddDir,&QPushButton::clicked,this,&MainWindow::onAddDir);
     connect(m_btnClearFiles,&QPushButton::clicked,this,&MainWindow::onClearFiles);
+    connect(m_btnPreview,&QPushButton::clicked,this,&MainWindow::onPreviewClicked);
 
     connect(m_btnRun,&QPushButton::clicked,this,&MainWindow::onRunClicked);
     if(m_btnRewrap)
@@ -1520,7 +1632,8 @@ ShellOptions MainWindow::collectOptions() const {
     o.compress=m_chkCompress->isChecked() && m_zstdAvailable;
     o.compressionLevel=o.compress ? m_compressLevel->value() : 0;
     o.useX448=(m_chkX448 && m_chkX448->isChecked());
-    o.pqc=(m_chkPqc && m_chkPqc->isChecked());
+    // CLI 不支持 PQC 时恒为 false：既不请求 PQC，也不下发旧 CLI 不认的 --no-pqc
+    o.pqc=(m_chkPqc && m_chkPqc->isChecked() && m_pqcAvailable);
     o.watermark=m_chkWatermark->isChecked();
     o.watermarkKeyPath=m_wmKeyEdit->text().trimmed();
 
@@ -1557,10 +1670,19 @@ QString MainWindow::resolveRecipients(const QString& raw) const {
                                   ||s.startsWith(QLatin1String("publickey:")); });
     if(!allKeys) return raw.trimmed();
     if(!m_recipientTempFile.isEmpty()) { QFile::remove(m_recipientTempFile); m_recipientTempFile.clear(); }
-    QTemporaryFile recTmp(QDir::tempPath()+QStringLiteral("/fileencryptor_recipients_XXXXXX"));
+    QTemporaryFile recTmp(QDir::tempPath()+QStringLiteral("/fe_recipients_XXXXXX"));
     recTmp.setAutoRemove(false);
-    if(!recTmp.open()) return raw.trimmed();
-    for(const QString& k:parts) recTmp.write((k+QLatin1Char('\n')).toUtf8());
+    // 0600：多用户 POSIX 下默认 0644 会让同机其他用户读到收件人公钥列表
+    recTmp.setPermissions(QFileDevice::ReadOwner|QFileDevice::WriteOwner);
+    // 无参 open() 是 public；带参重载在 QTemporaryFile 里是 protected
+    if(!recTmp.open()) return QString();
+    QByteArray blob;
+    for(const QString& k:parts) blob+=(k+QLatin1Char('\n')).toUtf8();
+    if(recTmp.write(blob)!=static_cast<qint64>(blob.size())) {
+        recTmp.close();
+        QFile::remove(recTmp.fileName());
+        return QString();
+    }
     recTmp.close();
     m_recipientTempFile=recTmp.fileName();
     return m_recipientTempFile;
@@ -1582,7 +1704,16 @@ void MainWindow::onRunClicked() {
 
     ShellOptions o=collectOptions();
 
-    o.recipientPath=resolveRecipients(o.recipientPath);
+    // 多收件人写成临时文件失败时不能把含逗号的原文当 -r 值下发
+    if(!o.recipientPath.trimmed().isEmpty()) {
+        const QString recipFile=resolveRecipients(o.recipientPath);
+        if(recipFile.isEmpty()) {
+            MsgBox::warn(this, tr("收件人列表写入失败"),
+                tr("无法创建收件人列表的临时文件（权限不足或临时目录不可写）。\n任务已取消。"));
+            return;
+        }
+        o.recipientPath=recipFile;
+    }
 
     if(o.mode==CryptoMode::Aegis256 && !m_aegisAvailable) {
         MsgBox::error(this, tr("AEGIS-256 不可用"),
@@ -1670,9 +1801,17 @@ void MainWindow::onRunClicked() {
     req.programPath=m_fileEncryptorPath;
     req.arguments=CliArgBuilder::buildArguments(o);
     req.extraEnv=CliArgBuilder::buildEnvironment(o);
+    // 签名私钥临时文件落盘失败时 buildArguments 返回空：中止并说明原因，
+    // 不要拿空参数去启动 CLI（那只会弹用法，用户看不出真实原因）
+    if(req.arguments.isEmpty()) {
+        MsgBox::warn(this, tr("水印签名失败"),
+            tr("无法创建水印签名私钥的临时文件（权限不足或临时目录不可写）。\n任务已取消，私钥不会被传给命令行。"));
+        return;
+    }
     {
         QTemporaryFile statsTmp(QDir::tempPath()+QStringLiteral("/fe_stats_XXXXXX"));
         statsTmp.setAutoRemove(false);
+        statsTmp.setPermissions(QFileDevice::ReadOwner|QFileDevice::WriteOwner);
         if(statsTmp.open()) {
             m_statsFile=statsTmp.fileName();
             statsTmp.close();
@@ -1966,8 +2105,17 @@ void MainWindow::onCommandFinished(const CommandResult& r) {
         QFile::remove(m_rewrapTempKey);
         m_rewrapTempKey.clear();
     }
+    // 任务结束即清理，避免公钥临时文件与统计 JSON 滞留到关窗口
+    if(!m_recipientTempFile.isEmpty()) {
+        QFile::remove(m_recipientTempFile);
+        m_recipientTempFile.clear();
+    }
     if(m_framePending) flushPendingFrame();
-    finishTaskRecord(r);
+    finishTaskRecord(r);   // 内部要读 m_statsFile，故统计文件在其后清理
+    if(!m_statsFile.isEmpty()) {
+        QFile::remove(m_statsFile);
+        m_statsFile.clear();
+    }
 
     QString summary;
     if(r.wasCancelled) {
@@ -1998,6 +2146,7 @@ void MainWindow::onCommandFinished(const CommandResult& r) {
     recomputePending();
     updateProgressLabel();
 
+    bool showedSummary=false;
     if(!r.wasCancelled && (m_doneFiles>0||m_failFiles>0)) {
         qint64 encSize=0;
         const QString outDir=m_outDirEdit->text().trimmed();
@@ -2022,14 +2171,18 @@ void MainWindow::onCommandFinished(const CommandResult& r) {
         TaskSummaryDialog dlg(tr("任务完成"),durStr,speedStr,encStr,
                               m_doneFiles,m_skipFiles,m_failFiles,this);
         dlg.exec();
+        showedSummary=true;   // 已弹汇总框，不再重复弹消息框/托盘通知
     }
 
-    const QString notifyTitle = tr("任务完成");
-    const QString notifyBody = summary.remove(QStringLiteral("---")).trimmed();
-    if (isActiveWindow()) {
-        QMessageBox::information(this, notifyTitle, notifyBody);
-    } else if (m_trayIcon && QSystemTrayIcon::isSystemTrayAvailable()) {
-        m_trayIcon->showMessage(notifyTitle, notifyBody, QSystemTrayIcon::Information, 5000);
+    // 已弹汇总框时不再重复通知
+    if(!showedSummary) {
+        const QString notifyTitle = tr("任务完成");
+        const QString notifyBody = summary.remove(QStringLiteral("---")).trimmed();
+        if (isActiveWindow()) {
+            QMessageBox::information(this, notifyTitle, notifyBody);
+        } else if (m_trayIcon && QSystemTrayIcon::isSystemTrayAvailable()) {
+            m_trayIcon->showMessage(notifyTitle, notifyBody, QSystemTrayIcon::Information, 5000);
+        }
     }
 }
 

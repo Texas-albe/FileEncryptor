@@ -9,16 +9,26 @@
     <Grid x:Name="RootGrid" RowDefinitions="Auto,*,Auto,Auto">
 
         <!-- 顶部标题栏（自定义，Acrylic 延伸至此） -->
-        <Grid x:Name="TitleBarGrid" Grid.Row="0" ColumnDefinitions="Auto,Auto,*" Height="36">
-            <TextBlock Grid.Column="0" x:Name="TitleText" Text="FileEncryptorGUI" VerticalAlignment="Center" Margin="12,0,12,0" FontWeight="SemiBold" />
-            <Border x:Name="DragRegion" Grid.Column="2" Background="Transparent" />
+        <Grid x:Name="TitleBarGrid" Grid.Row="0" ColumnDefinitions="Auto,Auto,Auto,*" Height="36">
+            <!-- 节日红条：仅国庆窗口由代码上色，平时保持透明 -->
+            <Border x:Name="TitleAccentBar" Grid.Column="0" Width="3" Height="16"
+                    CornerRadius="2" VerticalAlignment="Center" Margin="10,0,0,0"
+                    Background="Transparent" />
+            <TextBlock Grid.Column="1" x:Name="TitleText" Text="FileEncryptorGUI" VerticalAlignment="Center" Margin="10,0,12,0" FontWeight="SemiBold" />
+            <Border x:Name="DragRegion" Grid.Column="3" Background="Transparent" />
             <!-- 菜单按桌面应用常见顺序排列：功能类（编辑/视图/工具）在前，信息类（关于）最后 -->
-            <controls:MenuBar Grid.Column="1" x:Name="MenuBar" Height="36" HorizontalAlignment="Left">
+            <controls:MenuBar Grid.Column="2" x:Name="MenuBar" Height="36" HorizontalAlignment="Left">
                 <controls:MenuBarItem x:Name="MenuEdit" Title="编辑">
                     <MenuFlyoutItem x:Name="MenuEditConfig" Text="编辑 CLI 配置" Click="OnEditConfig" />
                 </controls:MenuBarItem>
                 <controls:MenuBarItem x:Name="MenuView" Title="视图">
                     <MenuFlyoutItem x:Name="MenuViewSettings" Text="背景设置..." Click="OnViewSettings" />
+                        <!-- 主题：Light/Dark/System，选择即生效并保存，重启后沿用 -->
+                    <MenuFlyoutSubItem x:Name="MenuTheme" Text="主题">
+                        <ToggleMenuFlyoutItem x:Name="MenuThemeLight" Text="浅色" Click="OnThemeLight" />
+                        <ToggleMenuFlyoutItem x:Name="MenuThemeDark" Text="深色" Click="OnThemeDark" />
+                        <ToggleMenuFlyoutItem x:Name="MenuThemeSystem" Text="跟随系统" Click="OnThemeSystem" />
+                    </MenuFlyoutSubItem>
                 </controls:MenuBarItem>
                 <controls:MenuBarItem x:Name="MenuTools" Title="工具">
                     <MenuFlyoutItem x:Name="MenuRetryCli" Text="重新检测 CLI 程序" Click="OnRetryCliDetection" />
@@ -42,7 +52,7 @@
         <Grid Grid.Row="1" ColumnDefinitions="*,2*" Margin="12,8,12,4">
 
             <!-- 左侧：文件选择 -->
-            <controls:Border Grid.Column="0"
+            <controls:Border Grid.Column="0" x:Name="LeftPanel"
                              Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
                              BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
                              BorderThickness="1" CornerRadius="8" Padding="8">
@@ -69,7 +79,9 @@
                             <Button Grid.Column="0" Content="添加文件..." Click="OnAddFiles" Margin="0,0,2,0" HorizontalAlignment="Stretch" />
                             <Button Grid.Column="1" Content="添加目录..." Click="OnAddDir" Margin="2,0,0,0" HorizontalAlignment="Stretch" />
                         </Grid>
-                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8">
+                            <Button Content="预览..." Click="OnPreviewClicked"
+                                    ToolTipService.ToolTip="不解密到文件，先看看密文里的内容" />
                             <Button Content="清空" Click="OnClearFiles" />
                         </StackPanel>
                     </StackPanel>
@@ -77,32 +89,42 @@
             </controls:Border>
 
             <!-- 右侧：功能区 -->
-            <controls:Border Grid.Column="1" Margin="12,0,0,0"
+            <controls:Border Grid.Column="1" x:Name="CenterPanel" Margin="12,0,0,0"
                              Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
                              BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
                              BorderThickness="1" CornerRadius="8" Padding="12">
-                <ScrollViewer VerticalScrollMode="Auto" VerticalScrollBarVisibility="Auto">
+              <Grid RowDefinitions="*,Auto">
+                <ScrollViewer Grid.Row="0" VerticalScrollMode="Auto" VerticalScrollBarVisibility="Auto"
+                              Padding="0,2,14,14">
                     <StackPanel Spacing="8">
 
                         <!-- 操作 -->
                         <Grid ColumnDefinitions="120,*">
                             <TextBlock Grid.Column="0" Text="操作" VerticalAlignment="Center" TextWrapping="Wrap" />
-                            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="16">
+                            <ScrollViewer Grid.Column="1" HorizontalScrollBarVisibility="Auto"
+                                          HorizontalScrollMode="Auto" VerticalScrollMode="Disabled"
+                                          VerticalScrollBarVisibility="Disabled" Padding="0,2,14,14">
+                            <StackPanel x:Name="ActionRow" Orientation="Horizontal" Spacing="16">
                                 <RadioButton x:Name="RbEncrypt" Content="加密" GroupName="Action" Checked="OnActionRadioChecked" />
                                 <RadioButton x:Name="RbDecrypt" Content="解密" GroupName="Action" Checked="OnActionRadioChecked" />
                                 <RadioButton x:Name="RbBatchEncrypt" Content="批量加密" GroupName="Action" Checked="OnActionRadioChecked" />
                                 <RadioButton x:Name="RbBatchDecrypt" Content="批量解密" GroupName="Action" Checked="OnActionRadioChecked" />
                             </StackPanel>
+                            </ScrollViewer>
                         </Grid>
 
                         <!-- 密钥管理 -->
                         <Grid ColumnDefinitions="120,*">
                             <TextBlock Grid.Column="0" Text="密钥管理" VerticalAlignment="Center" TextWrapping="Wrap" />
-                            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="16">
+                            <ScrollViewer Grid.Column="1" HorizontalScrollBarVisibility="Auto"
+                                          HorizontalScrollMode="Auto" VerticalScrollMode="Disabled"
+                                          VerticalScrollBarVisibility="Disabled" Padding="0,2,14,14">
+                            <StackPanel x:Name="KeyMgmtRow" Orientation="Horizontal" Spacing="16">
                                 <RadioButton x:Name="RbKeyGen" Content="生成密钥对" GroupName="KeyMgmt" Checked="OnKeyMgmtRadioChecked" />
                                 <RadioButton x:Name="RbDerive" Content="口令派生密钥对" GroupName="KeyMgmt" Checked="OnKeyMgmtRadioChecked" />
                                 <RadioButton x:Name="RbPubKey" Content="导出公钥" GroupName="KeyMgmt" Checked="OnKeyMgmtRadioChecked" />
                             </StackPanel>
+                            </ScrollViewer>
                         </Grid>
 
                         <!-- 加密模式：解密 / 批量解密 / 密钥管理下一律整行隐藏（含左侧标签） -->
@@ -136,7 +158,7 @@
             <TextBlock Grid.Column="0" Text="压缩 (zstd)" VerticalAlignment="Center" TextWrapping="Wrap" />
                             <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
                                 <CheckBox x:Name="ChkCompress" Content="压缩数据" Checked="OnOptionChanged" Unchecked="OnOptionChanged" VerticalAlignment="Center" />
-                                <TextBlock Text="压缩级别（1-22）:" VerticalAlignment="Center" />
+                                <TextBlock Text="压缩级别（-5 到 22）:" VerticalAlignment="Center" />
                                 <controls:NumberBox x:Name="CompressLevel" Value="3" Minimum="-5" Maximum="22" SmallChange="1" Width="60" SpinButtonPlacementMode="Hidden" ValueChanged="OnCompressLevelChanged" Foreground="{ThemeResource TextFillColorPrimaryBrush}" />
                             </StackPanel>
                         </Grid>
@@ -162,7 +184,10 @@
                         <!-- 选项 -->
                         <Grid ColumnDefinitions="120,*">
                             <TextBlock Grid.Column="0" Text="选项" VerticalAlignment="Center" TextWrapping="Wrap" />
-                            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="12" VerticalAlignment="Center">
+                            <ScrollViewer Grid.Column="1" HorizontalScrollBarVisibility="Auto"
+                                          HorizontalScrollMode="Auto" VerticalScrollMode="Disabled"
+                                          VerticalScrollBarVisibility="Disabled" Padding="0,2,14,14">
+                            <StackPanel x:Name="OptionsRow" Orientation="Horizontal" Spacing="12" VerticalAlignment="Center">
                                 <controls:ComboBox x:Name="SourceCombo" Width="140" SelectionChanged="OnSourceChanged">
                                     <controls:ComboBoxItem Content="保留源文件" />
                                     <controls:ComboBoxItem Content="删除源文件" />
@@ -178,6 +203,7 @@
                                 <CheckBox x:Name="ChkWatermark" Content="签名水印" Checked="OnOptionChanged" Unchecked="OnOptionChanged"
                                           VerticalAlignment="Center" ToolTipService.ToolTip="在密文尾部追加一条签名水印" />
                             </StackPanel>
+                            </ScrollViewer>
                         </Grid>
 
                         <!-- 水印签名私钥：勾选「签名水印」后才显示；走密码框输入，不明文回显 -->
@@ -240,6 +266,21 @@
 
                     </StackPanel>
                 </ScrollViewer>
+
+                <!-- 国庆祝福：放在滚动区之外的固定行，英俄文长句也整行可见不被裁 -->
+                <Border Grid.Row="1" x:Name="BirthdayBar" Visibility="Collapsed"
+                        Margin="0,10,0,0" Padding="0,8,0,0"
+                        BorderThickness="0,1,0,0"
+                        BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}">
+                    <TextBlock x:Name="BirthdayText"
+                               Text="祝祖国{0}岁生日快乐！永远繁荣昌盛！"
+                               TextWrapping="Wrap"
+                               TextAlignment="Center"
+                               FontWeight="SemiBold"
+                               FontSize="14"
+                               Foreground="#DE2910" />
+                </Border>
+              </Grid>
             </controls:Border>
         </Grid>
 

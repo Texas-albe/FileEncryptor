@@ -10,7 +10,13 @@ public sealed partial class TaskSummaryDialog : ContentDialog
 {
     public TaskSummaryDialog(string title, string duration, string avgSpeed, string encryptedSize, int done, int skip, int fail)
     {
-        RequestedTheme = ElementTheme.Dark;
+        // 跟随用户在「视图」菜单里的选择，不再写死深色
+        RequestedTheme = App.Settings.Current.Theme switch
+        {
+            AppTheme.Light => ElementTheme.Light,
+            AppTheme.Dark => ElementTheme.Dark,
+            _ => ElementTheme.Default
+        };
 
         var panel = new StackPanel { Spacing = 8 };
 

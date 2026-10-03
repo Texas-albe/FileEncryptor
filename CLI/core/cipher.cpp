@@ -41,6 +41,8 @@ public:
         const unsigned char* aad, size_t aad_len,
         const unsigned char* nonce, const unsigned char* key,
         unsigned char* ct_out, unsigned long long& ct_len) override {
+        // AEGIS-256 同样依赖 AES-NI；libsodium 未提供 is_available，用项目内的探测函数兜底
+        if(!aegis256_supported()) return -1;
         return crypto_aead_aegis256_encrypt(ct_out, &ct_len,
             pt, pt_len, aad, aad_len, nullptr, nonce, key);
     }
@@ -48,6 +50,7 @@ public:
         const unsigned char* aad, size_t aad_len,
         const unsigned char* nonce, const unsigned char* key,
         unsigned char* pt_out, unsigned long long& pt_len) override {
+        if(!aegis256_supported()) return -1;
         return crypto_aead_aegis256_decrypt(pt_out, &pt_len, nullptr,
             ct, ct_len, aad, aad_len, nonce, key);
     }
@@ -68,6 +71,8 @@ public:
         const unsigned char* aad, size_t aad_len,
         const unsigned char* nonce, const unsigned char* key,
         unsigned char* pt_out, unsigned long long& pt_len) override {
+        // AES-GCM 依赖 AES-NI；不支持的 CPU 上直接解密属未定义行为，先拦下
+        if(crypto_aead_aes256gcm_is_available()==0) return -1;
         return crypto_aead_aes256gcm_decrypt(pt_out, &pt_len, nullptr,
             ct, ct_len, aad, aad_len, nonce, key);
     }

@@ -4,6 +4,7 @@
 #include <QGuiApplication>
 #include <QPalette>
 #include <QSettings>
+#include <QStyleHints>
 #include <QWidget>
 #include <QColor>
 #include <string>
@@ -34,38 +35,41 @@ const char* ThemeManager::lightRedBgHex() {
 // 界面配色
 namespace {
 
+// 国庆配色：底子保持中性，红只落在强调处。
+// 早先把大面积底色也铺成红系，国旗红被衬底稀释成粉红，反而看不出节日感。
 const ThemeManager::Ui kRedLight = {
-    "#F7DDD9",                  // window
-    "rgba(240,196,190,0.55)",   // panelRgba（半透明，透出背景图）
-    "#FDEEEC",                  // field
-    "#F2BDB5",                  // ctrl
-    "#E9A79D",                  // ctrlHover
-    "#F6C9C4",                  // alt
-    "#D99A92",                  // border
-    "#3A1512",                  // text
-    "#FFF7F6",                  // indicator
-    "#B4655C",                  // indicatorBorder
-    "#9A6A64",                  // placeholder
-    "#DE2910",                  // highlight
-    "#B4655C",                  // scrollHandle
+    "#F7F5F4",                  // window
+    "rgba(240,238,237,0.55)",   // panelRgba（半透明，透出背景图）
+    "#FFFFFF",                  // field
+    "#F0EEED",                  // ctrl
+    "#E6E3E2",                  // ctrlHover
+    "#F1EFEE",                  // alt
+    "#C4BDBB",                  // border
+    "#1C1817",                  // text
+    "#FFFFFF",                  // indicator
+    "#8A8180",                  // indicatorBorder
+    "#8A8180",                  // placeholder
+    "#DE2910",                  // highlight（国旗红原色）
+    "#B8B1AF",                  // scrollHandle
     "#DE2910",                  // scrollHover
 };
 
+// 深色下层级只能靠明度差，红落在暗背景上会发闷，故控件底比卡片底亮一档
 const ThemeManager::Ui kRedDark = {
-    "#3A1210",
-    "rgba(74,26,22,0.55)",
-    "#2A0E0C",
-    "#5C2222",
-    "#6E2A24",
-    "#35130F",
-    "#7A322B",
-    "#F2DAD6",
-    "#2A0E0C",
-    "#A85449",
-    "#A87F79",
+    "#121111",
+    "rgba(30,28,28,0.55)",
+    "#171616",
+    "#2C2929",
+    "#3A3636",
+    "#1E1C1C",
+    "#403C3C",
+    "#F5F2F1",
+    "#2C2929",
+    "#6B605E",
+    "#8A8080",
     "#DE2910",
-    "#A85449",
-    "#DE2910",
+    "#4C4747",
+    "#F04A30",
 };
 
 const ThemeManager::Ui kNeutralLight = {
@@ -118,9 +122,15 @@ const char* ThemeManager::mutedTextHex() {
 }
 
 QString ThemeManager::birthdayMessage(const QDate& d) {
-    if (I18n::instance().currentLanguage() == QStringLiteral("en"))
+    // 三语与 WinUI 侧 L10n 译文逐字一致
+    const QString lang=I18n::instance().currentLanguage();
+    if (lang==QStringLiteral("en"))
         return QString("Happy %1th Birthday to the People's Republic of China! "
                        "May it always prosper!")
+            .arg(nationalDayAge(d));
+    if (lang==QStringLiteral("ru"))
+        return QString("С днём рождения %1 Китайской Народной Республики! "
+                       "Пусть она всегда процветает!")
             .arg(nationalDayAge(d));
     return QString("祝祖国%1岁生日快乐！永远繁荣昌盛！").arg(nationalDayAge(d));
 }
@@ -170,7 +180,9 @@ QPalette ThemeManager::buildDarkPalette() {
 // 存字符串而非枚举值：早期读写过 1/2 的旧值，数字含义有过漂移，字符串无歧义
 void ThemeManager::persist(Theme t) {
     QSettings s(kOrg, kApp);
-    s.setValue(kKey, t == Theme::Dark ? QStringLiteral("dark") : QStringLiteral("light"));
+    s.setValue(kKey, t == Theme::Dark ? QStringLiteral("dark")
+            : t == Theme::System ? QStringLiteral("system")
+            : QStringLiteral("light"));
 }
 
 ThemeManager::Theme ThemeManager::load() {
@@ -179,6 +191,7 @@ ThemeManager::Theme ThemeManager::load() {
     const QString str = v.toString();
     if (str.compare(QStringLiteral("dark"), Qt::CaseInsensitive) == 0) return Theme::Dark;
     if (str.compare(QStringLiteral("light"), Qt::CaseInsensitive) == 0) return Theme::Light;
+    if (str.compare(QStringLiteral("system"), Qt::CaseInsensitive) == 0) return Theme::System;
     // 兼容旧数字值：现行枚举 1 = 深色，早期还有用 2 表示深色的
     bool ok = false;
     const int n = v.toInt(&ok);
@@ -186,22 +199,31 @@ ThemeManager::Theme ThemeManager::load() {
     return (n == static_cast<int>(Theme::Dark) || n == 2) ? Theme::Dark : Theme::Light;
 }
 
+ThemeManager::Theme ThemeManager::effectiveTheme() {
+    if (g_chosen != Theme::System) return g_chosen;
+    // 跟随系统：读 QPalette 的当前窗口色亮度判断深浅
+    const QColor c = qApp ? qApp->palette().color(QPalette::Window) : QColor(Qt::white);
+    return c.lightness() < 128 ? Theme::Dark : Theme::Light;
+}
+
 void ThemeManager::initialize(QApplication* app) {
     g_chosen = load();
-    const bool dark = (g_chosen == Theme::Dark);
-    g_darkActive = dark;
-    app->setPalette(dark ? buildDarkPalette() : buildLightPalette());
+    // System 档：QApplication 构造时已装载系统调色板，直接据此判深浅
+    g_darkActive = (effectiveTheme() == Theme::Dark);
+    app->setPalette(g_darkActive ? buildDarkPalette() : buildLightPalette());
+    // 跟随系统时，系统主题切换要实时跟上
+    if (g_chosen == Theme::System && app->styleHints()) {
+        QObject::connect(app->styleHints(), &QStyleHints::colorSchemeChanged,
+                         app, [] { setTheme(Theme::System); });
+    }
 }
 
 void ThemeManager::setTheme(Theme t) {
     g_chosen = t;
     persist(t);
-    const bool dark = (t == Theme::Dark);
-    g_darkActive = dark;
+    g_darkActive = (effectiveTheme() == Theme::Dark);
     if (auto* app = qApp) {
-        app->setPalette(dark ? buildDarkPalette() : buildLightPalette());
-    }
-    if (auto* app = qApp) {
+        app->setPalette(g_darkActive ? buildDarkPalette() : buildLightPalette());
         for (QWidget* w : app->topLevelWidgets()) w->update();
     }
     emit instance().themeChanged(g_darkActive);

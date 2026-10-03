@@ -25,6 +25,8 @@ public class MainViewModel : ObservableObject
     private string? _cliPath;
     private bool _zstdAvailable = true;
     private bool _aegisAvailable = true;
+    // 后量子能力：缺 pqc= 字段的旧 CLI 视为不支持（fail-closed，同 Qt 侧 m_pqcAvailable）
+    private bool _pqcAvailable;
     private readonly Stopwatch _runTimer = new();
     private int _doneFiles, _skipFiles, _failFiles, _totalFiles;
     private string _currentFile = "";
@@ -78,6 +80,19 @@ public class MainViewModel : ObservableObject
     // 后量子：默认开启，取消勾选时 CliArgBuilder 才下发 --no-pqc
     private bool _pqc = true;
     public bool Pqc { get => _pqc; set { SetProperty(ref _pqc, value); RefreshCommandPreview(); } }
+
+    public bool PqcAvailable
+    {
+        get => _pqcAvailable;
+        set
+        {
+            if (_pqcAvailable == value) return;
+            SetProperty(ref _pqcAvailable, value);
+            // CLI 不支持时把勾选框一并关掉，避免用户以为后量子已启用
+            if (!value) Pqc = false;
+            RefreshCommandPreview();
+        }
+    }
 
     private bool _watermark;
     public bool Watermark { get => _watermark; set { SetProperty(ref _watermark, value); RefreshCommandPreview(); } }
@@ -166,10 +181,12 @@ public class MainViewModel : ObservableObject
             await p.WaitForExitAsync(cts.Token).ConfigureAwait(false);
             _zstdAvailable = output.Contains("zstd=1");
             _aegisAvailable = output.Contains("aegis=1");
+            _pqcAvailable = output.Contains("pqc=1");
             _dispatcher.TryEnqueue(() =>
             {
                 OnPropertyChanged(nameof(ZstdAvailable));
                 OnPropertyChanged(nameof(AegisAvailable));
+                OnPropertyChanged(nameof(PqcAvailable));
             });
         }
         catch (OperationCanceledException) { try { p?.Kill(); } catch { } }

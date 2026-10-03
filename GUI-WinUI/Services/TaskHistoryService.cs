@@ -16,6 +16,17 @@ public static class TaskHistoryService
         "FileEncryptor", "GUI", "history");
     private static string HistoryFile => Path.Combine(HistoryDir, "tasks.log");
 
+    // 进程内只收紧一次：目录与文件 ACL 都在首次写历史前落地
+    private static bool _aclApplied;
+
+    private static void EnsureAcl()
+    {
+        if (_aclApplied) return;
+        _aclApplied = true;
+        RestrictToCurrentUser(HistoryDir, isDirectory: true);
+        RestrictToCurrentUser(HistoryFile, isDirectory: false);
+    }
+
     public static bool Append(TaskRecord record, out string error)
     {
         error = "";
@@ -24,11 +35,11 @@ public static class TaskHistoryService
             try
             {
                 Directory.CreateDirectory(HistoryDir);
-                // 历史含敏感路径，收紧 ACL
+                EnsureAcl();
                 var newFile = !File.Exists(HistoryFile);
                 var json = JsonSerializer.Serialize(record);
                 File.AppendAllText(HistoryFile, json + "\n");
-                if (newFile) RestrictToCurrentUser(HistoryFile);
+                if (newFile) RestrictToCurrentUser(HistoryFile, isDirectory: false);
                 return true;
             }
             catch (Exception ex)
@@ -95,12 +106,13 @@ public static class TaskHistoryService
             try
             {
                 Directory.CreateDirectory(HistoryDir);
+                EnsureAcl();
                 // 写回时反转为正序
                 var ordered = records.AsEnumerable().Reverse().ToList();
                 var lines = ordered.Select(r => JsonSerializer.Serialize(r));
                 File.WriteAllLines(HistoryFile, lines);
-                // 重新收紧 ACL
-                RestrictToCurrentUser(HistoryFile);
+                // 重写后重新收紧 ACL
+                RestrictToCurrentUser(HistoryFile, isDirectory: false);
                 return true;
             }
             catch (Exception ex)
@@ -111,18 +123,30 @@ public static class TaskHistoryService
         }
     }
 
-    private static void RestrictToCurrentUser(string path)
+    private static void RestrictToCurrentUser(string path, bool isDirectory)
     {
         if (!OperatingSystem.IsWindows()) return;
         try
         {
-            var fs = new FileSecurity();
             var user = WindowsIdentity.GetCurrent().User;
             if (user == null) return;
-            fs.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
-            fs.AddAccessRule(new FileSystemAccessRule(user,
+            FileSystemSecurity sec = isDirectory
+                ? new DirectorySecurity()
+                : new FileSecurity();
+            sec.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
+            sec.AddAccessRule(new FileSystemAccessRule(user,
                 FileSystemRights.FullControl, AccessControlType.Allow));
-            new FileInfo(path).SetAccessControl(fs);
+            if (isDirectory)
+            {
+                // 目录须先存在才能改 ACL
+                if (!Directory.Exists(path)) return;
+                new DirectoryInfo(path).SetAccessControl((DirectorySecurity)sec);
+            }
+            else
+            {
+                if (!File.Exists(path)) return;
+                new FileInfo(path).SetAccessControl((FileSecurity)sec);
+            }
         }
         catch {  }
     }

@@ -3,7 +3,7 @@
 跨平台（Windows / Linux / macOS）文件加密命令行工具，基于 [libsodium](https://doc.libsodium.org/) 实现高强度、抗篡改、可续传的分块加密。
 
 - 磁盘文件格式默认版本 **v6**（可扩展加密容器；v4/v5 按需写出，v1~v6 全部可直接解密，旧文件无需重加密）。
-- 程序版本 **2.7.0**。
+- 程序版本 **2.7.1**。
 
 ---
 
@@ -77,8 +77,8 @@ rm -rf out/build/linux-release
 cmake --preset linux-release
 cmake --build --preset linux-release
 # 构建完成后自动：
-#   - 拷到 out/Ubuntu-26.04/build/linux-release/bin/FileEncryptorCLI-2.7.0-cmd-Linux
-#   - cpack 生成 out/packages/file-encryptor-cli-2.7.0-Linux.deb 和 .rpm
+#   - 拷到 out/Ubuntu-26.04/build/linux-release/bin/FileEncryptorCLI-2.7.1-cmd-Linux
+#   - cpack 生成 out/packages/file-encryptor-cli-2.7.1-Linux.deb 和 .rpm
 ```
 
 > 若系统中同时存在多个 libsodium（如 apt 旧版 + `/usr/local` 新版），可显式指定：
@@ -87,9 +87,9 @@ cmake --build --preset linux-release
 最终用户安装：
 
 ```bash
-sudo dpkg -i file-encryptor-cli-2.7.0-Linux.deb
+sudo dpkg -i file-encryptor-cli-2.7.1-Linux.deb
 # 或
-sudo rpm -ivh file-encryptor-cli-2.7.0-Linux.rpm
+sudo rpm -ivh file-encryptor-cli-2.7.1-Linux.rpm
 ```
 
 ### Windows（预编译 libsodium + MSVC）
@@ -195,8 +195,9 @@ FileEncryptorCLI <动作> <输入路径...> [选项]
   -k <keyfile>      从文件读取密钥材料（非交互；替代：ENCRYPTOR_KEY 环境变量）；
                     非对称解密时该文件必须是身份私钥文件（AGE-SECRET-KEY-... / X448SEC-...）
   -v / --verbose    显示认证失败的详细原因（默认仅返回通用错误，防信息泄露）
-  --restore-name, -rn  批量解密（含 -d）时还原完整原始文件名；默认关闭，仅保留扩展名
+  --restore-name, -rn  对称解密（含批量）时还原完整原始文件名；默认关闭，仅保留扩展名
                     （关闭可省去每文件一次 Argon2id KDF，批量解密显著加快）
+                    非对称容器不写文件名信封，混淆后的原始名无法恢复，此开关对其无效
   --obfuscate-name, -on  非对称专用：把输出文件名混淆为 <16 位十六进制>.<混淆扩展名>.ptd。
                     注意：非对称模式没有加密文件名信封，混淆后原始文件名**不可恢复**，
                     因此需显式开启（不跟随 YAML 的 obfuscate_names）；不开启时输出名为明文。

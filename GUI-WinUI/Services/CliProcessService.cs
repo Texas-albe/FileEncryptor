@@ -12,6 +12,8 @@ public class CliProcessService
     public event Action<CommandResult>? Finished;
     // 子进程逐行输出事件
     public event Action<string>? OutputLine;
+    // raw 模式：stdout 原始字节（不经行解析），供预览解密显示二进制明文前缀
+    public event Action<byte[]>? RawStdout;
 
     private Process? _process;
     private bool _cancelled;
@@ -19,12 +21,16 @@ public class CliProcessService
     private string _statsFile = "";
     // stderr 累积文本
     private readonly StringBuilder _stderr = new();
+    private bool _raw;
 
     public bool IsRunning => _process is { HasExited: false };
     public long TotalBytes { get; private set; }
     public int FilesDone { get; private set; }
     public int FilesSkip { get; private set; }
     public int FilesFail { get; private set; }
+
+    // 预览解密要用：stdout 是二进制明文，不能按行切
+    public void SetRawMode(bool on) => _raw = on;
 
     public void Execute(CommandRequest request)
     {
@@ -93,26 +99,51 @@ public class CliProcessService
     }
 
     // 结束后保留 3 秒再关窗；延迟展开取 CLI 真实退出码
-    private static string BuildConsoleCommand(CommandRequest request)
+    // 不用 psi.ArgumentList：走 cmd.exe 才有可见控制台窗口，而 cmd 只能吃字符串命令行。
+    // 参数写进临时 .cmd 批处理（每行一条，DisableDelayedExpansion），
+    // 避免字符串拼接把含 & | < > ^ % ! 的路径改坏 —— 引号只对空格类生效是常见错法。
+    private string BuildConsoleCommand(CommandRequest request)
     {
-        var sb = new StringBuilder("title FileEncryptor CLI & ");
-        AppendArg(sb, request.ProgramPath);
+        var cmdPath = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "FileEncryptor", "GUI",
+            $"fe_run_{Convert.ToHexString(RandomNumberGenerator.GetBytes(8)).ToLowerInvariant()}.cmd");
+        var sb = new StringBuilder();
+        sb.AppendLine("@echo off");
+        // 关闭延迟展开：路径里的 ! 才不会被吃掉；同时 %errorlevel% 逐行解析仍能拿到真实退出码
+        sb.AppendLine("setlocal EnableExtensions DisableDelayedExpansion");
+        sb.Append(QuoteCmd(request.ProgramPath));
         foreach (var a in request.Arguments)
         {
             sb.Append(' ');
-            AppendArg(sb, a);
+            sb.Append(QuoteCmd(a));
         }
-        // 延迟展开取 CLI 真实退出码，否则会被 timeout 覆盖成 0
-        sb.Append(" & set \"rc=!errorlevel!\" & timeout /t 3 /nobreak >nul 2>&1 & exit /b !rc!");
-        return "/v:on /c \"" + sb + "\"";
+        sb.AppendLine();
+        sb.AppendLine("exit /b %errorlevel%");
+        File.WriteAllText(cmdPath, sb.ToString(), new UTF8Encoding(false));
+        _consoleCmdFile = cmdPath;
+        // /c ""<脚本路径>"" ：路径含空格时外层还要再包一层引号
+        return "/c \"\"" + cmdPath + "\"\"";
     }
 
-    private static void AppendArg(StringBuilder sb, string arg)
+    // 临时批处理文件用完即删
+    private string? _consoleCmdFile;
+
+    private void CleanupConsoleCmd()
     {
-        var s = arg.Replace("\"", "'");
-        bool quote = s.Length == 0 || s.IndexOfAny(new[] { ' ', '\t', '&', '|', '<', '>', '^' }) >= 0;
-        if (quote) sb.Append('"').Append(s).Append('"');
-        else sb.Append(s);
+        var p = _consoleCmdFile;
+        if (p == null) return;
+        _consoleCmdFile = null;
+        try { File.Delete(p); } catch { }
+    }
+
+    // cmd 参数转义：% 必须写成 %%，其余特殊字符靠双引号隔离
+    private static string QuoteCmd(string arg)
+    {
+        var s = arg.Replace("%", "%%");
+        // Windows 文件名不允许含 "，但命令行参数可能出现：内层成对写出交给 CommandLineToArgvW 处理
+        s = s.Replace("\"", "\"\"");
+        return "\"" + s + "\"";
     }
 
     private void StartRedirected(CommandRequest request)
@@ -135,12 +166,15 @@ public class CliProcessService
         foreach (var kv in request.ExtraEnv) psi.Environment[kv.Key] = kv.Value;
 
         _process = new Process { StartInfo = psi, EnableRaisingEvents = true };
-        // 异步逐行读取输出
-        _process.OutputDataReceived += (_, e) =>
+        // 异步逐行读取输出；raw 模式改由 ReadRawStdout 直读字节流
+        if (!_raw)
         {
-            if (e.Data == null) return;
-            OutputLine?.Invoke(e.Data);
-        };
+            _process.OutputDataReceived += (_, e) =>
+            {
+                if (e.Data == null) return;
+                OutputLine?.Invoke(e.Data);
+            };
+        }
         _process.ErrorDataReceived += (_, e) =>
         {
             if (e.Data == null) return;
@@ -154,7 +188,8 @@ public class CliProcessService
             try
             {
                 _process.Start();
-                _process.BeginOutputReadLine();
+                if (_raw) _ = Task.Run(() => ReadRawStdout(_process!));
+                else _process.BeginOutputReadLine();
                 _process.BeginErrorReadLine();
                 if (request.StdinData.Length > 0)
                     _process.StandardInput.BaseStream.Write(request.StdinData);
@@ -184,6 +219,28 @@ public class CliProcessService
         }
     }
 
+    // 预览解密：stdout 是二进制明文前缀，按字节读，不做行切分与字符解码
+    private async Task ReadRawStdout(Process proc)
+    {
+        try
+        {
+            var stream = proc.StandardOutput.BaseStream;
+            var buf = new byte[8192];
+            while (true)
+            {
+                int n = await stream.ReadAsync(buf.AsMemory(0, buf.Length)).ConfigureAwait(false);
+                if (n <= 0) break;
+                var chunk = new byte[n];
+                Array.Copy(buf, chunk, n);
+                RawStdout?.Invoke(chunk);
+            }
+        }
+        catch (Exception ex) when (ex is IOException or ObjectDisposedException or InvalidOperationException)
+        {
+            // 进程被 kill 或管道关闭：属正常收尾
+        }
+    }
+
     private void OnProcessExited()
     {
         var proc = _process;
@@ -192,6 +249,8 @@ public class CliProcessService
             if (proc == null) return;
             proc.WaitForExit();
             int code = proc.ExitCode;
+            // 临时批处理用完即删
+            CleanupConsoleCmd();
             // 独占打开统计文件
             try
             {

@@ -5,8 +5,12 @@ namespace FileEncryptorGUI.Services;
 
 public enum BackgroundMode
 {
+    // 元素级 Mica：RootGrid 铺 MicaBrush，tint 完全可控
     FullAcrylic = 0,
-    MicaMainAcrylicControls = 1
+    // 系统 Mica（DWM DWMSBT_MAIN）：最通透，但 tint 跟随**系统**深浅不可控
+    SystemAcrylic = 1,
+    // 不用任何模糊，纯染色底
+    Flat = 2
 }
 
 public enum AppTheme

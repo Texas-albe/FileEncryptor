@@ -281,6 +281,13 @@ void CliNotFoundDialog::installFromTemp() {
     m_tempPath.clear();
     m_assetData.clear();
     m_downloaded=true;
+#ifndef Q_OS_WIN
+    // POSIX：rename/copy 保留的是临时文件权限，需显式给执行位，否则 CLI 跑不起来
+    QFile::setPermissions(m_savePath,
+        QFileDevice::ReadOwner|QFileDevice::WriteOwner|QFileDevice::ExeOwner|
+        QFileDevice::ReadGroup|QFileDevice::ExeGroup|
+        QFileDevice::ReadOther|QFileDevice::ExeOther);
+#endif
     QString msg = tr("下载完成：%1").arg(QFileInfo(m_savePath).fileName());
     if (m_shaWarned) msg += tr("（未提供 SHA256 校验文件，已跳过完整性校验）");
     m_statusLabel->setText(msg);

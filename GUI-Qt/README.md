@@ -4,7 +4,7 @@
 
 FileEncryptor **图形界面**。Windows 侧使用 **WinUI 3**（Windows App SDK，C#），Linux 侧使用 **Qt 6**（Widgets，C++，静态链接）。两个平台共享同一份 CLI 后端，界面各自独立实现。
 
-- 程序版本 **2.1.0**（配套 CLI 2.7.0）。
+- 程序版本 **2.1.1**（配套 CLI 2.7.1）。
 
 ---
 
@@ -25,7 +25,7 @@ FileEncryptor **图形界面**。Windows 侧使用 **WinUI 3**（Windows App SDK
 
 - **C++17** 编译器（MSVC / g++ / Clang）。
 - **CMake ≥ 3.16**。
-- **Qt 6.2+ Widgets**。静态 / 动态 Qt 均可构建（源码已用 `QT_STATIC` 宏自动区分）：
+- **Qt 6.3+ Widgets**（`TaskHistory` 用 `QStringConverter`，6.2 无此 API）。静态 / 动态 Qt 均可构建（源码已用 `QT_STATIC` 宏自动区分）：
   - **Windows**：仓库自带 `../third_party/smelibs/` 静态 Qt，CMake 自动选用，无需额外安装。
   - **Linux/WSL**：优先 `/opt/smelibs`（静态 Qt），没有则回退系统 `qt6-base-dev`（动态，运行时依赖 Qt6 *.so）。
   - **macOS**：`brew install qt`。
@@ -64,8 +64,8 @@ sudo apt install qt6-base-dev
 cmake --preset linux-release
 cmake --build --preset linux-release
 # 构建完成后自动：
-#   - 拷到 out/Ubuntu-26.04/build/linux-release/bin/FileEncryptorGUI-2.1.0-Qt-Linux
-#   - cpack 生成 out/packages/file-encryptor-gui-qt-2.1.0-Linux.deb 和 .rpm
+#   - 拷到 out/Ubuntu-26.04/build/linux-release/bin/FileEncryptorGUI-2.1.1-Qt-Linux
+#   - cpack 生成 out/packages/file-encryptor-gui-qt-2.1.1-Linux.deb 和 .rpm
 ```
 
 > **Linux 中文字体（豆腐块修复）**：最小化 / 服务器环境常无 CJK 字体，界面中文会渲染成方块（□）。
@@ -123,7 +123,7 @@ FileEncryptor/
 
 直接运行 `FileEncryptorGUI(.exe)`：
 
-- **顶栏（菜单栏）**：与 WinUI 版一致，顺序为 编辑 → 视图 → 工具 → 关于。编辑菜单（“编辑 YAML 配置...”用系统默认编辑器打开 CLI 的 fileencryptor.yaml）；视图菜单（“视图设置...”自定义背景图）；工具菜单（任务历史 / 重新检测 CLI 程序 / 语言）；关于菜单（检查更新 + 鸣谢 + README 摘要 + 关于 Qt）。右上角为主题下拉框（浅色 / 深色）与 `视图设置` 按钮，与菜单栏同一行
+- **顶栏（菜单栏）**：与 WinUI 版一致，顺序为 编辑 → 视图 → 工具 → 关于。编辑菜单（“编辑 YAML 配置...”用系统默认编辑器打开 CLI 的 fileencryptor.yaml）；视图菜单（“视图设置...”自定义背景图，以及“主题”子菜单：浅色 / 深色 / 跟随系统）；工具菜单（任务历史 / 重新检测 CLI 程序 / 语言）；关于菜单（检查更新 + 鸣谢 + README 摘要 + 关于 Qt）。主题切换与视图设置都在「视图」菜单里，与 WinUI 版位置一致
 - **左侧**：文件选择面板（添加文件 / 添加目录 / 清空；支持从资源管理器拖放文件 / 目录）
 - **中部**：动作按钮（加密 / 解密 / 批量加密 / 批量解密）+ 模式选择（XChaCha20-Poly1305 / AEGIS-256）。密钥库管理已整体下线 GUI——改由 CLI 的 `-L` 子命令（list/add/remove/show/pub/export）与 `-K` 按名解析收件人 / 身份承担，两端共用 `<用户配置目录>/keys/`。
 - **右侧**：密码输入框（星号遮挡 + 强度提示）
@@ -140,9 +140,21 @@ FileEncryptor/
 
 ---
 
+### 口令内存残留（已知限制）
+
+`QString` / `QByteArray` 是不可变写时复制容器，口令在界面控件与参数组装过程中的中间副本无法可靠清零（Qt 未提供固定内存的字符串类型）。项目已做的：`PasswordDialog` 内主口令缓冲用 `secure_zero` 擦除、写入子进程 stdin 的字节数组用后立即清零、rewrap 新口令临时文件权限 0600。残留窗口限于本进程堆内存，不落盘、不进 argv / 环境变量。历史记录只存元数据，不存口令。
+
+---
+
+## 预览解密
+
+文件列表旁的「预览...」按钮：选中一个密文、输入口令后，另开一个窗口显示该文件内容的前若干字节，不会在磁盘上生成解密文件。预览字节数可在窗口里调（64 B ~ 1 MiB，默认 4 KiB），完成后点「下一个文件」可连续查看列表里的下一个密文。
+
+实现上调用 CLI 的 `--preview --max-bytes N`，口令经子进程 stdin 传递（不进入命令行），stdout 按原始字节读取——预览内容可能是二进制，逐行解析会把它切坏，因此执行器为此单独开了 raw 通道。不可打印字节在窗口里显示为 `·`。
+
 ## 主题
 
-支持双态主题切换（**浅色 / 深色**），用户偏好经 `QSettings` 持久化到注册表 / 配置文件：
+支持三档主题切换（**浅色 / 深色 / 跟随系统**），入口在「视图 → 主题」；选「跟随系统」时监听系统配色变化自动跟随。用户偏好经 `QSettings` 持久化到注册表 / 配置文件：
 
 - **Windows**：`HKEY_CURRENT_USER\Software\FileEncryptor\FileEncryptorGUI\theme`
 - **Linux**：`~/.config/FileEncryptor/FileEncryptorGUI.conf`

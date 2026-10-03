@@ -105,6 +105,12 @@ set(CMAKE_LINK_LIBRARY_OVERRIDE_jitterentropy FE_STATIC)
 # ===================== 构建 Updater =====================
 add_executable(Updater src/updater.cpp)
 
+if(MSVC)
+    # CFG：编译+链接两侧都给，否则最终映像 load config 不落 CFG 位（B1）
+    target_compile_options(Updater PRIVATE /guard:cf)
+    target_link_options(Updater PRIVATE /guard:cf)
+endif()
+
 # 静态链接需 CURL_STATICLIB，否则符号被声明为 dllimport
 target_compile_definitions(Updater PRIVATE CURL_STATICLIB)
 target_include_directories(Updater PRIVATE

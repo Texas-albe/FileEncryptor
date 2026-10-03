@@ -100,10 +100,21 @@ public static class PasswordStrengthService
             }
             else nonAscii = true;
         }
-        if (nonAscii) return true;
-
-        int kinds = (lower ? 1 : 0) + (upper ? 1 : 0) + (digit ? 1 : 0) + (symbol ? 1 : 0);
-        if (kinds >= 2 || len >= 16) return true;
+        // 非 ASCII（CJK 等）只算一类字符：此前「含非 ASCII 即放行」会让
+        // 「的的的的的的的的」这类重复汉字被判为合格，实际熵近乎为零。
+        int kinds = (lower ? 1 : 0) + (upper ? 1 : 0) + (digit ? 1 : 0) +
+                    (symbol ? 1 : 0) + (nonAscii ? 1 : 0);
+        if (kinds >= 2 || len >= 16)
+        {
+            bool allSame = true;
+            for (int i = 1; i < password.Length; i++)
+            {
+                if (password[i] != password[0]) { allSame = false; break; }
+            }
+            if (!allSame) return true;
+            reason = L10n.T("口令过弱：请不要使用重复字符。");
+            return false;
+        }
 
         reason = L10n.T("口令过弱：请至少含 2 类字符（小写/大写/数字/符号），或长度 >= 16。");
         return false;

@@ -14,12 +14,16 @@
     <WindowsPackageType>None</WindowsPackageType>
     <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
     <EnableMsixTooling>true</EnableMsixTooling>
-    <AssemblyVersion>2.1.0.0</AssemblyVersion>
-    <FileVersion>2.1.0.0</FileVersion>
-    <Version>2.1.0</Version>
+    <AssemblyVersion>2.1.1.0</AssemblyVersion>
+    <FileVersion>2.1.1.0</FileVersion>
+    <Version>2.1.1</Version>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <LangVersion>latest</LangVersion>
+    <!-- 发布卫生：Release 不产出 portable PDB，避免 IL 字节码/源码绝对路径/局部变量名随 MSI 外泄（B2） -->
+    <DebugType Condition=" '$(Configuration)' == 'Release' ">none</DebugType>
+    <DebugSymbols Condition=" '$(Configuration)' == 'Release' ">false</DebugSymbols>
+    <!-- 注：.NET 程序集的 CFG 由 CLR 侧提供，本工程无原生 .cpp，无需再加 /guard:cf -->
   </PropertyGroup>
 
   <ItemGroup>

@@ -9,7 +9,7 @@ class QPalette;
 class ThemeManager : public QObject {
     Q_OBJECT
 public:
-    enum class Theme { Light = 0, Dark = 1 };
+    enum class Theme { Light = 0, Dark = 1, System = 2 };
 
     // 启动期应用主题
     static void initialize(QApplication* app);
@@ -21,6 +21,9 @@ public:
     static void setTheme(Theme t);
 
     static Theme chosenTheme();
+
+    // System 档解析后的实际取值（Light/Dark）
+    static Theme effectiveTheme();
 
     // 当前是否深色
     static bool isDarkActive();

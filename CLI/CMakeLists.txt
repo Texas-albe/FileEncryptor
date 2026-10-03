@@ -12,7 +12,7 @@ if(WIN32)
   endif()
 endif()
 
-project(FileEncryptorCLI VERSION 2.7.0 LANGUAGES CXX)
+project(FileEncryptorCLI VERSION 2.7.1 LANGUAGES CXX)
 
 # FileEncryptor CLI - 命令行加密工具（独立项目），产出 FileEncryptorCLI(.exe)，GUI 经 QProcess 调用。
 # 静态链接 libsodium + yaml-cpp，二进制零外部依赖，可直接打包 DEB/RPM。
@@ -308,6 +308,7 @@ set(SOURCES
   core/password_policy.cpp
   core/machine_id.cpp
   core/watermark.cpp
+  core/split_volumes.cpp
   cli/main.cpp)
 
 # Windows 图标资源（嵌入 exe；Linux/macOS 无 .rc）
@@ -317,6 +318,13 @@ if(WIN32)
 endif()
 
 add_executable(FileEncryptor ${SOURCES})
+
+if(MSVC)
+    # CFG：阻断间接调用劫持与 ROP 链。编译与链接两侧都必须给，
+    # 缺链接侧则只有编译期位、最终映像 load config 里不会落 CFG 位（B1）
+    target_compile_options(FileEncryptor PRIVATE /guard:cf)
+    target_link_options(FileEncryptor PRIVATE /guard:cf)
+endif()
 
 # ---------- 查找 yaml-cpp（YAML 配置解析，v1.7.2 起依赖） ----------
 # 优先 CMake 配置包命中；无配置时按头文件与静态库手动查找（YAMLCPP_ROOT 可显式指定）。

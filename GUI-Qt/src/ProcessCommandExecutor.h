@@ -9,7 +9,10 @@ public:
     explicit ProcessCommandExecutor(QObject* parent = nullptr);
     ~ProcessCommandExecutor() override;
 
+    // raw 模式：stdout 原样字节流交给 rawStdout，不做行解析。
+    // 预览解密要的就是二进制明文前缀，走行解析会被 \r / \0 切坏。
     void execute(const CommandRequest& request) override;
+    void setRawMode(bool on);
     void cancel() override;
     bool isRunning() const override;
 
@@ -30,6 +33,8 @@ private:
     void handleLine(const QString& line, bool isError);
     void emitFinished(const CommandResult& r);
     void cleanup();
+
+    bool m_raw = false;
 
     QStringList m_frameLines;
     bool m_inFrame = false;

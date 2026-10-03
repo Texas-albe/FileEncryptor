@@ -18,7 +18,6 @@ Release/
 *.lib
 *.bak
 *.dmp
-# core dump：只忽略根级 core 与 core.<pid> 形式，勿写裸 core（会吞掉源码目录 CLI/core）
 /core
 core.*
 *.core
@@ -89,5 +88,5 @@ fileencryptor.yaml
 .workbuddy/
 The Next Release/
 
-scripts/
+cripts/
 Updates/

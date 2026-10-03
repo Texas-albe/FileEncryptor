@@ -56,6 +56,10 @@ void ProcessCommandExecutor::execute(const CommandRequest& request) {
     m_process->closeWriteChannel();
 }
 
+void ProcessCommandExecutor::setRawMode(bool on) {
+    m_raw = on;
+}
+
 void ProcessCommandExecutor::cancel() {
     if (!m_process || !isRunning()) {
         return;
@@ -71,8 +75,12 @@ bool ProcessCommandExecutor::isRunning() const {
 
 void ProcessCommandExecutor::onReadyReadStandardOutput() {
     if (!m_process) return;
+    const QByteArray chunk = m_process->readAllStandardOutput();
+    if (chunk.isEmpty()) return;
+    // raw 模式：原样转交，不做行解析（预览解密的明文前缀可能是二进制）
+    if (m_raw) { emit rawStdout(chunk); return; }
     // CLI 输出按 UTF-8 解码
-    m_outBuffer.append(QString::fromUtf8(m_process->readAllStandardOutput()));
+    m_outBuffer.append(QString::fromUtf8(chunk));
     flushLines(m_outBuffer, false);
 }
 

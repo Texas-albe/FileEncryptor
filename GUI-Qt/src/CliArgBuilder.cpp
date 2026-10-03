@@ -2,7 +2,7 @@
 #include <QCoreApplication>
 #include <QDir>
 #include <QFile>
-#include <QUuid>
+#include <QTemporaryFile>
 
 // 命令预览随界面语言
 
@@ -22,6 +22,31 @@ static QString s_wmKeyTempPath;
 bool CliArgBuilder::isPrivateKeyMaterial(const QString& key)
 {
     return key.contains(QStringLiteral("PRIVATE KEY"));
+}
+
+// 私钥明文落 0600 临时文件；成功返回 true。失败一律返回 false，
+// 调用方必须放弃任务——绝不能把明文私钥当 argv 元素下发（/proc/<pid>/cmdline 世界可读）。
+static bool write_wm_key_temp(const QString& pem) {
+    // X 必须收尾：Qt 只替换模板末尾 6 个字符位，写 ".pem" 后缀会把后缀一起换掉
+    QTemporaryFile tmp(QDir::temp().absoluteFilePath(
+        QStringLiteral("fe_wm_XXXXXX")));
+    // 不自动删：文件要活到 CLI 读完，统一由 cleanupWatermarkTemp() 收尾
+    tmp.setAutoRemove(false);
+    // 0600：多用户 POSIX 下默认 0644 会让同机其他用户读到签名私钥
+    tmp.setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner);
+    // 无参 open() 是 public；带参数的重载在 QTemporaryFile 里是 protected
+    if (!tmp.open()) return false;
+    const QByteArray blob = pem.toUtf8();
+    if (tmp.write(blob) != static_cast<qint64>(blob.size())) {
+        // 半截私钥不能留在磁盘，删掉再报失败
+        tmp.close();
+        QFile::remove(tmp.fileName());
+        s_wmKeyTempPath.clear();
+        return false;
+    }
+    tmp.flush();
+    s_wmKeyTempPath = tmp.fileName();
+    return true;
 }
 
 QStringList CliArgBuilder::buildArguments(const ShellOptions& o) {
@@ -137,19 +162,10 @@ QStringList CliArgBuilder::buildArguments(const ShellOptions& o) {
         QString key = o.watermarkKeyPath.trimmed();
         if (!key.isEmpty()) {
             if (isPrivateKeyMaterial(key)) {
-                if (s_wmKeyTempPath.isEmpty()) {
-                    s_wmKeyTempPath = QDir::temp().absoluteFilePath(
-                        QStringLiteral("fe_wm_%1.pem").arg(
-                            QUuid::createUuid().toString(QUuid::WithoutBraces).left(8)));
-                    QFile out(s_wmKeyTempPath);
-                    if (out.open(QIODevice::WriteOnly | QIODevice::Text)) {
-                        out.write(key.toUtf8());
-                        out.close();
-                    } else {
-                        s_wmKeyTempPath.clear();
-                    }
-                }
-                if (!s_wmKeyTempPath.isEmpty()) key = s_wmKeyTempPath;
+                // 唯一出口是 0600 临时文件：落盘失败即中止，不回退明文
+                if (s_wmKeyTempPath.isEmpty() && !write_wm_key_temp(key)) return {};
+                if (s_wmKeyTempPath.isEmpty()) return {};
+                key = s_wmKeyTempPath;
             }
             args << QStringLiteral("--wm-sign") << key;
         }

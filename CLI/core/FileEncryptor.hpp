@@ -16,8 +16,8 @@
 
 #define FE_VERSION_MAJOR 2
 #define FE_VERSION_MINOR 7
-#define FE_VERSION_PATCH 0
-#define FE_VERSION_STRING "2.7.0"
+#define FE_VERSION_PATCH 1
+#define FE_VERSION_STRING "2.7.1"
 
 // --force-decrypt：解密时容忍块校验失败与明文哈希不匹配（强制恢复损坏数据）
 extern bool g_force_decrypt;
@@ -152,7 +152,9 @@ bool process_files(const std::vector<std::string>& input_paths,
     int num_threads=0,
     bool restore_name=false,
     int compress_level=0,
-    const WatermarkSpec* wm=nullptr);   // 批量加密时每个文件都带水印
+    const WatermarkSpec* wm=nullptr,     // 批量加密时每个文件都带水印
+    uint64_t split_bytes=0);             // >0 时加密后切分卷，单位字节（0=不分卷）
+
 
 // 认证失败详细输出开关（由 CLI -v/--verbose 设置）。
 // 关闭时所有认证失败只输出通用错误，避免向潜在攻击者泄露细节（最小信息泄露原则）。

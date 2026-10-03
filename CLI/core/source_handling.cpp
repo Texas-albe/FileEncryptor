@@ -4,6 +4,7 @@
 #include <vector>
 #include <fstream>
 #include <algorithm>
+#include <cstdio>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -21,6 +22,7 @@ static bool source_still_exists(const std::string& path) {
 bool secure_handle_source(const std::string& path, SourceDisposition disp) {
     if(disp==SourceDisposition::Keep) return true;
     if(disp==SourceDisposition::Delete) {
+        // 符号链接只移除链接自身（remove 语义即如此），不跟随到目标
         return remove_file_utf8(path);
     }
     if(disp==SourceDisposition::Recycle) {
@@ -45,21 +47,28 @@ bool secure_handle_source(const std::string& path, SourceDisposition disp) {
     if(disp==SourceDisposition::Wipe) {
         // 多遍覆写（0x00 / 0xFF / 随机）后删除；任一遍写入失败即标记 wipe_failed， 但仍尝试删除文件避免明文残留，返回 false
         // 告知调用者擦除不完整。 注意：SSD 上软件覆写仅 NIST Clear 级，因磨损均衡无法保证物理块被覆写。
-#ifdef _WIN32
+        // 符号链接：明文不在链接里，覆写会写到链接指向的目标上（等于破坏无关文件），只删链接
+        if(path_is_symlink(path)) return remove_file_utf8(path);
+        // 只读文件先放开写权限（Windows 是属性位，POSIX 是权限位），否则打不开写句柄就只能干删
         clear_readonly_attribute(path);
-#endif
         std::fstream f;
         if(!open_stream(f,path,std::ios::in|std::ios::out|std::ios::binary)) {
             return remove_file_utf8(path);
         }
-        f.seekg(0,std::ios::end);
-        std::streamoff sz=f.tellg();
-        f.seekg(0,std::ios::beg);
+        f.seekp(0,std::ios::end);
+        std::streamoff sz=f.tellp();
+        if(!f||sz<0) {
+            // 量不出长度就不该声称擦除过：保留文件并返回失败，交回用户处置
+            f.close();
+            fprintf(stderr,"Wipe aborted: cannot determine size of source file: %s\n",path.c_str());
+            return false;
+        }
+        f.seekp(0,std::ios::beg);
         std::vector<unsigned char> buf(FE_WIPE_CHUNK);
         const unsigned char pat[2]={0x00,0xFF};
         bool wipe_failed=false;
         for(int pass=0; pass<3; ++pass) {
-            f.seekg(0,std::ios::beg);
+            f.seekp(0,std::ios::beg);
             f.clear();
             unsigned long long remaining=(unsigned long long)(sz>0?sz:0);
             while(remaining>0) {

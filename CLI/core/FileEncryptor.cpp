@@ -1,4 +1,8 @@
 #define _CRT_SECURE_NO_WARNINGS
+#ifdef _WIN32
+#include <windows.h>    // 必须早于 C++ 头：CreateFileW / DeviceIoControl
+#include <winioctl.h>   // FSCTL_GET_REPARSE_POINT
+#endif
 #include "FileEncryptor.hpp"
 #ifdef FE_WITH_ZSTD
 #include "zstd.h"   // 仅当构建集成了 zstd 预编译库时引入（third_party/zstd/include）
@@ -26,6 +30,7 @@
 #include "asym_crypto.hpp"
 #include "machine_id.hpp"
 #include "watermark.hpp"
+#include "split_volumes.hpp"
 #include "kdf.hpp"
 #include "util/byte_io.hpp"
 #include "util/hex.hpp"
@@ -502,6 +507,28 @@ bool path_is_symlink(const std::string& path) {
     std::wstring w=utf8_to_wstring(path);
     DWORD attr=GetFileAttributesW(w.c_str());
     if(attr==INVALID_FILE_ATTRIBUTES) return false;
+    // 属性位检查与实际创建之间不是原子的（TOCTOU）：句柄级再判一次，
+    // 用 FILE_FLAG_OPEN_REPARSE_POINT 打开链接自身，避免“先查后建”期间被换成链接。
+    HANDLE h=CreateFileW(w.c_str(),0,
+        FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE,
+        nullptr,OPEN_EXISTING,
+        FILE_FLAG_OPEN_REPARSE_POINT|(attr&FILE_ATTRIBUTE_DIRECTORY
+            ? FILE_FLAG_BACKUP_SEMANTICS : 0u),
+        nullptr);
+    if(h!=INVALID_HANDLE_VALUE) {
+        std::vector<char> buf(4096,0);
+        DWORD ret=0;
+        // 句柄级读出重解析点内容＝确凿是链接，且不受后续换手影响
+        if(DeviceIoControl(h,FSCTL_GET_REPARSE_POINT,nullptr,0,
+                buf.data(),(DWORD)buf.size(),&ret,nullptr)) {
+            CloseHandle(h);
+            return true;
+        }
+        const DWORD err=GetLastError();
+        CloseHandle(h);
+        if(err==ERROR_NOT_A_REPARSE_POINT) return false;
+        // 打不开/非重解析点的其它错误：回退到属性位
+    }
     return (attr&FILE_ATTRIBUTE_REPARSE_POINT)!=0;
 #else
     struct stat st;
@@ -635,8 +662,15 @@ static void secure_wipe_and_remove(const std::string& path) {
         CloseHandle(h);
     }
 #else
+    // 只读源直接 O_WRONLY 会失败，那样等于「跳过覆写只删文件」，明文仍可被恢复。
+    // 复用源文件处置那条路径的 clear_readonly_attribute（补属主写位）
+    clear_readonly_attribute(path);
     int fd=::open(path.c_str(),O_WRONLY);
-    if(fd>=0) {
+    if(fd<0) {
+        // 补写位仍失败（文件系统只读、权限受控等）：不能假装擦除成功，保留文件
+        return;
+    }
+    {
         off_t sz=lseek(fd,0,SEEK_END);
         if(sz>0) {
             lseek(fd,0,SEEK_SET);
@@ -847,7 +881,7 @@ bool replace_file_utf8(const std::string& from,const std::string& to) {
 #endif
 }
 
-// Windows：清掉只读属性位（密钥文件覆盖写入前的准备；POSIX 无此概念）
+// 清掉只读属性（密钥文件 / 源文件覆写前的准备）
 void clear_readonly_attribute(const std::string& path) {
 #ifdef _WIN32
     const std::wstring w=utf8_to_wstring(path);
@@ -855,7 +889,10 @@ void clear_readonly_attribute(const std::string& path) {
     if(a!=INVALID_FILE_ATTRIBUTES&&(a&FILE_ATTRIBUTE_READONLY))
         SetFileAttributesW(w.c_str(),a&~FILE_ATTRIBUTE_READONLY);
 #else
-    (void)path;
+    // POSIX 的只读就是权限位：0444 打不开写句柄，补上属主写位再覆写
+    struct stat st;
+    if(::stat(path.c_str(),&st)==0&&(st.st_mode&S_IWUSR)==0)
+        ::chmod(path.c_str(),st.st_mode|S_IWUSR);
 #endif
 }
 
@@ -1255,6 +1292,16 @@ static void derive_name_nonce(const unsigned char* salt, size_t salt_len,
     crypto_generichash(nonce, XCHACHA20_IV_LEN, in.data(), in.size(), nullptr, 0);
 }
 
+// 文件名信封子密钥：作用域退出即清零，覆盖所有返回路径
+struct NameKeyScope {
+    unsigned char key[crypto_aead_xchacha20poly1305_ietf_KEYBYTES];
+    unsigned char nonce[XCHACHA20_IV_LEN];
+    ~NameKeyScope() {
+        sodium_memzero(key,sizeof(key));
+        sodium_memzero(nonce,sizeof(nonce));
+    }
+};
+
 static std::string path_basename_utf8(const std::string& p) {
     size_t pos=p.find_last_of("/\\");
     return (pos!=std::string::npos) ? p.substr(pos+1) : p;
@@ -1291,17 +1338,16 @@ static bool append_encrypted_name_footer(std::fstream& fout,
     const unsigned char* salt) {
     std::string base=path_basename_utf8(in_path);
     if(base.empty()||base.size()>NAME_FOOTER_MAX_NAME) return true; // 跳过则解密走文件名回退
-    unsigned char name_key[crypto_aead_xchacha20poly1305_ietf_KEYBYTES];
-    unsigned char nonce[XCHACHA20_IV_LEN];
-    derive_name_key(master_key, name_key);
-    derive_name_nonce(salt, ARGON2_SALT_LEN, nonce);
+    NameKeyScope nk;
+    derive_name_key(master_key, nk.key);
+    derive_name_nonce(salt, ARGON2_SALT_LEN, nk.nonce);
     std::vector<unsigned char> env(base.size()+NAME_ENV_TAG);
     unsigned long long envlen=0;
     // AAD 绑定本文件 salt，防止尾部被挪用到其他文件
     int rc=crypto_aead_xchacha20poly1305_ietf_encrypt(
         env.data(), &envlen,
         reinterpret_cast<const unsigned char*>(base.data()), base.size(),
-        salt, ARGON2_SALT_LEN, nullptr, nonce, name_key);
+        salt, ARGON2_SALT_LEN, nullptr, nk.nonce, nk.key);
     if(rc!=0||envlen!=(unsigned long long)env.size()) return false;
     unsigned char tail[NAME_FOOTER_HDR];
     memcpy(tail,NAME_FOOTER_MAGIC_ENC,4);
@@ -1478,15 +1524,14 @@ static bool decrypt_name_footer(const std::string& ptd_path,
     }
     std::vector<unsigned char> env((size_t)env_len);
     if(!f.read(reinterpret_cast<char*>(env.data()),(std::streamoff)env_len)) return false;
-    unsigned char name_key[crypto_aead_xchacha20poly1305_ietf_KEYBYTES];
-    unsigned char nonce[XCHACHA20_IV_LEN];
-    derive_name_key(master_key, name_key);
-    derive_name_nonce(salt, ARGON2_SALT_LEN, nonce);
+    NameKeyScope nk;
+    derive_name_key(master_key, nk.key);
+    derive_name_nonce(salt, ARGON2_SALT_LEN, nk.nonce);
     std::vector<unsigned char> plain_out((size_t)n);
     unsigned long long mlen=0;
     int rc=crypto_aead_xchacha20poly1305_ietf_decrypt(
         plain_out.data(), &mlen, nullptr,
-        env.data(), env_len, salt, ARGON2_SALT_LEN, nonce, name_key);
+        env.data(), env_len, salt, ARGON2_SALT_LEN, nk.nonce, nk.key);
     if(rc!=0) return false;            // 密钥错或被篡改
     if(mlen!=(unsigned long long)n) return false;
     std::string raw(reinterpret_cast<char*>(plain_out.data()), (size_t)mlen);
@@ -2918,6 +2963,17 @@ bool decrypt_file(const std::string& in_path,
     size_t aad_hdr_len=(ver==6) ? HEADER_AAD_COVER_V6 : header_hmac_cover(ver);
     std::vector<unsigned char> aad=build_aad_with_metadata(hdrbuf,aad_hdr_len,chunk_size,total_chunks,orig_size);
 
+    // AES-GCM / AEGIS-256 都依赖 AES-NI：不支持的 CPU 上逐块解密只会报「AEAD 失败」，
+    // 提前给出明确原因。解密端不做降级——换算法就解不出原文件。
+    if(mode==CryptoMode::AES_GCM && crypto_aead_aes256gcm_is_available()==0) {
+        if(!silent) fprintf(stderr,"该文件为旧版 AES-GCM 格式，需要 CPU 支持 AES-NI，当前机器不支持，无法解密。\n");
+        return false;
+    }
+    if(mode==CryptoMode::AEGIS256 && !aegis256_supported()) {
+        if(!silent) fprintf(stderr,"该文件使用 AEGIS-256，需要 CPU 支持 AES-NI，当前机器不支持，无法解密。\n");
+        return false;
+    }
+
     std::unique_ptr<Cipher> ciph=create_cipher(mode);
     if(!ciph) {
         if(!silent) fprintf(stderr,"Unsupported encryption mode in header\n");
@@ -3315,7 +3371,8 @@ bool process_files(const std::vector<std::string>& input_paths,
     int num_threads,
     bool restore_name,
     int compress_level,
-    const WatermarkSpec* wm) {
+    const WatermarkSpec* wm,
+    uint64_t split_bytes) {
     // 批量入口兜底：main.cpp 已处理 AEGIS-256 缺 AES-NI 的降级；若仍直达传入，
     // 不自动降级仅警告，交由调用方显式决定（避免自动化任务静默行为变更）。
     if(encrypt&&mode==CryptoMode::AEGIS256&&!aegis256_supported()) {
@@ -3367,7 +3424,34 @@ bool process_files(const std::vector<std::string>& input_paths,
                 ++skipped;
             }
         }
-        all_files=std::move(filtered);
+        // 分卷归组：foo.001.ptd / foo.002.ptd 折成一份 foo.ptd。
+        // 不折的话每个卷都会被当成独立密文去解，必然失败。
+        {
+            std::vector<std::string> kept;
+            std::vector<std::string> groups;
+            for(const auto& f:filtered) {
+                std::string base=base_ptd_of(f);
+                if(base.empty()) { kept.push_back(f); continue; }
+                if(std::find(groups.begin(),groups.end(),base)==groups.end())
+                    groups.push_back(base);
+            }
+            for(const auto& base:groups) {
+                // 完整件在场就用它（分卷是残留副本）；不在场但分卷齐全则记 base，
+                // worker 侧合并后再解
+                if(file_exists(base)) kept.push_back(base);
+                else if(!find_volumes(base).empty()) kept.push_back(base);
+            }
+            // 保持原有顺序，避免进度与日志顺序突变
+            std::vector<std::string> ordered;
+            for(const auto& f:filtered) {
+                std::string base=base_ptd_of(f);
+                if(base.empty()) { ordered.push_back(f); continue; }
+                if(std::find(kept.begin(),kept.end(),base)==kept.end()) continue;
+                if(std::find(ordered.begin(),ordered.end(),base)==ordered.end())
+                    ordered.push_back(base);
+            }
+            all_files=std::move(ordered);
+        }
         non_ptd_skipped=skipped;
         if(skipped>0) {
             fprintf(stderr,"Skipped %zu non-.ptd file(s) in batch decrypt.\n",skipped);
@@ -3555,6 +3639,26 @@ bool process_files(const std::vector<std::string>& input_paths,
             if(idx>=files_to_process.size()) break;
             const auto& in_path=files_to_process[idx];
 
+            // 分卷输入（base 不存在、只有 foo.001.ptd）先合并成完整件
+            SplitPlan plan;
+            MergedTemp merged;
+            std::string src_path=in_path;
+            if(!encrypt) {
+                std::string perr;
+                if(!resolve_decrypt_input(in_path,plan,perr)) {
+                    std::lock_guard<std::mutex> lock(error_mutex);
+                    std::cerr<<"Error: "<<perr<<"\n";
+                    error_files.push_back(in_path);
+                    ++files_failed;
+                    all_ok=false;
+                    continue;
+                }
+                if(plan.from_volumes) {
+                    merged.path=plan.merged_path;
+                    src_path=plan.merged_path;
+                }
+            }
+
             std::string out_path;
             if(!out_dir_clean.empty()) {
                 out_path=build_batch_out_path(in_path,out_dir_clean,input_paths,encrypt);
@@ -3630,7 +3734,7 @@ bool process_files(const std::vector<std::string>& input_paths,
                 {
                     unsigned char m5[5];
                     std::ifstream mf;
-                    if(open_stream(mf,in_path,std::ios::binary)
+                    if(open_stream(mf,src_path,std::ios::binary)
                        &&mf.read(reinterpret_cast<char*>(m5),5)&&mf.gcount()==5
                        &&memcmp(m5,MAGIC,4)!=0) {
                         ++skipped_not_ptd;
@@ -3640,7 +3744,7 @@ bool process_files(const std::vector<std::string>& input_paths,
                 }
                 const unsigned char* dec_kek=nullptr;
                 { auto _kit=kek_cache.find(in_path); if(_kit!=kek_cache.end()) dec_kek=_kit->second.data(); }
-                ok=decrypt_file(in_path,out_path,password,
+                ok=decrypt_file(src_path,out_path,password,
                     [&](size_t processed,size_t total) {
                         size_t inc=processed-last_file_processed;
                         last_file_processed=processed;
@@ -3655,11 +3759,22 @@ bool process_files(const std::vector<std::string>& input_paths,
                             print_progress(global_processed.load(),total_bytes,start_time,false);
                         }
                     },true,true,nullptr,dec_kek);
-                // 解密成功后处理源 .ptd（-de 删除 / 擦除 / 回收站）；此前解密分支缺失此步
+                // 解密成功后处理源 .ptd（-de 删除 / 擦除 / 回收站）；
+                // 输入来自分卷时，每一卷都要处置
                 if(ok && source_action!=0) {
-                    if(!secure_handle_source(in_path,static_cast<SourceDisposition>(source_action))) {
-                        std::cerr<<"Error: could not process source file: "<<in_path<<"\n";
-                        ok=false;
+                    // 输入来自分卷时每一卷都要处置；plan.volumes 为空说明
+                    // 归一阶段没认出分卷，退回按 base 名兜底枚举
+                    std::vector<std::string> victims=plan.from_volumes
+                        ? plan.volumes : std::vector<std::string>{in_path};
+                    if(victims.size()<=1 && !plan.from_volumes) {
+                        std::vector<std::string> vols=find_volumes(in_path);
+                        if(!vols.empty()) victims=vols;
+                    }
+                    for(const auto& v:victims) {
+                        if(!secure_handle_source(v,static_cast<SourceDisposition>(source_action))) {
+                            std::cerr<<"Error: could not process source file: "<<v<<"\n";
+                            ok=false;
+                        }
                     }
                 }
             }
@@ -3677,7 +3792,19 @@ bool process_files(const std::vector<std::string>& input_paths,
                         last_file_processed=file_size;
                     }
                 }
-                if(encrypt && write_sha256_enabled()) write_sha256_sidecar(out_path); // 功能10：校验单
+                if(encrypt) {
+                    if(write_sha256_enabled()) write_sha256_sidecar(out_path); // 功能10：校验单
+                    if(split_bytes>0) {
+                        std::string serr;
+                        if(!finish_encrypt_split(out_path,split_bytes,
+                                                  write_sha256_enabled(),serr)) {
+                            std::lock_guard<std::mutex> lock(error_mutex);
+                            std::cerr<<"Error: split failed: "<<serr<<"\n";
+                            error_files.push_back(in_path);
+                            all_ok=false;
+                        }
+                    }
+                }
                 ++files_done;
                 log_event(LOG_DEBUG,"file_done",{{"path",in_path}});
             }

@@ -6,12 +6,12 @@ namespace FileEncryptorGUI.Services;
 // 探测 CLI 路径
 public static class FileEncryptorLocator
 {
-    public const string GuiVersion = "2.1.0";
+    public const string GuiVersion = "2.1.1";
     public static string CliDownloadUrl =>
         $"https://github.com/Texas-albe/FileEncryptor/releases/tag/GUI{GuiVersion}_CLI{ExpectedCliVersion}";
 
     // 配套 CLI 版本
-    public static string ExpectedCliVersion => "2.7.0";
+    public static string ExpectedCliVersion => "2.7.1";
 
     public static string[] GetExpectedNames()
     {

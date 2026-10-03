@@ -72,13 +72,14 @@ private slots:
     void updateAsymVisibility();
     // SM4 需 OpenSSL 支持：不可用时禁用模式下拉里的对应项
     void updateSm4Visibility();
-    void onThemeComboChanged(int idx);
+    void onThemeActionTriggered();
     void onViewSettings();
+    void onPreviewClicked();
+    void openPreviewFor(const QString& path);
     void onEditConfig();
     void onThemeDarkChanged(bool dark);
     void resizeEvent(QResizeEvent* e) override;
     void onRetryCliDetection();
-    void onDownloadCli();
     void onOpenTaskHistory();
     void onCheckForUpdate();
     void startPendingScan();
@@ -88,7 +89,6 @@ private slots:
 private:
     // 构建各区域
     void buildMenu();
-    void buildNavControls();
     QWidget* buildLeftPanel();
     QWidget* buildCenterPanel();
     QWidget* buildBottomPanel();
@@ -132,9 +132,11 @@ private:
     // 菜单栏
     QMenuBar* m_menuBar=nullptr;
 
-    QWidget* m_navWidget=nullptr;
-    QComboBox* m_themeCombo=nullptr;
-    QPushButton* m_btnViewSettings=nullptr;
+    // 「视图」菜单里的主题子菜单（浅色/深色/跟随系统）
+    QActionGroup* m_themeGroup=nullptr;
+    QAction* m_actThemeLight=nullptr;
+    QAction* m_actThemeDark=nullptr;
+    QAction* m_actThemeSystem=nullptr;
 
     QWidget* m_leftPanel=nullptr;
     QWidget* m_centerPanel=nullptr;
@@ -182,7 +184,8 @@ private:
     bool      m_zstdAvailable=false;
     bool      m_aegisAvailable=true;
     bool      m_sm4Available=true;
-    bool      m_pqcAvailable=true;
+    // 默认 false：旧 CLI 的 --features 无 pqc 字段时按「不支持」，仅观测到 pqc=1 才启用
+    bool      m_pqcAvailable=false;
     QLineEdit* m_outDirEdit=nullptr;
     QPushButton* m_btnOutDirBrowse=nullptr;
     QLineEdit* m_keyfileEdit=nullptr;
@@ -216,6 +219,8 @@ private:
     QElapsedTimer m_runTimer;
     int m_runFileTotal=0;
     QPushButton* m_btnTaskHistory=nullptr;
+    QPushButton* m_btnPreview=nullptr;
+    class PreviewDialog* m_previewDlg=nullptr;
     qint64 m_pendingBytes=0;
     int m_pendingFiles=0;
 
@@ -237,6 +242,10 @@ private:
     OutputLine m_pendingFrame;
 
     QPlainTextEdit* m_outputView=nullptr;
+
+    // 国庆祝福语（功能区底部，常驻不被裁）
+    QLabel* m_birthdayLabel=nullptr;
+    void applyBirthdayStyle();
 
     // 命令执行器
     ICommandExecutor* m_executor=nullptr;

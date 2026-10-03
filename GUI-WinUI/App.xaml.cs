@@ -48,13 +48,17 @@ public partial class App : Application
     {
         try
         {
-            // 固定深色主题
-            Settings.Current.Theme = Services.AppTheme.Dark;
-            // 国庆节主题（节日窗口生效）
+            // 顺序要紧：资源覆盖必须在控件加载之前做完。
+            // 控件模板里的 {ThemeResource} 只在解析那一刻取一次值，
+            // 放到 MainWindow 构造之后覆盖资源字典，界面会一半深一半浅。
             Services.NationalDayTheme.ApplyThemeOverrides();
-            MainWindow = new MainWindow();
+            MainWindow = new FileEncryptorGUI.MainWindow();
             MainWindow.Activate();
-            Theme.ApplyTheme(Services.AppTheme.Dark);
+            // SystemBackdrop 必须在窗口激活之后再设：
+            // 构造函数阶段 DWM 还没拿到窗口句柄，会被静默丢弃（表现为设了却完全不透明）
+            if (MainWindow is FileEncryptorGUI.MainWindow mw) mw.ApplyBackdrop();
+            // 主题取用户在「视图」菜单里的选择，不再每次启动强制覆写
+            Theme.ApplyTheme(Settings.Current.Theme);
         }
         catch (Exception ex)
         {

@@ -13,7 +13,7 @@ if(FE_CL_EXECUTABLE)
       CACHE FILEPATH "MSVC 链接器（不按 PATH 搜索）" FORCE)
 endif()
 
-project(FileEncryptorGUI VERSION 2.1.0 LANGUAGES CXX)
+project(FileEncryptorGUI VERSION 2.1.1 LANGUAGES CXX)
 
 # FileEncryptor GUI - Qt6 图形界面（Windows + Linux 双平台；Windows 另有 WinUI3 版本）
 
@@ -33,7 +33,8 @@ elseif(EXISTS "/opt/smelibs/lib/cmake/Qt6/Qt6Config.cmake")
 endif()
 
 # Concurrent：目录规模统计（递归扫描）放到工作线程，避免大目录扫描卡住界面。
-find_package(Qt6 6.2 COMPONENTS Widgets Concurrent Network REQUIRED)
+# 下限 6.3：TaskHistory 用 QStringConverter::setEncoding（6.3 引入），6.2 会编译失败
+find_package(Qt6 6.3 COMPONENTS Widgets Concurrent Network REQUIRED)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -72,6 +73,7 @@ set(SHELL_SOURCES
     src/FontBootstrap.cpp
     src/ThemeManager.cpp
     src/ViewSettingsDialog.cpp
+    src/PreviewDialog.cpp
     src/CliNotFoundDialog.cpp
     src/TaskHistory.cpp
     src/EtaEstimator.cpp
@@ -93,6 +95,7 @@ set(SHELL_HEADERS
     src/FontBootstrap.h
     src/ThemeManager.h
     src/ViewSettingsDialog.h
+    src/PreviewDialog.h
     src/CliNotFoundDialog.h
     src/TaskHistory.h
     src/EtaEstimator.h
@@ -118,6 +121,12 @@ endif()
 
 add_executable(FileEncryptorGUI WIN32 ${SHELL_SOURCES} ${SHELL_HEADERS} ${SHELL_RESOURCES})
 target_link_libraries(FileEncryptorGUI PRIVATE Qt6::Widgets Qt6::Concurrent Qt6::Network)
+
+if(MSVC)
+    # CFG：与 CLI/Updater 对齐；Qt 是静态库，CFG 按模块生效，本目标自身加编译+链接位
+    target_compile_options(FileEncryptorGUI PRIVATE /guard:cf)
+    target_link_options(FileEncryptorGUI PRIVATE /guard:cf)
+endif()
 
 # Qt 静态构建：Qt6::Widgets 等目标已通过 INTERFACE_LINK_LIBRARIES 把 Qt6Bundled*（Freetype/Harfuzz/Libjpeg/Libpng/Pcre2 等）依赖传递进来，无需手动 link。
 # 平台抽象与图像格式插件经 main.cpp 的 Q_IMPORT_PLUGIN 静态导入，运行时无需 Qt6*.dll 与 platforms/qwindows.dll。
