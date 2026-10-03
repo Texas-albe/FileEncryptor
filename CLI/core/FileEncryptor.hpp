@@ -15,9 +15,9 @@
 #endif
 
 #define FE_VERSION_MAJOR 2
-#define FE_VERSION_MINOR 7
+#define FE_VERSION_MINOR 8
 #define FE_VERSION_PATCH 1
-#define FE_VERSION_STRING "2.7.1"
+#define FE_VERSION_STRING "2.8.0"
 
 // --force-decrypt：解密时容忍块校验失败与明文哈希不匹配（强制恢复损坏数据）
 extern bool g_force_decrypt;

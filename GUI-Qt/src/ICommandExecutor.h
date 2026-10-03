@@ -16,6 +16,10 @@ struct OutputLine {
 inline const char* feFrameBeginMarker() { return "\x1b[FEPRG+"; }
 inline const char* feFrameEndMarker()   { return "\x1b[FEPRG-"; }
 
+// CLI 询问确认的握手文件环境变量：CLI 往里写问题，宿主写回 y/n。
+// 走文件而非 stdin —— stdin 已被 --key-stdin 读到 EOF 占满，宿主无法再应答。
+inline const char* feConfirmFileEnv() { return "FILEENCRYPTOR_CONFIRM_FILE"; }
+
 // 命令请求
 struct CommandRequest {
     QString programPath;
@@ -24,6 +28,8 @@ struct CommandRequest {
     // 写入子进程 stdin 的数据
     QByteArray stdinData;
     QProcessEnvironment extraEnv;
+    // CLI 询问确认时的握手文件路径（空 = 不启用）
+    QString confirmFile;
 };
 
 // 命令结果
@@ -48,9 +54,14 @@ public:
 
     virtual bool isRunning() const = 0;
 
+    // 回答 CLI 的 y/n 询问
+    virtual void answerConfirm(bool yes) = 0;
+
 signals:
     void outputLine(const OutputLine& line);
     // raw 模式下的 stdout 原始字节（不经行解析），供预览解密显示二进制明文前缀
     void rawStdout(const QByteArray& chunk);
+    // CLI 请求确认，text 为完整问题（已含 y/N 提示）
+    void confirmPrompt(const QString& text);
     void finished(const CommandResult& result);
 };

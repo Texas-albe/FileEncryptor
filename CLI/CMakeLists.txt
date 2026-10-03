@@ -12,7 +12,7 @@ if(WIN32)
   endif()
 endif()
 
-project(FileEncryptorCLI VERSION 2.7.1 LANGUAGES CXX)
+project(FileEncryptorCLI VERSION 2.8.0 LANGUAGES CXX)
 
 # FileEncryptor CLI - 命令行加密工具（独立项目），产出 FileEncryptorCLI(.exe)，GUI 经 QProcess 调用。
 # 静态链接 libsodium + yaml-cpp，二进制零外部依赖，可直接打包 DEB/RPM。
@@ -309,6 +309,7 @@ set(SOURCES
   core/machine_id.cpp
   core/watermark.cpp
   core/split_volumes.cpp
+  core/archive.cpp
   cli/main.cpp)
 
 # Windows 图标资源（嵌入 exe；Linux/macOS 无 .rc）
@@ -390,7 +391,7 @@ if(SODIUM_TARGET)
   target_link_libraries(FileEncryptor PRIVATE ${SODIUM_TARGET})
 else()
   # core/ 加入 include 路径：cli/main.cpp 与 core/*.cpp 都 #include "FileEncryptor.hpp" 等头
-  target_include_directories(FileEncryptor PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/core ${SODIUM_INCLUDE_DIRS})
+  target_include_directories(FileEncryptor PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/core ${CMAKE_CURRENT_SOURCE_DIR}/include ${SODIUM_INCLUDE_DIRS})
   if(SODIUM_LINK_LIBRARY)
     target_link_libraries(FileEncryptor PRIVATE ${SODIUM_LINK_LIBRARY})
   else()

@@ -14,6 +14,8 @@ public class CliProcessService
     public event Action<string>? OutputLine;
     // raw 模式：stdout 原始字节（不经行解析），供预览解密显示二进制明文前缀
     public event Action<byte[]>? RawStdout;
+    // CLI 请求 y/n 确认，参数为完整问题（已含 y/N 提示）
+    public event Action<string>? ConfirmPrompt;
 
     private Process? _process;
     private bool _cancelled;
@@ -23,6 +25,13 @@ public class CliProcessService
     private readonly StringBuilder _stderr = new();
     private bool _raw;
 
+    // 握手确认：CLI 把问题写进 _confirmFile，宿主弹窗后把 y/n 写回。
+    // 走文件而非 stdin —— stdin 已被 --key-stdin 读到 EOF 占满，宿主无法再应答。
+    private string _confirmFile = "";
+    private volatile bool _confirmPending;
+    private volatile bool _confirmAnswered;
+    private CancellationTokenSource? _confirmCts;
+
     public bool IsRunning => _process is { HasExited: false };
     public long TotalBytes { get; private set; }
     public int FilesDone { get; private set; }
@@ -31,6 +40,81 @@ public class CliProcessService
 
     // 预览解密要用：stdout 是二进制明文，不能按行切
     public void SetRawMode(bool on) => _raw = on;
+
+    // 握手文件轮询。CLI 写问题 -> 宿主弹窗 -> 宿主写答案 -> CLI 取走后清空文件。
+    // 三态严格串行：pending（等回答）/ answered（等 CLI 取走）/ 空（可接受新问题），
+    // 缺了这层串行就会把刚写进去的答案当成新问题再弹一次。
+    private void StartConfirmWatch(string file)
+    {
+        StopConfirmWatch();
+        _confirmFile = file;
+        if (string.IsNullOrEmpty(file)) return;
+        _confirmPending = false;
+        _confirmAnswered = false;
+        // 上一轮的残留内容不能被这轮读到
+        try { if (File.Exists(file)) File.Delete(file); } catch { }
+
+        var cts = new CancellationTokenSource();
+        _confirmCts = cts;
+        var token = cts.Token;
+        _ = Task.Run(async () =>
+        {
+            while (!token.IsCancellationRequested)
+            {
+                try
+                {
+                    string content = "";
+                    if (File.Exists(file))
+                        content = File.ReadAllText(file, Encoding.UTF8).Trim();
+                    if (content.Length == 0)
+                    {
+                        // CLI 取走答案后会清空文件，此时才允许下一次询问
+                        _confirmPending = false;
+                        _confirmAnswered = false;
+                    }
+                    else if (!_confirmPending)
+                    {
+                        _confirmPending = true;
+                        ConfirmPrompt?.Invoke(content);
+                    }
+                }
+                catch (IOException) { }
+                catch (UnauthorizedAccessException) { }
+                catch { }
+                try { await Task.Delay(120, token); } catch { break; }
+            }
+        }, token);
+    }
+
+    // 回答 CLI 的 y/n 询问
+    public void AnswerConfirm(bool yes)
+    {
+        if (!_confirmPending || _confirmAnswered || string.IsNullOrEmpty(_confirmFile)) return;
+        try
+        {
+            if (File.Exists(_confirmFile)) File.Delete(_confirmFile);
+            File.WriteAllText(_confirmFile, yes ? "y\n" : "n\n", new UTF8Encoding(false));
+            _confirmAnswered = true;   // 等 CLI 清空文件后才复位
+        }
+        catch (IOException)
+        {
+            _confirmPending = false;
+        }
+    }
+
+    private void StopConfirmWatch()
+    {
+        var cts = _confirmCts;
+        _confirmCts = null;
+        if (cts != null) { try { cts.Cancel(); } catch { } cts.Dispose(); }
+        if (!string.IsNullOrEmpty(_confirmFile))
+        {
+            try { if (File.Exists(_confirmFile)) File.Delete(_confirmFile); } catch { }
+            _confirmFile = "";
+        }
+        _confirmPending = false;
+        _confirmAnswered = false;
+    }
 
     public void Execute(CommandRequest request)
     {
@@ -47,6 +131,8 @@ public class CliProcessService
         Directory.CreateDirectory(statsDir);
         var statsRand = RandomNumberGenerator.GetBytes(16);
         _statsFile = Path.Combine(statsDir, $"fe_stats_{Convert.ToHexString(statsRand).ToLowerInvariant()}.json");
+
+        StartConfirmWatch(request.ConfirmFile);
 
         if (request.ShowConsole && OperatingSystem.IsWindows())
             StartConsole(request);
@@ -294,6 +380,7 @@ public class CliProcessService
     {
         if (_finishedEmitted) return;
         _finishedEmitted = true;
+        StopConfirmWatch();
         Finished?.Invoke(r);
     }
 }

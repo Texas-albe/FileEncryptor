@@ -1,7 +1,7 @@
 <Project Sdk="WixToolset.Sdk/4.0.5">
   <PropertyGroup>
     <!-- 版本唯一来源：Product.wxs 通过 $(var.Version) 消费，MSI 版本与输出文件名一起变 -->
-    <GuiVersion>2.1.1</GuiVersion>
+    <GuiVersion>2.1.2</GuiVersion>
     <OutputType>Package</OutputType>
     <OutputName>FileEncryptorGUI-$(GuiVersion)-WinUI-Windows</OutputName>
     <Platform>x64</Platform>

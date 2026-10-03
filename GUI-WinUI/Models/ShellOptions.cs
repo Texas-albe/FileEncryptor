@@ -27,6 +27,14 @@ public enum SourceDisposition
     Recycle = 3
 }
 
+// 分卷单位（CLI --split 认 1024 进制：MB=2^20, GB=2^30, TB=2^40）
+public enum SplitUnit
+{
+    MB = 0,
+    GB = 1,
+    TB = 2
+}
+
 public class ShellOptions
 {
     public CryptoAction Action { get; set; } = CryptoAction.Encrypt;
@@ -36,6 +44,14 @@ public class ShellOptions
     public List<string> InputPaths { get; set; } = new();
     public string OutputDir { get; set; } = "";
     public SourceDisposition SourceDisposition { get; set; } = SourceDisposition.Keep;
+    // 加密压缩包：把目录树 / 多个文件打成单个 .ptd（CLI --pack）
+    public bool Pack { get; set; } = false;
+    // 分卷输出：把 .ptd 切成 <base>.001.ptd/002/003…（CLI --split <size>），默认不勾选
+    public bool Split { get; set; } = false;
+    public double SplitSize { get; set; } = 100;
+    public SplitUnit SplitUnit { get; set; } = SplitUnit.MB;
+    // 目录输入 + 删除类源处置已由界面弹窗确认，CLI 不必再问一次
+    public bool SourceDeleteOk { get; set; } = false;
     public bool ForceOverwrite { get; set; } = true;
     public string KeyfilePath { get; set; } = "";
     public string RecipientPath { get; set; } = "";
@@ -53,4 +69,6 @@ public class ShellOptions
     public bool Pqc { get; set; } = true;
     public bool Watermark { get; set; } = false;
     public string WatermarkKeyPath { get; set; } = "";
+    // 本次任务落盘的水印私钥临时文件（每任务独立，避免并发任务互相覆盖；任务结束由 CleanupWatermarkTemp 删除）
+    public string? WatermarkTempKeyPath { get; set; } = null;
 }

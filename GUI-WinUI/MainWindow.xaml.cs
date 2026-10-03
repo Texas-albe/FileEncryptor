@@ -105,6 +105,7 @@ public sealed partial class MainWindow : Window
         };
 
         ViewModel.PasswordRequested += OnPasswordRequested;
+        ViewModel.ConfirmPromptRequested += OnConfirmPromptRequested;
         ViewModel.TaskCompleted += OnTaskCompleted;
         ViewModel.TaskSummary += OnTaskSummary;
         this.Closed += (_, _) => App.Settings.Save();
@@ -725,6 +726,8 @@ public sealed partial class MainWindow : Window
         try
         {
             ViewModel.Force = ChkForce.IsChecked == true;
+            ViewModel.Pack = ChkPack.IsChecked == true;
+            ViewModel.Split = ChkSplit.IsChecked == true;
             ViewModel.Sha256 = ChkSha256.IsChecked == true;
             ViewModel.Compress = ChkCompress.IsChecked == true;
             ViewModel.RestoreName = ChkRestoreName.IsChecked == true;
@@ -747,6 +750,18 @@ public sealed partial class MainWindow : Window
     private void OnCompressLevelChanged(NumberBox sender, NumberBoxValueChangedEventArgs args)
     {
         ViewModel.CompressLevel = (int)sender.Value;
+    }
+
+    private void OnSplitSizeChanged(NumberBox sender, NumberBoxValueChangedEventArgs args)
+    {
+        if (_optionSyncing) return;
+        ViewModel.SplitSize = sender.Value;
+    }
+
+    private void OnSplitUnitChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_optionSyncing) return;
+        if (sender is ComboBox cb) ViewModel.SplitUnitIndex = cb.SelectedIndex < 0 ? 0 : cb.SelectedIndex;
     }
 
     private void OnOutDirChanged(object sender, TextChangedEventArgs e) => ViewModel.OutputDir = OutDirEdit.Text;
@@ -839,8 +854,15 @@ public sealed partial class MainWindow : Window
         {
             if (ChkCompress.IsChecked == true) ChkCompress.IsChecked = false;
             if (ChkWatermark.IsChecked == true) ChkWatermark.IsChecked = false;
+            if (ChkPack.IsChecked == true) ChkPack.IsChecked = false;
+            if (ChkSplit.IsChecked == true) ChkSplit.IsChecked = false;
         }
         SourceCombo.Visibility = encOptionVisible ? Visibility.Visible : Visibility.Collapsed;
+        ChkPack.Visibility = encOptionVisible ? Visibility.Visible : Visibility.Collapsed;
+        ChkSplit.Visibility = encOptionVisible ? Visibility.Visible : Visibility.Collapsed;
+        // 分卷大小行只在「加密动作 + 勾选分卷」时露出
+        SplitSizeRow.Visibility = (encOptionVisible && ChkSplit.IsChecked == true)
+            ? Visibility.Visible : Visibility.Collapsed;
         // 压缩整行（含标签与级别输入）同样只在加密动作出现，解密 / 批量解密 / 密钥管理下连行一起收起
         CompressionRow.Visibility = encOptionVisible ? Visibility.Visible : Visibility.Collapsed;
         ChkSha256.Visibility = encOptionVisible ? Visibility.Visible : Visibility.Collapsed;
@@ -854,6 +876,10 @@ public sealed partial class MainWindow : Window
         // 签名水印只在加密动作下露出（见上）。
         UpdateWatermarkKeyRow();
         BtnRewrap.Visibility = isEncrypt ? Visibility.Visible : Visibility.Collapsed;
+
+        // 切动作会成批改子控件 Visibility，ScrollViewer 有时不立刻重算滚动区，
+        // 表现是滚动条莫名消失（再切一次又好了）。强制走一次布局把它算回来。
+        MainScroll.UpdateLayout();
     }
 
     // 水印私钥行：勾选「签名水印」后才显示（该行不改变动作语义，任何加密模式都可用）
@@ -862,14 +888,68 @@ public sealed partial class MainWindow : Window
             (ChkWatermark.IsChecked == true && ViewModel.IsEncryptMode) ? Visibility.Visible : Visibility.Collapsed;
 
     // ===== 运行 =====
-    private void OnRunClicked(object sender, RoutedEventArgs e)
+    private async void OnRunClicked(object sender, RoutedEventArgs e)
     {
         if (ViewModel.CliPath == null)
         {
             ShowCliNotFoundDialog();
             return;
         }
+        // 目录 + 删除类源处置：整棵树都会被清掉，动手前必须确认一次。
+        // 确认通过后下发 --source-delete-ok，免得 CLI 再问一遍（问第二遍用户会懵）。
+        if (ViewModel.IsEncryptMode && !ViewModel.Pack && ViewModel.SourceIndex != 0)
+        {
+            var dirs = ViewModel.InputPaths.Where(p => p.IsSelected && Directory.Exists(p.Path)).ToList();
+            if (dirs.Count > 0)
+            {
+                // ContentDialog 不在 XAML 视觉树里，L10n.T 不会覆盖，手工翻译
+                string how = ViewModel.SourceIndex switch
+                {
+                    2 => L10n.T("安全擦除（多次覆写）"),
+                    3 => L10n.T("移至回收站"),
+                    _ => L10n.T("删除"),
+                };
+                var show = dirs.Take(5).Select(d => d.Path).ToList();
+                // 与 CLI 行为对齐：-de 只逐个删除目录树里的文件，空目录壳保留
+                string msg = L10n.F("加密完成后，以下源目录中的文件将被{0}（目录本身保留），此操作不可撤销：\n\n{1}",
+                                    how, string.Join("\n", show));
+                if (dirs.Count > show.Count)
+                    msg += "\n\n" + L10n.F("... 另有 {0} 个目录", dirs.Count - show.Count);
+                var warn = new ContentDialog
+                {
+                    XamlRoot = Content.XamlRoot,
+                    RequestedTheme = CurrentTheme,
+                    Title = L10n.T("确认删除源目录"),
+                    Content = msg,
+                    PrimaryButtonText = L10n.T("继续"),
+                    CloseButtonText = L10n.T("取消"),
+                    DefaultButton = ContentDialogButton.Close,
+                };
+                if (await warn.ShowAsync() != ContentDialogResult.Primary)
+                    return;
+                ViewModel.SourceDeleteOk = true;
+            }
+        }
         ViewModel.Run();
+    }
+
+    // ===== CLI 确认询问 =====
+    // CLI 遇到 y/n 询问时把问题写进握手文件，这里弹窗询问，答完写回让 CLI 继续
+    private async void OnConfirmPromptRequested(string text)
+    {
+        var dlg = new ContentDialog
+        {
+            XamlRoot = Content.XamlRoot,
+            RequestedTheme = CurrentTheme,
+            // 问题文本来自 CLI（英文），标题与按钮走三语
+            Title = L10n.T("需要确认"),
+            Content = text,
+            PrimaryButtonText = L10n.T("是"),
+            CloseButtonText = L10n.T("否"),
+            DefaultButton = ContentDialogButton.Close,
+        };
+        bool yes = await dlg.ShowAsync() == ContentDialogResult.Primary;
+        ViewModel.AnswerConfirm(yes);
     }
     private void OnCancelClicked(object sender, RoutedEventArgs e) => ViewModel.Cancel();
 

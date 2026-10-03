@@ -17,4 +17,6 @@ public:
     static QStringList getExpectedNames();
     // 检查是否存在匹配的 CLI
     static bool existsWithVersion(QString* foundPath=nullptr);
+    // 清掉程序目录里版本号低于目标版本的 CLI，返回被删的文件名
+    static QStringList cleanupOutdated(const QString& keepPath=QString());
 };

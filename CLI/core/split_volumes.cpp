@@ -4,8 +4,19 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cerrno>
 #include <cstdio>
+#include <fcntl.h>
 #include <fstream>
+#include <sodium.h>
+#include "util/hex.hpp"
+
+#ifdef _WIN32
+#include <io.h>
+#include <sys/stat.h>
+#else
+#include <unistd.h>
+#endif
 
 namespace {
 
@@ -59,6 +70,63 @@ std::string dir_of(const std::string& p) {
 std::string base_name_of(const std::string& p) {
     size_t pos = p.find_last_of("/\\");
     return (pos == std::string::npos) ? p : p.substr(pos + 1);
+}
+
+// POSIX 叫 fdopen，MSVC 叫 _fdopen；这里收口，避免 Windows 专名漏到 POSIX 构建
+static inline std::FILE* fdopen_compat(int fd, const char* mode) {
+#ifdef _WIN32
+    return _fdopen(fd, mode);
+#else
+    return ::fdopen(fd, mode);
+#endif
+}
+
+// 独占创建的文件：O_EXCL 要求目标此前不存在，
+// 因此既不会跟随攻击者预置的符号链接，也不会截断它指向的文件。
+//
+// 为什么不用 ofstream(path, trunc)：trunc 打开会走已有的符号链接，
+// 攻击者在目标目录预置 "foo.merge.ptd" -> 任意可写文件，解密就会把它截断。
+class ExclusiveFile {
+public:
+    explicit ExclusiveFile(const std::string& path) {
+#ifdef _WIN32
+        std::wstring wpath = utf8_to_wstring(path);
+        int fd = _wopen(wpath.c_str(), _O_CREAT | _O_EXCL | _O_WRONLY | _O_BINARY,
+                        _S_IREAD | _S_IWRITE);
+#else
+        int fd = ::open(path.c_str(), O_CREAT | O_EXCL | O_WRONLY | O_CLOEXEC, 0600);
+#endif
+        if (fd < 0) { err_ = errno; return; }
+        fp_ = fdopen_compat(fd, "wb");
+        if (!fp_) {
+            err_ = errno;
+#ifdef _WIN32
+            _close(fd);
+#else
+            ::close(fd);
+#endif
+        }
+    }
+    ~ExclusiveFile() { if (fp_) std::fclose(fp_); }
+    ExclusiveFile(const ExclusiveFile&) = delete;
+    ExclusiveFile& operator=(const ExclusiveFile&) = delete;
+
+    bool ok() const { return fp_ != nullptr; }
+    // 打开失败时的 errno（构造时抓定，后续调用会覆盖全局 errno）
+    int err() const { return err_; }
+    bool write(const char* p, size_t n) { return std::fwrite(p, 1, n, fp_) == n; }
+
+private:
+    std::FILE* fp_ = nullptr;
+    int err_ = 0;
+};
+
+// 合并临时件名：带随机后缀。O_EXCL 只保证「创建那一刻」没人抢先，
+// 名字可预测的话仍能被抢在前面预置（DoS 与符号链接覆盖的前提），故加随机段。
+std::string merged_temp_path(const std::string& base) {
+    unsigned char r[8];
+    randombytes_buf(r, sizeof(r));
+    return base + ".merge." + fe::util::to_hex(r, sizeof(r)) + ".ptd";
 }
 
 }  // namespace
@@ -139,6 +207,10 @@ bool parse_split_size(const std::string& spec, uint64_t& out_bytes, std::string&
     if (frac_num > UINT64_MAX / mul) { err = "size overflow"; return false; }
 
     uint64_t base = whole * mul;
+    // 向上取整要先加上 frac_den-1，这一步自己也会回绕。
+    // 上面那道 frac_num*mul 的检查只管住了乘法，加法得单独判，
+    // 否则 "18446744073.709551615GB" 这类输入会绕出偏小的 extra。
+    if (frac_num > (UINT64_MAX - (frac_den - 1)) / mul) { err = "size overflow"; return false; }
     uint64_t extra = (frac_num * mul + frac_den - 1) / frac_den;   // 向上取整
     if (base > UINT64_MAX - extra) { err = "size overflow"; return false; }
 
@@ -213,8 +285,9 @@ std::vector<std::string> find_volumes(const std::string& base_ptd,
 }
 
 bool merge_volumes(const std::string& base_ptd, const std::string& merged_path,
-                   std::string& err) {
+                   std::string& err, bool* out_conflict) {
     err.clear();
+    if (out_conflict) *out_conflict = false;
     std::vector<uint32_t> missing;
     std::vector<std::string> vols = find_volumes(base_ptd, &missing);
     if (vols.empty()) { err = "no volumes found for " + base_ptd; return false; }
@@ -231,8 +304,17 @@ bool merge_volumes(const std::string& base_ptd, const std::string& merged_path,
         return false;
     }
 
-    std::ofstream out(merged_path, std::ios::binary | std::ios::trunc);
-    if (!out.good()) { err = "cannot write " + merged_path; return false; }
+    ExclusiveFile out(merged_path);
+    if (!out.ok()) {
+        // 名字已被占用（含预置的符号链接）：交给调用方换个随机名重试
+        if (out_conflict && (out.err() == EEXIST || out.err() == EACCES)) {
+            *out_conflict = true;
+            err = "temporary file already exists: " + merged_path;
+        } else {
+            err = "cannot write " + merged_path;
+        }
+        return false;
+    }
 
     std::vector<char> buf(kIoBufMax);
     for (const auto& v : vols) {
@@ -242,11 +324,12 @@ bool merge_volumes(const std::string& base_ptd, const std::string& merged_path,
             in.read(buf.data(), (std::streamsize)buf.size());
             std::streamsize got = in.gcount();
             if (got <= 0) break;
-            out.write(buf.data(), got);
-            if (!out.good()) { err = "write failed: " + merged_path; return false; }
+            if (!out.write(buf.data(), (size_t)got)) {
+                err = "write failed: " + merged_path;
+                return false;
+            }
         }
     }
-    out.close();
     return true;
 }
 
@@ -279,9 +362,24 @@ bool resolve_decrypt_input(const std::string& in_path, SplitPlan& plan, std::str
     plan.volumes = find_volumes(base);
     if (plan.volumes.empty()) return true;        // 没有分卷，原样返回
 
-    plan.merged_path = base + ".merge.ptd";
-    if (!merge_volumes(base, plan.merged_path, err)) {
-        remove_file_utf8(plan.merged_path);
+    // 随机名 + O_EXCL 独占创建：名字可预测时攻击者能抢在前面预置同名文件
+    //（符号链接会把合并内容写到别处，或直接让合并失败）。
+    // 随机段命中不了才需要重试，其余失败是真错误，直接退出。
+    for (int attempt = 0; attempt < 8; ++attempt) {
+        std::string cand = merged_temp_path(base);
+        bool conflict = false;
+        if (merge_volumes(base, cand, err, &conflict)) {
+            plan.merged_path = cand;
+            break;
+        }
+        if (conflict) continue;   // 名字被占：那文件不是我们的，别去动它
+        remove_file_utf8(cand);   // 自己开了口、写坏了，残留即清
+        plan = SplitPlan();
+        plan.real_input = in_path;
+        return false;
+    }
+    if (plan.merged_path.empty()) {
+        err = "cannot create a temporary file next to " + base;
         plan = SplitPlan();
         plan.real_input = in_path;
         return false;

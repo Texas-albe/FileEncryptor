@@ -346,6 +346,124 @@ static bool urlAllowed(const std::string& url, std::string* hostOut, bool allowA
 }
 
 // ===================== libcurl 回调与 GET / 下载 =====================
+// TLS 行为统一在这里设一次，两处lowGet 共用。
+//
+// 1) 吊销检查用 BEST_EFFORT 而不是 NO_REVOCATION：
+//    内网/防火墙常把 CRL 分发点拦掉，Schannel 拿不到吊销状态就直接
+//    InitializeSecurityContext 失败（CRYPT_E_NO_REVOCATION_CHECK），
+//    表现是「所有 HTTPS 都SSL connect error」。BEST_EFFORT 只在
+//    拉不到列表时放行，在线能查到吊销仍会拒绝。
+// 2) 用系统证书库（Schannel 后端本就默认走它，这里写明以防构建切换后端）。
+static void applyTls(CURL* h) {
+    curl_easy_setopt(h, CURLOPT_SSL_OPTIONS,
+                     (long)(CURLSSLOPT_REVOKE_BEST_EFFORT | CURLSSLOPT_NATIVE_CA));
+    curl_easy_setopt(h, CURLOPT_SSL_VERIFYPEER, 1L);
+    curl_easy_setopt(h, CURLOPT_SSL_VERIFYHOST, 2L);
+}
+
+#ifdef _WIN32
+// 读系统代理设置（Internet 选项 → 连接）。
+// Updater 是 GUI 拉起的独立进程，拿不到 GUI 进程的代理，只能自己读注册表。
+// 只在 --proxy 未显式指定时生效，显式指定永远优先。
+//
+// 读 HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings：
+//   ProxyEnable=1 时 ProxyServer 形如 "127.0.0.1:7890" 或 "http=…;https=…"
+//   AutoConfigURL非空表示走 PAC 脚本
+static std::string readRegistryStr(const wchar_t* name) {
+    HKEY key = nullptr;
+    if (RegOpenKeyExW(HKEY_CURRENT_USER,
+                      L"Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings",
+                      0, KEY_READ | KEY_WOW64_64KEY, &key) != ERROR_SUCCESS)
+        return {};
+    DWORD type = 0, cb = 0;
+    std::wstring val;
+    if (RegQueryValueExW(key, name, nullptr, &type, nullptr, &cb) == ERROR_SUCCESS
+        && (type == REG_SZ || type == REG_EXPAND_SZ) && cb > 0) {
+        val.resize(cb / sizeof(wchar_t));
+        if (RegQueryValueExW(key, name, nullptr, &type,
+                             reinterpret_cast<LPBYTE>(val.data()), &cb) == ERROR_SUCCESS) {
+            while (!val.empty() && (val.back() == L'\0' || val.back() == L' ')) val.pop_back();
+        } else {
+            val.clear();
+        }
+    }
+    RegCloseKey(key);
+    if (val.empty()) return {};
+    int need = WideCharToMultiByte(CP_UTF8, 0, val.c_str(), (int)val.size(), nullptr, 0, nullptr, nullptr);
+    std::string out(need, '\0');
+    WideCharToMultiByte(CP_UTF8, 0, val.c_str(), (int)val.size(), out.data(), need, nullptr, nullptr);
+    return out;
+}
+
+static DWORD readRegistryDword(const wchar_t* name) {
+    HKEY key = nullptr;
+    if (RegOpenKeyExW(HKEY_CURRENT_USER,
+                      L"Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings",
+                      0, KEY_READ | KEY_WOW64_64KEY, &key) != ERROR_SUCCESS)
+        return 0;
+    DWORD type = 0, val = 0, cb = sizeof(val);
+    if (RegQueryValueExW(key, name, nullptr, &type,
+                         reinterpret_cast<LPBYTE>(&val), &cb) != ERROR_SUCCESS)
+        val = 0;
+    RegCloseKey(key);
+    return val;
+}
+
+// 从 "http=1.2.3.4:80;https=1.2.3.4:443" 里挑出 https 对应项，没有就取第一项
+static std::string pickByScheme(const std::string& proxylist, const std::string& scheme) {
+    std::string fallback;
+    size_t pos = 0;
+    while (pos < proxylist.size()) {
+        size_t end = proxylist.find(';', pos);
+        if (end == std::string::npos) end = proxylist.size();
+        std::string item = proxylist.substr(pos, end - pos);
+        pos = end + 1;
+        while (!item.empty() && item.front() == ' ') item.erase(item.begin());
+        if (item.empty()) continue;
+        size_t eq = item.find('=');
+        if (eq == std::string::npos) {
+            if (fallback.empty()) fallback = item;
+            continue;
+        }
+        std::string key = item.substr(0, eq), val = item.substr(eq + 1);
+        for (auto& c : key) c = (char)tolower((unsigned char)c);
+        if (val.empty()) continue;
+        if (key == scheme) return val;
+        if (fallback.empty()) fallback = val;
+    }
+    return fallback;
+}
+
+// 返回可直接喂给 CURLOPT_PROXY 的值，空串表示不用代理
+static std::string systemProxy() {
+    // PAC 脚本：curl 不执行 JS，只认静态代理串。
+    // 这里取不到 PAC 的解析结果，交给调用方回退到直连。
+    if (!readRegistryStr(L"AutoConfigURL").empty()) return {};
+    if (readRegistryDword(L"ProxyEnable") != 1) return {};
+    std::string list = readRegistryStr(L"ProxyServer");
+    if (list.empty()) return {};
+    std::string picked = pickByScheme(list, "https");
+    if (picked.empty()) return {};
+    // 裸 "host:port" 补上 http://，curl 不接受无 scheme 的代理值
+    if (picked.find("://") == std::string::npos) picked = "http://" + picked;
+    return picked;
+}
+#endif
+
+// 显式 --proxy 优先；没有就读系统代理设置（仅 Windows 有）。
+// 检查更新与下载必须调同一个函数，否则会出现「查得到新版本却下不下来」。
+static void applyProxy(CURL* h) {
+    std::string proxy = g_proxy;
+#ifdef _WIN32
+    if (proxy.empty()) proxy = systemProxy();
+#endif
+    if (proxy.empty()) return;
+    curl_easy_setopt(h, CURLOPT_PROXY, proxy.c_str());
+    // 代理认证走 URL/header 里的凭据，需要关掉主机认证门禁
+    curl_easy_setopt(h, CURLOPT_HTTPAUTH, (long)CURLAUTH_ANY);
+    curl_easy_setopt(h, CURLOPT_UNRESTRICTED_AUTH, 1L);
+}
+
 // CA 证书包：Windows 上 curl 的 OpenSSL 后端不读系统证书库，缺 CAINFO 时 HTTPS 直接
 // 报证书校验失败（表现为「检查不了更新」）；Linux 的 OpenSSL 默认路径已覆盖，这里也
 // 允许 CURL_CA_BUNDLE / SSL_CERT_FILE 覆盖以便自带 CA 分发。
@@ -466,7 +584,7 @@ static HttpResult lowGet(const std::string& url, std::vector<char>* out,
     curl_easy_setopt(h, CURLOPT_CONNECTTIMEOUT, 15L);
     curl_easy_setopt(h, CURLOPT_TIMEOUT, 30L);
     curl_easy_setopt(h, CURLOPT_NOSIGNAL, 1L);
-    if (!g_proxy.empty()) curl_easy_setopt(h, CURLOPT_PROXY, g_proxy.c_str());
+    applyProxy(h);
     curl_easy_setopt(h, CURLOPT_WRITEFUNCTION, getWriteCb);
     curl_easy_setopt(h, CURLOPT_WRITEDATA, &ctx);
     curl_easy_setopt(h, CURLOPT_HEADERFUNCTION, getHeaderCb);
@@ -484,6 +602,7 @@ static HttpResult lowGet(const std::string& url, std::vector<char>* out,
     if (!rangeHeader.empty()) hdr = curl_slist_append(hdr, rangeHeader.c_str());
     if (hdr) curl_easy_setopt(h, CURLOPT_HTTPHEADER, hdr);
     applyCaBundle(h);
+    applyTls(h);
 
     CURLcode rc = curl_easy_perform(h);
     long code = 0;
@@ -585,6 +704,8 @@ static long long downloadToFile(const std::string& url, const std::string& outPa
     curl_easy_setopt(h, CURLOPT_LOW_SPEED_LIMIT, 4096L);
     curl_easy_setopt(h, CURLOPT_LOW_SPEED_TIME, 60L);
     applyCaBundle(h);
+    applyTls(h);
+    applyProxy(h);
     if (resumeFrom > 0) curl_easy_setopt(h, CURLOPT_RESUME_FROM_LARGE, (curl_off_t)resumeFrom);
 
     CURLcode rc = curl_easy_perform(h);

@@ -27,9 +27,12 @@ public class MainViewModel : ObservableObject
     private bool _aegisAvailable = true;
     // 后量子能力：缺 pqc= 字段的旧 CLI 视为不支持（fail-closed，同 Qt 侧 m_pqcAvailable）
     private bool _pqcAvailable;
+    // 打包能力：默认乐观，仅当 --features 里没有 pack=1（旧 CLI 不认 -p）才置 false
+    private bool _packAvailable = true;
     private readonly Stopwatch _runTimer = new();
     private int _doneFiles, _skipFiles, _failFiles, _totalFiles;
     private string _currentFile = "";
+    private ShellOptions? _runOptions;   // 本次运行的参数，任务结束用它删对应的临时私钥
 
     public MainViewModel()
     {
@@ -37,6 +40,7 @@ public class MainViewModel : ObservableObject
         _cli.Finished += OnFinished;
         // 进度计数来源（控制台模式下不触发）
         _cli.OutputLine += OnOutputLine;
+        _cli.ConfirmPrompt += OnConfirmPrompt;
     }
 
     // ===== 输入 =====
@@ -63,6 +67,37 @@ public class MainViewModel : ObservableObject
 
     private bool _force = true;
     public bool Force { get => _force; set { SetProperty(ref _force, value); RefreshCommandPreview(); } }
+
+    // 加密压缩包：目录树 / 多文件打成单个 .ptd（--pack）
+    private bool _pack;
+    public bool Pack { get => _pack; set { SetProperty(ref _pack, value); RefreshCommandPreview(); } }
+
+    // 打包能力探测：--features 缺 pack=1 的旧 CLI 会把 -p 当未知参数，这里自动关掉勾选框
+    public bool PackAvailable
+    {
+        get => _packAvailable;
+        set
+        {
+            if (_packAvailable == value) return;
+            SetProperty(ref _packAvailable, value);
+            if (!value) Pack = false;   // 不支持就别让用户以为已启用
+            RefreshCommandPreview();
+        }
+    }
+
+    // 分卷输出：默认不勾选；勾选后由 CliArgBuilder 下发 --split <size>
+    private bool _split;
+    public bool Split { get => _split; set { SetProperty(ref _split, value); RefreshCommandPreview(); } }
+
+    private double _splitSize = 100;
+    public double SplitSize { get => _splitSize; set { SetProperty(ref _splitSize, value); RefreshCommandPreview(); } }
+
+    private int _splitUnitIndex;
+    public int SplitUnitIndex { get => _splitUnitIndex; set { SetProperty(ref _splitUnitIndex, value); RefreshCommandPreview(); } }
+
+    // 目录 + 删除类源处置已由界面弹窗确认
+    private bool _sourceDeleteOk;
+    public bool SourceDeleteOk { get => _sourceDeleteOk; set => SetProperty(ref _sourceDeleteOk, value); }
 
     private bool _sha256;
     public bool Sha256 { get => _sha256; set { SetProperty(ref _sha256, value); RefreshCommandPreview(); } }
@@ -182,11 +217,14 @@ public class MainViewModel : ObservableObject
             _zstdAvailable = output.Contains("zstd=1");
             _aegisAvailable = output.Contains("aegis=1");
             _pqcAvailable = output.Contains("pqc=1");
+            _packAvailable = output.Contains("pack=1");
             _dispatcher.TryEnqueue(() =>
             {
                 OnPropertyChanged(nameof(ZstdAvailable));
                 OnPropertyChanged(nameof(AegisAvailable));
                 OnPropertyChanged(nameof(PqcAvailable));
+                OnPropertyChanged(nameof(PackAvailable));
+                if (!_packAvailable) Pack = false;   // 旧 CLI 不支持打包，强制取消勾选
             });
         }
         catch (OperationCanceledException) { try { p?.Kill(); } catch { } }
@@ -207,7 +245,11 @@ public class MainViewModel : ObservableObject
     {
         if (_cliPath == null) return;
         var opts = CollectOptions();
+        _runOptions = opts;
         var args = CliArgBuilder.BuildArguments(opts);
+        // --source-delete-ok 仅本次任务有效：弹窗确认一遍，下发就清掉，别保留到下次
+        opts.SourceDeleteOk = false;
+        SourceDeleteOk = false;
         string? workDir = null;
         if (opts.InputPaths.Count > 0)
         {
@@ -220,14 +262,24 @@ public class MainViewModel : ObservableObject
         if (string.IsNullOrEmpty(workDir))
             workDir = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
 
+        // 确认握手：CLI 把 y/n 询问写进这个文件，界面读到后弹窗，再把答案写回去
+        var confirmDir = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "FileEncryptor", "GUI");
+        Directory.CreateDirectory(confirmDir);
+        var confirmFile = Path.Combine(confirmDir,
+            "fe_confirm_" + Guid.NewGuid().ToString("N") + ".txt");
+
         var req = new CommandRequest
         {
             ProgramPath = _cliPath,
             Arguments = args,
             StdinData = stdinData,
             WorkingDirectory = workDir,
-            ShowConsole = console
+            ShowConsole = console,
+            ConfirmFile = confirmFile,
         };
+        req.ExtraEnv["FILEENCRYPTOR_CONFIRM_FILE"] = confirmFile;
 
         _doneFiles = _skipFiles = _failFiles = 0;
         _totalFiles = InputPaths.Count(p => p.IsSelected);
@@ -298,6 +350,15 @@ public class MainViewModel : ObservableObject
     }
 
     public event Action? PasswordRequested;
+
+    // CLI 请求确认：text 为完整问题（已含 y/N 提示）
+    public event Action<string>? ConfirmPromptRequested;
+
+    private void OnConfirmPrompt(string text)
+        => _dispatcher.TryEnqueue(() => ConfirmPromptRequested?.Invoke(text));
+
+    // 回答 CLI 的 y/n 询问
+    public void AnswerConfirm(bool yes) => _cli.AnswerConfirm(yes);
     public event Action<string>? TaskCompleted;
     public event Action<TaskSummaryInfo>? TaskSummary;
 
@@ -332,7 +393,7 @@ public class MainViewModel : ObservableObject
                 _currentTask.TotalBytes = _cli.TotalBytes > 0 ? _cli.TotalBytes : _currentTask.TotalBytes;
                 TaskHistoryService.Append(_currentTask, out _);
             }
-            CliArgBuilder.CleanupWatermarkTemp();
+            CliArgBuilder.CleanupWatermarkTemp(_runOptions!);
 
             // 构建汇总
             var summary = new TaskSummaryInfo
@@ -441,6 +502,11 @@ public class MainViewModel : ObservableObject
             InputPaths = new List<string>(InputPaths.Where(p => p.IsSelected).Select(p => p.Path)),
             OutputDir = OutputDir,
             SourceDisposition = (SourceDisposition)SourceIndex,
+            Pack = Pack,
+            Split = Split,
+            SplitSize = SplitSize,
+            SplitUnit = (SplitUnit)SplitUnitIndex,
+            SourceDeleteOk = SourceDeleteOk,
             ForceOverwrite = Force,
             KeyfilePath = Keyfile,
             RecipientPath = Recipient,
@@ -461,6 +527,12 @@ public class MainViewModel : ObservableObject
     {
         var opts = CollectOptions();
         var args = CliArgBuilder.BuildArguments(opts);
+        // 预览只拼参数不真正跑 CLI，落盘的临时私钥立刻清掉
+        if (opts.WatermarkTempKeyPath != null)
+        {
+            try { File.Delete(opts.WatermarkTempKeyPath); } catch { }
+            opts.WatermarkTempKeyPath = null;
+        }
         var argStr = string.Join(" ", args.Select(a =>
             CliArgBuilder.IsPrivateKeyMaterial(a) ? "<private-key>"
             : a.StartsWith("-") ? a

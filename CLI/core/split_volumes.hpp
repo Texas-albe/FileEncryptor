@@ -35,8 +35,10 @@ std::vector<std::string> find_volumes(const std::string& base_ptd,
 
 // 把 base_ptd 对应的分卷按序号合并成 merged_path。
 // 序号必须从 1 开始且连续，缺号时报错并列出缺哪几卷。
+// merged_path 以 O_EXCL 独占创建：已存在（含符号链接）时不覆盖，
+// 置 out_conflict=true 让调用方换个名字重试。
 bool merge_volumes(const std::string& base_ptd, const std::string& merged_path,
-                   std::string& err);
+                   std::string& err, bool* out_conflict = nullptr);
 
 // 加密收尾：把完整 .ptd 切成多卷并删掉原件。原件删掉后整文件校验单
 // 就失去意义，故 sha_sidecar 为真时改为每卷各写一份。失败只报错，

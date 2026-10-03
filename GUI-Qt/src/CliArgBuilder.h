@@ -44,6 +44,12 @@ struct ShellOptions {
 
     bool restoreName = false;
 
+    // 加密压缩包：把目录树 / 多个文件打成单个 .ptd（CLI --pack）
+    bool pack = false;
+
+    // 目录输入 + 删除类源处置已由界面弹窗确认，CLI 不必再问一次
+    bool sourceDeleteOk = false;
+
     bool writeSha256 = false;
 
     // 非对称曲线：false=X25519，true=X448（非对称封装与 -g 生成密钥对都走该曲线）

@@ -1,6 +1,7 @@
 #include "FileEncryptorLocator.h"
 #include <QCoreApplication>
 #include <QDir>
+#include <QFile>
 #include <QFileInfo>
 #include <QProcessEnvironment>
 
@@ -50,16 +51,16 @@ QString FileEncryptorLocator::locate() {
 
 // 配套 CLI 版本
 QString FileEncryptorLocator::version() {
-    return QStringLiteral("2.7.1");
+    return QStringLiteral("2.8.0");
 }
 
 // GUI 自身版本
 QString FileEncryptorLocator::guiVersion() {
-    return QStringLiteral("2.1.1");
+    return QStringLiteral("2.1.2");
 }
 
 QString FileEncryptorLocator::cliDownloadUrl() {
-    return QStringLiteral("https://github.com/Texas-albe/FileEncryptor/releases/tag/GUI2.1.1_CLI2.7.1");
+    return QStringLiteral("https://github.com/Texas-albe/FileEncryptor/releases/tag/GUI2.1.2_CLI2.8.0");
 }
 
 QStringList FileEncryptorLocator::getExpectedNames() {
@@ -93,29 +94,88 @@ static QString findInDirWithNames(const QString& dir,const QStringList& names) {
     return {};
 }
 
+// 把 "2.7.1" 解析成三元组，认不出来返回 false
+static bool parseVersion(const QString& s,int* maj,int* min,int* pat) {
+    if(s.isEmpty()) return false;
+    const QStringList parts=s.split(QLatin1Char('.'));
+    if(parts.isEmpty()||parts.size()>3) return false;
+    int v[3]={0,0,0};
+    for(int i=0;i<parts.size();++i) {
+        bool ok=false;
+        v[i]=parts.at(i).toInt(&ok);
+        if(!ok||v[i]<0) return false;
+    }
+    *maj=v[0]; *min=v[1]; *pat=v[2];
+    return true;
+}
+
+// 三元组比较：a<b 返回 true
+static bool verLess(int amaj,int amin,int apat,int bmaj,int bmin,int bpat) {
+    if(amaj!=bmaj) return amaj<bmaj;
+    if(amin!=bmin) return amin<bmin;
+    return apat<bpat;
+}
+
+// "FileEncryptorCLI-2.7.0-cmd-Windows.exe" -> (2,7,0)；认不出来返回 false
+static bool cliVersionOfFile(const QString& fileName,int* maj,int* min,int* pat) {
+    const QString prefix=QStringLiteral("FileEncryptorCLI-");
+    if(!fileName.startsWith(prefix,Qt::CaseInsensitive)) return false;
+    QString rest=fileName.mid(prefix.size());
+    // 版本号后面必跟 '-cmd-' 或 '.exe'，否则是别的文件
+    int end=rest.indexOf(QLatin1Char('-'));
+    if(end<0) end=rest.indexOf(QLatin1Char('.'));
+    if(end<=0) return false;
+    return parseVersion(rest.left(end),maj,min,pat);
+}
+
+QStringList FileEncryptorLocator::cleanupOutdated(const QString& keepPath) {
+    QStringList removed;
+    int wantMaj=0,wantMin=0,wantPat=0;
+    if(!parseVersion(version(),&wantMaj,&wantMin,&wantPat)) return removed;
+
+    // 只看程序目录：别的地方（PATH、系统目录）不由我们处置
+    QDir dir(selfDir());
+    if(!dir.exists()) return removed;
+
+    const QString keepFull=keepPath.isEmpty()?QString():QFileInfo(keepPath).absoluteFilePath();
+    const QStringList entries=dir.entryList(QDir::Files|QDir::NoDotAndDotDot,QDir::Name);
+    for(const QString& name:entries) {
+        int maj=0,min=0,pat=0;
+        if(!cliVersionOfFile(name,&maj,&min,&pat)) continue;
+        // 只删严格低于目标版本的：同版本与更高版本一律不动，
+        // 免得用户手动放的定制版或更新的预发布版被误删
+        if(!verLess(maj,min,pat,wantMaj,wantMin,wantPat)) continue;
+        if(!keepFull.isEmpty()&&QFileInfo(dir.absoluteFilePath(name)).absoluteFilePath()==keepFull) continue;
+        if(QFile::remove(dir.absoluteFilePath(name))) removed<<name;
+        // 删不掉（正在运行 / 无权限）就留着，不打扰用户
+    }
+    return removed;
+}
+
 bool FileEncryptorLocator::existsWithVersion(QString* foundPath) {
     const QStringList names=getExpectedNames();
 
-    const QString envPath=qEnvironmentVariable("FILEENCRYPTOR_EXE");
-    if(!envPath.isEmpty()&&isExecutable(envPath)) {
-        if(foundPath) *foundPath=envPath;
+    // 三条命中路径统一走这里收尾，顺手清掉目录里版本过低的 CLI：
+    // 探测在哪触发都清，不必每个调用点都记得调一次
+    auto finish=[foundPath](const QString& p)->bool {
+        cleanupOutdated(p);
+        if(foundPath) *foundPath=p;
         return true;
-    }
+    };
+
+    const QString envPath=qEnvironmentVariable("FILEENCRYPTOR_EXE");
+    if(!envPath.isEmpty()&&isExecutable(envPath)) return finish(envPath);
 
     QString found=findInDirWithNames(selfDir(),names);
-    if(!found.isEmpty()) {
-        if(foundPath) *foundPath=found;
-        return true;
-    }
+    if(!found.isEmpty()) return finish(found);
 
     const QProcessEnvironment env=QProcessEnvironment::systemEnvironment();
     for(const QString& p:env.value("PATH").split(QDir::listSeparator(),Qt::SkipEmptyParts)) {
         found=findInDirWithNames(p,names);
-        if(!found.isEmpty()) {
-            if(foundPath) *foundPath=found;
-            return true;
-        }
+        if(!found.isEmpty()) return finish(found);
     }
 
+    // 没找到也要清：老版本堆积正是「找不到新版」最常见的原因
+    cleanupOutdated(QString());
     return false;
 }

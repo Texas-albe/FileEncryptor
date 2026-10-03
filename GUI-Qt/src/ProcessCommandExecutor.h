@@ -15,6 +15,7 @@ public:
     void setRawMode(bool on);
     void cancel() override;
     bool isRunning() const override;
+    void answerConfirm(bool yes) override;
 
 private slots:
     void onReadyReadStandardOutput();
@@ -38,4 +39,11 @@ private:
 
     QStringList m_frameLines;
     bool m_inFrame = false;
+
+    QString m_confirmFile;
+    // 已弹窗等回答 / 已写答案但 CLI 未取走，两态都禁止再次弹窗
+    bool m_confirmPending = false;
+    bool m_confirmAnswered = false;
+    class QTimer* m_confirmTimer = nullptr;
+    void pollConfirmFile();
 };

@@ -68,6 +68,8 @@ private slots:
     void onRewrapClicked();
     void onOutputLine(const OutputLine& line);
     void onCommandFinished(const CommandResult& r);
+    // CLI 请求 y/n 确认：弹窗询问后把答案写回握手文件
+    void onConfirmPrompt(const QString& text);
     void refreshCommandPreview();
     void updateAsymVisibility();
     // SM4 需 OpenSSL 支持：不可用时禁用模式下拉里的对应项
@@ -168,6 +170,7 @@ private:
     QLabel* m_fileCipherLabel=nullptr;
     QComboBox* m_sourceCombo=nullptr;
     QCheckBox* m_chkForce=nullptr;
+    QCheckBox* m_chkPack=nullptr;
     QCheckBox* m_chkSha256=nullptr;
     QCheckBox* m_chkCompress=nullptr;
     QWidget* m_compressRow=nullptr;
@@ -216,6 +219,7 @@ private:
 
     TaskRecord m_currentTask;
     QString m_statsFile;
+    QString m_confirmFile;
     QElapsedTimer m_runTimer;
     int m_runFileTotal=0;
     QPushButton* m_btnTaskHistory=nullptr;

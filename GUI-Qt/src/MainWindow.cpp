@@ -1234,6 +1234,8 @@ QWidget* MainWindow::buildCenterPanel() {
     m_sourceCombo->addItem(tr("完成后安全擦除（多次覆写）"),2);
     m_sourceCombo->setToolTip(tr("加密成功后对源文件的处理方式，仅加密动作生效"));
     m_chkForce=new QCheckBox(tr("覆盖已存在文件"));
+    m_chkPack=new QCheckBox(tr("打包为单个容器"));
+    m_chkPack->setToolTip(tr("把整个目录树或多个文件打成单个 .ptd 容器，不删除源文件"));
     m_chkSha256=new QCheckBox(tr("生成校验单"));
     m_chkSha256->setToolTip(tr("额外生成 .sha256 校验单，便于校验传输完整性"));
     // 与「生成校验单」同排，样式统一
@@ -1247,6 +1249,7 @@ QWidget* MainWindow::buildCenterPanel() {
     m_chkWatermark->setToolTip(tr("在密文尾部追加一条签名水印"));
     optsRow->addWidget(m_sourceCombo);
     optsRow->addWidget(m_chkForce);
+    optsRow->addWidget(m_chkPack);
     optsRow->addWidget(m_chkSha256);
     optsRow->addWidget(m_chkPqc);
     optsRow->addWidget(m_chkX448);
@@ -1345,6 +1348,7 @@ void MainWindow::connectSignals() {
 
     connect(m_executor,&ICommandExecutor::outputLine,this,&MainWindow::onOutputLine);
     connect(m_executor,&ICommandExecutor::finished,this,&MainWindow::onCommandFinished);
+    connect(m_executor,&ICommandExecutor::confirmPrompt,this,&MainWindow::onConfirmPrompt);
 
     auto refresh=[this]{ refreshCommandPreview(); };
     connect(m_actionGroup,&QButtonGroup::idClicked,this,refresh);
@@ -1477,10 +1481,12 @@ void MainWindow::updateAsymVisibility() {
         if(asym && m_fileCipherCombo->currentIndex()<0) m_fileCipherCombo->setCurrentIndex(0);
     }
     if(m_sourceCombo) m_sourceCombo->setVisible(encFields);
+    if(m_chkPack) m_chkPack->setVisible(encFields);
     if(!encFields) {
         // 藏起来的开关清掉勾选，CLI 不会收到对当前动作无意义的开关
         if(m_chkSha256&&m_chkSha256->isChecked()) m_chkSha256->setChecked(false);
         if(m_chkWatermark&&m_chkWatermark->isChecked()) m_chkWatermark->setChecked(false);
+        if(m_chkPack&&m_chkPack->isChecked()) m_chkPack->setChecked(false);
     }
     if(m_chkSha256) m_chkSha256->setVisible(encFields);
     if(m_chkWatermark) m_chkWatermark->setVisible(encFields);
@@ -1626,6 +1632,7 @@ ShellOptions MainWindow::collectOptions() const {
     o.outputDir=m_outDirEdit->text().trimmed();
     o.sourceDisposition=m_sourceCombo ? m_sourceCombo->currentData().toInt() : 0;
     o.forceOverwrite=m_chkForce->isChecked();
+    o.pack=(m_chkPack && m_chkPack->isChecked());
     o.writeSha256=m_chkSha256->isChecked();
     o.keyfilePath=m_keyfileEdit->text().trimmed();
     // CLI 无 zstd 时禁用勾选框，这里再兜一层，避免任务记录/预览里出现别人无法执行的指令
@@ -1740,10 +1747,37 @@ void MainWindow::onRunClicked() {
     bool isBatch=(o.action==CryptoAction::BatchEncrypt||
         o.action==CryptoAction::BatchDecrypt);
     bool isEnc=(o.action==CryptoAction::Encrypt||o.action==CryptoAction::BatchEncrypt);
-    if(!isBatch&&o.inputPaths.size()>1) {
+    if(!isBatch&&!o.pack&&o.inputPaths.size()>1) {
         MsgBox::warn(this,tr("输入过多"),
-            tr("单文件模式只接受一个输入路径，请清空后只选一个，或改用批量模式。"));
+            tr("单文件模式只接受一个输入路径，请清空后只选一个，勾选「打包为单个容器」，或改用批量模式。"));
         return;
+    }
+    // 目录 + 删除类源处置：整棵树都会被清掉，动手前必须确认一次。
+    // 确认通过后下发 --source-delete-ok，免得 CLI 再问一遍（问第二遍用户会懵）。
+    if(isEnc && !o.pack && o.sourceDisposition!=0) {
+        QStringList dirs;
+        for(const QString& p : o.inputPaths) {
+            if(QFileInfo(p).isDir()) dirs<<p;
+        }
+        if(!dirs.isEmpty()) {
+            const int disp=o.sourceDisposition;
+            const QString how = disp==2 ? tr("安全擦除（多次覆写）")
+                             : disp==3 ? tr("移入回收站")
+                             : tr("删除");
+            QStringList show=dirs.mid(0,5);
+            // 与 CLI 行为对齐：-de 只逐个删除目录树里的文件，空目录壳保留
+            QString msg=tr("加密完成后，以下源目录中的文件将被%1（目录本身保留），此操作不可撤销：\n\n%2")
+                             .arg(how)
+                             .arg(show.join('\n'));
+            if(dirs.size()>show.size()) {
+                msg+=QStringLiteral("\n\n... ")
+                    +tr("另有 %1 个目录").arg(dirs.size()-show.size());
+            }
+            if(!MsgBox::confirm(this,tr("确认删除源目录"),msg)) {
+                return;
+            }
+            o.sourceDeleteOk=true;
+        }
     }
     // 非对称判定对解密同样成立：解密不看模式，只认「私钥文件」入口
     const bool asymDecrypt=(!isEnc)&&!noInputNeeded&&
@@ -1818,6 +1852,22 @@ void MainWindow::onRunClicked() {
         }
     }
     req.extraEnv.insert(QStringLiteral("FILEENCRYPTOR_STATS_FILE"),m_statsFile);
+    // 确认握手：CLI 把 y/n 询问写进这个文件，界面读到后弹窗，再把答案写回去。
+    // 走文件是因为 stdin 已被 --key-stdin 读到 EOF，CLI 那边没法再从 stdin 收答案。
+    {
+        QTemporaryFile confirmTmp(QDir::tempPath()+QStringLiteral("/fe_confirm_XXXXXX"));
+        confirmTmp.setAutoRemove(false);
+        confirmTmp.setPermissions(QFileDevice::ReadOwner|QFileDevice::WriteOwner);
+        if(confirmTmp.open()) {
+            m_confirmFile=confirmTmp.fileName();
+            confirmTmp.close();
+        }
+        QFile::remove(m_confirmFile);
+    }
+    if(!m_confirmFile.isEmpty()) {
+        req.confirmFile=m_confirmFile;
+        req.extraEnv.insert(QString::fromLatin1(feConfirmFileEnv()),m_confirmFile);
+    }
     if(o.action==CryptoAction::BatchEncrypt||o.action==CryptoAction::BatchDecrypt) {
         req.extraEnv.insert(QStringLiteral("FILEENCRYPTOR_PROGRESS_FRAME"),QStringLiteral("1"));
         const QFontMetrics fm(m_outputView->font());
@@ -1858,6 +1908,13 @@ void MainWindow::onRunClicked() {
         secure_zero(req.stdinData.data(),(size_t)req.stdinData.size());
         req.stdinData.clear();
     }
+}
+
+// CLI 请求确认：同步弹窗，答完立刻写回握手文件让 CLI 继续
+void MainWindow::onConfirmPrompt(const QString& text) {
+    if(!m_executor) return;
+    const bool yes=MsgBox::confirm(this,tr("需要确认"),text);
+    m_executor->answerConfirm(yes);
 }
 
 // 密钥轮换

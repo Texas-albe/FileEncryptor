@@ -116,6 +116,11 @@ QStringList CliArgBuilder::buildArguments(const ShellOptions& o) {
         args << QStringLiteral("-o") << o.outputDir;
     }
 
+    // 加密压缩包：目录树 / 多文件打成单个 .ptd。短选项 -p，长选项 --pack。必须在 -- 之前。
+    if (o.pack && isEnc) {
+        args << QStringLiteral("-p");
+    }
+
     // 源文件处理（仅加密动作）
     if (isEnc) {
         if (o.sourceDisposition == 1) {
@@ -124,6 +129,10 @@ QStringList CliArgBuilder::buildArguments(const ShellOptions& o) {
             args << QStringLiteral("--wipe-source");
         } else if (o.sourceDisposition == 3) {
             args << QStringLiteral("--recycle-source");
+        }
+        // 目录 + 删除类处置：界面已弹窗确认，告知 CLI 免掉交互询问
+        if (o.sourceDeleteOk && o.sourceDisposition != 0) {
+            args << QStringLiteral("--source-delete-ok");
         }
     }
 

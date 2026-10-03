@@ -1,4 +1,5 @@
 using System.Text;
+using System.Linq;
 using FileEncryptorGUI.Models;
 
 namespace FileEncryptorGUI.Services;
@@ -6,29 +7,61 @@ namespace FileEncryptorGUI.Services;
 // GUI 参数到 argv 的映射
 public static class CliArgBuilder
 {
-    // 任务结束时删掉这份临时私钥
-    private static string? _wmKeyTempPath;
-
     // 密码框里存的是私钥明文，而 CLI 的 --wm-sign 只收文件路径
-    private static string ResolveKeySource(string key)
-        => IsPrivateKeyMaterial(key) ? TempFileFor(key) : key;
+    private static string ResolveKeySource(string key, ShellOptions options)
+        => IsPrivateKeyMaterial(key) ? TempFileFor(key, options) : key;
 
     public static bool IsPrivateKeyMaterial(string? v)
         => !string.IsNullOrEmpty(v) && v.Contains("PRIVATE KEY", StringComparison.Ordinal);
 
-    private static string TempFileFor(string key)
+    // 私钥明文只落在这一个任务自己的临时文件里（路径挂在 ShellOptions 上）。
+    // 原来用静态字段存路径：单任务串行没事，一旦并发任务，后一个会覆盖前一个的路径，
+    // 前一个任务结束时删错文件、私钥残留。ACL 显式收紧到仅当前用户，不继承 %TEMP% 默认 DACL。
+    private static string TempFileFor(string key, ShellOptions options)
     {
-        _wmKeyTempPath ??= Path.Combine(Path.GetTempPath(),
+        var path = Path.Combine(Path.GetTempPath(),
             "fe_wm_" + Guid.NewGuid().ToString("N") + ".pem");
-        File.WriteAllText(_wmKeyTempPath, key);
-        return _wmKeyTempPath;
+        using (var fs = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+        using (var sw = new StreamWriter(fs, new UTF8Encoding(false)))
+        {
+            sw.Write(key);
+        }
+        TightenTempAcl(path);
+        options.WatermarkTempKeyPath = path;
+        return path;
     }
 
-    public static void CleanupWatermarkTemp()
+    // 显式收紧 ACL：断继承 + 清空既有规则 + 只留当前用户完全控制
+    private static void TightenTempAcl(string path)
     {
-        if (_wmKeyTempPath == null) return;
-        try { File.Delete(_wmKeyTempPath); } catch { }
-        _wmKeyTempPath = null;
+        try
+        {
+            var fi = new FileInfo(path);
+            var sec = fi.GetAccessControl();
+            sec.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
+            var rules = sec.GetAccessRules(includeExplicit: true, includeInherited: true,
+                typeof(System.Security.Principal.NTAccount))
+                .Cast<System.Security.AccessControl.FileSystemAccessRule>().ToList();
+            foreach (var r in rules) sec.RemoveAccessRule(r);
+            var me = System.Security.Principal.WindowsIdentity.GetCurrent().User;
+            if (me != null)
+            {
+                sec.AddAccessRule(new System.Security.AccessControl.FileSystemAccessRule(
+                    me, System.Security.AccessControl.FileSystemRights.FullControl,
+                    System.Security.AccessControl.AccessControlType.Allow));
+            }
+            fi.SetAccessControl(sec);
+        }
+        catch { /* 收紧失败不阻断：文件仍会由任务结束时删除 */ }
+    }
+
+    // 删除本次任务自己的水印私钥临时文件（每任务独立，不会误删并发任务的文件）
+    public static void CleanupWatermarkTemp(ShellOptions options)
+    {
+        var path = options?.WatermarkTempKeyPath;
+        if (string.IsNullOrEmpty(path)) return;
+        try { File.Delete(path); } catch { }
+        options!.WatermarkTempKeyPath = null;
     }
 
     public static List<string> BuildArguments(ShellOptions options)
@@ -66,8 +99,20 @@ public static class CliArgBuilder
         // 输出目录
         if (!string.IsNullOrEmpty(options.OutputDir)) { args.Add("-o"); args.Add(options.OutputDir); }
 
+        bool isEnc = options.Action is CryptoAction.Encrypt or CryptoAction.BatchEncrypt;
+
+        // 加密压缩包：目录树 / 多文件打成单个 .ptd。短选项 -p，长选项 --pack。必须排在 -- 之前。
+        if (isEnc && options.Pack) args.Add("-p");
+
+        // 分卷：把产出的 .ptd 切成 <base>.001.ptd/002/…；--split 的值是尺寸串（2GB/512MB/4096）
+        if (isEnc && options.Split)
+        {
+            args.Add("--split");
+            args.Add(FormatSplitSize(options.SplitSize, options.SplitUnit));
+        }
+
         // 源文件处理
-        if (options.Action is CryptoAction.Encrypt or CryptoAction.BatchEncrypt)
+        if (isEnc)
         {
             switch (options.SourceDisposition)
             {
@@ -75,6 +120,9 @@ public static class CliArgBuilder
                 case SourceDisposition.Wipe: args.Add("--wipe-source"); break;
                 case SourceDisposition.Recycle: args.Add("--recycle-source"); break;
             }
+            // 目录 + 删除类处置：界面已弹窗确认，告知 CLI 免掉交互询问
+            if (options.SourceDeleteOk && options.SourceDisposition != SourceDisposition.Keep)
+                args.Add("--source-delete-ok");
         }
 
         if (options.ForceOverwrite) args.Add("-y");
@@ -125,7 +173,7 @@ public static class CliArgBuilder
             if (!string.IsNullOrEmpty(options.WatermarkKeyPath))
             {
                 args.Add("--wm-sign");
-                args.Add(ResolveKeySource(options.WatermarkKeyPath));
+                args.Add(ResolveKeySource(options.WatermarkKeyPath, options));
             }
         }
 
@@ -160,6 +208,19 @@ public static class CliArgBuilder
         }
 
         return args;
+    }
+
+    // 组装 --split 尺寸串；CLI 的 parse_split_size 认 1024 进制 KB/MB/GB/TB
+    private static string FormatSplitSize(double value, SplitUnit unit)
+    {
+        double v = value > 0 ? value : 1;
+        string suffix = unit switch
+        {
+            SplitUnit.GB => "GB",
+            SplitUnit.TB => "TB",
+            _ => "MB",
+        };
+        return v.ToString("0.####", System.Globalization.CultureInfo.InvariantCulture) + suffix;
     }
 
     private static string ModeToken(CryptoMode m) => m switch
@@ -201,6 +262,8 @@ public static class CliArgBuilder
         {
             sb.Append(L10n.T("  # 密钥经 stdin 管道注入"));
         }
+        // 预览只拼字符串、不真正跑 CLI，临时私钥用完即删
+        CleanupWatermarkTemp(options);
         return sb.ToString();
     }
 }

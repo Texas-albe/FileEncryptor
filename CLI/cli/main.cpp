@@ -4,6 +4,8 @@
 #include "keylib.hpp"
 #include "password_policy.hpp"
 #include "split_volumes.hpp"
+#include "archive.hpp"
+#include "util/hex.hpp"
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -13,10 +15,21 @@
 #include <algorithm>
 #include <cctype>
 #include <fstream>
+#include <chrono>
+#include <thread>
 #include <iterator>
 #include <sodium.h>
 #include <stdexcept>
 #include <ctime>
+
+#ifdef _MSC_VER
+#pragma warning(push)
+#pragma warning(disable: 4127 4251 4275 4702 26495 26451)
+#endif
+#include "CLI11.hpp"
+#ifdef _MSC_VER
+#pragma warning(pop)
+#endif
 
 #ifdef _WIN32
 #include <windows.h>
@@ -80,6 +93,105 @@ static std::vector<char> get_password_win() {
     return pwd;
 }
 #endif
+
+// ===== 确认询问 =====
+// 交互终端：纯文本提示 + std::cin 读一个字符。
+// 宿主（GUI）：FILEENCRYPTOR_CONFIRM_FILE 指向一个来回文件 —— CLI 把问题写进去，
+// 宿主弹窗后把 y/n 写回来。走文件而非 stdin/stdout 有两个硬理由：
+//   1) stdin 已被口令通道占满（--key-stdin 读到 EOF 为止），关掉写端后 CLI 读到的是 EOF；
+//   2) WinUI 的「系统控制台」模式只重定向 stdin，stdout/stderr 直接进控制台窗口，
+//      宿主根本看不到提示，也没法把应答送回去。
+static bool host_confirm_enabled() {
+    const char* v=std::getenv("FILEENCRYPTOR_CONFIRM_FILE");
+    return v&&v[0];
+}
+
+// 把问题写进握手文件，再轮询等应答。宿主写回以覆盖截断，故读到的首行即答案。
+static bool host_confirm(const std::string& question) {
+    const char* path=std::getenv("FILEENCRYPTOR_CONFIRM_FILE");
+    if(!path||!path[0]) return false;
+    const std::string f=path;
+    {
+        std::ofstream of;
+        if(!open_stream(of,f,std::ios::out|std::ios::binary|std::ios::trunc)) {
+            std::cerr<<"Error: cannot write the confirmation handshake file: "<<f<<"\n";
+            return false;
+        }
+        of<<question<<"\n";
+        of.flush();
+        if(!of.good()) {
+            std::cerr<<"Error: cannot write the confirmation handshake file: "<<f<<"\n";
+            return false;
+        }
+    }
+    // 上限 10 分钟：宿主窗口被用户最小化时不该把 CLI 永久挂住。
+    // 答案只认严格的 y/yes/n/no：第一次轮询很可能读回上面刚写的**问题本身**，
+    // 若按首字符判断，「Source directories...」会被当成回答（既不是 y 也不是 n，
+    // 结果是立刻返回 false，用户还没来得及答就被判为拒绝）。
+    for(int i=0; i<6000; ++i) {
+        std::ifstream in;
+        std::string line;
+        int verdict=-1;   // 0=否 1=是 -1=还没收到答案
+        if(open_stream(in,f,std::ios::in|std::ios::binary)&&std::getline(in,line)) {
+            while(!line.empty()&&(line.back()=='\r'||line.back()==' '||line.back()=='\t')) line.pop_back();
+            size_t b=0;
+            while(b<line.size()&&(line[b]==' '||line[b]=='\t')) ++b;
+            std::string ans=line.substr(b);
+            std::string low;
+            for(char c:ans) low+=(char)std::tolower((unsigned char)c);
+            if(low=="y"||low=="yes") verdict=1;
+            else if(low=="n"||low=="no") verdict=0;
+        }
+        if(verdict>=0) {
+            // 吃掉应答，免得下一次询问读到上一轮的残留
+            std::ofstream clr;
+            open_stream(clr,f,std::ios::out|std::ios::binary|std::ios::trunc);
+            clr.flush();
+            clr.close();
+            return verdict==1;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+    std::cerr<<"Error: timed out waiting for a confirmation answer.\n";
+    return false;
+}
+
+static bool confirm_yes_no(const std::string& subject, const char* prompt_suffix) {
+    // subject 可能是多行（目录清单），必须换行接提示，否则最后一条路径与提示符连成一行
+    if(host_confirm_enabled()) return host_confirm(subject+"\n"+prompt_suffix);
+    std::string suf=prompt_suffix;
+    while(!suf.empty()&&(suf.back()==' ')) suf.pop_back();
+    std::cout<<subject<<"\n"<<suf<<std::flush;
+    char ch='n';
+    if(!(std::cin>>ch)) return false;
+    return ch=='y'||ch=='Y';
+}
+
+// 目录输入 + 删除类源文件处置：整棵树会被清掉，动手前必须确认一次。
+// GUI 侧先弹窗并用 --source-delete-ok 免掉这里的询问；--pack 不删目录，故不适用。
+static bool confirm_source_dir_removal(const std::vector<std::string>& input_paths,
+                                       int source_action) {
+    std::vector<std::string> dirs;
+    for(const auto& p : input_paths) if(fe_path_is_directory(p)) dirs.push_back(p);
+    if(dirs.empty()) return true;
+    const char* how = source_action==2 ? "securely erased"
+                    : source_action==3 ? "moved to the Recycle Bin"
+                    : "deleted";
+    // 措辞与实现对齐：-de 只逐个删除目录树里的文件（secure_handle_source 作用于文件），
+    // 空目录壳保留。不写 "directories will be deleted"，否则默认输出到源目录时
+    // .ptd 就落在目录里、目录根本不会空，承诺与行为对不上。
+    std::string msg = "Files inside these directories will be ";
+    msg += how;
+    msg += " once encryption finishes (the directories themselves are kept; this cannot be undone):";
+    const size_t shown = dirs.size() > 5 ? 5 : dirs.size();
+    for(size_t k = 0 ; k < shown ; ++k) { msg += "\n  "; msg += dirs[k]; }
+    if(dirs.size() > shown) {
+        msg += "\n  ... ";
+        msg += std::to_string(dirs.size() - shown);
+        msg += " more";
+    }
+    return confirm_yes_no(msg, "Continue? (y/N): ");
+}
 
 #ifndef _WIN32
 static std::vector<char> get_password_posix() {
@@ -165,13 +277,18 @@ static void print_usage() {
         <<"                      ('#' comments and publickey: ok)\n"
         <<"  -x448             Generate an X448 keypair with -g (default: X25519)\n"
         <<"  --key-stdin       Read the password from stdin until EOF (symmetric modes only)\n"
+        <<"  --source-delete-ok  Source-directory removal already confirmed by the host;\n"
+        <<"                    skip the interactive check\n"
         <<"  --salt <hex|file> Salt for -G: 32 hex chars, or a file holding them (default: random 16B)\n"
         <<"  --restore-name, -rn  Batch decrypt: restore full original filenames (slow: one KDF per file)\n"
         <<"  --obfuscate-name, -on  force an obfuscated output filename (<16hex>.<3 letters>.ptd)\n"
-        <<"  --split <size>    Encrypt, then cut the .ptd into volumes of <size>:\n"
+        <<"  -s, --split <size>  Encrypt, then cut the .ptd into volumes of <size>:\n"
         <<"                      2GB / 512MB / 100M / 1.5G / 4096 (1024-based; 1MB minimum)\n"
         <<"                      Decryption auto-detects volumes: pass any one of them.\n"
         <<"  --split-size <size>  Alias of --split\n"
+        <<"  -p, --pack        Pack dir tree / files into ONE .ptd archive (encryption only)\n"
+        <<"                      Decryption auto-detects archives and restores the tree\n"
+        <<"  --no-extract       Keep a decrypted archive as a single file instead of unpacking\n"
         <<"  --sha256          Write a <out>.ptd.sha256 sidecar after successful encryption\n"
         <<"  --rename          With -R: rename the .ptd in place to its original name (content unchanged)\n"
         <<"  --as <name>       With -L add: library name for the imported key\n"
@@ -197,6 +314,7 @@ static void print_usage() {
         <<"    FileEncryptor -be/-bd <Path> [-o <Path>] [-de] [-m xchacha20|aegis256] [-y]\n"
         <<"    FileEncryptor -e/-be <File> [-zstd] [--compression-level <N>]   (zstd: 1..22 normal, -1..-5 fast)\n"
         <<"    FileEncryptor -e <File> --split 4GB      (cut the .ptd into 4GB volumes)\n"
+        <<"    FileEncryptor -e -p <Dir|File...>   (pack a whole tree into one .ptd)\n"
         <<"    FileEncryptor -e/-d -m x25519 -r <pub>|-k <priv> <File> [-o <Path>] [-y]\n"
         <<"  Key management (asymmetric):\n"
         <<"    FileEncryptor -g [-o <dir>] [-x448] [--no-pqc]\n"
@@ -293,6 +411,217 @@ static bool collect_recipients(const std::string& spec,
     rf.close();
     if(out.empty()) { err="No public keys found in: "+t; return false; }
     return true;
+}
+
+// 把归档明文展开到 dest_dir（行为同 unzip：直接铺进去，不再套一层同名目录）。
+//
+// 先展开到同级暂存目录再逐项搬过去：归档里的条目可能与 dest_dir 下已有的
+// 同名文件撞车，边展开边覆盖会在中途失败时留下半新半旧的状态。
+// 暂存目录与目标同级，收尾是同卷改名，不用整树复制。
+static bool unpack_archive(const std::string& plain_path, const std::string& dest_dir,
+                           bool force_overwrite) {
+    if (!create_directory_recursive(dest_dir)) {
+        std::cerr << "Error: cannot create output directory: " << dest_dir << "\n";
+        return false;
+    }
+    unsigned char rnd[8];
+    randombytes_buf(rnd, sizeof(rnd));
+    std::string tmp_dir = dest_dir + "/.unpack-" + fe::util::to_hex(rnd, sizeof(rnd));
+    if (!create_directory_recursive(tmp_dir)) {
+        std::cerr << "Error: cannot create a staging directory: " << tmp_dir << "\n";
+        return false;
+    }
+    std::string err;
+
+    std::cout << "Unpacking archive to: " << dest_dir << "\n";
+    uint64_t last_pct = 100;
+    std::function<void(uint64_t, uint64_t)> cb = [&](uint64_t done, uint64_t total) {
+        if (total == 0) return;
+        uint64_t pct = done * 100 / total;
+        if (pct >= last_pct) return;              // 只在整数百分点跳变时刷一行
+        last_pct = pct;
+        fprintf(stderr, "\rExtracting: %llu%%", (unsigned long long)pct);
+        fflush(stderr);
+    };
+    if (!archive_extract(plain_path, tmp_dir, force_overwrite, cb, err)) {
+        fprintf(stderr, "\n");
+        std::cerr << "Error: " << err << "\n";
+        remove_file_utf8(plain_path);             // 半成品不留，明文也别留在盘上
+        return false;
+    }
+    if (last_pct < 100) fprintf(stderr, "\rExtracting: 100%%");
+    fprintf(stderr, "\n");
+
+    // 展开成功才删中间明文：失败时它还在，用户可以 --no-extract 再取一次
+    remove_file_utf8(plain_path);
+
+    // 把暂存目录里的顶层项搬进 dest_dir：目录树可能有好几层，
+    // 直接 rename 整个暂存目录会把 dest_dir 本身换掉
+    // 顶层项逐个并入 dest_dir：同名目录递归并（不整体替换，免得丢掉
+    // dest_dir 里已有的其它内容），文件按 -y 决定跳过还是替换
+    bool ok = true;
+    std::vector<std::string> tops;
+    if (!list_dir_names(tmp_dir, tops)) {
+        std::cerr << "Error: cannot read the staging directory\n";
+        return false;
+    }
+    for (const auto& name : tops) {
+        std::string from = tmp_dir + "/" + name;
+        std::string to = dest_dir + "/" + name;
+        bool fdir = fe_path_is_directory(from);
+        bool tdir = fe_path_is_directory(to);
+        if (fdir && tdir) {
+            std::string merr;
+            if (!merge_dir_into(from, to, force_overwrite, merr)) {
+                std::cerr << "Error: " << merr << "\n";
+                ok = false;
+            }
+            continue;
+        }
+        if (tdir) remove_tree(to);                        // 同名目录挡路
+        else if (!force_overwrite) {
+            std::ifstream ex;
+            if (open_stream(ex, to, std::ios::in | std::ios::binary) && ex.good()) {
+                fprintf(stderr, "Skipped (exists): %s\n", to.c_str());
+                continue;
+            }
+        } else {
+            remove_file_utf8(to);
+        }
+        if (!replace_file_utf8(from, to)) {
+            std::cerr << "Error: cannot move " << from << " to " << to << "\n";
+            ok = false;
+        }
+    }
+    // 暂存目录空了，删掉；里面还剩东西说明上面有失败，保留给用户查看
+    if (ok) remove_tree(tmp_dir);
+    else std::cerr << "Incomplete items are left at: " << tmp_dir << "\n";
+    return ok;
+}
+
+// --pack：把目录树 / 多个文件打成单个归档明文，再走常规加密成单个 .ptd。
+// 归档字节流本身是普通明文，所以压缩、分卷、水印、密钥轮换都照常生效。
+static bool run_pack(const std::vector<std::string>& input_paths,
+                     const std::string& output_dir,
+                     const SecureBuffer& password,
+                     CryptoMode mode,
+                     int source_action,
+                     bool force_overwrite,
+                     int compress_level,
+                     uint64_t split_bytes,
+                     const WatermarkSpec* wm,
+                     bool sha_sidecar) {
+    // 输出名：单根输入取其基名，多根输入给个通用名
+    std::string out_base = "archive";
+    if (input_paths.size() == 1) {
+        const std::string& in = input_paths[0];
+        size_t slash = in.find_last_of("/\\");
+        std::string fname = (slash != std::string::npos) ? in.substr(slash + 1) : in;
+        size_t dot = fname.find_last_of('.');
+        if (dot != std::string::npos && dot > 0) fname = fname.substr(0, dot);
+        if (!fname.empty()) out_base = fname;
+    }
+    std::string out_dir = output_dir;
+    if (out_dir.empty()) out_dir = fe_path_is_directory(input_paths[0]) ? input_paths[0] : ".";
+    if (!create_directory_recursive(out_dir)) {
+        std::cerr << "Cannot create output directory: " << out_dir << "\n";
+        return false;
+    }
+    std::string out_path = out_dir;
+    if (!out_path.empty() && out_path.back() != '/' && out_path.back() != '\\')
+        out_path += '/';
+    out_path += out_base + ".ptd";
+    out_path = to_native_path(out_path);
+
+    if (!force_overwrite) {
+        std::ifstream test;
+        if (open_stream(test, out_path, std::ios::in | std::ios::binary) && test.good()) {
+            if (!confirm_yes_no("Output file exists: " + out_path, "Overwrite? (y/N): ")) {
+                std::cerr << "Aborted.\n";
+                return false;
+            }
+        }
+    }
+
+    // 输出 .ptd 与中间归档件都得排除：同目录时会把刚生成的产物打进包里
+    std::vector<std::string> excludes;
+    excludes.push_back(out_path);
+
+    std::string tmp_archive;
+    std::string err;
+    if (!archive_make_temp("pack", tmp_archive, err)) {
+        std::cerr << "Error: " << err << "\n";
+        return false;
+    }
+    excludes.push_back(tmp_archive);
+
+    std::vector<ArchiveEntry> entries;
+    if (!archive_collect(input_paths, excludes, entries, err)) {
+        std::cerr << "Error: " << err << "\n";
+        remove_file_utf8(tmp_archive);
+        return false;
+    }
+
+    uint64_t total_raw = 0;
+    for (const auto& e : entries) if (!e.is_dir) total_raw += e.size;
+    size_t file_count = entries.size();
+    for (const auto& e : entries) if (e.is_dir) --file_count;
+    std::cout << "Packing " << file_count << " file(s) from " << entries.size()
+              << " entrie(s), " << format_size(total_raw).c_str() << " raw -> " << out_path << "\n";
+
+    if (!archive_write(tmp_archive, entries, err)) {
+        std::cerr << "Error: " << err << "\n";
+        remove_file_utf8(tmp_archive);
+        return false;
+    }
+
+    bool ok = true;
+    try {
+        ok = encrypt_file(tmp_archive, out_path, password, mode, nullptr, true,
+                          compress_level, false, nullptr, wm);
+    } catch (const std::exception& e) {
+        fprintf(stderr, "Error: encryption failed: %s\n", e.what());
+        ok = false;
+    } catch (...) {
+        fprintf(stderr, "Error: encryption failed (unexpected exception)\n");
+        ok = false;
+    }
+
+    // 中间归档明文：无论成败都不留（成功时它是完整的明文目录内容）
+    if (ok) secure_handle_source(tmp_archive, SourceDisposition::Wipe);
+    else remove_file_utf8(tmp_archive);
+
+    if (!ok) {
+        remove_file_utf8(out_path);
+        remove_file_utf8(out_path + ".prs");
+        return false;
+    }
+
+    // 源文件处置：逐个输入走一遍，目录则交给 secure_handle_source 递归不了，
+    // 故目录输入只提示（要清源请用 -de 配 -be 逐文件处理）
+    if (source_action != 0) {
+        for (const auto& in : input_paths) {
+            if (fe_path_is_directory(in)) {
+                fprintf(stderr,
+                        "Note: --pack does not remove source directories automatically; "
+                        "removing a whole tree is left to you: %s\n", in.c_str());
+                continue;
+            }
+            if (!secure_handle_source(in, static_cast<SourceDisposition>(source_action))) {
+                std::cerr << "Error: could not process source file: " << in << "\n";
+                ok = false;
+            }
+        }
+    }
+    if (ok && sha_sidecar) write_sha256_sidecar(out_path);
+    if (ok && split_bytes > 0) {
+        std::string serr;
+        if (!finish_encrypt_split(out_path, split_bytes, sha_sidecar, serr)) {
+            std::cerr << "Error: split failed: " << serr << "\n";
+            ok = false;
+        }
+    }
+    return ok;
 }
 
 // 非对称调度：DEK 以收件人公钥（X25519/X448）包装进 v6 容器（.ptd）。
@@ -429,9 +758,9 @@ static bool run_asym(const std::vector<std::string>& input_paths,
             std::ifstream test;
             if(open_stream(test,out_path,std::ios::in)&&test.good()) {
                 test.close();
-                std::cout<<"Output file exists: "<<out_path<<"\nOverwrite? (y/N): ";
-                char ch='n'; std::cin>>ch;
-                if(ch!='y'&&ch!='Y') { std::cerr<<"Aborted.\n"; all_ok=false; continue; }
+                if(!confirm_yes_no("Output file exists: "+out_path,"Overwrite? (y/N): ")) {
+                    std::cerr<<"Aborted.\n"; all_ok=false; continue;
+                }
             }
         }
 
@@ -1084,6 +1413,17 @@ int main(int argc,char* argv[]) {
     SetConsoleCP(CP_UTF8);
     // 改用 UTF-8 参数向量（覆盖默认 ANSI 代码页的 argv）
     std::vector<std::string> argv_utf8=get_utf8_argv();
+    // CLI11 2.7.2 拒绝「单横线 + 多字符」选项名（-be/-bd/-x448/-de/-zstd/-cl/-rn/-on），
+    // 这里在交给 CLI11 之前改写成双横线形式；对外接口（CLI/GUI 仍用 -be 等）保持不变。
+    {
+        static const std::pair<const char*,const char*> kDashRewrite[] = {
+            {"-be","--be"}, {"-bd","--bd"}, {"-x448","--x448"}, {"-de","--de"},
+            {"-zstd","--zstd"}, {"-cl","--cl"}, {"-rn","--rn"}, {"-on","--on"}
+        };
+        for(auto& s: argv_utf8)
+            for(auto& kv: kDashRewrite)
+                if(s==kv.first) s=kv.second;
+    }
     std::vector<char*> argv_ptr;
     argv_ptr.reserve(argv_utf8.size()+1);
     for(auto& s:argv_utf8) argv_ptr.push_back(const_cast<char*>(s.c_str()));
@@ -1106,19 +1446,6 @@ int main(int argc,char* argv[]) {
     set_global_config(cfg);
     init_logger(cfg.log_file,cfg.log_level);
     init_rate_limiter(cfg.max_speed); // 进程级限速（YAML max_speed；0 = 不限速）
-
-    if(argc==1) {
-        print_usage();
-        return 0;
-    }
-
-    for(int i=1; i<argc; ++i) {
-        std::string arg=argv[i];
-        if(arg=="-h"||arg=="-?"||arg=="--help") {
-            print_usage();
-            return 0;
-        }
-    }
 
     enum {
         ACTION_NONE,ACTION_ENCRYPT,ACTION_DECRYPT,
@@ -1163,250 +1490,204 @@ int main(int argc,char* argv[]) {
     std::string keylib_notes;   // --notes <text>：-L add 的备注
     int compress_level=0;       // -z/--compress 或 --compression-level N：zstd 级别；0=不压缩
     uint64_t split_bytes=0;     // --split <size>：加密后分卷大小（0=不分卷）；只走命令行，不进 yaml
+    bool pack_mode=false;       // --pack：把目录树/多文件打成单个归档再加密
+    bool yes_source_delete=false;// --source-delete-ok：源目录删除已由宿主确认过
+    bool no_extract=false;      // --no-extract：解密归档时只出单文件，不展开目录树
     std::string new_keyfile_path; // --new-key-file <file>：rewrap 的新口令密钥文件
     bool new_key_from_stdin=false;// --new-key-stdin：rewrap 的新口令从 stdin 读取
-    bool end_of_options=false;    // "--"：其后的参数一律作为输入路径
 
-    for(int i=1; i<argc; ++i) {
-        std::string arg=argv[i];
-        if(end_of_options) { input_paths.push_back(arg); continue; }
-        if(arg=="--") { end_of_options=true; continue; }
-        if(arg=="-e") {
-            if(action!=ACTION_NONE) { std::cerr<<"Multiple modes specified.\n"; return 1; }
-            action=ACTION_ENCRYPT;
-        }
-        else if(arg=="-d") {
-            if(action!=ACTION_NONE) { std::cerr<<"Multiple modes specified.\n"; return 1; }
-            action=ACTION_DECRYPT;
-        }
-        else if(arg=="-be") {
-            if(action!=ACTION_NONE) { std::cerr<<"Multiple modes specified.\n"; return 1; }
-            action=ACTION_BATCH_ENCRYPT;
-        }
-        else if(arg=="-bd") {
-            if(action!=ACTION_NONE) { std::cerr<<"Multiple modes specified.\n"; return 1; }
-            action=ACTION_BATCH_DECRYPT;
-        }
-        else if(arg=="-g") {
-            if(action!=ACTION_NONE) { std::cerr<<"Multiple modes specified.\n"; return 1; }
-            action=ACTION_KEYGEN;
-        }
-        else if(arg=="-G") {
-            if(action!=ACTION_NONE) { std::cerr<<"Multiple modes specified.\n"; return 1; }
-            action=ACTION_DERIVE;
-        }
-        else if(arg=="-Y") {
-            if(action!=ACTION_NONE) { std::cerr<<"Multiple modes specified.\n"; return 1; }
-            action=ACTION_PUBKEY;
-        }
-        else if(arg=="-H"||arg=="--info") {
-            if(action!=ACTION_NONE) { std::cerr<<"Multiple modes specified.\n"; return 1; }
-            action=ACTION_INFO;
-        }
-        else if(arg=="-V"||arg=="--verify") {
-            if(action!=ACTION_NONE) { std::cerr<<"Multiple modes specified.\n"; return 1; }
-            action=ACTION_VERIFY;
-        }
-        else if(arg=="-R"||arg=="--recover-name") {
-            if(action!=ACTION_NONE) { std::cerr<<"Multiple modes specified.\n"; return 1; }
-            action=ACTION_RECOVER;
-        }
-        else if(arg=="-L"||arg=="--keylib") {
-            if(action!=ACTION_NONE) { std::cerr<<"Multiple modes specified.\n"; return 1; }
-            action=ACTION_KEYLIB;
-        }
-        else if(arg=="--rewrap") {
-            if(action!=ACTION_NONE) { std::cerr<<"Multiple modes specified.\n"; return 1; }
-            action=ACTION_REWRAP;
-        }
-        else if(arg=="--new-key-file"&&i+1<argc) {
-            new_keyfile_path=argv[++i];
-        }
-        else if(arg=="--new-key-stdin") {
-            new_key_from_stdin=true;
-        }
-        else if(arg=="--as"&&i+1<argc) {
-            keylib_as=argv[++i];
-        }
-        else if(arg=="--alias"&&i+1<argc) {
-            keylib_alias=argv[++i];
-        }
-        else if(arg=="--notes"&&i+1<argc) {
-            keylib_notes=argv[++i];
-        }
-        else if(arg=="-K"&&i+1<argc) {
-            keylib_refs=argv[++i];
-        }
-        else if(arg=="--salt"&&i+1<argc) {
-            salt_spec=argv[++i];
-        }
-        else if(arg=="-o"&&i+1<argc) {
-            output_dir=argv[++i];
-            if(path_has_traversal(output_dir)) {
-                std::cerr<<"Output directory contains directory traversal (..): "<<output_dir<<"\n";
-                return 1;
-            }
-        }
-        else if(arg=="-de") {
-            if(source_action!=0 && source_action!=1) {
-                std::cerr<<"Conflicting source handling options (-de / --wipe-source / --recycle-source).\n";
-                return 1;
-            }
-            source_action=1;
-        }
-        else if(arg=="--wipe-source") {
-            if(source_action!=0 && source_action!=2) {
-                std::cerr<<"Conflicting source handling options (-de / --wipe-source / --recycle-source).\n";
-                return 1;
-            }
-            source_action=2;
-        }
-        else if(arg=="--recycle-source") {
-            if(source_action!=0 && source_action!=3) {
-                std::cerr<<"Conflicting source handling options (-de / --wipe-source / --recycle-source).\n";
-                return 1;
-            }
-            source_action=3;
-        }
-        else if(arg=="-m"&&i+1<argc) {
-            std::string m=argv[++i];
-            if(m=="xchacha20") mode=CryptoMode::XCHACHA20;
-            else if(m=="aegis256") mode=CryptoMode::AEGIS256;
-            else if(m=="sm4") mode=CryptoMode::SM4;
-            else if(m=="x25519"||m=="x448") asym_mode=true;   // 曲线由收件人公钥串决定
-            else { std::cerr<<"Unknown mode: "<<m<<"\n"; return 1; }
-        }
-        else if(arg=="-x448") {
-            x448_mode=true;
-        }
-        else if(arg=="-i"&&i+1<argc) {
-            input_paths.push_back(argv[++i]);
-        }
-        else if(arg=="-y"||arg=="--force") {
-            force_overwrite=true;
-        }
-        else if(arg=="--force-decrypt") {
-            force_decrypt=true;
-        }
-        else if(arg=="-v"||arg=="--verbose") {
-            set_verbose(true);
-        }
-        else if(arg=="-k"&&i+1<argc) {
-            keyfile_path=argv[++i];
-        }
-        else if(arg=="-r"&&i+1<argc) {
-            recipient_spec=argv[++i];
-        }
-        else if(arg=="--key-stdin") {
-            key_from_stdin=true;
-        }
-        else if(arg=="--restore-name"||arg=="-rn") {
-            restore_name=true;
-        }
-        else if(arg=="--obfuscate-name"||arg=="-on") {
-            obfuscate_name=true;   // 强制混淆输出文件名（初始名已加密存在文件尾信封）
-        }
-        else if(arg=="--sha256") {
-            force_sha256=true;     // 功能10：本次加密生成校验单
-        }
-        else if(arg=="--rename") {
-            recover_rename=true;   // 配合 -R：原地重命名 .ptd 为原始名（内容不变）
-        }
-        // -zstd 是布尔开关（不带参数值）；-z / --compress 为其等价别名。
-        // 级别只能由 --compression-level <N> 单独指定，未指定时用 zstd 默认级别 1。
-        else if(arg=="-zstd"||arg=="-z"||arg=="--compress") {
-            if(compress_level==0) compress_level=1;
-        }
-        else if((arg=="--compression-level"||arg=="-cl")&&i+1<argc) {
-            compress_level=std::atoi(argv[++i]);
-            if(compress_level==0) {
-                std::cerr<<"--compression-level requires a non-zero integer: "
-                    "zstd level 1..22 (normal) or -1..-5 (fast).\n";
-                return 1;
-            }
-        }
-        // 分卷大小只接受显式命令行参数：进 yaml 的话每次加密都要回忆上次选了多少，
-        // 而分卷大小是随文件大小临时定的量，不该有持久默认值。
-        else if(arg=="--split"||arg=="--split-size") {
-            if(i+1>=argc) {
-                std::cerr<<arg<<" requires a size, e.g. --split 4GB\n";
-                return 1;
-            }
-            std::string serr;
-            if(!parse_split_size(argv[++i],split_bytes,serr)) {
-                std::cerr<<"Invalid --split size: "<<serr<<"\n";
-                return 1;
-            }
-        }
-        else if(arg=="--features") {
-            // 供 GUI 探测能力（如 zstd / aegis 是否可用）；每行 key=value
+    // 帮助 / 无参数：保持原 print_usage() 文案，解析前短路（CLI11 不触发自带 help）
+    if(argc<=1) { print_usage(); return 0; }
+    for(int k=1; k<argc; ++k) {
+        std::string a=argv[k];
+        if(a=="-h"||a=="-?"||a=="--help") { print_usage(); return 0; }
+    }
+
+    CLI::App app("FileEncryptor command-line interface");
+
+    // Temp bools: CLI11 add_flag binds bool targets; merged into action / switches after parse
+    bool f_encrypt=false, f_decrypt=false, f_bencrypt=false, f_bdecrypt=false,
+         f_keygen=false, f_derive=false, f_pubkey=false, f_info=false,
+         f_verify=false, f_recover=false, f_keylib=false, f_rewrap=false;
+    bool f_preview=false, f_pqc=false, f_nopqc=false, f_wm=false, f_nowm=false,
+         f_compress=false, f_verbose=false;
+    std::vector<std::string> mode_strs;
+    std::string split_str;
+    std::string wm_extract_path;
+    std::vector<std::string> explicit_inputs;
+    bool src_del=false, src_wipe=false, src_recycle=false;
+    bool features_mode=false;
+    bool cl_given=false;
+
+    // ===== actions (mutually exclusive; merged after parse) =====
+    app.add_flag("-e", f_encrypt);
+    app.add_flag("-d", f_decrypt);
+    app.add_flag("--be", f_bencrypt);
+    app.add_flag("--bd", f_bdecrypt);
+    app.add_flag("-g", f_keygen);
+    app.add_flag("-G", f_derive);
+    app.add_flag("-Y", f_pubkey);
+    app.add_flag("-H,--info", f_info);
+    app.add_flag("-V,--verify", f_verify);
+    app.add_flag("-R,--recover-name", f_recover);
+    app.add_flag("-L,--keylib", f_keylib);
+    app.add_flag("--rewrap", f_rewrap);
+
+    // ===== common options =====
+    app.add_option("-m,--mode", mode_strs, "crypto mode: xchacha20|aegis256|sm4|x25519|x448")
+        ->multi_option_policy(CLI::MultiOptionPolicy::TakeAll);
+    app.add_flag("--x448", x448_mode);
+    app.add_option("-o,--output", output_dir, "output directory");
+    app.add_flag("--de", src_del);
+    app.add_flag("--wipe-source", src_wipe);
+    app.add_flag("--recycle-source", src_recycle);
+    app.add_option("--new-key-file", new_keyfile_path, "rewrap new key file");
+    app.add_flag("--new-key-stdin", new_key_from_stdin);
+    app.add_option("--as", keylib_as, "keylib entry name");
+    app.add_option("--alias", keylib_alias, "keylib display alias");
+    app.add_option("--notes", keylib_notes, "keylib notes");
+    app.add_option("-K", keylib_refs, "-K <name>[,...]");
+    app.add_option("--salt", salt_spec, "-G derive salt <hex|file>");
+    app.add_option("-k,--keyfile", keyfile_path, "key file -k <file>");
+    app.add_option("-r,--recipient", recipient_spec, "recipient -r <pub|file>");
+    app.add_flag("--key-stdin", key_from_stdin);
+    app.add_flag("--restore-name,--rn", restore_name);
+    app.add_flag("--obfuscate-name,--on", obfuscate_name);
+    app.add_flag("--sha256", force_sha256);
+    app.add_flag("--rename", recover_rename);
+    app.add_flag("-z,--compress", f_compress);
+    app.add_flag("--zstd", f_compress);
+    app.add_option("--compression-level,--cl", compress_level, "zstd level 1..22 or -1..-5")
+        ->each([&](std::string){ cl_given=true; });
+    app.add_flag("-p,--pack,--archive", pack_mode);
+    app.add_flag("--source-delete-ok", yes_source_delete);
+    app.add_flag("--no-extract", no_extract);
+    app.add_option("-s,--split,--split-size", split_str, "split volume size, e.g. 4GB");
+    app.add_flag("--features", features_mode);
+    app.add_flag("--preview", f_preview);
+    app.add_option("--max-bytes", preview_max, "preview max bytes (default 4096)");
+    app.add_flag("--force-decrypt", force_decrypt);
+    app.add_flag("-y,--force", force_overwrite);
+    app.add_flag("-v,--verbose", f_verbose);
+    app.add_flag("--pqc", f_pqc);
+    app.add_flag("--no-pqc", f_nopqc);
+    app.add_flag("--watermark", f_wm);
+    app.add_flag("--no-watermark", f_nowm);
+    app.add_option("--wm-sign", wm_spec.sign_key, "watermark signing key (ML-DSA-65/RSA)");
+    app.add_option("--wm-verify", wm_verify_pem, "watermark verify public key PEM");
+    app.add_option("--wm-keygen", wm_keygen_path, "generate watermark keypair");
+    app.add_option("--watermark-extract", wm_extract_path, "extract tail watermark (read-only)");
+    app.add_option("-i,--input", explicit_inputs, "explicit input path");
+    app.add_option("inputs", input_paths, "input files or directories");
+
+    try {
+        app.parse(argc, argv);
+    } catch(const CLI::CallForHelp&) {
+        return 0;
+    } catch(const CLI::ParseError& e) {
+        std::cerr<<e.what()<<"\n";
+        return 1;
+    }
+
+    for(auto& s: explicit_inputs) input_paths.push_back(s);
+
+    // ===== merge / validate after parse =====
+    if(features_mode) {
 #ifdef FE_WITH_ZSTD
-            std::cout<<"zstd=1\n";
+        std::cout<<"zstd=1\n";
 #else
-            std::cout<<"zstd=0\n";
+        std::cout<<"zstd=0\n";
 #endif
-            std::cout<<"aegis="<<(aegis256_supported()?1:0)<<"\n";
-            std::cout<<"sm4="<<(sm4_supported()?1:0)<<"\n";
-            std::cout<<"pqc="<<(pqc_supported()?1:0)<<"\n";
-            std::cout<<"split=1\n";
-            return 0;
+        std::cout<<"aegis="<<(aegis256_supported()?1:0)<<"\n";
+        std::cout<<"sm4="<<(sm4_supported()?1:0)<<"\n";
+        std::cout<<"pqc="<<(pqc_supported()?1:0)<<"\n";
+        std::cout<<"split=1\n";
+        std::cout<<"pack=1\n";
+        std::cout<<"confirm=1\n";
+        return 0;
+    }
+
+    if(f_verbose) set_verbose(true);
+
+    // -m mode validation (order preserved; asym can appear with a payload mode)
+    for(auto& ms : mode_strs) {
+        if(ms=="xchacha20") mode=CryptoMode::XCHACHA20;
+        else if(ms=="aegis256") mode=CryptoMode::AEGIS256;
+        else if(ms=="sm4") mode=CryptoMode::SM4;
+        else if(ms=="x25519"||ms=="x448") asym_mode=true;
+        else { std::cerr<<"Unknown mode: "<<ms<<"\n"; return 1; }
+    }
+
+    // mutually exclusive action merge
+    {
+        const int n_act = (f_encrypt?1:0)+(f_decrypt?1:0)+(f_bencrypt?1:0)+(f_bdecrypt?1:0)
+            +(f_keygen?1:0)+(f_derive?1:0)+(f_pubkey?1:0)+(f_info?1:0)+(f_verify?1:0)
+            +(f_recover?1:0)+(f_keylib?1:0)+(f_rewrap?1:0);
+        if(n_act>1) { std::cerr<<"Multiple modes specified.\n"; return 1; }
+        if(f_encrypt) action=ACTION_ENCRYPT;
+        else if(f_decrypt) action=ACTION_DECRYPT;
+        else if(f_bencrypt) action=ACTION_BATCH_ENCRYPT;
+        else if(f_bdecrypt) action=ACTION_BATCH_DECRYPT;
+        else if(f_keygen) action=ACTION_KEYGEN;
+        else if(f_derive) action=ACTION_DERIVE;
+        else if(f_pubkey) action=ACTION_PUBKEY;
+        else if(f_info) action=ACTION_INFO;
+        else if(f_verify) action=ACTION_VERIFY;
+        else if(f_recover) action=ACTION_RECOVER;
+        else if(f_keylib) action=ACTION_KEYLIB;
+        else if(f_rewrap) action=ACTION_REWRAP;
+    }
+
+    // --watermark-extract: read-only tail watermark, not a regular action
+    if(!wm_extract_path.empty()) {
+        if(action!=ACTION_NONE) { std::cerr<<"Multiple modes specified.\n"; return 1; }
+        action=ACTION_WATERMARK;
+        input_paths.push_back(wm_extract_path);
+    }
+
+    if(f_preview) { preview_mode=true; if(action==ACTION_NONE) action=ACTION_DECRYPT; }
+    if(f_compress && compress_level==0) compress_level=1;
+    if(f_pqc) { pqc_on=true; wm_spec.pqc=true; }
+    if(f_nopqc) { pqc_on=false; wm_spec.pqc=false; }
+    if(f_wm) { wm_spec.enabled=true; wm_spec.pqc=pqc_on; }
+    if(f_nowm) { wm_spec.enabled=false; }
+    if(!wm_spec.sign_key.empty()) { wm_spec.enabled=true; wm_spec.pqc=pqc_on; }
+    if(!wm_keygen_path.empty()) wm_keygen_mode=true;
+
+    {
+        int cnt=(src_del?1:0)+(src_wipe?1:0)+(src_recycle?1:0);
+        if(cnt>1) {
+            std::cerr<<"Conflicting source handling options (-de / --wipe-source / --recycle-source).\n";
+            return 1;
         }
-        else if(arg=="--preview") {
-            preview_mode=true;
-            // 预览即解密的一种：未显式给 -d/-e 等动作时，自动按解密处理
-            if(action==ACTION_NONE) action=ACTION_DECRYPT;
-        }
-        else if(arg=="--max-bytes"&&i+1<argc) {
-            preview_max=(size_t)std::strtoull(argv[++i],nullptr,10);
-            if(preview_max==0) {
-                std::cerr<<"--max-bytes requires a positive integer.\n";
-                return 1;
-            }
-        }
-        else if(arg=="--pqc") {
-            // 显式打开：与默认值一致，但让「用户主动要求」在参数回显里可见
-            pqc_on=true;
-            wm_spec.pqc=true;
-        }
-        else if(arg=="--no-pqc") {
-            pqc_on=false;
-            wm_spec.pqc=false;
-        }
-        else if(arg=="--watermark") {
-            wm_spec.enabled=true;
-            wm_spec.pqc=pqc_on;
-        }
-        else if(arg=="--no-watermark") {
-            wm_spec.enabled=false;
-        }
-        else if(arg=="--wm-sign"&&i+1<argc) {
-            wm_spec.sign_key=argv[++i];
-            // 给了签名私钥就意味着要写水印，不必再要求用户重复 --watermark
-            wm_spec.enabled=true;
-            wm_spec.pqc=pqc_on;
-        }
-        else if(arg=="--wm-verify"&&i+1<argc) {
-            wm_verify_pem=argv[++i];
-        }
-        else if(arg=="--wm-keygen"&&i+1<argc) {
-            wm_keygen_mode=true;
-            wm_keygen_path=argv[++i];
-        }
-        else if(arg=="--watermark-extract"&&i+1<argc) {
-            if(action!=ACTION_NONE) { std::cerr<<"Multiple modes specified.\n"; return 1; }
-            action=ACTION_WATERMARK;    // 只读尾部水印，不需要口令
-            input_paths.push_back(argv[++i]);
-        }
-        else if(arg[0]!='-') {
-            input_paths.push_back(arg);
-        }
-        else {
-            std::cerr<<"Unknown option: "<<arg<<"\n";
-            print_usage();
+        if(src_del) source_action=1;
+        else if(src_wipe) source_action=2;
+        else if(src_recycle) source_action=3;
+    }
+
+    if(!output_dir.empty() && path_has_traversal(output_dir)) {
+        std::cerr<<"Output directory contains directory traversal (..): "<<output_dir<<"\n";
+        return 1;
+    }
+
+    if(!split_str.empty()) {
+        std::string serr;
+        if(!parse_split_size(split_str,split_bytes,serr)) {
+            std::cerr<<"Invalid --split size: "<<serr<<"\n";
             return 1;
         }
     }
 
+    if(cl_given && compress_level==0) {
+        std::cerr<<"--compression-level requires a non-zero integer: "
+            "zstd level 1..22 (normal) or -1..-5 (fast).\n";
+        return 1;
+    }
+
+    if(preview_max==0) {
+        std::cerr<<"--max-bytes requires a positive integer.\n";
+        return 1;
+    }
     bool is_batch=(action==ACTION_BATCH_ENCRYPT||action==ACTION_BATCH_DECRYPT);
     bool is_encrypt=(action==ACTION_ENCRYPT||action==ACTION_BATCH_ENCRYPT);
 
@@ -1469,7 +1750,8 @@ int main(int argc,char* argv[]) {
         return 1;
     }
 
-    if(!is_batch&&input_paths.size()>1) {
+    // --pack 本来就是「多输入打成一个」，不受单文件模式的单路径限制
+    if(!is_batch&&!pack_mode&&input_paths.size()>1) {
         std::cerr<<"Single mode accepts only one input path.\n";
         return 1;
     }
@@ -1492,6 +1774,22 @@ int main(int argc,char* argv[]) {
                 <<": zstd accepts 1..22 (normal) or -1..-5 (fast).\n";
             return 1;
         }
+    }
+
+    // 归档打包：仅单文件加密可用（批量逐个加密再各自成包不是这个开关的含义）
+    if(pack_mode) {
+        if(action!=ACTION_ENCRYPT) {
+            std::cerr<<"--pack is only valid for encryption (-e).\n";
+            return 1;
+        }
+        if(input_paths.empty()) {
+            std::cerr<<"--pack requires at least one file or directory to pack.\n";
+            return 1;
+        }
+    }
+    if(no_extract&&action!=ACTION_DECRYPT) {
+        std::cerr<<"--no-extract is only valid for decryption (-d/-bd).\n";
+        return 1;
     }
 
     // 分卷校验：仅加密可用；下限 1MB（容器头 + 至少一个数据块）
@@ -1782,12 +2080,25 @@ int main(int argc,char* argv[]) {
         return all?0:1;
     }
 
+    // 目录输入 + 删除类源处置：先确认一次，避免批量模式静默清掉整棵树。
+    if(is_encrypt && source_action!=0 && !pack_mode && !yes_source_delete) {
+        if(!confirm_source_dir_removal(input_paths, source_action)) {
+            std::cerr<<"Aborted.\n";
+            return 1;
+        }
+    }
+
     g_force_decrypt=force_decrypt;
 
     if(asym_mode) {
         // 输出名策略与对称路径一致：配置 obfuscate_names 默认开启时非对称也混淆，-on 可强制
         all_ok=run_asym(input_paths,output_dir,is_encrypt,source_action,force_overwrite,recipient_spec,keyfile_path,password,
             obfuscate_name||global_config().obfuscate_names,lib_recipients,mode,compress_level,split_bytes);
+    }
+    else if(pack_mode) {
+        all_ok=run_pack(input_paths,output_dir,password,mode,source_action,
+                        force_overwrite,compress_level,split_bytes,
+                        wm_spec.enabled?&wm_spec:nullptr,force_sha256||write_sha256_enabled());
     }
     else if(is_batch) {
         all_ok=process_files(input_paths,output_dir,password,mode,is_encrypt,source_action,force_overwrite,num_threads,restore_name,compress_level,wm_spec.enabled?&wm_spec:nullptr,split_bytes);
@@ -1903,10 +2214,7 @@ int main(int argc,char* argv[]) {
                 std::ifstream test;
                 if(open_stream(test,out_path,std::ios::in)&&test.good()) {
                     test.close();
-                    std::cout<<"Output file exists: "<<out_path<<"\nOverwrite? (y/N): ";
-                    char ch='n';
-                    std::cin>>ch;
-                    if(ch!='y'&&ch!='Y') {
+                    if(!confirm_yes_no("Output file exists: "+out_path,"Overwrite? (y/N): ")) {
                         std::cerr<<"Aborted.\n";
                         return false;
                     }
@@ -1962,6 +2270,22 @@ int main(int argc,char* argv[]) {
                 } catch(...) {
                     fprintf(stderr,"Error: decryption failed (unexpected exception)\n");
                     ok=false;
+                }
+                // 归档容器：明文落地后识别魔数，是归档就展开成目录树并删掉中间件。
+                // 放在源处置之前：展开成功才算真正拿到明文，此时 .ptd 才能删。
+                if(ok && !no_extract && !preview_mode && archive_probe(out_path)) {
+                    // 归档铺进 -o 指定的目录；未给 -o 时用密文所在目录（同 unzip）
+                    std::string dest_dir = output_dir;
+                    if(dest_dir.empty()) {
+                        size_t sl = src_path.find_last_of("/\\");
+                        dest_dir = (sl!=std::string::npos) ? src_path.substr(0,sl) : ".";
+                    }
+                    if(!create_directory_recursive(dest_dir)) {
+                        std::cerr<<"Error: cannot create output directory: "<<dest_dir<<"\n";
+                        ok=false;
+                    } else {
+                        ok=unpack_archive(out_path,dest_dir,force_overwrite);
+                    }
                 }
                 // 解密成功后同样按所选方式处理源文件（此处为 .ptd）：-de 删除、
                 // --wipe-source 安全擦除、--recycle-source 移入回收站。

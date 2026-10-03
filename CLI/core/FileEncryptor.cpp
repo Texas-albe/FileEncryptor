@@ -741,7 +741,22 @@ static bool create_output_no_follow(const std::string& path) {
     // 预期路径解析为绝对规范化形式
     std::error_code ec;
     fs::path expected = fs::absolute(fs::path(wpath), ec).lexically_normal();
-    std::wstring exp_w = expected.make_preferred().wstring();
+    // 8.3 短名只在「目录段」展开。GetFinalPathNameByHandleW 返回的是内核解析后的长名
+    // （%TEMP% 里的 ADMINI~1 会被系统展开成 Administrator），而 lexically_normal 是纯
+    // 词法的、不做短名展开，直接字符串比对会把合法路径误判成「链接指向他处」，删掉刚
+    // 建好的文件并拒绝写入。末分量是真正要防的符号链接目标，必须保持字面量不展开 ——
+    // 否则 GetLongPathName 会替攻击者把末分量的链接一起解析掉，TOCTOU 防护形同虚设。
+    std::wstring exp_w;
+    {
+        std::wstring dir = expected.parent_path().make_preferred().wstring();
+        std::wstring nam = expected.filename().make_preferred().wstring();
+        std::vector<wchar_t> lbuf(32768, 0);
+        DWORD need = ::GetLongPathNameW(dir.c_str(), lbuf.data(), (DWORD)lbuf.size());
+        // 返回 0 = 展开失败（罕见），退回未展开形式，行为与改动前一致
+        if(need>0 && need<(DWORD)lbuf.size()) dir.assign(lbuf.data(), need);
+        if(!dir.empty() && dir.back()!=L'\\') dir.push_back(L'\\');
+        exp_w = dir + nam;
+    }
     // Windows 路径大小写不敏感
     bool mismatch = (exp_w.size()!=final_w.size());
     if(!mismatch) {
@@ -3779,17 +3794,19 @@ bool process_files(const std::vector<std::string>& input_paths,
                 }
             }
 
+            bool file_ok = ok;
             if(ok) {
-                // 仅在成功处理的文件上补齐进度，避免失败文件把进度条拉满到 100%；
-                // 尺寸优先查预扫描缓存，缺省才回退 stat（源文件已按 -de 删除时缓存仍可用）
-                int64_t fsize=-1;
-                { auto _it=size_cache.find(in_path); if(_it!=size_cache.end()) fsize=_it->second; }
-                if(fsize<0) fsize=get_file_size_utf8(in_path);
-                if(fsize>=0) {
-                    size_t file_size=(size_t)fsize;
-                    if(last_file_processed<file_size) {
-                        global_processed+=(file_size-last_file_processed);
-                        last_file_processed=file_size;
+                // 仅真正成功处理的文件才补齐进度并计入 files_done；分卷失败从 file_ok 摘掉
+                if(file_ok) {
+                    int64_t fsize=-1;
+                    { auto _it=size_cache.find(in_path); if(_it!=size_cache.end()) fsize=_it->second; }
+                    if(fsize<0) fsize=get_file_size_utf8(in_path);
+                    if(fsize>=0) {
+                        size_t file_size=(size_t)fsize;
+                        if(last_file_processed<file_size) {
+                            global_processed+=(file_size-last_file_processed);
+                            last_file_processed=file_size;
+                        }
                     }
                 }
                 if(encrypt) {
@@ -3797,18 +3814,20 @@ bool process_files(const std::vector<std::string>& input_paths,
                     if(split_bytes>0) {
                         std::string serr;
                         if(!finish_encrypt_split(out_path,split_bytes,
-                                                  write_sha256_enabled(),serr)) {
+                                              write_sha256_enabled(),serr)) {
                             std::lock_guard<std::mutex> lock(error_mutex);
                             std::cerr<<"Error: split failed: "<<serr<<"\n";
-                            error_files.push_back(in_path);
                             all_ok=false;
+                            file_ok=false;
                         }
                     }
                 }
-                ++files_done;
-                log_event(LOG_DEBUG,"file_done",{{"path",in_path}});
+                if(file_ok) {
+                    ++files_done;
+                    log_event(LOG_DEBUG,"file_done",{{"path",in_path}});
+                }
             }
-            else {
+            if(!file_ok) {
                 ++files_failed;
                 // 单文件失败仅记录并继续（统一 Failed: 前缀供 GUI 统计），不中断整批
                 all_ok=false;

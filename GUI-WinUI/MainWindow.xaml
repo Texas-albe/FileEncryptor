@@ -94,7 +94,7 @@
                              BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
                              BorderThickness="1" CornerRadius="8" Padding="12">
               <Grid RowDefinitions="*,Auto">
-                <ScrollViewer Grid.Row="0" VerticalScrollMode="Auto" VerticalScrollBarVisibility="Auto"
+                <ScrollViewer x:Name="MainScroll" Grid.Row="0" VerticalScrollMode="Auto" VerticalScrollBarVisibility="Auto"
                               Padding="0,2,14,14">
                     <StackPanel Spacing="8">
 
@@ -195,6 +195,11 @@
                                     <controls:ComboBoxItem Content="移至回收站" />
                                 </controls:ComboBox>
                                 <CheckBox x:Name="ChkForce" Content="覆盖已存在文件" Checked="OnOptionChanged" Unchecked="OnOptionChanged" VerticalAlignment="Center" />
+                                <CheckBox x:Name="ChkPack" Content="打包为单个文件" Checked="OnOptionChanged" Unchecked="OnOptionChanged"
+                                          VerticalAlignment="Center" IsEnabled="{x:Bind ViewModel.PackAvailable, Mode=OneWay}"
+                                          ToolTipService.ToolTip="把整个目录树或多个文件打成单个文件，不删除源文件" />
+                                <CheckBox x:Name="ChkSplit" Content="分卷输出" Checked="OnOptionChanged" Unchecked="OnOptionChanged"
+                                          VerticalAlignment="Center" ToolTipService.ToolTip="把密文切成多个 .001/.002 分卷；解密时随便挑一卷即可自动合并" />
                                 <CheckBox x:Name="ChkSha256" Content="生成校验单" Checked="OnOptionChanged" Unchecked="OnOptionChanged" VerticalAlignment="Center" />
                                 <CheckBox x:Name="ChkPqc" Content="后量子 PQC" Checked="OnOptionChanged" Unchecked="OnOptionChanged"
                                           VerticalAlignment="Center" ToolTipService.ToolTip="非对称收件人用 X25519（或 X448）+ ML-KEM-768 混合密钥，水印签名用 ML-DSA-65" />
@@ -204,6 +209,21 @@
                                           VerticalAlignment="Center" ToolTipService.ToolTip="在密文尾部追加一条签名水印" />
                             </StackPanel>
                             </ScrollViewer>
+                        </Grid>
+
+                        <!-- 分卷：勾选「分卷输出」后显示大小与单位 -->
+                        <Grid x:Name="SplitSizeRow" ColumnDefinitions="120,*" Visibility="Collapsed">
+                            <TextBlock Grid.Column="0" Text="分卷大小" VerticalAlignment="Center" TextWrapping="Wrap" />
+                            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                                <controls:NumberBox x:Name="SplitSizeBox" Value="100" Minimum="1" Maximum="1048576"
+                                                    SmallChange="10" Width="120" SpinButtonPlacementMode="Inline"
+                                                    ValueChanged="OnSplitSizeChanged" />
+                                <controls:ComboBox x:Name="SplitUnitCombo" Width="84" SelectionChanged="OnSplitUnitChanged">
+                                    <controls:ComboBoxItem Content="MB" />
+                                    <controls:ComboBoxItem Content="GB" />
+                                    <controls:ComboBoxItem Content="TB" />
+                                </controls:ComboBox>
+                            </StackPanel>
                         </Grid>
 
                         <!-- 水印签名私钥：勾选「签名水印」后才显示；走密码框输入，不明文回显 -->

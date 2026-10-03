@@ -1,6 +1,8 @@
 #include "ProcessCommandExecutor.h"
 #include <QTextStream>
 #include <QByteArray>
+#include <QFile>
+#include <QTimer>
 
 ProcessCommandExecutor::ProcessCommandExecutor(QObject* parent)
     : ICommandExecutor(parent) {}
@@ -20,6 +22,19 @@ void ProcessCommandExecutor::execute(const CommandRequest& request) {
     m_frameLines.clear();
     m_inFrame = false;
     m_finishedEmitted = false;
+    m_confirmPending = false;
+    m_confirmAnswered = false;
+    m_confirmFile = request.confirmFile;
+    if (!m_confirmFile.isEmpty()) {
+        QFile::remove(m_confirmFile);   // 上一轮的残留内容不能被这轮读到
+        if (!m_confirmTimer) {
+            m_confirmTimer = new QTimer(this);
+            m_confirmTimer->setInterval(120);
+            connect(m_confirmTimer, &QTimer::timeout, this,
+                    &ProcessCommandExecutor::pollConfirmFile);
+        }
+        m_confirmTimer->start();
+    }
 
     m_process = new QProcess(this);
 
@@ -49,11 +64,46 @@ void ProcessCommandExecutor::execute(const CommandRequest& request) {
             this, &ProcessCommandExecutor::onErrorOccurred);
 
     m_process->start();
-    // 写入 stdin 后关闭写通道
+    // 写入 stdin 后关闭写通道：CLI 的 --key-stdin 读到 EOF 为止，
+    // 不关它就会一直等。后续 y/n 确认走握手文件，不依赖 stdin。
     if (!request.stdinData.isEmpty()) {
         m_process->write(request.stdinData);
     }
     m_process->closeWriteChannel();
+}
+
+// 握手文件轮询。CLI 写问题 -> 宿主弹窗 -> 宿主写答案 -> CLI 取走后清空文件。
+// 三态严格串行：pending（等回答）/ answered（等 CLI 取走）/ 空（可接受新问题），
+// 缺了这层串行就会在 120ms 轮询里把刚写进去的答案当成新问题再弹一次。
+void ProcessCommandExecutor::pollConfirmFile() {
+    if (m_confirmFile.isEmpty()) return;
+    QFile f(m_confirmFile);
+    if (!f.open(QIODevice::ReadOnly | QIODevice::Text)) return;
+    const QString content = QString::fromUtf8(f.readAll()).trimmed();
+    f.close();
+    if (content.isEmpty()) {
+        // CLI 取走答案后清空文件，此时才允许下一次询问
+        m_confirmPending = false;
+        m_confirmAnswered = false;
+        return;
+    }
+    if (m_confirmPending) return;
+    m_confirmPending = true;
+    emit confirmPrompt(content);
+}
+
+void ProcessCommandExecutor::answerConfirm(bool yes) {
+    if (!m_confirmPending || m_confirmAnswered || m_confirmFile.isEmpty()) return;
+    QFile::remove(m_confirmFile);
+    QFile f(m_confirmFile);
+    if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text)) {
+        m_confirmPending = false;   // 写不进去就别卡住 CLI 之外的状态
+        return;
+    }
+    f.write(yes ? QByteArrayLiteral("y\n") : QByteArrayLiteral("n\n"));
+    f.flush();
+    f.close();
+    m_confirmAnswered = true;   // 等 CLI 清空文件后才复位
 }
 
 void ProcessCommandExecutor::setRawMode(bool on) {
@@ -212,6 +262,13 @@ void ProcessCommandExecutor::emitFinished(const CommandResult& r) {
 }
 
 void ProcessCommandExecutor::cleanup() {
+    if (m_confirmTimer) m_confirmTimer->stop();
+    if (!m_confirmFile.isEmpty()) {
+        QFile::remove(m_confirmFile);
+        m_confirmFile.clear();
+    }
+    m_confirmPending = false;
+    m_confirmAnswered = false;
     if (m_process) {
         m_process->disconnect(this);
         if (m_process->state() != QProcess::NotRunning) {

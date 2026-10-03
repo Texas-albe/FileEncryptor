@@ -19,6 +19,8 @@ public sealed class PreviewWindow
     private readonly Button _nextBtn;
     private readonly NumberBox _bytes;
     private readonly StringBuilder _pending = new();
+    // 流式解码器：跨 chunk 保留不完整的多字节序列，避免 UTF-8 字符被块边界截断成乱码
+    private readonly Decoder _utf8Decoder = Encoding.UTF8.GetDecoder();
 
     private string _programPath = "";
     private string _filePath = "";
@@ -112,6 +114,7 @@ public sealed class PreviewWindow
         _fileLabel.Text = L10n.F("文件：{0}", displayName);
         _view.Text = "";
         _pending.Clear();
+        _utf8Decoder.Reset();   // 窗口复用时清掉上一次残留的半截字节
         _done = false;
         _nextBtn.Visibility = Visibility.Collapsed;
         _status.Text = L10n.T("正在解密…");
@@ -141,7 +144,13 @@ public sealed class PreviewWindow
 
     private void OnRaw(byte[] chunk)
     {
-        _pending.Append(Encoding.UTF8.GetString(chunk));
+        // 不能每 chunk 单独 UTF8.GetString：一个多字节字符可能横跨两块，
+        // 单独解码会让两边各变成 U+FFFD。改用常驻 Decoder，它会把尾部不完整
+        // 的字节留在内部缓冲，等下一块补齐再解。
+        if (chunk.Length == 0) return;
+        char[] chars = new char[_utf8Decoder.GetCharCount(chunk, 0, chunk.Length)];
+        int n = _utf8Decoder.GetChars(chunk, 0, chunk.Length, chars, 0);
+        if (n > 0) _pending.Append(chars, 0, n);
     }
 
     private void OnLine(string line)
