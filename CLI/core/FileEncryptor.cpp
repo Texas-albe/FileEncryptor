@@ -13,6 +13,8 @@
 #include <cstring>
 #include <cstdint>
 #include <vector>
+#include <memory>
+#include <array>
 #include <unordered_map>
 #include <fstream>
 #include <algorithm>
@@ -35,6 +37,7 @@
 #include "util/byte_io.hpp"
 #include "util/hex.hpp"
 #include "secure_zero.hpp"
+#include "buffer_pool.hpp"
 #include <atomic>
 #ifdef FE_WITH_OPENSSL
 #include <openssl/evp.h>
@@ -82,7 +85,15 @@ namespace fs = std::filesystem;
 #include <unistd.h>
 #endif
 // 常量
+// 主加密块大小。块大小写入文件头（v2+），解密按头里的值走，故上调不会让旧文件解不开。
+// 实测上调到 4MiB 反而略慢（12 核，48×1MB: 6.94s vs 6.70s；8×64MB: 2.63s vs 2.58s）：
+// 缓冲随块大小翻倍、局部性变差，抵掉了每块固定开销的节省。暂维持 1MiB。
 static constexpr size_t CHUNK_SIZE=1*1024*1024;
+// 头里 chunk_size 的合法区间：该值同时决定解密侧缓冲尺寸，须防伪造头诱导超大分配
+static constexpr uint32_t MIN_CHUNK_SIZE=4096;
+// 读取端上界必须 <= CHUNK_SIZE：解密缓冲按 CHUNK_SIZE 固定取（含压缩帧上界），
+// 放行更大的 chunk_size 会让 secure_zero / ZSTD_decompress 写出缓冲边界。
+static constexpr uint32_t MAX_CHUNK_SIZE=CHUNK_SIZE;
 static constexpr size_t PASSWORD_MIN_LEN=6;
 
 static constexpr size_t AES_GCM_IV_LEN=crypto_aead_aes256gcm_NPUBBYTES;
@@ -103,6 +114,33 @@ static const size_t COMP_BUF_MAX = ZSTD_compressBound(CHUNK_SIZE);
 #else
 static const size_t COMP_BUF_MAX = CHUNK_SIZE;
 #endif
+
+// 数据阶段缓冲池：批量每文件反复 malloc/free 数 MiB 会带来分配抖动与缺页开销，
+// 池化后固定复用。明文缓冲归还时清零，密文缓冲无敏感内容故省去清零。
+namespace {
+struct DataBufPool {
+    static BufferPool& plain()  { static BufferPool p(CHUNK_SIZE, true);  return p; }
+    static BufferPool& comp()   { static BufferPool p(COMP_BUF_MAX, true); return p; }
+    static BufferPool& cipher() { static BufferPool p(COMP_BUF_MAX+MAX_TAG_SIZE, false); return p; }
+};
+// 从池取缓冲、析构自动归还。接口与 std::vector 对齐，供 secure_clear 等模板直接使用。
+class PooledBuf {
+    BufferPool* pool_;
+    std::vector<unsigned char> v_;
+public:
+    explicit PooledBuf(BufferPool& p) : pool_(&p), v_(p.acquire()) {}
+    ~PooledBuf() { if(pool_) pool_->release(v_); }
+    unsigned char* data() { return v_.data(); }
+    const unsigned char* data() const { return v_.data(); }
+    size_t size() const { return v_.size(); }
+    bool empty() const { return v_.empty(); }
+    // 只擦内容不改容量：保持与池的容量一致，下一轮仍可命中复用
+    void clear() { if(!v_.empty()) sodium_memzero(v_.data(),v_.size()); }
+    void shrink_to_fit() {}
+    PooledBuf(const PooledBuf&)=delete;
+    PooledBuf& operator=(const PooledBuf&)=delete;
+};
+} // namespace
 
 // 断点进度结构（v2：带 HMAC 认证，防续传劫持）
 // HMAC（crypto_auth = HMAC-SHA512/256，32 字节）覆盖前 24 字节（magic+version+chunks+bytes）
@@ -386,6 +424,27 @@ bool sm4_supported() {
         randombytes_buf(nonce, sizeof(nonce));
         memset(pt, 0x5A, sizeof(pt));
         std::unique_ptr<Cipher> c = create_cipher(CryptoMode::SM4);
+        if(!c) return false;
+        int e = c->encrypt(pt, sizeof(pt), nullptr, 0, nonce, key, ct, ct_len);
+        int d = (e == 0) ? c->decrypt(ct, ct_len, nullptr, 0, nonce, key, pt2, pt_len) : -1;
+        return (e == 0 && d == 0 && pt_len == sizeof(pt) && memcmp(pt, pt2, sizeof(pt)) == 0);
+    }();
+    return s_supported;
+#else
+    return false;
+#endif
+}
+
+// 运行时探测 AES-256-GCM 是否可用。与 SM4 同口径：真跑一轮加解密往返，不看编译期宏。
+bool aes_gcm_supported() {
+#ifdef FE_WITH_OPENSSL
+    static const bool s_supported = []() -> bool {
+        unsigned char key[32], nonce[12], pt[32], ct[64], pt2[32];
+        unsigned long long ct_len = 0, pt_len = 0;
+        randombytes_buf(key, sizeof(key));
+        randombytes_buf(nonce, sizeof(nonce));
+        memset(pt, 0x5A, sizeof(pt));
+        std::unique_ptr<Cipher> c = create_cipher(CryptoMode::AES_GCM);
         if(!c) return false;
         int e = c->encrypt(pt, sizeof(pt), nullptr, 0, nonce, key, ct, ct_len);
         int d = (e == 0) ? c->decrypt(ct, ct_len, nullptr, 0, nonce, key, pt2, pt_len) : -1;
@@ -712,65 +771,41 @@ static bool create_output_no_follow(const std::string& path) {
     return true;
 }
 #else
-// Windows：CreateFileW 默认跟随符号链接/重解析点，无 O_NOFOLLOW 等价物。
-// 创建后用 GetFinalPathNameByHandleW 取句柄解析出的真实路径，与预期路径（均转绝对规范化、
-// 剥离 \\?\ 前缀、大小写不敏感）比对；不一致说明末分量是符号链接指向他处，关闭并删除后拒绝。
+// Windows: no O_NOFOLLOW equivalent, CreateFileW follows a reparse point on the
+// last component. Two phases instead: CREATE_NEW first — if the name did not
+// exist, the last component cannot be a link, so no path comparison is needed at all
+// (comparing paths misfires on 8.3 short names and parent-directory junctions,
+// rejecting legitimate paths). Only when it already exists do we open it once more
+// with OPEN_REPARSE_POINT to read the attributes, and truncate after that check —
+// so there is no window where the link target is damaged before we notice.
 static bool create_output_no_follow(const std::string& path) {
     const std::wstring wpath=utf8_to_wstring(path);
-    HANDLE h=CreateFileW(wpath.c_str(),GENERIC_WRITE,0,NULL,CREATE_ALWAYS,
-                         FILE_ATTRIBUTE_NORMAL,NULL);
-    if(h==INVALID_HANDLE_VALUE) {
+    HANDLE h=CreateFileW(wpath.c_str(),GENERIC_WRITE,0,NULL,CREATE_NEW,FILE_ATTRIBUTE_NORMAL,NULL);
+    if(h!=INVALID_HANDLE_VALUE) { CloseHandle(h); return true; }
+    DWORD err=GetLastError();
+    if(err!=ERROR_FILE_EXISTS && err!=ERROR_ALREADY_EXISTS) {
         fprintf(stderr,"Cannot create output file: %s\n",path.c_str());
         return false;
     }
-    wchar_t final_buf[32768];
-    DWORD len=GetFinalPathNameByHandleW(h, final_buf, 32768, FILE_NAME_NORMALIZED);
-    if(len==0 || len>=32768) {
-        CloseHandle(h);
-        DeleteFileW(wpath.c_str());
+    // exists: inspect the last component itself, without traversing it
+    HANDLE lh=CreateFileW(wpath.c_str(),FILE_READ_ATTRIBUTES,
+                          FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE,
+                          NULL,OPEN_EXISTING,FILE_FLAG_OPEN_REPARSE_POINT,NULL);
+    if(lh==INVALID_HANDLE_VALUE) {
+        fprintf(stderr,"Cannot create output file: %s\n",path.c_str());
         return false;
     }
-    std::wstring final_w(final_buf, len);
-    // GetFinalPathNameByHandleW 返回带 \\?\ 前缀的路径，剥离后再比较
-    if(final_w.size()>=4 && final_w[0]==L'\\' && final_w[1]==L'\\' && final_w[2]==L'?' && final_w[3]==L'\\') {
-        if(final_w.size()>=8 && final_w.compare(4,4,L"UNC\\")==0)
-            final_w = L"\\" + final_w.substr(8);
-        else
-            final_w = final_w.substr(4);
-    }
-    // 预期路径解析为绝对规范化形式
-    std::error_code ec;
-    fs::path expected = fs::absolute(fs::path(wpath), ec).lexically_normal();
-    // 8.3 短名只在「目录段」展开。GetFinalPathNameByHandleW 返回的是内核解析后的长名
-    // （%TEMP% 里的 ADMINI~1 会被系统展开成 Administrator），而 lexically_normal 是纯
-    // 词法的、不做短名展开，直接字符串比对会把合法路径误判成「链接指向他处」，删掉刚
-    // 建好的文件并拒绝写入。末分量是真正要防的符号链接目标，必须保持字面量不展开 ——
-    // 否则 GetLongPathName 会替攻击者把末分量的链接一起解析掉，TOCTOU 防护形同虚设。
-    std::wstring exp_w;
-    {
-        std::wstring dir = expected.parent_path().make_preferred().wstring();
-        std::wstring nam = expected.filename().make_preferred().wstring();
-        std::vector<wchar_t> lbuf(32768, 0);
-        DWORD need = ::GetLongPathNameW(dir.c_str(), lbuf.data(), (DWORD)lbuf.size());
-        // 返回 0 = 展开失败（罕见），退回未展开形式，行为与改动前一致
-        if(need>0 && need<(DWORD)lbuf.size()) dir.assign(lbuf.data(), need);
-        if(!dir.empty() && dir.back()!=L'\\') dir.push_back(L'\\');
-        exp_w = dir + nam;
-    }
-    // Windows 路径大小写不敏感
-    bool mismatch = (exp_w.size()!=final_w.size());
-    if(!mismatch) {
-        for(size_t i=0;i<exp_w.size();++i) {
-            wchar_t a=exp_w[i], b=final_w[i];
-            if(a>=L'A'&&a<=L'Z') a=(wchar_t)(a+32);
-            if(b>=L'A'&&b<=L'Z') b=(wchar_t)(b+32);
-            if(a!=b) { mismatch=true; break; }
-        }
-    }
-    if(mismatch) {
-        CloseHandle(h);
-        DeleteFileW(wpath.c_str());
+    BY_HANDLE_FILE_INFORMATION fi;
+    bool reparse=GetFileInformationByHandle(lh,&fi) &&
+                 (fi.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT);
+    CloseHandle(lh);
+    if(reparse) {
         fprintf(stderr,"Refusing to write through existing symlink: %s\n",path.c_str());
+        return false;
+    }
+    h=CreateFileW(wpath.c_str(),GENERIC_WRITE,0,NULL,TRUNCATE_EXISTING,FILE_ATTRIBUTE_NORMAL,NULL);
+    if(h==INVALID_HANDLE_VALUE) {
+        fprintf(stderr,"Cannot create output file: %s\n",path.c_str());
         return false;
     }
     CloseHandle(h);
@@ -894,6 +929,36 @@ bool replace_file_utf8(const std::string& from,const std::string& to) {
     std::remove(to.c_str());
     return std::rename(from.c_str(),to.c_str())==0;
 #endif
+}
+
+// 临时名由最终路径确定性派生（FNV-1a 64）：同一输出路径每次得到同一临时名，
+// 这样重跑才能复用上次的 .prs 续传；随机名会让续传失效并堆积孤儿残留。
+static std::string atomic_tmp_path(const std::string& final_path) {
+    uint64_t h=1469598103934665603ull;
+    for(unsigned char c: final_path) { h^=c; h*=1099511628211ull; }
+    char buf[24];
+    snprintf(buf,sizeof(buf),"%016llx",(unsigned long long)h);
+    return final_path + ".fe_tmp_" + buf;
+}
+
+AtomicOutput::AtomicOutput(const std::string& final_path)
+    : final_(final_path), tmp_(atomic_tmp_path(final_path)) {}
+
+AtomicOutput::~AtomicOutput() {
+    if(!committed_) remove_file_utf8(tmp_);
+}
+
+bool AtomicOutput::commit() {
+    if(committed_) return true;
+    if(!replace_file_utf8(tmp_, final_)) {
+        // 替换失败：最终路径上不能留半截文件，临时文件也一并清掉
+        fprintf(stderr,"Error: cannot move temp output into place: %s\n", final_.c_str());
+        remove_file_utf8(tmp_);
+        committed_ = true;   // 视作已终结，析构不再干预
+        return false;
+    }
+    committed_ = true;
+    return true;
 }
 
 // 清掉只读属性（密钥文件 / 源文件覆写前的准备）
@@ -1058,25 +1123,48 @@ static bool is_file_valid(const std::string& path) {
 }
 
 // 判断已存在的输出是否“完整且有效”，可安全跳过
-static bool is_complete_output(const std::string& out_path, bool encrypt, const std::string& in_path) {
+// in_size_hint：调用方已 stat 过的源尺寸（批量预扫描的 size_cache），传入可省一次 stat。
+// header_ok：顺带报告「输出头部是否有效」，使预扫描不必再单独调 is_file_valid 开一次文件。
+static bool is_complete_output(const std::string& out_path, bool encrypt, const std::string& in_path,
+    int64_t in_size_hint=-1, bool* header_ok=nullptr) {
+    if(header_ok) *header_ok=false;
     int64_t cur=get_file_size_utf8(out_path);
     if(cur<0) return false;
     if(encrypt) {
-        int64_t in_sz=get_file_size_utf8(in_path);
+        int64_t in_sz=in_size_hint;
+        if(in_sz<0) in_sz=get_file_size_utf8(in_path);
         if(in_sz<0) return false;
         // 读取输出头部的 version / mode 以确定头部大小与 tag 长度
         std::ifstream hf;
         unsigned char ver=0; CryptoMode m=CryptoMode::XCHACHA20;
+        uint32_t cs_stored=CHUNK_SIZE;   // 文件头里的实际块大小，读不到则按当前默认
         if(open_stream(hf,out_path,std::ios::binary)) {
-            unsigned char h5[6];
-            if(hf.read(reinterpret_cast<char*>(h5),6)&&memcmp(h5,MAGIC,4)==0) {
-                ver=h5[4]; m=static_cast<CryptoMode>(h5[5]);
+            // 一次读到最大头长：既取 version/mode，也据实际读到的字节数判头是否完整
+            unsigned char hb[HEADER_SIZE_V6];
+            hf.read(reinterpret_cast<char*>(hb),HEADER_SIZE_V6);
+            std::streamsize got=hf.gcount();
+            if(got>=6&&memcmp(hb,MAGIC,4)==0) {
+                ver=hb[4]; m=static_cast<CryptoMode>(hb[5]);
+                if(header_ok&&(uint64_t)got>=header_size_for_version(ver)
+                    &&(ver==1||ver==2||ver==3||ver==5||ver==6||ver==VERSION)) *header_ok=true;
+            }
+            // 块大小取自文件头：默认块大小上调后，旧密文仍能被正确判定为「已完成」
+            hf.clear();   // 首读可能撞 EOF 置位，不清则后续 seekg 直接失败
+            uint64_t recip_meta=0;
+            if(ver==6&&(uint64_t)got>=HEADER_SIZE_V6) {
+                FileHeaderV6 hv=load_header<FileHeaderV6>(hb);
+                recip_meta=get_recip_len(hv.reserved);
+            }
+            if(hf.seekg((std::streamoff)(header_size_for_version(ver)+recip_meta),std::ios::beg)) {
+                uint32_t cs_raw=0;
+                if(hf.read(reinterpret_cast<char*>(&cs_raw),4)
+                    &&cs_raw>=MIN_CHUNK_SIZE&&cs_raw<=MAX_CHUNK_SIZE) cs_stored=cs_raw;
             }
             hf.close();
         }
         uint64_t hdr=header_size_for_version(ver);
         size_t tag=tag_size_for_mode(m);
-        uint64_t cs=CHUNK_SIZE;
+        uint64_t cs=cs_stored;
         uint64_t expected;
         if(in_sz==0) {
             expected=hdr+4+4+8;
@@ -1828,7 +1916,9 @@ bool encrypt_file(const std::string& in_path,
     int compress_level,
     bool asym_mode,
     const std::vector<std::string>* asym_recipients,
-    const WatermarkSpec* wm) {
+    const WatermarkSpec* wm,
+    const unsigned char* ext_salt,
+    const unsigned char* ext_kek) {
 
     disable_core_dump();
 
@@ -2028,6 +2118,7 @@ bool encrypt_file(const std::string& in_path,
     uint64_t start_chunk=has_progress?prog_info.processed_chunks:0;
     uint64_t start_bytes=has_progress?prog_info.processed_bytes:0;
 
+
     // 压缩决策：未集成 zstd 时强制关闭；续传已存在的 v5 压缩文件时继续压缩（沿用其级别）
     bool do_compress;
 #ifdef FE_WITH_ZSTD
@@ -2049,6 +2140,25 @@ bool encrypt_file(const std::string& in_path,
     size_t existing_hdr_size = existing_is_v6 ? HEADER_SIZE_V6
                               : (existing_is_v5 ? HEADER_SIZE_V5
                                 : (existing_is_v4 ? HEADER_SIZE_V4 : HEADER_SIZE_V3));
+    // 续传时沿用既有文件头里的块大小：块大小随版本上调后，旧半成品仍能从断点续完，
+    // 否则 st_chunk 与新默认值不等会被误判为损坏。须早于 trunc_pos 计算。
+    uint32_t res_chunk=0; uint32_t res_total=0; uint64_t res_orig=0; bool res_meta=false;
+    if(has_progress&&start_chunk>0) {
+        std::ifstream fhex;
+        if(open_stream(fhex,out_path,std::ios::binary)
+            && fhex.seekg(existing_hdr_size,std::ios::beg)
+            && fhex.read(reinterpret_cast<char*>(&res_chunk),4)
+            && fhex.read(reinterpret_cast<char*>(&res_total),4)
+            && fhex.read(reinterpret_cast<char*>(&res_orig),8)) {
+            res_meta=true;
+            if(res_chunk>=MIN_CHUNK_SIZE&&res_chunk<=MAX_CHUNK_SIZE&&res_chunk!=chunk_size) {
+                chunk_size=res_chunk;
+                total_chunks_64=(total_size+chunk_size-1)/chunk_size;
+                total_chunks=static_cast<uint32_t>(total_chunks_64);
+            }
+        }
+    }
+
     uint64_t trunc_pos;
     if(resume_compressed && start_chunk>0) {
         // v5 压缩文件：每块带 4 字节压缩帧长度前缀，磁盘为变长，需扫描前缀求断点偏移
@@ -2101,19 +2211,13 @@ bool encrypt_file(const std::string& in_path,
                 (int)existing_mode,(int)mode);
             return false;
         }
-        uint32_t st_chunk=0,st_total=0; uint64_t st_orig=0;
-        {
-            std::ifstream fhex;
-            if(!open_stream(fhex,out_path,std::ios::binary)
-                || !fhex.seekg(existing_hdr_size,std::ios::beg)
-                || !fhex.read(reinterpret_cast<char*>(&st_chunk),4)
-                || !fhex.read(reinterpret_cast<char*>(&st_total),4)
-                || !fhex.read(reinterpret_cast<char*>(&st_orig),8)) {
-                fprintf(stderr,"Cannot read metadata from existing file\n");
-                return false;
-            }
+        if(!res_meta) {
+            fprintf(stderr,"Cannot read metadata from existing file\n");
+            return false;
         }
-        if(st_chunk!=CHUNK_SIZE||st_total!=total_chunks||st_orig!=orig_size) {
+        const uint32_t st_chunk=res_chunk, st_total=res_total;
+        const uint64_t st_orig=res_orig;
+        if(st_chunk!=chunk_size||st_total!=total_chunks||st_orig!=orig_size) {
             fprintf(stderr,"Metadata mismatch: file may be corrupted\n");
             return false;
         }
@@ -2157,10 +2261,10 @@ bool encrypt_file(const std::string& in_path,
     std::unique_ptr<Cipher> ciph=create_cipher(mode);
     if(!ciph) { fprintf(stderr,"Unsupported encryption mode\n"); return false; }
     std::vector<unsigned char> aad;
-    std::vector<unsigned char> plaintext_chunk(CHUNK_SIZE);
+    PooledBuf plaintext_chunk(DataBufPool::plain());
     // 压缩帧缓冲（仅压缩模式使用，固定上界 ZSTD_compressBound(CHUNK_SIZE)；无 zstd 时退化为 CHUNK_SIZE）
-    std::vector<unsigned char> comp_chunk(COMP_BUF_MAX);
-    std::vector<unsigned char> ciphertext_chunk(COMP_BUF_MAX+MAX_TAG_SIZE);
+    PooledBuf comp_chunk(DataBufPool::comp());
+    PooledBuf ciphertext_chunk(DataBufPool::cipher());
     unsigned char nonce[32]={0};
     uint64_t processed_bytes=start_bytes;
 
@@ -2185,7 +2289,9 @@ bool encrypt_file(const std::string& in_path,
             header.opslimit=pops;
             header.memlimit_kb=pmem;
         }
-        randombytes_buf(header.salt,ARGON2_SALT_LEN);
+        // 批量预派生：盐由调用方预生成（据此已在预扫描阶段派生好 KEK），此处直接沿用
+        if(ext_salt) memcpy(header.salt,ext_salt,ARGON2_SALT_LEN);
+        else         randombytes_buf(header.salt,ARGON2_SALT_LEN);
         randombytes_buf(header.iv,iv_len);
         header.compression = do_compress ? 1 : 0;
         header.comp_level   = do_compress ? (unsigned char)(int)compress_level : 0;
@@ -2198,6 +2304,9 @@ bool encrypt_file(const std::string& in_path,
         SecureBuffer kek(ARGON2_OUTPUT_LEN);
         if(asym_active) {
             sodium_memzero(kek.data(), kek.size());
+        } else if(ext_kek) {
+            // 批量预派生命中：直接复用预扫描阶段算好的 KEK，省掉本次 Argon2id
+            memcpy(kek.data(),ext_kek,ARGON2_OUTPUT_LEN);
         } else if(!derive_key(password.data(),password.size(),header.salt,kek.data(),
                 header.opslimit,(size_t)header.memlimit_kb*1024)) {
             ok=false; goto cleanup;
@@ -2314,7 +2423,7 @@ bool encrypt_file(const std::string& in_path,
     if(start_bytes>0) {
         fin.seekg(0,std::ios::beg);
         uint64_t remain=start_bytes;
-        std::vector<unsigned char> tmp(CHUNK_SIZE);
+        PooledBuf tmp(DataBufPool::plain());
         while(remain>0) {
             size_t n=(size_t)std::min<uint64_t>(CHUNK_SIZE,remain);
             fin.read(reinterpret_cast<char*>(tmp.data()),n);
@@ -2740,10 +2849,11 @@ bool decrypt_file(const std::string& in_path,
         return false;
     }
 
-    if(chunk_size!=CHUNK_SIZE) {
+    // 块大小以文件头为准（默认块大小可能随版本上调），仅约束区间防伪造头
+    if(chunk_size<MIN_CHUNK_SIZE||chunk_size>MAX_CHUNK_SIZE) {
         if(!silent) {
-            fprintf(stderr,"Invalid chunk_size: %u (expected %zu). File may be corrupted.\n",
-                chunk_size,CHUNK_SIZE);
+            fprintf(stderr,"Invalid chunk_size: %u (allowed %zu..%zu). File may be corrupted.\n",
+                chunk_size,(size_t)MIN_CHUNK_SIZE,(size_t)MAX_CHUNK_SIZE);
         }
         return false;
     }
@@ -2999,9 +3109,11 @@ bool decrypt_file(const std::string& in_path,
     // .prs 节流基点：进度文件只服务"进程被强杀后的断点续传"，无需逐块落盘。
     auto last_prs_save=std::chrono::steady_clock::now();
     // 压缩块密文上界为 ZSTD_compressBound(CHUNK_SIZE)+tag；未压缩块为 CHUNK_SIZE+tag
-    std::vector<unsigned char> ciphertext_chunk((comp_on?COMP_BUF_MAX:chunk_size)+MAX_TAG_SIZE);
-    std::vector<unsigned char> plaintext_chunk(COMP_BUF_MAX);  // AEAD 输出暂存（压缩帧，上界 COMP_BUF_MAX）
-    std::vector<unsigned char> dec_chunk(chunk_size);          // zstd 解压后的最终明文（仅压缩模式使用）
+    // 一律按上界取缓冲：文件头 chunk_size 可能小于当前默认块大小（旧文件），
+    // 上界尺寸既能容纳也便于命中缓冲池复用
+    PooledBuf ciphertext_chunk(DataBufPool::cipher());
+    PooledBuf plaintext_chunk(DataBufPool::comp());   // AEAD 输出暂存（压缩帧，上界 COMP_BUF_MAX）
+    PooledBuf dec_chunk(DataBufPool::plain());        // zstd 解压后的最终明文（仅压缩模式使用）
     unsigned char nonce[32]={0};
     bool ok=true;
     uint64_t processed_bytes=start_bytes;
@@ -3061,7 +3173,7 @@ bool decrypt_file(const std::string& in_path,
         }
         else {
             uint64_t remain=start_bytes;
-            std::vector<unsigned char> tmp(CHUNK_SIZE);
+            PooledBuf tmp(DataBufPool::plain());
             while(remain>0 && ok) {
                 size_t n=(size_t)std::min<uint64_t>(CHUNK_SIZE,remain);
                 pin.read(reinterpret_cast<char*>(tmp.data()),n);
@@ -3377,6 +3489,40 @@ static std::string build_batch_out_path(const std::string& in_path,
     return out_path;
 }
 
+// 批量预派生用：只读文件头的 KDF 三元组（盐 + ops + mem），不做任何密钥派生。
+// 与 read_original_name 同源的版本分派，保证 v1 旧格式回落到历史固定参数。
+static bool read_header_kdf_params(const std::string& ptd_path,
+    unsigned char salt[ARGON2_SALT_LEN], unsigned int& ops, uint32_t& mem_kb) {
+    std::ifstream f;
+    if(!open_stream(f,ptd_path,std::ios::binary)) return false;
+    unsigned char hdr[HEADER_SIZE_V6];
+    if(!f.read(reinterpret_cast<char*>(hdr),5)) return false;
+    if(memcmp(hdr,MAGIC,4)!=0) return false;
+    unsigned char ver=hdr[4];
+    if(ver!=1&&ver!=2&&ver!=3&&ver!=VERSION&&ver!=5&&ver!=6) return false;
+    uint64_t need=header_size_for_version(ver);
+    if(need<5||need>sizeof(hdr)) return false;
+    if(!f.read(reinterpret_cast<char*>(hdr+5),(std::streamoff)(need-5))) return false;
+    ops=ARGON2_OPS_LEGACY; mem_kb=ARGON2_MEM_LEGACY_KB;
+    if(ver==1)      { FileHeaderV1 h=load_header<FileHeaderV1>(hdr); memcpy(salt,h.salt,ARGON2_SALT_LEN); }
+    else if(ver==2) { FileHeaderV2 h=load_header<FileHeaderV2>(hdr); memcpy(salt,h.salt,ARGON2_SALT_LEN); ops=h.opslimit; mem_kb=h.memlimit_kb; }
+    else if(ver==3) { FileHeaderV3 h=load_header<FileHeaderV3>(hdr); memcpy(salt,h.salt,ARGON2_SALT_LEN); ops=h.opslimit; mem_kb=h.memlimit_kb; }
+    else if(ver==5) { FileHeaderV5 h=load_header<FileHeaderV5>(hdr); memcpy(salt,h.salt,ARGON2_SALT_LEN); ops=h.opslimit; mem_kb=h.memlimit_kb; }
+    else if(ver==6) { FileHeaderV6 h=load_header<FileHeaderV6>(hdr); memcpy(salt,h.salt,ARGON2_SALT_LEN); ops=h.opslimit; mem_kb=h.memlimit_kb; }
+    else            { FileHeaderV4 h=load_header<FileHeaderV4>(hdr); memcpy(salt,h.salt,ARGON2_SALT_LEN); ops=h.opslimit; mem_kb=h.memlimit_kb; }
+    return true;
+}
+
+// 分卷输入的 base 不在场时，各卷头部与完整件一致，取第一卷即可
+static bool kdf_params_for_batch_input(const std::string& in_path,
+    unsigned char salt[ARGON2_SALT_LEN], unsigned int& ops, uint32_t& mem_kb) {
+    if(read_header_kdf_params(in_path,salt,ops,mem_kb)) return true;
+    if(file_exists(in_path)) return false;
+    for(const auto& v:find_volumes(in_path))
+        if(read_header_kdf_params(v,salt,ops,mem_kb)) return true;
+    return false;
+}
+
 bool process_files(const std::vector<std::string>& input_paths,
     const std::string& out_dir,
     const SecureBuffer& password,
@@ -3570,13 +3716,25 @@ bool process_files(const std::vector<std::string>& input_paths,
         if(!force_overwrite && file_exists(out_path)) {
             // 先 stat 判存在再打开：对不存在的输出逐文件做失败的 CreateFile
             // 也会经过过滤驱动（AV 实时扫描），大目录下是无谓的开销。
-            if(!is_file_valid(out_path)) {
+            // 加密侧把「头是否有效」并入完整性检查一次 open 完成；解密侧仍先判头，
+            // 头坏就没必要再读全长。
+            int64_t sz_hint=-1;
+            { auto _sc=size_cache.find(in_path); if(_sc!=size_cache.end()) sz_hint=_sc->second; }
+            bool hdr_ok=false, complete=false;
+            if(encrypt) {
+                complete=is_complete_output(out_path,encrypt,in_path,sz_hint,&hdr_ok);
+            }
+            else {
+                hdr_ok=is_file_valid(out_path);
+                if(hdr_ok) complete=is_complete_output(out_path,encrypt,in_path,sz_hint);
+            }
+            if(!hdr_ok) {
                 fprintf(stderr,"Existing file %s is corrupted, will overwrite.\n",out_path.c_str());
             }
             else if(file_exists(out_path+".prs")) {
                 fprintf(stderr,"Existing file %s has unfinished progress, will resume.\n",out_path.c_str());
             }
-            else if(is_complete_output(out_path,encrypt,in_path)) {
+            else if(complete) {
                 // 头部有效、无 .prs、尺寸完整即已完成，安全跳过；
                 // 但解密若带源处置(-de/--wipe-source/--recycle-source)仍须移除源 .ptd。
                 skip=true;
@@ -3639,6 +3797,65 @@ bool process_files(const std::vector<std::string>& input_paths,
                 std::this_thread::sleep_for(std::chrono::milliseconds(40));
             }
         });
+    }
+
+    // KDF 与数据阶段分离：先以 KDF 并发上限（默认 4）集中派生全部 KEK，再让数据阶段
+    // 独占全部 worker。Argon2id 是内存带宽瓶颈型，并发再高墙钟也不降；若把派生混在数据
+    // 阶段里，16 个 worker 会堵在 4 个信号量许可上，实际只有 4 路在干活。
+    std::unordered_map<std::string, std::array<unsigned char,ARGON2_SALT_LEN>> salt_cache;
+    if(encrypt) {
+        // 盐先于派生随机生成：加密侧 KEK 只依赖 (口令, 盐, ops, mem)，可提前算好
+        salt_cache.reserve(files_to_process.size());
+        for(const auto& f:files_to_process) {
+            std::array<unsigned char,ARGON2_SALT_LEN> s;
+            randombytes_buf(s.data(),s.size());
+            salt_cache.emplace(f,s);
+        }
+    }
+    {
+        int kdf_n=kdf_max_concurrency();
+        if(kdf_n>num_threads) kdf_n=num_threads;
+        if(kdf_n<1) kdf_n=1;
+        unsigned int kdf_ops=ARGON2_OPS_DEFAULT, kdf_memkb=ARGON2_MEM_DEFAULT_KB;
+        kdf_preset_params(global_config().kdf_preset,kdf_ops,kdf_memkb);
+        if(files_to_process.size()>=(size_t)(kdf_n*4)) {
+            fprintf(stderr,"Pre-deriving keys for %zu file(s) on %d thread(s)...\n",
+                files_to_process.size(),kdf_n);
+        }
+        std::atomic<size_t> kdf_idx{0};
+        std::mutex kdf_mu;
+        std::vector<std::thread> kdf_threads;
+        for(int i=0;i<kdf_n;++i) {
+            kdf_threads.emplace_back([&]{
+                while(true) {
+                    size_t ki=kdf_idx.fetch_add(1);
+                    if(ki>=files_to_process.size()) break;
+                    const auto& f=files_to_process[ki];
+                    { std::lock_guard<std::mutex> lk(kdf_mu); if(kek_cache.count(f)) continue; }
+                    std::vector<unsigned char> kek(ARGON2_OUTPUT_LEN);
+                    bool got=false;
+                    if(encrypt) {
+                        auto sit=salt_cache.find(f);
+                        if(sit!=salt_cache.end())
+                            got=derive_key(password.data(),password.size(),sit->second.data(),
+                                           kek.data(),kdf_ops,(size_t)kdf_memkb*1024);
+                    }
+                    else {
+                        unsigned char salt[ARGON2_SALT_LEN];
+                        unsigned int ops=0; uint32_t memkb=0;
+                        if(kdf_params_for_batch_input(f,salt,ops,memkb))
+                            got=derive_key(password.data(),password.size(),salt,kek.data(),
+                                           ops,(size_t)memkb*1024);
+                        sodium_memzero(salt,sizeof(salt));
+                    }
+                    // 读头失败或口令派生失败都不缓存：worker 会自行派生并给出原样报错
+                    if(!got) continue;
+                    std::lock_guard<std::mutex> lk(kdf_mu);
+                    kek_cache.emplace(f,std::move(kek));
+                }
+            });
+        }
+        for(auto& kt:kdf_threads) kt.join();
     }
 
     auto worker=[&](int slot) {
@@ -3718,8 +3935,22 @@ bool process_files(const std::vector<std::string>& input_paths,
             size_t last_file_processed=0;
 
             bool ok=false;
+            // 原子落盘：与单文件路径同一套守卫。进程被强杀（GUI 取消=杀进程树）
+            // 或崩溃时，最终路径上不留半截密文，只留可辨识的 .fe_tmp_ 残留。
+            // 临时名按最终路径确定性派生，worker 并发处理不同源文件时互不干扰。
+            std::unique_ptr<AtomicOutput> atomic_out;
+            if(encrypt) atomic_out.reset(new AtomicOutput(out_path));
+            const unsigned char* enc_salt=nullptr;
+            const unsigned char* enc_kek=nullptr;
+            {
+                auto _sit=salt_cache.find(in_path);
+                if(_sit!=salt_cache.end()) enc_salt=_sit->second.data();
+                auto _kit=kek_cache.find(in_path);
+                if(_kit!=kek_cache.end()) enc_kek=_kit->second.data();
+            }
+            const std::string enc_target = encrypt ? atomic_out->path() : out_path;
             if(encrypt) {
-                ok=encrypt_file(in_path,out_path,password,mode,
+                ok=encrypt_file(in_path,enc_target,password,mode,
                     [&](size_t processed,size_t total) {
                         size_t inc=processed-last_file_processed;
                         last_file_processed=processed;
@@ -3734,7 +3965,9 @@ bool process_files(const std::vector<std::string>& input_paths,
                             std::lock_guard<std::mutex> lock(print_mutex);
                             print_progress(global_processed.load(),total_bytes,start_time,false);
                         }
-                    },true,compress_level,false,nullptr,wm);
+                    },true,compress_level,false,nullptr,wm,enc_salt,enc_kek);
+                // 自校验已过才提交：此刻最终路径上要么是完整密文，要么什么都没有
+                if(ok && !atomic_out->commit()) ok=false;
                 if(ok && source_action!=0) {
                     if(!secure_handle_source(in_path, static_cast<SourceDisposition>(source_action))) {
                         std::lock_guard<std::mutex> lock(error_mutex);
@@ -3891,9 +4124,31 @@ bool process_files(const std::vector<std::string>& input_paths,
     for(auto& kv:kek_cache) sodium_memzero(kv.second.data(), kv.second.size());
     kek_cache.clear();
 
-    // 宿主（GUI）可通过环境变量指定统计文件，批量结束时写入 JSON 供宿主解析
+    // 宿主（GUI）可通过环境变量指定统计文件，批量结束时写入 JSON 供宿主解析。
+    // 不用 fopen(wb)：trunc 打开会跟随攻击者预置的符号链接，把统计内容写进别处。
+    // 目标可能已存在（Qt 侧 QTemporaryFile 会先建好空文件），故用「拒绝跟随链接」
+    // 而非 O_EXCL——后者会让宿主永远读不到统计。
     if(const char* stats_path=std::getenv("FILEENCRYPTOR_STATS_FILE")) {
-        FILE* sf=fopen(stats_path,"wb");
+        FILE* sf=nullptr;
+        bool blocked=path_is_symlink(stats_path);
+        if(blocked) {
+            fprintf(stderr,"Refusing to write stats through a symlink: %s\n",stats_path);
+        }
+#ifndef _WIN32
+        // O_NOFOLLOW：末分量是符号链接则 ELOOP，不顺着它写到别处
+        if(!blocked) {
+            int sfd=::open(stats_path,O_CREAT|O_TRUNC|O_WRONLY|O_NOFOLLOW|O_CLOEXEC,0600);
+            if(sfd>=0) {
+                sf=::fdopen(sfd,"wb");
+                if(!sf) ::close(sfd);
+            } else if(errno==ELOOP) {
+                fprintf(stderr,"Refusing to write stats through a symlink: %s\n",stats_path);
+            }
+        }
+#else
+        // MSVC 无 O_NOFOLLOW；上面的句柄级重解析点判定已挡掉链接
+        if(!blocked) sf=fopen(stats_path,"wb");
+#endif
         if(sf) {
             fprintf(sf,"{\"total_bytes\":%llu,\"files_done\":%llu,\"files_failed\":%llu,"
                       "\"files_skipped\":%llu,\"total_files\":%llu}\n",

@@ -12,7 +12,7 @@ if(WIN32)
   endif()
 endif()
 
-project(FileEncryptorCLI VERSION 2.8.0 LANGUAGES CXX)
+project(FileEncryptorCLI VERSION 2.9.0 LANGUAGES CXX)
 
 # FileEncryptor CLI - 命令行加密工具（独立项目），产出 FileEncryptorCLI(.exe)，GUI 经 QProcess 调用。
 # 静态链接 libsodium + yaml-cpp，二进制零外部依赖，可直接打包 DEB/RPM。
@@ -310,6 +310,7 @@ set(SOURCES
   core/watermark.cpp
   core/split_volumes.cpp
   core/archive.cpp
+  core/keywrap.cpp
   cli/main.cpp)
 
 # Windows 图标资源（嵌入 exe；Linux/macOS 无 .rc）

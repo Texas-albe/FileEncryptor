@@ -44,7 +44,7 @@ TaskHistoryDialog::TaskHistoryDialog(QWidget* parent) : QDialog(parent) {
     m_table->horizontalHeader()->setStretchLastSection(true);
     lay->addWidget(m_table,1);
 
-    auto* hint=new QLabel(tr("双击一行可将该次任务的参数回填到主窗口（回放）。"));
+    auto* hint=new QLabel(tr("双击一行可将该次任务的参数回填到主窗口。"));
     hint->setWordWrap(true);
     lay->addWidget(hint);
 
@@ -74,6 +74,8 @@ TaskHistoryDialog::TaskHistoryDialog(QWidget* parent) : QDialog(parent) {
 QString TaskHistoryDialog::modeLabel(const QString& mode) const {
     if(mode==QStringLiteral("xchacha20"))  return tr("XChaCha20");
     if(mode==QStringLiteral("aegis256"))   return tr("AEGIS-256");
+    if(mode==QStringLiteral("aes-gcm"))    return tr("AES-256-GCM");
+    if(mode==QStringLiteral("sm4"))        return tr("SM4-GCM");
     if(mode==QStringLiteral("asymmetric")) return tr("非对称");
     return mode.isEmpty() ? tr("-") : mode;
 }

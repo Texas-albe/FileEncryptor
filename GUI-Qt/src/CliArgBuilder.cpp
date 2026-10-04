@@ -10,8 +10,17 @@
 static const char* modeToken(CryptoMode m) {
     switch (m) {
     case CryptoMode::Aegis256: return "aegis256";
+    case CryptoMode::AesGcm:   return "aes-gcm";
     case CryptoMode::Sm4:      return "sm4";
     default:                   return "xchacha20";
+    }
+}
+
+static const char* wrapAlgToken(WrapAlg a) {
+    switch (a) {
+    case WrapAlg::AesKw:   return "aes-kw";
+    case WrapAlg::Pubkey: return "pubkey";
+    default:              return "kwp";
     }
 }
 
@@ -81,6 +90,43 @@ QStringList CliArgBuilder::buildArguments(const ShellOptions& o) {
         }
         return args;
     }
+    // 密钥包装：与加解密流程完全独立，只有 --wrap-key / --unwrap-key 一组参数。
+    // 口令 / 私钥不落 argv：统一走 --key-stdin 或 -k <file>，理由同水印私钥。
+    if (o.action == CryptoAction::WrapKey) {
+        args << QStringLiteral("--wrap-key") << o.wrapInput;
+        args << QStringLiteral("--wrap-alg") << wrapAlgToken(o.wrapAlg);
+        if (!o.wrapOutput.isEmpty()) {
+            args << QStringLiteral("--wrap-out") << o.wrapOutput;
+        }
+        if (o.wrapAlg == WrapAlg::Pubkey) {
+            // 公钥路线：--wrap-to 接字符串或文件都认，这里优先给路径
+            args << QStringLiteral("--wrap-to") << o.recipientPath;
+        } else if (!o.keyfilePath.isEmpty()) {
+            args << QStringLiteral("-k") << o.keyfilePath;
+        } else {
+            args << QStringLiteral("--key-stdin");
+        }
+        if (o.forceOverwrite) args << QStringLiteral("-y");
+        return args;
+    }
+    if (o.action == CryptoAction::UnwrapKey) {
+        args << QStringLiteral("--unwrap-key") << o.wrapInput;
+        if (o.wrapAlg != WrapAlg::Pubkey) {
+            // 解包时算法存在 blob 头里，但 GUI 侧的 alg 选择也用于决定「要不要口令」
+            if (!o.keyfilePath.isEmpty()) {
+                args << QStringLiteral("-k") << o.keyfilePath;
+            } else {
+                args << QStringLiteral("--key-stdin");
+            }
+        } else {
+            args << QStringLiteral("--identity") << o.identityPath;
+        }
+        if (!o.wrapOutput.isEmpty()) {
+            args << QStringLiteral("--unwrap-out") << o.wrapOutput;
+        }
+        if (o.forceOverwrite) args << QStringLiteral("-y");
+        return args;
+    }
 
     const bool isAsym = (o.mode == CryptoMode::Asymmetric);
     const bool isEnc = (o.action == CryptoAction::Encrypt ||
@@ -97,7 +143,9 @@ QStringList CliArgBuilder::buildArguments(const ShellOptions& o) {
     case CryptoAction::KeyGen:
     case CryptoAction::Derive:
     case CryptoAction::PubKey:
-        break;
+    case CryptoAction::WrapKey:
+    case CryptoAction::UnwrapKey:
+        break;   // 包装动作在上面的分支里已各自 return
     }
 
     // CLI 的 -m 后写覆盖前写，但 -m x25519/x448 只置 asym 标志、不改算法，
@@ -114,6 +162,14 @@ QStringList CliArgBuilder::buildArguments(const ShellOptions& o) {
 
     if (!o.outputDir.isEmpty()) {
         args << QStringLiteral("-o") << o.outputDir;
+    }
+
+    // 分卷：把产出的 .ptd 切成 <base>.001.ptd/002/…；值是尺寸串（2GB/512MB/4096）
+    if (isEnc && o.split) {
+        static const char* kUnit[3] = { "MB", "GB", "TB" };
+        const char* unit = kUnit[(o.splitUnit >= 0 && o.splitUnit <= 2) ? o.splitUnit : 0];
+        args << QStringLiteral("--split")
+             << QString::number(o.splitSize > 0 ? o.splitSize : 1) + QLatin1String(unit);
     }
 
     // 加密压缩包：目录树 / 多文件打成单个 .ptd。短选项 -p，长选项 --pack。必须在 -- 之前。
@@ -223,7 +279,11 @@ QString CliArgBuilder::buildPreview(const QString& programPath, const ShellOptio
         QStringLiteral("-o"), QStringLiteral("-i"), QStringLiteral("-k"),
         QStringLiteral("-r"), QStringLiteral("--salt"),
         QStringLiteral("--compression-level"), QStringLiteral("-cl"),
-        QStringLiteral("--wm-sign"), QStringLiteral("--wm-verify")
+        QStringLiteral("--wm-sign"), QStringLiteral("--wm-verify"),
+        QStringLiteral("--wrap-key"), QStringLiteral("--wrap-out"),
+        QStringLiteral("--wrap-alg"), QStringLiteral("--wrap-to"),
+        QStringLiteral("--unwrap-key"), QStringLiteral("--unwrap-out"),
+        QStringLiteral("--identity")
     };
 
     const QStringList args = buildArguments(o);
@@ -267,6 +327,16 @@ QString CliArgBuilder::buildPreview(const QString& programPath, const ShellOptio
     }
     if (o.action == CryptoAction::PubKey) {
         return cmd + QCoreApplication::translate("CliArgBuilder", "   [私钥来自 -k 文件]");
+    }
+    // 包装动作：口令路线走 stdin，公钥路线靠收件人密钥材料，都不经 -m
+    if (o.action == CryptoAction::WrapKey || o.action == CryptoAction::UnwrapKey) {
+        if (o.wrapAlg == WrapAlg::Pubkey) {
+            return cmd + QCoreApplication::translate("CliArgBuilder", "   [使用收件人密钥材料]");
+        }
+        if (!o.keyfilePath.isEmpty()) {
+            return cmd + QCoreApplication::translate("CliArgBuilder", "   [口令来自 -k 文件]");
+        }
+        return cmd + QCoreApplication::translate("CliArgBuilder", "   [口令经 stdin 注入]");
     }
 
     const bool isAsym = (o.mode == CryptoMode::Asymmetric);

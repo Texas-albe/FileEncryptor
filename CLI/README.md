@@ -176,7 +176,7 @@ FileEncryptorCLI <动作> <输入路径...> [选项]
   <输入路径>         单文件：一个位置参数；批量：用 -i <目录> 指定（可多次）
   -o <dir>          输出目录（默认：输入同级目录）
   -i <dir>          批量输入目录（可多次，仅 -be/-bd 使用）
-  -m <mode>         加密模式：xchacha20（默认）| aegis256 | sm4 | x25519 | x448（后两者为非对称）
+  -m <mode>         加密模式：xchacha20（默认）| aegis256 | aes-gcm | sm4 | x25519 | x448（后两者为非对称）
   -z / --compress   对称加密（-e/-be）启用逐块 zstd 压缩（磁盘格式 v5；不压缩仍为 v4）。
                     未显式给 --compression-level 时默认级别 1
   --compression-level <N>, -cl <N>

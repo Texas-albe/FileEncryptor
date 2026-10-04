@@ -334,29 +334,37 @@ static std::string urlHost(const std::string& url) {
     return h;
 }
 
-// 仅 http/https，且主机在 GitHub 白名单内（下载场景额外放行对象存储域）
+// 仅 https，且主机在 GitHub 白名单内（下载场景额外放行对象存储域）。
+// 不接受 http：明文传输等于没有 TLS，而本程序的可信链正是「TLS + SHA256」，
+// 放行 http 会让降级攻击直接绕过全部保障。
 static bool urlAllowed(const std::string& url, std::string* hostOut, bool allowAssetHost = false) {
     std::string host = urlHost(url);
     if (hostOut) *hostOut = host;
-    if (g_allowAnyHost) return !host.empty();
     size_t s = url.find("://");
     std::string scheme = (s != std::string::npos) ? url.substr(0, s) : std::string();
-    if (scheme != "https" && scheme != "http") return false;
+    for (char& c : scheme) c = (char)tolower((unsigned char)c);
+    if (scheme != "https") return false;
+    if (g_allowAnyHost) return !host.empty();
     return allowAssetHost ? isGitHubOrAssetHost(host) : isGitHubHost(host);
 }
 
 // ===================== libcurl 回调与 GET / 下载 =====================
 // TLS 行为统一在这里设一次，两处lowGet 共用。
 //
-// 1) 吊销检查用 BEST_EFFORT 而不是 NO_REVOCATION：
-//    内网/防火墙常把 CRL 分发点拦掉，Schannel 拿不到吊销状态就直接
-//    InitializeSecurityContext 失败（CRYPT_E_NO_REVOCATION_CHECK），
-//    表现是「所有 HTTPS 都SSL connect error」。BEST_EFFORT 只在
-//    拉不到列表时放行，在线能查到吊销仍会拒绝。
-// 2) 用系统证书库（Schannel 后端本就默认走它，这里写明以防构建切换后端）。
-static void applyTls(CURL* h) {
-    curl_easy_setopt(h, CURLOPT_SSL_OPTIONS,
-                     (long)(CURLSSLOPT_REVOKE_BEST_EFFORT | CURLSSLOPT_NATIVE_CA));
+// 1) 吊销检查先用 BEST_EFFORT：内网/防火墙常把 CRL 分发点拦掉，Schannel
+//    拿不到吊销状态就直接 InitializeSecurityContext 失败
+//    （CRYPT_E_NO_REVOCATION_CHECK），表现是「所有 HTTPS 都 SSL connect error」。
+// 2) 但 BEST_EFFORT 并不保证一定放行：吊销站点不可达时 Schannel 仍可能直接握手
+//    失败（实测 curl 8.22 + Schannel 就是如此，只写 BEST_EFFORT 并不够）。所以失
+//    败后由调用方带 relaxRevoke=true 重试一次，改用 NO_CHECK 只跳过「这张证书是
+//    否已被吊销」这一步；证书链与域名校验照旧（VERIFYPEER/VERIFYHOST 始终为
+//    开），不会退化成不校验证书。
+// 3) 用系统证书库（Schannel 后端本就默认走它，这里写明以防构建切换后端）。
+static void applyTls(CURL* h, bool relaxRevoke = false) {
+    long sslOpt = relaxRevoke
+        ? (long)(CURLSSLOPT_NO_REVOKE | CURLSSLOPT_NATIVE_CA)
+        : (long)(CURLSSLOPT_REVOKE_BEST_EFFORT | CURLSSLOPT_NATIVE_CA);
+    curl_easy_setopt(h, CURLOPT_SSL_OPTIONS, sslOpt);
     curl_easy_setopt(h, CURLOPT_SSL_VERIFYPEER, 1L);
     curl_easy_setopt(h, CURLOPT_SSL_VERIFYHOST, 2L);
 }
@@ -508,6 +516,7 @@ struct GetCtx {
     std::vector<char>* body = nullptr;
     std::string* etag = nullptr;
     std::string* finalUrl = nullptr;
+    bool allowAssetHost = false;   // 下载场景才复检 Location（API 请求不需要）
 };
 static size_t getWriteCb(void* ptr, size_t size, size_t nmemb, void* userdata) {
     auto* c = static_cast<GetCtx*>(userdata);
@@ -524,6 +533,13 @@ static size_t getHeaderCb(char* buffer, size_t size, size_t nmemb, void* userdat
         std::string key = line.substr(0, colon);
         std::string lk; for (char ch : key) lk += (char)tolower((unsigned char)ch);
         if (lk == "etag" && c->etag) *c->etag = trim(line.substr(colon + 1));
+        // 3xx 的 Location 逐跳复检：CURLOPT_FOLLOWLOCATION 不受白名单约束，
+        // 只在入口查一次 URL 是不够的，中途被引到别处一样能拿到东西。
+        if (lk == "location" && c->allowAssetHost) {
+            std::string loc = trim(line.substr(colon + 1));
+            if (!urlAllowed(loc, nullptr, true))
+                return 0;   // 中止传输：交白名单外的主机
+        }
     }
     return n;
 }
@@ -574,11 +590,12 @@ static void classify(int curlCode, const std::string& curlErr, long status, Http
 static HttpResult lowGet(const std::string& url, std::vector<char>* out,
                          long* statusOut, std::string* etagOut, std::string* finalUrlOut,
                          const std::string& etagIn, const std::string& rangeHeader,
-                         const HttpResult* preset = nullptr, const char* purpose = nullptr) {
+                         const HttpResult* preset = nullptr, const char* purpose = nullptr,
+                         bool relaxRevoke = false, bool allowAssetHost = false) {
     HttpResult r;
     CURL* h = curl_easy_init();
     if (!h) { r.error = "curl_init_failed"; r.detail = "curl_easy_init returned null"; return r; }
-    GetCtx ctx{out, etagOut, finalUrlOut};
+    GetCtx ctx{out, etagOut, finalUrlOut, allowAssetHost};
     curl_easy_setopt(h, CURLOPT_URL, url.c_str());
     // 无超时会让 GUI 一直转圈：连不上/被墙时必须有上限
     curl_easy_setopt(h, CURLOPT_CONNECTTIMEOUT, 15L);
@@ -602,7 +619,7 @@ static HttpResult lowGet(const std::string& url, std::vector<char>* out,
     if (!rangeHeader.empty()) hdr = curl_slist_append(hdr, rangeHeader.c_str());
     if (hdr) curl_easy_setopt(h, CURLOPT_HTTPHEADER, hdr);
     applyCaBundle(h);
-    applyTls(h);
+    applyTls(h, relaxRevoke);
 
     CURLcode rc = curl_easy_perform(h);
     long code = 0;
@@ -628,6 +645,48 @@ static HttpResult lowGet(const std::string& url, std::vector<char>* out,
     return r;
 }
 
+// Schannel 在吊销站点不可达时会直接握手失败（CRYPT_E_NO_REVOCATION_CHECK），
+// 表现为所有 HTTPS 都 SSL connect error / network_failed。此时重试一次并只跳过
+// 「证书是否已被吊销」这一步（证书链与域名校验照旧）。仅在 TLS 类失败时重试，
+// 免得把超时/404 也重跑一遍。仅 Windows 走 Schannel 需要这层。
+// 吊销相关握手失败的特征串。Schannel 的报错文本随版本变过，两条都认；
+// 下载路径原先只匹配其中一条，导致同一种故障在下载时不重试、在检查时重试。
+static bool isTlsHandshakeDetail(const std::string& detail) {
+    return detail.find("SSL connect error") != std::string::npos
+        || detail.find("SCHANNEL") != std::string::npos;
+}
+
+static bool isTlsHandshakeFail(const HttpResult& r) {
+#ifdef _WIN32
+    return isTlsHandshakeDetail(r.detail) || r.error == "tls_verify_failed";
+#else
+    (void)r;
+    return false;
+#endif
+}
+
+// 统一的「先按标准吊销策略，握手失败再放宽重试一次」GET
+static HttpResult lowGetWithRevokeFallback(const std::string& url, std::vector<char>* out,
+                                           long* statusOut, std::string* etagOut,
+                                           std::string* finalUrlOut, const std::string& etagIn,
+                                           const std::string& rangeHeader) {
+    HttpResult r = lowGet(url, out, statusOut, etagOut, finalUrlOut, etagIn, rangeHeader);
+    if (!r.ok && isTlsHandshakeFail(r)) {
+        // 放宽吊销检查必须留痕：静默降级会让人误以为证书验过。
+        // 放宽后仍然校验证书链与域名（VERIFYPEER/VERIFYHOST 恒为 1），
+        // 只是不再查「这张证书是否已被吊销」——泄露私钥的 CA 场景下弱于原策略。
+        fprintf(stderr,
+                "[updater] WARNING: TLS handshake failed (%s); retrying with revocation check "
+                "disabled (certificate chain and hostname are still verified)\n",
+                r.detail.c_str());
+        // 清掉半截响应再重试，避免把两次结果拼在一起
+        if (out) out->clear();
+        r = lowGet(url, out, statusOut, etagOut, finalUrlOut, etagIn, rangeHeader,
+                   nullptr, nullptr, true /* relaxRevoke */);
+    }
+    return r;
+}
+
 struct DlCtx {
     std::ofstream* f = nullptr;
     long long* written = nullptr;
@@ -644,6 +703,8 @@ static size_t dlWriteCb(void* ptr, size_t size, size_t nmemb, void* userdata) {
     if (c->prog) (*c->prog)(*c->written, c->total);
     return n;
 }
+// 下载时 GitHub 会 302 到 release-assets.githubusercontent.com；跟到白名单外的主机
+// 等于把安装包交给任意第三方，返回 0 中止传输。
 static size_t dlHeaderCb(char* buffer, size_t size, size_t nmemb, void* userdata) {
     auto* c = static_cast<DlCtx*>(userdata);
     size_t n = size * nmemb;
@@ -657,6 +718,15 @@ static size_t dlHeaderCb(char* buffer, size_t size, size_t nmemb, void* userdata
             // 续传时 Content-Length 只含剩余部分，进度条总长按完整大小算
             if (len > 0) c->total = (c->base > 0) ? (len + c->base) : len;
         }
+        // 重定向逐跳复检：下载必然跟随 GitHub 的 302，但跟随目标同样得在白名单内，
+        // 否则入口校验形同虚设，中途被引到别处也能把包写下来。
+        if (lk == "location") {
+            std::string loc = trim(line.substr(colon + 1));
+            if (!urlAllowed(loc, nullptr, true)) {
+                fprintf(stderr, "[update] redirect to disallowed host rejected: %s\n", loc.c_str());
+                return 0;   // 中止传输
+            }
+        }
     }
     return n;
 }
@@ -667,7 +737,8 @@ static std::string g_dlError;
 // 下载到文件（支持 Range 续传、进度回调）。返回实际写入字节数；失败时返回 -1。
 static long long downloadToFile(const std::string& url, const std::string& outPathUtf8,
                                  long long resumeFrom,
-                                 const std::function<void(long long, long long)>& onProgress) {
+                                 const std::function<void(long long, long long)>& onProgress,
+                                 bool relaxRevoke = false) {
     CURL* h = curl_easy_init();
     if (!h) { g_dlError = "curl_easy_init failed"; return -1; }
 
@@ -704,7 +775,7 @@ static long long downloadToFile(const std::string& url, const std::string& outPa
     curl_easy_setopt(h, CURLOPT_LOW_SPEED_LIMIT, 4096L);
     curl_easy_setopt(h, CURLOPT_LOW_SPEED_TIME, 60L);
     applyCaBundle(h);
-    applyTls(h);
+    applyTls(h, relaxRevoke);
     applyProxy(h);
     if (resumeFrom > 0) curl_easy_setopt(h, CURLOPT_RESUME_FROM_LARGE, (curl_off_t)resumeFrom);
 
@@ -843,7 +914,8 @@ static int doCheck(const std::string& current, const std::string& type, const st
     }
     std::vector<char> body;
     long status = 0; std::string etagNew, finalUrl;
-    HttpResult hr = lowGet(api, &body, &status, &etagNew, &finalUrl, etagIn, std::string());
+    HttpResult hr = lowGetWithRevokeFallback(api, &body, &status, &etagNew, &finalUrl,
+                                             etagIn, std::string());
     if (!hr.ok) {
         // 把具体原因（DNS/超时/TLS/限流）透出，GUI 才不会只显示一句「网络失败」
         printf("{\"ok\":false,\"error\":\"%s\",\"detail\":\"%s\",\"http_status\":%ld}\n",
@@ -954,6 +1026,12 @@ static int doUpdate(const std::string& url, const std::string& expectedSha,
 
     printf("{\"progress\":0,\"stage\":\"downloading\"}\n"); fflush(stdout);
     long long got = downloadToFile(url, tmpPathUtf8, 0, progress);
+    // 握手被吊销检查挡下时重试一次；否则会出现「查得到新版本却下不下来」
+    if (got < 0 && isTlsHandshakeDetail(g_dlError)) {
+        fprintf(stderr, "[update] WARNING: download handshake failed; retrying with revocation check "
+                        "disabled (certificate chain and hostname are still verified)\n");
+        got = downloadToFile(url, tmpPathUtf8, 0, progress, true /* relaxRevoke */);
+    }
     if (got < 0) {
         printf("{\"progress\":100,\"stage\":\"error\",\"error\":\"download_failed\",\"detail\":\"%s\"}\n",
                jsonEscape(g_dlError).c_str());
@@ -979,9 +1057,17 @@ static int doUpdate(const std::string& url, const std::string& expectedSha,
         std::filesystem::remove_all(tmpDir, ec);
         return 1;
     }
+    // 没拿到期望摘要就没法验完整性：宁可拒装，也不能「没给摘要就算过」。
+    // 攻击者能改 JSON 响应，就能把 digest 字段抹掉；这里空值直接失败。
+    if (expectedSha.empty()) {
+        printf("{\"progress\":100,\"stage\":\"error\",\"error\":\"sha256_missing\"}\n");
+        fprintf(stderr, "[update] expected sha256 absent; refusing to install unverified package\n");
+        std::filesystem::remove(tmpFile, ec);
+        std::filesystem::remove_all(tmpDir, ec);
+        return 1;
+    }
     std::string actualSha = sha256File(tmpPathUtf8);
-    bool shaOk = expectedSha.empty() ? true : iequals(actualSha, expectedSha);
-    if (!shaOk) {
+    if (!iequals(actualSha, expectedSha)) {
         printf("{\"progress\":100,\"stage\":\"error\",\"error\":\"sha256_mismatch\",\"expected\":\"%s\",\"actual\":\"%s\"}\n",
                expectedSha.c_str(), actualSha.c_str());
         std::filesystem::remove(tmpFile, ec);
@@ -989,9 +1075,13 @@ static int doUpdate(const std::string& url, const std::string& expectedSha,
         return 1;
     }
 
-    // 可选 Minisign：若 sigUrl 可得则验证（当前 release 无 .minisig，404 即跳过）
+    // 签名校验未实现：minisign 公钥未内置，这里不假装验过。
+    // 当前可信链是「TLS 证书链 + 域名校验 + SHA256 摘要比对」；
+    // 摘要来自同一条 TLS 通道，因此并不能独立于 TLS 抵抗中间人。
+    // 要脱离这个依赖，需给 release 附 .minisig 并把公钥内置进本程序。
     if (!sigUrl.empty()) {
-        fprintf(stderr, "[update] sig_url provided but Minisign verification not bundled; skipping (no embedded key)\n");
+        fprintf(stderr, "[update] sig_url given but Minisign is NOT verified (no embedded public key); "
+                        "relying on TLS + sha256 only\n");
     }
 
     std::filesystem::path installPath = nativePath(installDir);

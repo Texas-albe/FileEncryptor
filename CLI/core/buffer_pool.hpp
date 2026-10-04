@@ -7,10 +7,15 @@
 class BufferPool {
     std::vector<std::vector<unsigned char>> pool_;
     size_t buf_size_;
-    std::mutex mutex_;
+    bool zero_;
+    size_t max_;
+    mutable std::mutex mutex_;   // pooled_count() 为 const，锁须可写
 
 public:
-    explicit BufferPool(size_t buf_size) : buf_size_(buf_size) {}
+    // zero_on_release：归还时清零（承载过明文的缓冲）；max_retained：池内保留上限，
+    // 防止高并发下每线程各留一份把常驻内存顶上去。
+    explicit BufferPool(size_t buf_size, bool zero_on_release = true, size_t max_retained = 8)
+        : buf_size_(buf_size), zero_(zero_on_release), max_(max_retained) {}
 
     std::vector<unsigned char> acquire() {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -23,9 +28,10 @@ public:
     }
 
     void release(std::vector<unsigned char>& buf) {
-        secure_zero(buf.data(), buf.size());
         if (buf.size() != buf_size_) return;
+        if (zero_) secure_zero(buf.data(), buf.size());
         std::lock_guard<std::mutex> lock(mutex_);
+        if (pool_.size() >= max_) return;   // 超出保留上限直接丢弃，交回分配器
         pool_.push_back(std::move(buf));
     }
 

@@ -31,6 +31,10 @@ public class TaskRecord
     [JsonPropertyName("keyfile")] public string Keyfile { get; set; } = "";
     [JsonPropertyName("recipient")] public string Recipient { get; set; } = "";
     [JsonPropertyName("identity")] public string Identity { get; set; } = "";
+    // 密钥包装：待包装/待解开的文件、产物路径与算法（kwp / aes-kw / pubkey）
+    [JsonPropertyName("wrapInput")] public string WrapInput { get; set; } = "";
+    [JsonPropertyName("wrapOutput")] public string WrapOutput { get; set; } = "";
+    [JsonPropertyName("wrapAlg")] public string WrapAlg { get; set; } = "";
     [JsonPropertyName("restoreName")] public bool RestoreName { get; set; }
     [JsonPropertyName("pqc")] public bool Pqc { get; set; } = true;
     [JsonPropertyName("watermark")] public bool Watermark { get; set; }

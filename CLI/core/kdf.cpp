@@ -5,6 +5,8 @@
 #include <mutex>
 #include <condition_variable>
 #include <atomic>
+#include <thread>
+#include <algorithm>
 
 namespace {
 
@@ -23,6 +25,15 @@ struct KdfSemaphore {
         long cap = 0;
         if(budget > 0) {
             cap = (long)(budget / (128ULL*1024*1024));   // 以标准预设 128MB 为单份
+            if(cap < 1) cap = 1;
+        }
+        else {
+            // 未显式配置预算时也要限流：Argon2id 是内存带宽瓶颈型，并发度超过 4 后
+            // 墙钟几乎不再下降，峰值内存却线性增长（16 并发 × 128MiB ≈ 2GiB）。
+            // 默认封顶 4 并发 ≈ 512MiB，吞吐基本无损。
+            unsigned hw = std::thread::hardware_concurrency();
+            if(hw == 0) hw = 4;
+            cap = (long)std::min<unsigned>(hw, 4);
             if(cap < 1) cap = 1;
         }
         permits.store(cap, std::memory_order_relaxed);
@@ -87,6 +98,13 @@ bool derive_key(const unsigned char* password, size_t pwd_len,
         return false;
     }
     return true;
+}
+
+int kdf_max_concurrency() {
+    g_kdf_sem.ensure();
+    long n = g_kdf_sem.permits.load(std::memory_order_acquire);
+    if(n < 1) n = 1;
+    return (int)n;
 }
 
 void derive_progress_auth_key(const unsigned char* master_key,

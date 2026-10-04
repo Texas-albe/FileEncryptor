@@ -51,6 +51,9 @@ QJsonObject toJson(const TaskRecord& r) {
     if(!r.keyfile.isEmpty()) o.insert(QStringLiteral("keyfile"),r.keyfile);
     if(!r.recipient.isEmpty()) o.insert(QStringLiteral("recipient"),r.recipient);
     if(!r.identity.isEmpty()) o.insert(QStringLiteral("identity"),r.identity);
+    if(!r.wrapInput.isEmpty()) o.insert(QStringLiteral("wrapInput"),r.wrapInput);
+    if(!r.wrapOutput.isEmpty()) o.insert(QStringLiteral("wrapOutput"),r.wrapOutput);
+    if(!r.wrapAlg.isEmpty()) o.insert(QStringLiteral("wrapAlg"),r.wrapAlg);
     o.insert(QStringLiteral("restoreName"),r.restoreName);
     return o;
 }
@@ -90,6 +93,9 @@ TaskRecord fromJson(const QJsonObject& o) {
     r.keyfile     =o.value(QStringLiteral("keyfile")).toString();
     r.recipient   =o.value(QStringLiteral("recipient")).toString();
     r.identity    =o.value(QStringLiteral("identity")).toString();
+    r.wrapInput   =o.value(QStringLiteral("wrapInput")).toString();
+    r.wrapOutput  =o.value(QStringLiteral("wrapOutput")).toString();
+    r.wrapAlg     =o.value(QStringLiteral("wrapAlg")).toString();
     r.restoreName =o.value(QStringLiteral("restoreName")).toBool(false);
     return r;
 }
@@ -146,6 +152,8 @@ QString TaskHistory::actionLabel(const QString& actionKey) {
     if(actionKey==QStringLiteral("keygen"))         return th("生成密钥对 (-g)");
     if(actionKey==QStringLiteral("derive"))         return th("口令派生 (-G)");
     if(actionKey==QStringLiteral("pubkey"))         return th("导出公钥 (-Y)");
+    if(actionKey==QStringLiteral("wrap"))           return th("包装密钥 (--wrap-key)");
+    if(actionKey==QStringLiteral("unwrap"))         return th("解开密钥 (--unwrap-key)");
     return actionKey;
 }
 

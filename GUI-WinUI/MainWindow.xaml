@@ -127,6 +127,52 @@
                             </ScrollViewer>
                         </Grid>
 
+                        <!-- 与「密钥管理」互斥的第三组单选 -->
+                        <Grid ColumnDefinitions="120,*">
+                            <TextBlock Grid.Column="0" Text="密钥包装" VerticalAlignment="Center" TextWrapping="Wrap" />
+                            <ScrollViewer Grid.Column="1" HorizontalScrollBarVisibility="Auto"
+                                          HorizontalScrollMode="Auto" VerticalScrollMode="Disabled"
+                                          VerticalScrollBarVisibility="Disabled" Padding="0,2,14,14">
+                            <StackPanel x:Name="WrapRow" Orientation="Horizontal" Spacing="16">
+                                <RadioButton x:Name="RbWrapKey" Content="包装密钥" GroupName="Wrap" Checked="OnWrapRadioChecked"
+                                             ToolTipService.ToolTip="把一份 32 字节的数据密钥单独包进 .fekw 文件，用口令或收件人公钥保护" />
+                                <RadioButton x:Name="RbUnwrapKey" Content="解开密钥" GroupName="Wrap" Checked="OnWrapRadioChecked"
+                                             ToolTipService.ToolTip="把 .fekw 里的数据密钥还原成 32 字节文件" />
+                            </StackPanel>
+                            </ScrollViewer>
+                        </Grid>
+
+                        <!-- 产物路径由这里的输出行决定 -->
+                        <!-- Spacing 与外层一致：外层间距只作用到 WrapPanel 这一层，行距得自己给 -->
+                        <StackPanel x:Name="WrapPanel" Visibility="Collapsed" Spacing="8">
+                            <Grid ColumnDefinitions="120,*">
+                                <TextBlock Grid.Column="0" x:Name="WrapFileLabel" Text="32 字节密钥文件" VerticalAlignment="Center" TextWrapping="Wrap" />
+                                <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="4">
+                                    <TextBox x:Name="WrapFileEdit" PlaceholderText="恰好 32 字节的数据密钥（DEK）文件" Width="320" TextChanged="OnWrapInputChanged" />
+                                    <Button Content="浏览..." Click="OnBrowseWrapFile" />
+                                </StackPanel>
+                            </Grid>
+                            <Grid ColumnDefinitions="120,*">
+                                <TextBlock Grid.Column="0" x:Name="WrapOutLabel" Text="包装输出" VerticalAlignment="Center" TextWrapping="Wrap" />
+                                <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="4">
+                                    <TextBox x:Name="WrapOutEdit" PlaceholderText="留空则用 &lt;密钥文件&gt;.fekw" Width="320" TextChanged="OnWrapOutputChanged" />
+                                    <Button Content="浏览..." Click="OnBrowseWrapOut" />
+                                </StackPanel>
+                            </Grid>
+                            <Grid ColumnDefinitions="120,*">
+                                <TextBlock Grid.Column="0" x:Name="WrapAlgLabel" Text="包装算法" VerticalAlignment="Center" TextWrapping="Wrap" />
+                                <controls:ComboBox x:Name="WrapAlgCombo" Grid.Column="1" HorizontalAlignment="Left" Width="320"
+                                                   SelectionChanged="OnWrapAlgChanged"
+                                                   ToolTipService.ToolTip="包装密钥的算法">
+                                    <controls:ComboBoxItem Content="AES-256-KWP（推荐，长度不限）" />
+                                    <controls:ComboBoxItem Content="AES-KW（兼容旧工具）" />
+                                    <controls:ComboBoxItem Content="收件人公钥（不需要口令）" />
+                                </controls:ComboBox>
+                            </Grid>
+                            <TextBlock x:Name="WrapIntroText" TextWrapping="Wrap"
+                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                        </StackPanel>
+
                         <!-- 加密模式：解密 / 批量解密 / 密钥管理下一律整行隐藏（含左侧标签） -->
                         <Grid x:Name="EncryptModeRow" ColumnDefinitions="120,*">
                             <TextBlock Grid.Column="0" Text="加密模式" VerticalAlignment="Center" TextWrapping="Wrap" />
@@ -136,6 +182,7 @@
                                                    SelectionChanged="OnModeChanged">
                                     <controls:ComboBoxItem Content="XChaCha20-Poly1305" />
                                     <controls:ComboBoxItem Content="AEGIS-256" />
+                                    <controls:ComboBoxItem Content="AES-256-GCM" />
                                     <controls:ComboBoxItem Content="SM4-GCM" />
                                     <controls:ComboBoxItem Content="X25519 非对称" />
                                 </controls:ComboBox>
@@ -147,6 +194,7 @@
                                                        ToolTipService.ToolTip="非对称模式下的文件载荷加密算法；非对称部分只加密此处所选算法生成的密钥">
                                         <controls:ComboBoxItem Content="XChaCha20-Poly1305（默认）" />
                                         <controls:ComboBoxItem Content="AEGIS-256" />
+                                        <controls:ComboBoxItem Content="AES-256-GCM" />
                                         <controls:ComboBoxItem Content="SM4-GCM" />
                                     </controls:ComboBox>
                                 </Grid>
@@ -164,7 +212,7 @@
                         </Grid>
 
                         <!-- 输出目录 -->
-                        <Grid ColumnDefinitions="120,*">
+                        <Grid ColumnDefinitions="120,*" x:Name="OutDirRow">
                             <TextBlock Grid.Column="0" Text="输出目录" VerticalAlignment="Center" TextWrapping="Wrap" />
                             <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="4">
                                 <TextBox x:Name="OutDirEdit" PlaceholderText="留空 = 输出到源文件目录" Width="320" TextChanged="OnOutDirChanged" />
@@ -215,8 +263,11 @@
                         <Grid x:Name="SplitSizeRow" ColumnDefinitions="120,*" Visibility="Collapsed">
                             <TextBlock Grid.Column="0" Text="分卷大小" VerticalAlignment="Center" TextWrapping="Wrap" />
                             <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                                <!-- 数字框：微调按钮放右侧（Compact 会挤占输入区，
+                                     打字时字符被按钮盖住看不见），并给足宽度 -->
                                 <controls:NumberBox x:Name="SplitSizeBox" Value="100" Minimum="1" Maximum="1048576"
-                                                    SmallChange="10" Width="120" SpinButtonPlacementMode="Inline"
+                                                    SmallChange="10" Width="180" SpinButtonPlacementMode="Compact"
+                                                    Foreground="{ThemeResource TextFillColorPrimaryBrush}"
                                                     ValueChanged="OnSplitSizeChanged" />
                                 <controls:ComboBox x:Name="SplitUnitCombo" Width="84" SelectionChanged="OnSplitUnitChanged">
                                     <controls:ComboBoxItem Content="MB" />
@@ -267,14 +318,14 @@
 
                         <!-- 非对称：收件人 -->
                         <StackPanel x:Name="RecipientPanel" Orientation="Horizontal" Spacing="4" Visibility="Collapsed">
-                            <TextBlock Text="收件人:" VerticalAlignment="Center" Width="72" />
+                            <TextBlock x:Name="RecipientLabel" Text="收件人:" VerticalAlignment="Center" Width="72" />
                             <TextBox x:Name="RecipientEdit" PlaceholderText="公钥或公钥文件路径" Width="320" TextChanged="OnRecipientChanged" />
                             <Button Content="浏览..." Click="OnBrowseRecipient" />
                         </StackPanel>
 
                         <!-- 非对称：身份私钥 -->
                         <StackPanel x:Name="IdentityPanel" Orientation="Horizontal" Spacing="4" Visibility="Collapsed">
-                            <TextBlock Text="身份文件:" VerticalAlignment="Center" Width="72" />
+                            <TextBlock x:Name="IdentityLabel" Text="身份文件:" VerticalAlignment="Center" Width="72" />
                             <TextBox x:Name="IdentityEdit" PlaceholderText="私钥文件路径" Width="320" TextChanged="OnIdentityChanged" />
                             <Button Content="浏览..." Click="OnBrowseIdentity" />
                         </StackPanel>

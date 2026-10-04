@@ -4,6 +4,8 @@
 // 因此这里把 32 字节摘要当作「消息」直接交给 ML-DSA 签名/验签。
 #include "watermark.hpp"
 
+#include "FileEncryptor.hpp"
+
 #include <sodium.h>
 
 #include <openssl/evp.h>
@@ -15,6 +17,17 @@
 
 #include <cstdio>
 #include <cstring>
+#include <cerrno>
+
+#ifdef _WIN32
+#include <fcntl.h>
+#include <io.h>
+#include <sys/stat.h>
+#else
+#include <fcntl.h>
+#include <unistd.h>
+#include <sys/stat.h>
+#endif
 #include <ctime>
 #include <string>
 #include <vector>
@@ -247,6 +260,25 @@ bool wm_parse_blob(const unsigned char* data, size_t len,
     return true;
 }
 
+// 私钥落盘用专属函数：专有创建（不跟随符号链接、不覆盖已有私钥）。
+// 用 fopen("wb") 会静默截断已有文件，私钥一旦被覆盖就永久丢失。
+static bool open_priv_pem_exclusive(const std::string& path, FILE** out_fp) {
+#ifdef _WIN32
+    const std::wstring wp=utf8_to_wstring(path);
+    int fd=_wopen(wp.c_str(), _O_WRONLY|_O_CREAT|_O_EXCL|_O_BINARY, _S_IREAD|_S_IWRITE);
+    if (fd < 0) return false;
+    FILE* fp=_fdopen(fd, "wb");
+    if (!fp) { _close(fd); _wunlink(wp.c_str()); return false; }
+#else
+    int fd=::open(path.c_str(), O_WRONLY|O_CREAT|O_EXCL|O_NOFOLLOW, 0600);
+    if (fd < 0) return false;
+    FILE* fp=fdopen(fd, "wb");
+    if (!fp) { ::close(fd); ::unlink(path.c_str()); return false; }
+#endif
+    *out_fp=fp;
+    return true;
+}
+
 // 生成签名密钥对：ML-DSA-65（pqc）或 RSA-3072，私钥以 PKCS#8 PEM 落盘。
 bool wm_generate_keypair(const std::string& priv_pem_path, bool pqc,
                          std::string& pub_pem, std::string& error) {
@@ -273,15 +305,28 @@ bool wm_generate_keypair(const std::string& priv_pem_path, bool pqc,
         EVP_PKEY_CTX_free(kctx);
     }
 
-    FILE* fp = std::fopen(priv_pem_path.c_str(), "wb");
-    if (!fp || PEM_write_PrivateKey(fp, pkey, nullptr, nullptr, 0, 0, nullptr) != 1) {
-        if (fp) std::fclose(fp);
+    FILE* fp = nullptr;
+    if (!open_priv_pem_exclusive(priv_pem_path, &fp)) {
         EVP_PKEY_free(pkey);
         ERR_clear_error();
+        if (errno == EEXIST)
+            error = "watermark: private key file already exists (refusing to overwrite): "
+                    + priv_pem_path;
+        else
+            error = "watermark: cannot create private key PEM: " + priv_pem_path;
+        return false;
+    }
+    if (PEM_write_PrivateKey(fp, pkey, nullptr, nullptr, 0, 0, nullptr) != 1) {
+        std::fclose(fp);
+        EVP_PKEY_free(pkey);
+        ERR_clear_error();
+        remove_file_utf8(priv_pem_path);
         error = "watermark: cannot write private key PEM: " + priv_pem_path;
         return false;
     }
     std::fclose(fp);
+    // 私钥写完紧内容才紧权限：创建时的默认 ACL 会允许其他用户读取
+    tighten_file_permissions(priv_pem_path);
 
     // 公钥走 BIO + PEM_write_bio_PUBKEY：ML-DSA 的 get1_encoded_public_key 在本构建
     // 返回 0（公钥编码器缺失），而 PEM 写路径对 RSA 与 ML-DSA 都成立。

@@ -56,22 +56,27 @@ public:
     }
 };
 
-// AES-GCM 仅供解密旧格式（v1/v2）文件；新加密不再使用，encrypt 返回失败。
+// AES-256-GCM：96 位 nonce，故每个文件必须新 DEK（容器已保证）。
+// 硬件 AES-NI + CLMUL 下吞吐远高于 XChaCha20，但无 AES-NI 的老 CPU 上不可用。
 class AesGcmCipher final : public Cipher {
 public:
     CryptoMode mode() const override { return CryptoMode::AES_GCM; }
     size_t key_size() const override { return crypto_aead_aes256gcm_KEYBYTES; }
     size_t nonce_size() const override { return crypto_aead_aes256gcm_NPUBBYTES; }
     size_t tag_size() const override { return crypto_aead_aes256gcm_ABYTES; }
-    int encrypt(const unsigned char*, size_t,
-        const unsigned char*, size_t,
-        const unsigned char*, const unsigned char*,
-        unsigned char*, unsigned long long&) override { return -1; }
+    int encrypt(const unsigned char* pt, size_t pt_len,
+        const unsigned char* aad, size_t aad_len,
+        const unsigned char* nonce, const unsigned char* key,
+        unsigned char* ct_out, unsigned long long& ct_len) override {
+        // 无 AES-NI 时 libsodium 的 GCM 实现不可用，直接失败而非产出坏密文
+        if(crypto_aead_aes256gcm_is_available()==0) return -1;
+        return crypto_aead_aes256gcm_encrypt(ct_out, &ct_len,
+            pt, pt_len, aad, aad_len, nullptr, nonce, key);
+    }
     int decrypt(const unsigned char* ct, size_t ct_len,
         const unsigned char* aad, size_t aad_len,
         const unsigned char* nonce, const unsigned char* key,
         unsigned char* pt_out, unsigned long long& pt_len) override {
-        // AES-GCM 依赖 AES-NI；不支持的 CPU 上直接解密属未定义行为，先拦下
         if(crypto_aead_aes256gcm_is_available()==0) return -1;
         return crypto_aead_aes256gcm_decrypt(pt_out, &pt_len, nullptr,
             ct, ct_len, aad, aad_len, nonce, key);

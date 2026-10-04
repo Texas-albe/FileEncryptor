@@ -25,10 +25,14 @@ public class MainViewModel : ObservableObject
     private string? _cliPath;
     private bool _zstdAvailable = true;
     private bool _aegisAvailable = true;
+    // AES-GCM 依赖 AES-NI：--features 缺 aesgcm=1 的旧 CLI 不认 -m aes-gcm
+    private bool _aesGcmAvailable;
     // 后量子能力：缺 pqc= 字段的旧 CLI 视为不支持（fail-closed，同 Qt 侧 m_pqcAvailable）
     private bool _pqcAvailable;
     // 打包能力：默认乐观，仅当 --features 里没有 pack=1（旧 CLI 不认 -p）才置 false
     private bool _packAvailable = true;
+    // 密钥包装能力：--features 缺 keywrap=1 的旧 CLI 不认 --wrap-key（fail-closed）
+    private bool _keywrapAvailable;
     private readonly Stopwatch _runTimer = new();
     private int _doneFiles, _skipFiles, _failFiles, _totalFiles;
     private string _currentFile = "";
@@ -48,19 +52,64 @@ public class MainViewModel : ObservableObject
 
     // ===== 选项 =====
     private int _actionIndex;
-    public int ActionIndex { get => _actionIndex; set { SetProperty(ref _actionIndex, value); OnPropertyChanged(nameof(IsAsymmetric)); OnPropertyChanged(nameof(IsEncryptMode)); OnPropertyChanged(nameof(IsKeyGenMode)); RefreshCommandPreview(); } }
+    public int ActionIndex
+    {
+        get => _actionIndex;
+        set
+        {
+            SetProperty(ref _actionIndex, value);
+            OnPropertyChanged(nameof(IsAsymmetric));
+            OnPropertyChanged(nameof(IsEncryptMode));
+            OnPropertyChanged(nameof(IsKeyGenMode));
+            OnPropertyChanged(nameof(IsWrapMode));
+            OnPropertyChanged(nameof(IsWrapKeyMode));
+            OnPropertyChanged(nameof(IsUnwrapMode));
+            OnPropertyChanged(nameof(PasswordNeedsConfirm));
+            RefreshCommandPreview();
+        }
+    }
 
-    // 模式索引与 ModeCombo 对齐：0=XChaCha20 1=AEGIS-256 2=SM4-GCM 3=X25519 非对称
+    // 模式索引与 ModeCombo 对齐：0=XChaCha20 1=AEGIS-256 2=AES-256-GCM 3=SM4-GCM 4=X25519 非对称
     private int _modeIndex;
     public int ModeIndex { get => _modeIndex; set { SetProperty(ref _modeIndex, value); OnPropertyChanged(nameof(IsAsymmetric)); RefreshCommandPreview(); } }
 
-    // 非对称模式下文件载荷的对称算法（0=XChaCha20 1=AEGIS-256 2=SM4-GCM）
+    // 非对称模式下文件载荷的对称算法（0=XChaCha20 1=AEGIS-256 2=AES-256-GCM 3=SM4-GCM）
     private int _fileCipherIndex;
     public int FileCipherIndex { get => _fileCipherIndex; set { SetProperty(ref _fileCipherIndex, value); RefreshCommandPreview(); } }
 
-    public bool IsAsymmetric => ModeIndex == 3;
+    public bool IsAsymmetric => ModeIndex == 4;
     public bool IsEncryptMode => ActionIndex is 0 or 2;
     public bool IsKeyGenMode => ActionIndex is 4 or 5 or 6;
+    // 密钥包装：7=包装 8=解开
+    public bool IsWrapMode => ActionIndex is 7 or 8;
+    public bool IsWrapKeyMode => ActionIndex == 7;
+    public bool IsUnwrapMode => ActionIndex == 8;
+    // 公钥路线没有 KEK，不需要口令
+    public bool WrapUsesPublicKey => WrapAlgIndex == 2;
+    // 解密与解包只需输入一次口令（1=解密 / 3=批解密 / 8=解包）
+    public bool PasswordNeedsConfirm => ActionIndex is not (1 or 3 or 8);
+
+    // 包装算法：0=KWP 1=AES-KW 2=收件人公钥，与 WrapAlgCombo 索引对齐
+    private int _wrapAlgIndex;
+    public int WrapAlgIndex { get => _wrapAlgIndex; set { SetProperty(ref _wrapAlgIndex, value); OnPropertyChanged(nameof(WrapUsesPublicKey)); RefreshCommandPreview(); } }
+
+    private string _wrapInput = "";
+    public string WrapInput { get => _wrapInput; set { SetProperty(ref _wrapInput, value); RefreshCommandPreview(); } }
+
+    private string _wrapOutput = "";
+    public string WrapOutput { get => _wrapOutput; set { SetProperty(ref _wrapOutput, value); RefreshCommandPreview(); } }
+
+    // 包装能力探测：--features 缺 keywrap=1 的旧 CLI 会把 --wrap-key 当未知参数
+    public bool KeywrapAvailable
+    {
+        get => _keywrapAvailable;
+        set
+        {
+            if (_keywrapAvailable == value) return;
+            SetProperty(ref _keywrapAvailable, value);
+            RefreshCommandPreview();
+        }
+    }
 
     private int _sourceIndex;
     public int SourceIndex { get => _sourceIndex; set { SetProperty(ref _sourceIndex, value); RefreshCommandPreview(); } }
@@ -175,11 +224,12 @@ public class MainViewModel : ObservableObject
 
     public bool ZstdAvailable { get => _zstdAvailable; set => SetProperty(ref _zstdAvailable, value); }
     public bool AegisAvailable { get => _aegisAvailable; set => SetProperty(ref _aegisAvailable, value); }
+    public bool AesGcmAvailable { get => _aesGcmAvailable; set => SetProperty(ref _aesGcmAvailable, value); }
 
     public string? CliPath => _cliPath;
 
     // ===== 命令 =====
-    public ICommand RunCommand => new RelayCommand(_ => Run(), _ => !IsRunning && (InputPaths.Any(p => p.IsSelected) || IsKeyGenMode));
+    public ICommand RunCommand => new RelayCommand(_ => Run(), _ => !IsRunning && (InputPaths.Any(p => p.IsSelected) || IsKeyGenMode || IsWrapMode));
     public ICommand CancelCommand => new RelayCommand(_ => Cancel(), _ => IsRunning);
 
     // ===== CLI 探测 =====
@@ -216,14 +266,18 @@ public class MainViewModel : ObservableObject
             await p.WaitForExitAsync(cts.Token).ConfigureAwait(false);
             _zstdAvailable = output.Contains("zstd=1");
             _aegisAvailable = output.Contains("aegis=1");
+            _aesGcmAvailable = output.Contains("aesgcm=1");
             _pqcAvailable = output.Contains("pqc=1");
             _packAvailable = output.Contains("pack=1");
+            _keywrapAvailable = output.Contains("keywrap=1");
             _dispatcher.TryEnqueue(() =>
             {
                 OnPropertyChanged(nameof(ZstdAvailable));
                 OnPropertyChanged(nameof(AegisAvailable));
+                OnPropertyChanged(nameof(AesGcmAvailable));
                 OnPropertyChanged(nameof(PqcAvailable));
                 OnPropertyChanged(nameof(PackAvailable));
+                OnPropertyChanged(nameof(KeywrapAvailable));
                 if (!_packAvailable) Pack = false;   // 旧 CLI 不支持打包，强制取消勾选
             });
         }
@@ -251,11 +305,13 @@ public class MainViewModel : ObservableObject
         opts.SourceDeleteOk = false;
         SourceDeleteOk = false;
         string? workDir = null;
-        if (opts.InputPaths.Count > 0)
+        // 包装动作的输入不走文件清单，取 WrapInput 推工作目录
+        var firstInput = opts.Action is CryptoAction.WrapKey or CryptoAction.UnwrapKey
+            ? opts.WrapInput : opts.InputPaths.FirstOrDefault();
+        if (!string.IsNullOrEmpty(firstInput))
         {
-            var first = opts.InputPaths[0];
-            if (File.Exists(first)) workDir = Path.GetDirectoryName(first);
-            else if (Directory.Exists(first)) workDir = first;
+            if (File.Exists(firstInput)) workDir = Path.GetDirectoryName(firstInput);
+            else if (Directory.Exists(firstInput)) workDir = firstInput;
         }
         if (string.IsNullOrEmpty(workDir) && !string.IsNullOrEmpty(opts.OutputDir) && Directory.Exists(opts.OutputDir))
             workDir = opts.OutputDir;
@@ -322,6 +378,10 @@ public class MainViewModel : ObservableObject
             Keyfile = Keyfile ?? "",
             Recipient = Recipient ?? "",
             Identity = Identity ?? "",
+            WrapInput = WrapInput ?? "",
+            WrapOutput = WrapOutput ?? "",
+            WrapAlg = opts.Action is CryptoAction.WrapKey or CryptoAction.UnwrapKey
+                ? WrapAlgKey(opts.WrapAlg) : "",
             RestoreName = RestoreName,
             Pqc = Pqc,
             Watermark = Watermark,
@@ -344,6 +404,8 @@ public class MainViewModel : ObservableObject
     // 对称模式且未指定密钥文件/身份时才需要口令
     private bool NeedsPassword()
     {
+        // 公钥路线没有 KEK，口令与身份都不参与
+        if (IsWrapMode) return !WrapUsesPublicKey && string.IsNullOrEmpty(Keyfile);
         if (IsAsymmetric) return false;
         if (!string.IsNullOrEmpty(Keyfile)) return false;
         return ActionIndex is 0 or 1 or 2 or 3 or 5;
@@ -477,21 +539,25 @@ public class MainViewModel : ObservableObject
             4 => CryptoAction.KeyGen,
             5 => CryptoAction.Derive,
             6 => CryptoAction.PubKey,
+            7 => CryptoAction.WrapKey,
+            8 => CryptoAction.UnwrapKey,
             _ => CryptoAction.Encrypt
         };
         var mode = ModeIndex switch
         {
             0 => CryptoMode.XChaCha20,
             1 => CryptoMode.Aegis256,
-            2 => CryptoMode.Sm4,
-            3 => CryptoMode.Asymmetric,
+            2 => CryptoMode.AesGcm,
+            3 => CryptoMode.Sm4,
+            4 => CryptoMode.Asymmetric,
             _ => CryptoMode.XChaCha20
         };
         // 非对称模式下会话密钥由文件算法产生，非对称部分只负责包裹它
         var fileMode = FileCipherIndex switch
         {
             1 => CryptoMode.Aegis256,
-            2 => CryptoMode.Sm4,
+            2 => CryptoMode.AesGcm,
+            3 => CryptoMode.Sm4,
             _ => CryptoMode.XChaCha20
         };
         return new ShellOptions
@@ -520,6 +586,9 @@ public class MainViewModel : ObservableObject
             Pqc = Pqc,
             Watermark = Watermark,
             WatermarkKeyPath = WatermarkKey ?? "",
+            WrapInput = WrapInput ?? "",
+            WrapOutput = WrapOutput ?? "",
+            WrapAlg = (WrapAlg)WrapAlgIndex,
         };
     }
 
@@ -579,6 +648,8 @@ public class MainViewModel : ObservableObject
         CryptoAction.KeyGen => "keygen",
         CryptoAction.Derive => "derive",
         CryptoAction.PubKey => "pubkey",
+        CryptoAction.WrapKey => "wrap",
+        CryptoAction.UnwrapKey => "unwrap",
         _ => "encrypt"
     };
 
@@ -591,6 +662,8 @@ public class MainViewModel : ObservableObject
         CryptoAction.KeyGen => "生成密钥对",
         CryptoAction.Derive => "口令派生密钥对",
         CryptoAction.PubKey => "导出公钥",
+        CryptoAction.WrapKey => "包装密钥",
+        CryptoAction.UnwrapKey => "解开密钥",
         _ => "加密"
     };
 
@@ -598,9 +671,17 @@ public class MainViewModel : ObservableObject
     {
         CryptoMode.XChaCha20 => "xchacha20",
         CryptoMode.Aegis256 => "aegis256",
+        CryptoMode.AesGcm => "aes-gcm",
         CryptoMode.Sm4 => "sm4",
         CryptoMode.Asymmetric => "x25519",
         _ => "xchacha20"
+    };
+
+    private static string WrapAlgKey(WrapAlg a) => a switch
+    {
+        WrapAlg.AesKw => "aes-kw",
+        WrapAlg.Pubkey => "pubkey",
+        _ => "kwp"
     };
 }
 

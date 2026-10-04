@@ -12,13 +12,23 @@ enum class CryptoAction {
     BatchDecrypt,
     KeyGen,
     Derive,
-    PubKey
+    PubKey,
+    WrapKey,
+    UnwrapKey
+};
+
+// 密钥包装算法（与载荷加密正交：包装的是密钥，不是文件内容）
+enum class WrapAlg {
+    Kwp,        // RFC 5649 AES-256-KWP，长度不受 8 字节倍数限制（默认）
+    AesKw,      // RFC 3394 原始 AES-KW，供旧工具互操作
+    Pubkey      // 收件人公钥封装，不需要口令
 };
 
 // 加密模式枚举
 enum class CryptoMode {
     XChaCha20,
     Aegis256,
+    AesGcm,
     Sm4,
     Asymmetric
 };
@@ -47,6 +57,12 @@ struct ShellOptions {
     // 加密压缩包：把目录树 / 多个文件打成单个 .ptd（CLI --pack）
     bool pack = false;
 
+    // 分卷：切成 <base>.001.ptd/002/…（--split <size>），默认不勾选
+    bool split = false;
+    double splitSize = 100;
+    // 0=MB 1=GB 2=TB
+    int splitUnit = 0;
+
     // 目录输入 + 删除类源处置已由界面弹窗确认，CLI 不必再问一次
     bool sourceDeleteOk = false;
 
@@ -59,13 +75,20 @@ struct ShellOptions {
     bool compress = false;
     int compressionLevel = 0;
 
-    // 后量子：true=X25519+ML-KEM-768 混合收件人 / ML-DSA-65 水印签名；false=经典 X25519、X448 + RSA
+    // 后量子：true=X25519+ML-KEM-768 混合收件人 / ML-DSA-65 水印；false=经典 X25519、X448 + RSA
     bool pqc = true;
 
     // 尾部水印（仅加密动作）：开启后在密文尾部追加签名水印记录
     bool watermark = false;
     // 水印签名私钥 PEM；为空时仍写未签名记录，CLI 不阻断加密
     QString watermarkKeyPath;
+
+    // ===== 密钥包装（WrapKey / UnwrapKey 动作专用）=====
+    // 待包装的 32 字节 DEK 文件（WrapKey）/ 待解开的 .fekw（UnwrapKey）
+    QString wrapInput;
+    // 产物路径：包装为 .fekw、解包为 .dek；留空则由 CLI 按输入文件名推导
+    QString wrapOutput;
+    WrapAlg wrapAlg = WrapAlg::Kwp;
 };
 
 class CliArgBuilder {

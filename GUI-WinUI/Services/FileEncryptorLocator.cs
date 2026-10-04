@@ -7,12 +7,12 @@ namespace FileEncryptorGUI.Services;
 // 探测 CLI 路径
 public static class FileEncryptorLocator
 {
-    public const string GuiVersion = "2.1.2";
+    public const string GuiVersion = "2.1.3";
     public static string CliDownloadUrl =>
         $"https://github.com/Texas-albe/FileEncryptor/releases/tag/GUI{GuiVersion}_CLI{ExpectedCliVersion}";
 
     // 配套 CLI 版本
-    public static string ExpectedCliVersion => "2.8.0";
+    public static string ExpectedCliVersion => "2.9.0";
 
     public static string[] GetExpectedNames()
     {
@@ -145,7 +145,7 @@ public static class FileEncryptorLocator
         var rest = fileName.Substring("FileEncryptorCLI-".Length);
         // 版本号段以 '-cmd-' 收尾，取第一个 '-'；没有再退回第一个 '.'。
         // 不能用 IndexOfAny(['-','.'])：它返回最先出现的那个，
-        // "2.8.0-cmd-Windows.exe" 会命中下标 1 的 '.'，版本被截成 "2"，
+        // "2.8.1-cmd-Windows.exe" 会命中下标 1 的 '.'，版本被截成 "2"，
         // 2.0.0 < 2.7.1 于是把新版当旧版删了。
         var end = rest.IndexOf('-');
         if (end < 0) end = rest.IndexOf('.');

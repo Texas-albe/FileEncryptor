@@ -1,12 +1,11 @@
 #pragma once
-// 盘面格式模块：.ptd 头部结构（v1..v6）、布局常量与 DEK 包裹原语。
-// 只描述字节布局与格式级操作，不包含加解密流程；所有常量取值与既有盘面严格一致。
+// .ptd 头部结构（v1..v6）、布局常量与 DEK 包裹原语。只描述字节布局，不含加解密流程。
 #include <cstddef>
 #include <cstring>
 #include <sodium.h>
 #include "util/byte_io.hpp"
 
-// 字节序原语统一由 util/byte_io.hpp 提供，提前转发到当前命名空间供后续函数直接调用。
+// 转发 util/byte_io.hpp 的字节序原语，供本文件后续函数直接调用
 using fe::util::put_le32;
 using fe::util::get_le32;
 using fe::util::put_be32;
@@ -32,9 +31,8 @@ struct FileHeaderV1 {
 };
 #pragma pack(pop)
 
-// v2 头部：Argon2 参数写入文件头，iv 缓冲扩到 24 字节
-// 磁盘实际占 69 字节：前 53 字节为已用字段，尾部 16 字节为历史保留区（v2 写入时的预留填充，读取不访问）。
-// reserved 凑入结构体使 sizeof 与 HEADER_SIZE_V2 一致，避免按 sizeof 误算。
+// v2：Argon2 参数写入头部，iv 扩到 24 字节。尾部 reserved 16 字节凑 sizeof 与
+// HEADER_SIZE_V2 一致，读取侧不访问。
 #pragma pack(push, 1)
 struct FileHeaderV2 {
     unsigned char magic[4];
@@ -131,15 +129,14 @@ inline constexpr size_t HEADER_SIZE_V4 = sizeof(FileHeaderV4); // 125
 inline constexpr size_t HEADER_SIZE_V5 = sizeof(FileHeaderV5); // 143
 inline constexpr size_t HEADER_SIZE_V6 = sizeof(FileHeaderV6); // 256
 
-// header_hmac 覆盖头部前缀（不含 plaintext_hash 与 header_hmac 自身）。刻意排除
-// plaintext_hash 它在加密结束后才可知；排除后写头瞬间即可算出合法 HMAC。
+// header_hmac 覆盖前缀，排除 plaintext_hash：它在加密结束后才可知，排除后写头瞬间即可算出
 inline constexpr size_t HEADER_HMAC_COVER    = HEADER_SIZE_V4 - HASH_SIZE - HEADER_HMAC_SIZE; // 61
 inline constexpr size_t HEADER_HMAC_COVER_V5 = HEADER_SIZE_V5 - HASH_SIZE - HEADER_HMAC_SIZE; // 63
 inline constexpr size_t HEADER_HMAC_COVER_V6 = HEADER_SIZE_V6 - HASH_SIZE - HEADER_HMAC_SIZE; // 192
 inline constexpr size_t V6_CONTAINER_LEN = 24 + 64 + 4 + 33; // dek_nonce+dek_box+key_version+reserved
 
-// v6 载荷 AEAD 的 AAD 只覆盖稳定前缀（magic..comp_level）：容器区会被 rewrap 改写，
-// 若纳入载荷 AAD，密钥轮换后即使 DEK 不变 AEAD 也会失败。header_hmac 仍覆盖整段前缀。
+// 载荷 AAD 只覆盖稳定前缀（magic..comp_level）：容器区会被 rewrap 改写，纳入则轮换后
+// 即使 DEK 不变也会解密失败。header_hmac 仍覆盖整段前缀。
 inline constexpr size_t HEADER_AAD_COVER_V6 = HEADER_HMAC_COVER_V5; // 63
 
 static_assert(HEADER_SIZE_V2 == sizeof(FileHeaderV2), "v2 struct must match on-disk 69B layout");
@@ -156,21 +153,17 @@ size_t header_size_for_version(unsigned char ver);
 // 按版本返回 header_hmac 覆盖字节数
 size_t header_hmac_cover(unsigned char ver);
 
-// v6 DEK 包裹/解裹：明文 = 16 字节固定标记 || 32 字节 DEK，XChaCha20-Poly1305 AEAD。
-// 标记用于以恒定时间校验口令正确性。box 固定 64 字节，nonce 24 字节。
+// 明文 = 16 字节固定标记 || 32 字节 DEK；标记用于恒定时间校验口令正确性
 bool wrap_dek(const unsigned char* dek, const unsigned char* kek,
               unsigned char nonce[24], unsigned char box[64]);
 bool unwrap_dek(const unsigned char* box, const unsigned char* kek,
                 const unsigned char* nonce, unsigned char dek[32]);
 
-// ---------------------------------------------------------------------------
 // 非对称收件人（OpenSSL X25519/X448）
-// v6 固定头 256 字节之后、16 字节块元数据之前，可选追加一段"收件人 blob"；
-// 收件人数量与总字节数记入固定头 reserved[0..3]（大端 recip_len）。recip_len=0
-// 表示纯对称 v6（字节布局与旧版完全一致，保持向后兼容）。
-// blob 本身不含在 header_hmac / 载荷 AAD 内：篡改只影响"哪些密钥能解裹 DEK"，
-// 不危及载荷机密性（伪造 stanza 因缺少正确 DEK 包装而无用）。
-// ---------------------------------------------------------------------------
+// 插在 v6 固定头 256B 之后、16B 块元数据之前；总长度记入 reserved[0..3]（大端
+// recip_len）。recip_len=0 即纯对称 v6，字节布局与旧版完全一致。
+// blob 不进 header_hmac 与载荷 AAD：篡改只改「谁能解裹 DEK」，伪造 stanza 缺正确
+// DEK 包装故无害。
 inline constexpr uint8_t RECIP_ALGO_X25519 = 1;
 inline constexpr uint8_t RECIP_ALGO_X448   = 2;
 inline constexpr uint8_t RECIP_ALGO_MLKEM  = 3;   // X25519 + ML-KEM-768 手工混合
@@ -179,8 +172,8 @@ inline constexpr size_t   RECIP_KEY_X448   = 56;
 inline constexpr size_t   RECIP_WRAP_LEN   = 48;   // DEK(32) + Poly1305 tag(16)，零 nonce
 
 // 混合收件人（algo=3）的分段长度：公钥串 = X25519(32) || ML-KEM-768(1184)。
-// stanza 内 recip_pub 与用户串同构，eph_pub 则是 临时 X25519(32) || KEM 密文(1088)：
-// ML-KEM 是 KEM 而非签名，封装密文必须随 stanza 一起传给解压方才能解裹。
+// eph_pub = 临时 X25519(32) || KEM 密文(1088)：ML-KEM 是 KEM 非签名，
+// 封装密文必须随 stanza 传给解包方
 inline constexpr size_t   RECIP_KEY_MLKEM_PUB  = 32 + 1184;   // 1216
 inline constexpr size_t   RECIP_KEY_MLKEM_PRIV = 32 + 2400;   // 2432
 inline constexpr size_t   RECIP_EPH_MLKEM_CT   = 32 + 1088;   // 1120
@@ -211,8 +204,8 @@ inline void put_recip_len(unsigned char reserved[33], uint32_t n) {
     put_be32(reinterpret_cast<unsigned char*>(reserved), n);
 }
 
-// 从字节缓冲装载磁盘头结构（strict-aliasing 安全）：禁止直接 reinterpret_cast
-// char[] 为 FileHeaderV*（GCC/Clang -fstrict-aliasing 下是 UB），memcpy 到本地 POD 后再读。
+// 禁止把 char[] 直接 reinterpret_cast 成 FileHeaderV*（-fstrict-aliasing 下是 UB），
+// memcpy 到本地 POD 后再读
 template<typename T>
 inline T load_header(const unsigned char* buf) {
     T h;

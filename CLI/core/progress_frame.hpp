@@ -1,5 +1,5 @@
-// progress_frame - 批量模式帧式进度显示（CLI v2.3.0）。按帧原地刷新不刷屏：第 1 行汇总，
-// 其后每线程一行（路径|进度条|速率|ETA）。tty 用 ANSI 重绘；非 tty 由环境变量开启哨兵帧供 GUI 解析。
+// 批量模式帧式进度：按帧原地刷新不刷屏。第 1 行汇总，其后每线程一行
+// （路径|进度条|速率|ETA）。tty 用 ANSI 重绘，非 tty 由环境变量开启哨兵帧供 GUI 解析。
 #pragma once
 #include <cstdint>
 #include <string>
@@ -19,7 +19,7 @@ extern const char* const FE_FRAME_ENV;     // "FILEENCRYPTOR_PROGRESS_FRAME"
 namespace feui {
 
 // 格式化（与 GUI BatchProgressPanel 内的同名实现保持一致）
-// 自适应单位：B / KB / MB / GB / TB（1024 进制）；数值 <10 保留 2 位，<100 保留 1 位，其余取整。
+// B / KB / MB / GB / TB（1024 进制）；<10 保留 2 位，<100 保留 1 位，其余取整
 std::string fmt_bytes(uint64_t bytes);
 // 速率：同上单位 + "/s"；0 或非法值返回 "-"。
 std::string fmt_rate(double bytes_per_sec);

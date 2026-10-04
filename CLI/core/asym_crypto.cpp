@@ -752,3 +752,4 @@ AsymOutcome fe_derive_keypair(const char* pw, size_t pw_len,
     o.ok = true;
     return o;
 }
+

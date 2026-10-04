@@ -5,6 +5,8 @@
 #include "password_policy.hpp"
 #include "split_volumes.hpp"
 #include "archive.hpp"
+#include "keywrap.hpp"
+#include "kdf.hpp"
 #include "util/hex.hpp"
 #include <cstdio>
 #include <cstdlib>
@@ -249,6 +251,14 @@ static void print_usage() {
         <<"  -H, --info        Show file header metadata of a .ptd (read-only, no decryption)\n"
         <<"  -V, --verify      Verify integrity of .ptd file(s) without writing plaintext\n"
         <<"  -R, --recover-name Recover the original filename from a .ptd (offline; add --rename to rename)\n\n"
+        <<"Key wrapping (wraps a 32-byte data key, not file content):\n"
+        <<"  --wrap-key <file> Wrap a 32-byte DEK into a FEKW blob\n"
+        <<"  --unwrap-key <f>  Unwrap a .fekw blob back to the DEK\n"
+        <<"  --wrap-alg <alg>  kwp (default, RFC 5649) | aes-kw (RFC 3394) | pubkey\n"
+        <<"  --wrap-to <pub>   Recipient public key (or file) for --wrap-alg pubkey\n"
+        <<"  --identity <priv> Recipient private key (or file) for --unwrap-key\n"
+        <<"  --wrap-out <f>    Output path for --wrap-key (default: <input>.fekw)\n"
+        <<"  --unwrap-out <f>  Output path for --unwrap-key (default: <blob>.dek)\n\n"
         <<"  -h, --help, -?    Show this help\n\n"
         <<"Post-quantum:\n"
         <<"  --pqc             Hybrid X25519+ML-KEM-768 recipients and ML-DSA-65 watermark\n"
@@ -262,7 +272,7 @@ static void print_usage() {
         <<"  --rewrap <file>   Rotate key of a v6 container (payload untouched; old password via -k/env/interactive)\n"
         <<"  --new-key-file F  New password key file for --rewrap\n"
         <<"  --new-key-stdin   New password for --rewrap read from stdin\n"
-        <<"  -m <mode>         Encryption mode: xchacha20 (default) | aegis256 | sm4 | x25519 | x448\n"
+        <<"  -m <mode>         Encryption mode: xchacha20 (default) | aegis256 | aes-gcm | sm4 | x25519 | x448\n"
         <<"                      x25519 | x448 = asymmetric: DEK wrapped to recipients (-r / -K)\n"
         <<"  -y, --force       Overwrite existing output files without asking\n"
         <<"  --force-decrypt   Decrypt corrupted files: skip failed chunks (zero-filled) and\n"
@@ -310,8 +320,8 @@ static void print_usage() {
         <<"                   All files under directories will be processed recursively.\n\n"
         <<"Usage:\n"
         <<"  File encryption / decryption:\n"
-        <<"    FileEncryptor -e/-d <FileName> [-o <Path>] [-de] [-m xchacha20|aegis256] [-y]\n"
-        <<"    FileEncryptor -be/-bd <Path> [-o <Path>] [-de] [-m xchacha20|aegis256] [-y]\n"
+        <<"    FileEncryptor -e/-d <FileName> [-o <Path>] [-de] [-m xchacha20|aegis256|aes-gcm] [-y]\n"
+        <<"    FileEncryptor -be/-bd <Path> [-o <Path>] [-de] [-m xchacha20|aegis256|aes-gcm] [-y]\n"
         <<"    FileEncryptor -e/-be <File> [-zstd] [--compression-level <N>]   (zstd: 1..22 normal, -1..-5 fast)\n"
         <<"    FileEncryptor -e <File> --split 4GB      (cut the .ptd into 4GB volumes)\n"
         <<"    FileEncryptor -e -p <Dir|File...>   (pack a whole tree into one .ptd)\n"
@@ -320,6 +330,9 @@ static void print_usage() {
         <<"    FileEncryptor -g [-o <dir>] [-x448] [--no-pqc]\n"
         <<"    FileEncryptor -G [-o <dir>] [--salt <hex|file>]\n"
         <<"    FileEncryptor -Y -k <private key file>\n"
+        <<"  Key wrapping:\n"
+        <<"    FileEncryptor --wrap-key <dek32> [--wrap-out <f>] [--wrap-alg kwp|aes-kw|pubkey] [-k <pw>|--wrap-to <pub>]\n"
+        <<"    FileEncryptor --unwrap-key <blob.fekw> [--unwrap-out <dek32>] [-k <pw>|--identity <priv>]\n"
         <<"\n  Watermark:\n"
         <<"    FileEncryptor -e --watermark --wm-sign <priv.pem> <File>\n"
         <<"    FileEncryptor --watermark-extract <File.ptd> [--wm-verify <pub.pem>]\n"
@@ -837,6 +850,173 @@ static bool run_asym(const std::vector<std::string>& input_paths,
 }
 
 // -g：随机生成密钥对。公钥写 stdout（干净一行，可重定向），私钥写 <dir>/rage_private.txt。
+// 密钥包装：把 32 字节 DEK 藏进 FEKW blob。三条路线——口令 KWP、公钥 KWP、AES-KW。
+// 公钥路线不需要口令：临时 X25519 ECDH + HKDF 出 KEK，临时公钥写进 blob 头部。
+static int run_keywrap(const std::string& in_path, const std::string& out_path,
+                       const std::string& alg_name, const std::string& to_pub,
+                       const SecureBuffer& password, bool force_overwrite) {
+    if(!keywrap_available()) { std::cerr<<"Key wrap requires an OpenSSL-enabled build\n"; return 1; }
+    const uint8_t by=keywrap_alg_from_name(alg_name);
+    const bool is_pub = (by==2);
+    if(!is_pub && password.empty()) {
+        std::cerr<<"--wrap-key needs a password (-k / ENCRYPTOR_KEY / --key-stdin)\n";
+        return 1;
+    }
+    if(is_pub && to_pub.empty()) {
+        std::cerr<<"--wrap-key --wrap-alg pubkey needs --wrap-to <recipient public key>\n";
+        return 1;
+    }
+
+    std::vector<unsigned char> dek;
+    if(!keywrap_read_file(in_path, dek)) {
+        std::cerr<<"Cannot read: "<<in_path<<"\n";
+        return 1;
+    }
+    while(!dek.empty() && (dek.back()=='\n'||dek.back()=='\r')) dek.pop_back();
+    if(dek.size()!=32) {
+        std::cerr<<"Expected a 32-byte DEK, got " << dek.size() << " bytes\n";
+        sodium_memzero(dek.data(), dek.size());
+        return 1;
+    }
+
+    // 公钥串本身或存放该串的文件都要能处理
+    std::string pub_s;
+    if(is_pub) {
+        pub_s = to_pub;
+        std::vector<unsigned char> raw;
+        if(keywrap_read_file(to_pub, raw)) {
+            while(!raw.empty() && (raw.back()=='\n'||raw.back()=='\r')) raw.pop_back();
+            if(!raw.empty()) pub_s.assign((const char*)raw.data(), raw.size());
+        }
+    }
+
+    unsigned char kek[ARGON2_OUTPUT_LEN];
+    unsigned char salt[crypto_pwhash_SALTBYTES];
+    bool have_kek=false;
+    if(!is_pub) {
+        randombytes_buf(salt, sizeof salt);
+        unsigned int ops=ARGON2_OPS_DEFAULT; unsigned int mem_kb=ARGON2_MEM_DEFAULT_KB;
+        kdf_preset_params(global_config().kdf_preset, ops, mem_kb);
+        size_t mem=(size_t)mem_kb*1024;
+        if(!derive_key((const unsigned char*)password.data(), password.size(),
+                       salt, kek, ops, mem)) {
+            std::cerr<<"Key derivation failed\n";
+            sodium_memzero(dek.data(), dek.size());
+            return 1;
+        }
+        have_kek=true;
+    }
+
+    std::vector<unsigned char> blob;
+    std::string err;
+    const bool ok=keywrap_pack(dek.data(), dek.size(),
+                               have_kek?kek:nullptr, by,
+                               pub_s,
+                               is_pub?nullptr:salt, is_pub?0:sizeof salt,
+                               blob, err);
+    sodium_memzero(dek.data(), dek.size());
+    if(have_kek) sodium_memzero(kek, sizeof kek);
+    if(!ok) { std::cerr<<err<<"\n"; return 1; }
+
+    if(!force_overwrite && file_exists_path(out_path)) {
+        std::cerr<<"Refusing to overwrite: " << out_path << "\nUse -y to overwrite.\n";
+        return 1;
+    }
+    if(!keywrap_write_file_exclusive(out_path, blob.data(), blob.size())) {
+        std::cerr<<"Cannot write: " << out_path << "\n";
+        return 1;
+    }
+    tighten_file_permissions(out_path);
+    std::cerr<<"Wrapped DEK written to: " << out_path << "\n";
+    std::cerr<<"Algorithm: " << keywrap_alg_name(by) << "\n";
+    return 0;
+}
+
+// 解包装：把 FEKW blob 还原成 32 字节 DEK
+static int run_unwrapkey(const std::string& in_path, const std::string& out_path,
+                         const SecureBuffer& password, const std::string& priv_path,
+                         bool force_overwrite) {
+    if(!keywrap_available()) { std::cerr<<"Key wrap requires an OpenSSL-enabled build\n"; return 1; }
+    std::vector<unsigned char> blob;
+    if(!keywrap_read_file(in_path, blob)) {
+        std::cerr<<"Cannot read: " << in_path << "\n";
+        return 1;
+    }
+    if(blob.size()<6 || memcmp(blob.data(), "FEKW", 4)!=0) {
+        std::cerr<<"Not a FEKW blob: " << in_path << "\n";
+        return 1;
+    }
+    const uint8_t by=blob[5];
+    const bool is_pub = (by==2);
+
+    if(!is_pub && password.empty()) {
+        std::cerr<<"This blob needs a password (-k / ENCRYPTOR_KEY / --key-stdin)\n";
+        return 1;
+    }
+
+    // 口令路线：复用 blob 里的 salt 才能复现同一 KEK
+    unsigned char kek[ARGON2_OUTPUT_LEN];
+    bool have_kek=false;
+    if(!is_pub) {
+        const size_t salt_len=((size_t)blob[8]<<8)|blob[9];
+        if(salt_len!=crypto_pwhash_SALTBYTES || blob.size()<12+salt_len) {
+            std::cerr<<"Blob has no usable KDF salt\n";
+            return 1;
+        }
+        unsigned int ops=ARGON2_OPS_DEFAULT; unsigned int mem_kb=ARGON2_MEM_DEFAULT_KB;
+        kdf_preset_params(global_config().kdf_preset, ops, mem_kb);
+        size_t mem=(size_t)mem_kb*1024;
+        if(!derive_key((const unsigned char*)password.data(), password.size(),
+                       blob.data()+12, kek, ops, mem)) {
+            std::cerr<<"Key derivation failed\n";
+            return 1;
+        }
+        have_kek=true;
+    }
+
+    // 身份私钥串本身或存放该串的文件都要能处理
+    std::string priv_s;
+    if(is_pub) {
+        if(priv_path.empty()) {
+            std::cerr<<"This blob needs the recipient identity: --identity <file or private key string>\n";
+            return 1;
+        }
+        priv_s = priv_path;
+        std::vector<unsigned char> raw;
+        if(keywrap_read_file(priv_path, raw)) {
+            while(!raw.empty() && (raw.back()=='\n'||raw.back()=='\r')) raw.pop_back();
+            if(!raw.empty()) priv_s.assign((const char*)raw.data(), raw.size());
+        }
+    }
+
+    std::vector<unsigned char> dek;
+    uint8_t got_alg=1;
+    std::string err;
+    const bool ok=keywrap_unpack(blob.data(), blob.size(),
+                                 have_kek?kek:nullptr, priv_s,
+                                 dek, got_alg, err);
+    if(have_kek) sodium_memzero(kek, sizeof kek);
+    if(!ok) { std::cerr<<err<<"\n"; return 1; }
+    if(dek.size()!=32) {
+        std::cerr<<"Unwrapped DEK has unexpected length\n";
+        sodium_memzero(dek.data(), dek.size());
+        return 1;
+    }
+
+    if(!force_overwrite && file_exists_path(out_path)) {
+        std::cerr<<"Refusing to overwrite: " << out_path << "\nUse -y to overwrite.\n";
+        sodium_memzero(dek.data(), dek.size());
+        return 1;
+    }
+    const bool w=keywrap_write_file_exclusive(out_path, dek.data(), dek.size());
+    sodium_memzero(dek.data(), dek.size());
+    if(!w) { std::cerr<<"Cannot write: " << out_path << "\n"; return 1; }
+    tighten_file_permissions(out_path);
+    std::cerr<<"DEK written to: " << out_path << "\n";
+    return 0;
+}
+
+
 static bool run_keygen(const std::string& output_dir,bool force_overwrite,uint8_t algo) {
     std::string pub, priv;
     AsymOutcome o=fe_generate_keypair(algo,pub,priv);
@@ -1451,7 +1631,7 @@ int main(int argc,char* argv[]) {
         ACTION_NONE,ACTION_ENCRYPT,ACTION_DECRYPT,
         ACTION_BATCH_ENCRYPT,ACTION_BATCH_DECRYPT,ACTION_KEYGEN,
         ACTION_DERIVE,ACTION_PUBKEY,ACTION_INFO,ACTION_VERIFY,ACTION_RECOVER,
-        ACTION_KEYLIB,ACTION_REWRAP,ACTION_WATERMARK
+        ACTION_KEYLIB,ACTION_REWRAP,ACTION_WATERMARK,ACTION_WRAPKEY,ACTION_UNWRAPKEY
     } action=ACTION_NONE;
 
     std::vector<std::string> input_paths;
@@ -1462,6 +1642,7 @@ int main(int argc,char* argv[]) {
         const std::string& dc = global_config().default_cipher;
         if (dc == "aegis256") mode = CryptoMode::AEGIS256;
         else if (dc == "sm4") mode = CryptoMode::SM4;
+        else if (dc == "aes-gcm") mode = CryptoMode::AES_GCM;
     }
     int source_action=0;          // 0=保留 1=删除(-de) 2=安全擦除(--wipe-source) 3=回收站(--recycle-source)
     bool force_overwrite=false;
@@ -1484,6 +1665,11 @@ int main(int argc,char* argv[]) {
     std::string wm_verify_pem;  // --wm-verify：<--watermark-extract> 验签用的签名公钥 PEM
     bool wm_keygen_mode=false;  // --wm-keygen <file>：生成水印签名密钥（ML-DSA-65/RSA）
     std::string wm_keygen_path; // --wm-keygen 的私钥落盘路径
+    // 密钥包装层：与 -m 正交，包的是 DEK 而非文件内容
+    std::string wrap_path, unwrap_path, unwrap_out, wrap_out;
+    std::string wrap_alg = "kwp";   // kwp|aes-kw|pubkey
+    std::string wrap_to, unwrap_identity;
+    bool wrap_mode = false, unwrap_mode = false;
     std::string keylib_refs;    // -K <name>[,...]：密钥库引用（加密=收件人；解密=身份）
     std::string keylib_as;      // --as <name>：-L add 的库内名称
     std::string keylib_alias;   // --alias <text>：-L add 的展示别名
@@ -1534,7 +1720,7 @@ int main(int argc,char* argv[]) {
     app.add_flag("--rewrap", f_rewrap);
 
     // ===== common options =====
-    app.add_option("-m,--mode", mode_strs, "crypto mode: xchacha20|aegis256|sm4|x25519|x448")
+    app.add_option("-m,--mode", mode_strs, "crypto mode: xchacha20|aegis256|aes-gcm|sm4|x25519|x448")
         ->multi_option_policy(CLI::MultiOptionPolicy::TakeAll);
     app.add_flag("--x448", x448_mode);
     app.add_option("-o,--output", output_dir, "output directory");
@@ -1576,6 +1762,13 @@ int main(int argc,char* argv[]) {
     app.add_option("--wm-sign", wm_spec.sign_key, "watermark signing key (ML-DSA-65/RSA)");
     app.add_option("--wm-verify", wm_verify_pem, "watermark verify public key PEM");
     app.add_option("--wm-keygen", wm_keygen_path, "generate watermark keypair");
+    app.add_option("--wrap-key", wrap_path, "wrap a 32-byte DEK into a FEKW blob");
+    app.add_option("--unwrap-key", unwrap_path, "unwrap a FEKW blob back to the DEK");
+    app.add_option("--unwrap-out", unwrap_out, "output path for --unwrap-key");
+    app.add_option("--wrap-out", wrap_out, "output path for --wrap-key (default: <input>.fekw)");
+    app.add_option("--wrap-alg", wrap_alg, "wrap algorithm: kwp|aes-kw|pubkey");
+    app.add_option("--wrap-to", wrap_to, "recipient public key (or file) for --wrap-key --wrap-alg pubkey");
+    app.add_option("--identity", unwrap_identity, "recipient identity (private key or file) for --unwrap-key");
     app.add_option("--watermark-extract", wm_extract_path, "extract tail watermark (read-only)");
     app.add_option("-i,--input", explicit_inputs, "explicit input path");
     app.add_option("inputs", input_paths, "input files or directories");
@@ -1599,8 +1792,10 @@ int main(int argc,char* argv[]) {
         std::cout<<"zstd=0\n";
 #endif
         std::cout<<"aegis="<<(aegis256_supported()?1:0)<<"\n";
+        std::cout<<"aesgcm="<<(aes_gcm_supported()?1:0)<<"\n";
         std::cout<<"sm4="<<(sm4_supported()?1:0)<<"\n";
         std::cout<<"pqc="<<(pqc_supported()?1:0)<<"\n";
+        std::cout<<"keywrap="<<(keywrap_available()?1:0)<<"\n";
         std::cout<<"split=1\n";
         std::cout<<"pack=1\n";
         std::cout<<"confirm=1\n";
@@ -1613,6 +1808,7 @@ int main(int argc,char* argv[]) {
     for(auto& ms : mode_strs) {
         if(ms=="xchacha20") mode=CryptoMode::XCHACHA20;
         else if(ms=="aegis256") mode=CryptoMode::AEGIS256;
+        else if(ms=="aes-gcm"||ms=="aesgcm") mode=CryptoMode::AES_GCM;
         else if(ms=="sm4") mode=CryptoMode::SM4;
         else if(ms=="x25519"||ms=="x448") asym_mode=true;
         else { std::cerr<<"Unknown mode: "<<ms<<"\n"; return 1; }
@@ -1653,6 +1849,8 @@ int main(int argc,char* argv[]) {
     if(f_nowm) { wm_spec.enabled=false; }
     if(!wm_spec.sign_key.empty()) { wm_spec.enabled=true; wm_spec.pqc=pqc_on; }
     if(!wm_keygen_path.empty()) wm_keygen_mode=true;
+    if(!wrap_path.empty()) wrap_mode=true;
+    if(!unwrap_path.empty()) unwrap_mode=true;
 
     {
         int cnt=(src_del?1:0)+(src_wipe?1:0)+(src_recycle?1:0);
@@ -1691,8 +1889,85 @@ int main(int argc,char* argv[]) {
     bool is_batch=(action==ACTION_BATCH_ENCRYPT||action==ACTION_BATCH_DECRYPT);
     bool is_encrypt=(action==ACTION_ENCRYPT||action==ACTION_BATCH_ENCRYPT);
 
-    // --wm-keygen <file> 不设置 action（它单独完成一次签名密钥生成），
-    // 必须排在 usage 短路之前，否则只有这一个开关时会被当成无动作直接打印帮助。
+if(wrap_mode || unwrap_mode) {
+        // 包装层与加密流程正交：口令只用来派生 KEK，不进载荷加密路径。
+        // --wrap-alg pubkey 路线走X25519 ECDH，不需要口令。
+        const bool pub_route = wrap_mode && keywrap_alg_from_name(wrap_alg) == 2;
+        // 解包路线要读 blob 头才知道是不是公钥路线；读不到就按需要口令处理
+        bool unwrap_pub = false;
+        if(unwrap_mode) {
+            std::vector<unsigned char> probe;
+            if(keywrap_read_file(unwrap_path, probe) && probe.size() >= 6
+               && memcmp(probe.data(), "FEKW", 4) == 0)
+                unwrap_pub = (probe[5] == 2);
+        }
+        SecureBuffer wrap_pwd;
+        if(!pub_route && !unwrap_pub) {
+            // 密钥源优先级沿用主流程：-k <file> > ENCRYPTOR_KEY > --key-stdin > 交互
+            if(!keyfile_path.empty()) {
+                // 与主流程同口径：流式读取并封顶 1 MB，防超大文件耗尽内存
+                std::ifstream kf;
+                if(!open_stream(kf, keyfile_path, std::ios::binary)) {
+                    std::cerr<<"Cannot open key file: "<<keyfile_path<<"\n";
+                    return 1;
+                }
+                std::vector<char> kbuf;
+                const size_t kMaxKeyBytes = size_t(1) << 20;
+                char chunk[4096];
+                while(kf.read(chunk, sizeof(chunk)) || kf.gcount()>0) {
+                    const std::streamsize got = kf.gcount();
+                    if(got > 0) {
+                        kbuf.insert(kbuf.end(), chunk, chunk + got);
+                        if(kbuf.size() > kMaxKeyBytes) {
+                            std::cerr<<"Key file too large (>1 MB): "<<keyfile_path<<"\n";
+                            return 1;
+                        }
+                    }
+                }
+                kf.close();
+                while(!kbuf.empty() && (kbuf.back()=='\n'||kbuf.back()=='\r')) kbuf.pop_back();
+                if(kbuf.empty()) { std::cerr<<"No key material in: "<<keyfile_path<<"\n"; return 1; }
+                wrap_pwd = SecureBuffer(kbuf.data(), kbuf.size());
+                sodium_memzero(kbuf.data(), kbuf.size());
+            }
+            else if(const char* ek=std::getenv("ENCRYPTOR_KEY")) {
+                if(*ek) wrap_pwd = SecureBuffer(ek, std::strlen(ek));
+            }
+            else if(key_from_stdin) {
+                std::vector<char> sbuf;
+                char c;
+                while(std::cin.get(c)) sbuf.push_back(c);
+                while(!sbuf.empty() && (sbuf.back()=='\n'||sbuf.back()=='\r')) sbuf.pop_back();
+                if(!sbuf.empty()) wrap_pwd = SecureBuffer(sbuf.data(), sbuf.size());
+                sodium_memzero(sbuf.data(), sbuf.size());
+            }
+            if(wrap_pwd.empty()) {
+                std::cout<<"Enter key wrap password: ";
+                std::vector<char> p = get_password();
+                while(!p.empty() && (p.back()=='\n'||p.back()=='\r')) p.pop_back();
+                if(p.empty()) { std::cerr<<"No key material provided.\n"; return 1; }
+                wrap_pwd = SecureBuffer(p.data(), p.size());
+                sodium_memzero(p.data(), p.size());
+                p.clear();
+            }
+        }
+        if(wrap_mode) {
+            // --wrap-out 优先；否则沿用 -o 目录（此时文件名固定 wrapped.fekw）
+            std::string out = wrap_out.empty() ? (wrap_path + ".fekw") : wrap_out;
+            if(wrap_out.empty() && !output_dir.empty()) {
+                if(!create_directory_recursive(output_dir)) {
+                    std::cerr<<"Cannot create output directory: "<<output_dir<<"\n";
+                    return 1;
+                }
+                out = output_dir;
+                if(out.back()!='/' && out.back()!='\\') out += '/';
+                out += "wrapped.fekw";
+            }
+            return run_keywrap(wrap_path, out, wrap_alg, wrap_to, wrap_pwd, force_overwrite);
+        }
+        const std::string out = unwrap_out.empty() ? (unwrap_path + ".dek") : unwrap_out;
+        return run_unwrapkey(unwrap_path, out, wrap_pwd, unwrap_identity, force_overwrite);
+    }
     if(wm_keygen_mode) {
         std::string pub_pem, err;
         if(!wm_generate_keypair(wm_keygen_path, pqc_on, pub_pem, err)) {
@@ -1963,7 +2238,6 @@ int main(int argc,char* argv[]) {
         }
     }
 
-    // 口令派生 / 公钥导出 / 完整性校验 / 文件名还原：只消费密钥材料，不读写任何输入文件，
     // 因此必须在下面的“对称密码交互输入”之前拦截。
     if(action==ACTION_DERIVE||action==ACTION_PUBKEY||
        action==ACTION_VERIFY||action==ACTION_RECOVER) {
@@ -2224,10 +2498,15 @@ int main(int argc,char* argv[]) {
             bool ok;
             if(is_encrypt) {
                 std::cout<<"Encrypting: "<<in_path<<" -> "<<out_path<<"\n";
+                // 原子落盘：先写同目录临时文件，encrypt_file 内部自校验通过后再
+                // 替换到最终路径。进程被强杀（GUI 取消=杀进程树）或崩溃时，最终
+                // 路径上不会出现半截密文，只留可辨识的 .fe_tmp_ 残留。
+                AtomicOutput atomic_out(out_path);
+                const std::string enc_target = atomic_out.path();
                 // 防御性兜底：任何未预期异常（如编码转换失败）都以干净错误退出，
                 // 而非未捕获导致 std::terminate/fastfail（GUI 侧表现为"进程崩溃"）。
                 try {
-                    ok=encrypt_file(in_path,out_path,password,mode,nullptr,true,compress_level,
+                    ok=encrypt_file(in_path,enc_target,password,mode,nullptr,true,compress_level,
                                     false,nullptr,wm_spec.enabled?&wm_spec:nullptr);
                 } catch(const std::exception& e) {
                     fprintf(stderr,"Error: encryption failed: %s\n",e.what());
@@ -2236,6 +2515,8 @@ int main(int argc,char* argv[]) {
                     fprintf(stderr,"Error: encryption failed (unexpected exception)\n");
                     ok=false;
                 }
+                // 自校验已过才提交：此刻最终路径上要么是完整密文，要么什么都没有
+                if(ok && !atomic_out.commit()) ok=false;
                 if(ok && source_action!=0) {
                     if(!secure_handle_source(in_path, static_cast<SourceDisposition>(source_action))) {
                         std::cerr<<"Error: could not process source file: "<<in_path<<"\n";

@@ -7,39 +7,35 @@
 // 全局运行配置（仅由 YAML 配置文件提供，CLI 不可覆盖）：日志位置/级别、并发线程、
 // 路径白名单、进度文件轮转等运维参数统一走 YAML，避免 CLI 暴露实现细节。
 struct Config {
-    // 结构化日志
-    std::string log_file;   // 日志文件；空字符串 = 不写日志文件（仍可有 stdout 进度）
+    std::string log_file;   // 空 = 只走 stdout
     int         log_level = 2; // 0=ERROR 1=WARN 2=INFO 3=DEBUG
 
     // 并发 / 资源
     int         worker_threads = 0;       // 0 = 自动（= 硬件并发数）
     uint64_t    max_memory_bytes = 0;     // 0 = 不限；支持 "512MB" 等带单位写法
     size_t      io_buffer_size = 1u << 20; // 内部流式缓冲字节（不影响磁盘分块格式）
-    size_t      max_open_files = 256;     // 资源耗尽防御：限制并发线程数不超过 max_open_files/3（防句柄耗尽 DoS）
+    size_t      max_open_files = 256;     // 并发线程数上限 = 本值/3，防句柄耗尽
     uint64_t    max_speed = 0;            // 限速：每秒最大处理字节数，0 = 不限速（进程级总吞吐上限）
 
     // 路径安全
     size_t      max_path_length = 0;       // 0 = 不限（按 UTF-8 字节计）
-    bool        path_whitelist_enabled = false; // 仅当 path_whitelist 显式列出至少一项时为 true；空列表（仅写键名）不启用，所有路径均放行
-    std::vector<std::string> path_whitelist; // 允许的输入/输出根目录（非空且启用时强制校验）
+    bool        path_whitelist_enabled = false; // 须显式列出至少一项才启用；空列表全放行
+    std::vector<std::string> path_whitelist; // 允许的输入/输出根目录
 
-    // 输出文件名混淆（v1.7.0 引入，v1.7.1 起语义收窄） 仅控制"可见输出文件名"是否混淆为 "<16 位十六进制>.<混淆扩展名>.ptd"； 原始名一律以加密信封存入密文尾部，不受此开关影响。
+    // 只管可见输出文件名；原始名始终以加密信封存进密文尾部
     bool        obfuscate_names = true;
 
-    // 口令强度策略（功能7：CLI 与 GUI 共用同一套校验）
-    // min_password_length：0=用内置默认(8)；min_password_classes：要求字符类别数 (lower/upper/digit/symbol)，0=不强制，默认 2。非 ASCII 口令视为高熵直接放行。
+    // 口令策略：0=用内置默认(8)；字符类别数 0=不强制；非 ASCII 视为高熵直接放行
     int         min_password_length = 0;
     int         min_password_classes = 2;
 
-    // 加密强度预设（功能14） 0=fast(ops3/64MB) 1=standard(ops4/128MB,默认) 2=strong(ops6/512MB)。 写入文件头，解密端自适应（v2+ 支持参数化）。
+    // 0=fast 1=standard(默认) 2=strong；写入文件头，解密端自适应
     int         kdf_preset = 1;
 
-    // 加密默认算法（多算法架构）：空 = xchacha20；可取 "xchacha20" / "aegis256" / "sm4"。
-    // 仅当 CLI 未显式指定 -m 时生效；解密永远以文件头 mode 字节为准。
+    // 空 = xchacha20；仅在 CLI 未给 -m 时生效，解密永远以文件头 mode 为准
     std::string default_cipher;
 
-    // 校验单（功能10）：加密成功后生成 <out>.ptd.sha256
-    // 内容为输出密文的 SHA-256，便于与外部备份 / 传输工具链配合校验完整性。
+    // 加密成功后生成 <out>.ptd.sha256
     bool        write_sha256 = false;
 
 };
@@ -47,38 +43,31 @@ struct Config {
 // 配置文件来源（v2.1.2：用于判定信任级别）
 enum class ConfigSource { None = 0, Env, Cwd, ExeDir, UserConfig };
 
-// 定位配置文件（优先级从高到低）：$FILEENCRYPTOR_CONFIG > CWD/fileencryptor.yaml（低信任）>
-// 可执行文件目录 > 用户配置目录。都不存在返回空串；src 非空时回填命中来源。
+// 优先级：$FILEENCRYPTOR_CONFIG > CWD（低信任）> 可执行文件目录 > 用户配置目录
 std::string find_config_file(ConfigSource* src = nullptr);
 
-// 用户配置目录（Win %APPDATA%/FileEncryptor；Linux $XDG_CONFIG_HOME/fileencryptor 或
-// ~/.config/fileencryptor）。定位失败返回空串。密钥库复用同一目录下 keys/。
+// Win %APPDATA%/FileEncryptor；Linux $XDG_CONFIG_HOME/fileencryptor 或 ~/.config/fileencryptor
 std::string user_config_dir();
 
-// 路径分隔符归一化：Windows 下把 '/' 统一为原生 '\\'（POSIX 原样返回）。
-// 用于用户可见/落盘路径，避免 "AppData/Roaming\keys" 这类混合分隔符。
+// Windows 下把 '/' 统一为原生分隔符，避免 "AppData/Roaming\keys" 这类混写
 std::string to_native_path(const std::string& p);
 
-// 解析极简 YAML（顶层标量键与单层序列）到 Config。出错返回 false 并写 err（不致命，
-// 回退默认）；warn（可空）收集非致命类型/单位告警，由调用方统一输出。
+// 出错写 err 后回退默认；warn 收集非致命的类型/单位告警
 bool parse_yaml_config(const std::string& text, Config& cfg, std::string& err, std::string* warn = nullptr);
 
-// 解析带单位的字节数：KB / MB / GB（1024 进制），可带 "/s" 后缀；"0"/空/缺省 = 0（不限）。
-// 例："10MB"、"1.5GB"、"512KB"、"1048576"、"10MB/s"。格式非法返回 false。
+// 1024 进制，可带 "/s"；"0"/空 = 不限。"1.5GB" 合法
 bool parse_size(const std::string& s, uint64_t& out_bytes);
 
-// 把字节数格式化为统一单位字符串（KB / MB / GB，1024 进制）：
-// 例：1572864 -> "1.50 MB"，512 -> "512 B"。
+// 1572864 -> "1.50 MB"，512 -> "512 B"
 std::string format_size(uint64_t bytes);
 
 // 加载配置：自动定位文件，缺失时返回默认 Config。
 Config load_config();
 
 // 结构化 JSON 日志
-// 级别常量
 enum LogLevel { LOG_ERROR = 0, LOG_WARN = 1, LOG_INFO = 2, LOG_DEBUG = 3 };
 
-// 初始化日志（指定日志文件路径与级别；log_file 为空则不写文件）。
+// log_file 为空则只写 stdout
 void init_logger(const std::string& log_file, int level);
 
 // 写一条 JSON 行日志：{"ts":...,"level":...,"msg":...[, "fields":{...}]}
@@ -86,7 +75,6 @@ void log_event(int level, const std::string& msg);
 void log_event(int level, const std::string& msg,
                const std::vector<std::pair<std::string, std::string>>& fields);
 
-// 全局配置（启动期设置一次，之后只读，线程安全）
-// 参数为值拷贝，内部以 shared_ptr<const Config> 持有，避免传入临时 Config 产生悬空指针。
+// 启动期设置一次，之后只读；按值拷贝持有，避免临时 Config 造成悬空指针
 void    set_global_config(Config cfg);
 const Config& global_config();

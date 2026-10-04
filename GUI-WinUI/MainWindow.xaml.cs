@@ -79,6 +79,7 @@ public sealed partial class MainWindow : Window
         // 构造函数阶段还没就绪，交给 ApplyBackdrop() 在 Activate() 之后统一做。
         ModeCombo.SelectedIndex = 0;
         SourceCombo.SelectedIndex = 0;
+        WrapAlgCombo.SelectedIndex = 0;
 
         try {
             var iconPath = System.IO.Path.Combine(AppContext.BaseDirectory, "Assets", "app.ico");
@@ -101,6 +102,38 @@ public sealed partial class MainWindow : Window
                 RbDecrypt.IsChecked = ViewModel.ActionIndex == 1;
                 RbBatchEncrypt.IsChecked = ViewModel.ActionIndex == 2;
                 RbBatchDecrypt.IsChecked = ViewModel.ActionIndex == 3;
+                RbKeyGen.IsChecked = ViewModel.ActionIndex == 4;
+                RbDerive.IsChecked = ViewModel.ActionIndex == 5;
+                RbPubKey.IsChecked = ViewModel.ActionIndex == 6;
+                RbWrapKey.IsChecked = ViewModel.ActionIndex == 7;
+                RbUnwrapKey.IsChecked = ViewModel.ActionIndex == 8;
+            }
+        };
+
+        // 旧 CLI 不支持包装动作时禁用两个单选，并把停用原因写进提示
+        ViewModel.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName != nameof(ViewModel.KeywrapAvailable)) return;
+            RbWrapKey.IsEnabled = ViewModel.KeywrapAvailable;
+            RbUnwrapKey.IsEnabled = ViewModel.KeywrapAvailable;
+            if (ViewModel.KeywrapAvailable)
+            {
+                // 可用时保留说明性提示（随语言切换由 LocalizeTree 翻译）
+                ToolTipService.SetToolTip(RbWrapKey, L10n.T("把一份 32 字节的数据密钥单独包进 .fekw 文件，用口令或收件人公钥保护"));
+                ToolTipService.SetToolTip(RbUnwrapKey, L10n.T("把 .fekw 里的数据密钥还原成 32 字节文件"));
+            }
+            else
+            {
+                var tip = L10n.T("配套的命令行程序没有密钥包装能力，请更换带 OpenSSL 的 CLI");
+                ToolTipService.SetToolTip(RbWrapKey, tip);
+                ToolTipService.SetToolTip(RbUnwrapKey, tip);
+            }
+            // 勾中的那个要主动切走，否则界面停用却仍能点运行
+            if (!ViewModel.KeywrapAvailable && (RbWrapKey.IsChecked == true || RbUnwrapKey.IsChecked == true))
+            {
+                RbWrapKey.IsChecked = false;
+                RbUnwrapKey.IsChecked = false;
+                RbEncrypt.IsChecked = true;
             }
         };
 
@@ -137,6 +170,7 @@ public sealed partial class MainWindow : Window
         var h = Microsoft.UI.Xaml.Controls.Orientation.Horizontal;
         ActionRow.Orientation = h;
         KeyMgmtRow.Orientation = h;
+        WrapRow.Orientation = h;
         OptionsRow.Orientation = h;
     }
 
@@ -209,7 +243,7 @@ public sealed partial class MainWindow : Window
                 case Microsoft.UI.Xaml.Controls.ContentControl cc when cc.Content is string s:
                     cc.Content = L10n.T(s);
                     break;
-                // 下拉项未展开时不在视觉树中，需单独遍历 Items（须排在 FrameworkElement 之前）
+                // 下拉项未展开时不在视觉树中，需单独遍历 Items
                 case Microsoft.UI.Xaml.Controls.ComboBox cb:
                     foreach (var item in cb.Items)
                     {
@@ -217,14 +251,15 @@ public sealed partial class MainWindow : Window
                             cbi.Content = L10n.T(cs);
                     }
                     break;
-                // 悬停提示是附加属性，走不到 Content，中文界面下也要跟着切（放最后兜底）
-                case Microsoft.UI.Xaml.FrameworkElement fe:
-                {
-                    var tip = fe.GetValue(Microsoft.UI.Xaml.Controls.ToolTipService.ToolTipProperty);
-                    if (tip is string ts)
-                        fe.SetValue(Microsoft.UI.Xaml.Controls.ToolTipService.ToolTipProperty, L10n.T(ts));
-                    break;
-                }
+        }
+        // 悬停提示是附加属性，所有 FrameworkElement 统一兜底翻译。
+        // 不能放进上面 switch —— ComboBox/ContentControl 等命中自己的 case 后 break，
+        // 会跳过最后的 FrameworkElement 分支，导致它们的 tooltip 一直漏翻。
+        if (child is Microsoft.UI.Xaml.FrameworkElement fe)
+        {
+            var tip = fe.GetValue(Microsoft.UI.Xaml.Controls.ToolTipService.ToolTipProperty);
+            if (tip is string ts)
+                fe.SetValue(Microsoft.UI.Xaml.Controls.ToolTipService.ToolTipProperty, L10n.T(ts));
         }
     }
 
@@ -314,29 +349,55 @@ public sealed partial class MainWindow : Window
     }
 
     // ===== 动作 / 密钥管理 =====
-    // 两组单选分属不同 GroupName，选中态互不干扰；这里显式互斥，避免同时点亮两组
-    private void ExclusiveGroup(bool keyMgmtGroup)
+    // 三组单选的 GroupName 各不相同，WinUI 只在同组内互斥，跨组要手工取消。
+    // 被点亮的那组绝不能碰，否则调用方刚勾上的会被这里清掉。
+    private const int GroupAction = 0;
+    private const int GroupKeyMgmt = 1;
+    private const int GroupWrap = 2;
+
+    private void ExclusiveGroup(int keep)
     {
-        if (keyMgmtGroup)
+        if (keep != GroupAction)
         {
             RbEncrypt.IsChecked = false; RbDecrypt.IsChecked = false;
             RbBatchEncrypt.IsChecked = false; RbBatchDecrypt.IsChecked = false;
         }
-        else
+        if (keep != GroupKeyMgmt)
         {
             RbKeyGen.IsChecked = false; RbDerive.IsChecked = false; RbPubKey.IsChecked = false;
+        }
+        if (keep != GroupWrap)
+        {
+            RbWrapKey.IsChecked = false; RbUnwrapKey.IsChecked = false;
         }
     }
 
     private void OnKeyMgmtRadioChecked(object sender, RoutedEventArgs e)
     {
         if (RbKeyGen.IsChecked != true && RbDerive.IsChecked != true && RbPubKey.IsChecked != true) return;
-        ExclusiveGroup(keyMgmtGroup: true);
+        ExclusiveGroup(GroupKeyMgmt);
         if (RbKeyGen.IsChecked == true) ViewModel.ActionIndex = 4;
         else if (RbDerive.IsChecked == true) ViewModel.ActionIndex = 5;
         else if (RbPubKey.IsChecked == true) ViewModel.ActionIndex = 6;
         UpdateVisibility();
     }
+
+    private void OnWrapRadioChecked(object sender, RoutedEventArgs e)
+    {
+        if (RbWrapKey.IsChecked != true && RbUnwrapKey.IsChecked != true) return;
+        ExclusiveGroup(GroupWrap);
+        ViewModel.ActionIndex = RbWrapKey.IsChecked == true ? 7 : 8;
+        UpdateVisibility();
+    }
+
+    private void OnWrapAlgChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (WrapAlgCombo.SelectedIndex >= 0) ViewModel.WrapAlgIndex = WrapAlgCombo.SelectedIndex;
+        UpdateVisibility();
+    }
+
+    private void OnWrapInputChanged(object sender, TextChangedEventArgs e) => ViewModel.WrapInput = WrapFileEdit.Text;
+    private void OnWrapOutputChanged(object sender, TextChangedEventArgs e) => ViewModel.WrapOutput = WrapOutEdit.Text;
 
     private void UpdateTitleBarButtonColors()
     {
@@ -553,7 +614,12 @@ public sealed partial class MainWindow : Window
     // ===== 密码请求 =====
     private async void OnPasswordRequested()
     {
-        var dlg = new PasswordDialog { XamlRoot = Content.XamlRoot, RequestedTheme = CurrentTheme };
+        var dlg = new PasswordDialog
+        {
+            XamlRoot = Content.XamlRoot,
+            RequestedTheme = CurrentTheme,
+            NeedConfirm = ViewModel.PasswordNeedsConfirm
+        };
         var result = await dlg.ShowAsync();
         if (result == ContentDialogResult.Primary && !string.IsNullOrEmpty(dlg.Password))
         {
@@ -646,7 +712,12 @@ public sealed partial class MainWindow : Window
         byte[] password = Array.Empty<byte>();
         if (string.IsNullOrEmpty(identity))
         {
-            var pwd = new PasswordDialog { XamlRoot = Content.XamlRoot, RequestedTheme = CurrentTheme };
+            var pwd = new PasswordDialog
+            {
+                XamlRoot = Content.XamlRoot,
+                RequestedTheme = CurrentTheme,
+                NeedConfirm = false   // 预览恒为解密
+            };
             if (await pwd.ShowAsync() != ContentDialogResult.Primary) return;
             password = Encoding.UTF8.GetBytes(pwd.Password);
         }
@@ -691,7 +762,8 @@ public sealed partial class MainWindow : Window
     {
         if (RbEncrypt.IsChecked != true && RbDecrypt.IsChecked != true
             && RbBatchEncrypt.IsChecked != true && RbBatchDecrypt.IsChecked != true) return;
-        ExclusiveGroup(keyMgmtGroup: false);
+        // 互斥只取消另外两组，本组的勾选状态由本次 Checked 决定，不受影响
+        ExclusiveGroup(GroupAction);
         if (RbEncrypt.IsChecked == true) ViewModel.ActionIndex = 0;
         else if (RbDecrypt.IsChecked == true) ViewModel.ActionIndex = 1;
         else if (RbBatchEncrypt.IsChecked == true) ViewModel.ActionIndex = 2;
@@ -813,6 +885,30 @@ public sealed partial class MainWindow : Window
         } catch (Exception ex) { ViewModel.SetStatus("[身份文件] 错误: {0}", ex.Message); }
     }
 
+    private async void OnBrowseWrapFile(object sender, RoutedEventArgs e)
+    {
+        try {
+            var picker = new FileOpenPicker();
+            WinRT.Interop.InitializeWithWindow.Initialize(picker, WinRT.Interop.WindowNative.GetWindowHandle(this));
+            if (ViewModel.IsWrapKeyMode) picker.FileTypeFilter.Add("*");
+            else { picker.FileTypeFilter.Add(".fekw"); picker.FileTypeFilter.Add("*"); }
+            var file = await picker.PickSingleFileAsync();
+            if (file != null) WrapFileEdit.Text = file.Path;
+        } catch (Exception ex) { ViewModel.SetStatus("[密钥文件] 错误: {0}", ex.Message); }
+    }
+
+    private async void OnBrowseWrapOut(object sender, RoutedEventArgs e)
+    {
+        try {
+            var picker = new FileSavePicker();
+            WinRT.Interop.InitializeWithWindow.Initialize(picker, WinRT.Interop.WindowNative.GetWindowHandle(this));
+            picker.FileTypeChoices.Add(ViewModel.IsWrapKeyMode ? "包装文件" : "数据密钥",
+                new List<string> { ViewModel.IsWrapKeyMode ? ".fekw" : ".dek" });
+            var file = await picker.PickSaveFileAsync();
+            if (file != null) WrapOutEdit.Text = file.Path;
+        } catch (Exception ex) { ViewModel.SetStatus("[输出路径] 错误: {0}", ex.Message); }
+    }
+
     private async void OnBrowseWatermarkKey(object sender, RoutedEventArgs e)
     {
         try {
@@ -832,12 +928,15 @@ public sealed partial class MainWindow : Window
         bool isEncrypt = ViewModel.IsEncryptMode;
         bool isAsym = ViewModel.IsAsymmetric;
         bool isKeyGen = ViewModel.IsKeyGenMode;
+        bool isWrap = ViewModel.IsWrapMode;
+        bool isWrapKey = ViewModel.IsWrapKeyMode;
+        bool wrapPubkey = isWrap && ViewModel.WrapUsesPublicKey;
 
         // 非对称（X25519 / X448）模式下「文件算法」与曲线开关才有意义
-        bool asymMode = ModeCombo.SelectedIndex == 3;
+        bool asymMode = ModeCombo.SelectedIndex == 4;
         bool isKeyGenOnly = ViewModel.ActionIndex == 4;   // -x448 只对「生成密钥对」有意义
 
-        // 加密模式整行只服务加密动作：解密 / 批量解密 / 密钥管理三项下一律连左侧标签一起收起
+        // 加密模式整行只服务加密动作，其余动作连左侧标签一起收起
         EncryptModeRow.Visibility = (isEncrypt && !isKeyGen) ? Visibility.Visible : Visibility.Collapsed;
         // 文件算法只在非对称模式露出；露出时模式下拉退回半宽，两个选择框等分同一行
         var fileCipherVisible = asymMode && isEncrypt && !isKeyGen;
@@ -847,8 +946,8 @@ public sealed partial class MainWindow : Window
         // 曲线开关：非对称模式下控制封装曲线；生成密钥对时控制 -x448（CLI 只认这条）
         ChkX448.Visibility = (asymMode || isKeyGenOnly) ? Visibility.Visible : Visibility.Collapsed;
 
-        // 加密专属选项：密钥管理三项目（生成密钥对 / 口令派生 / 导出公钥）下一律不出现
-        bool encOptionVisible = isEncrypt && !isKeyGen;
+        // 加密专属选项：密钥管理与密钥包装动作下一律不出现
+        bool encOptionVisible = isEncrypt && !isKeyGen && !isWrap;
         // 藏起来的开关先取消勾选，免得 CLI 收到对当前动作无意义的开关
         if (!encOptionVisible)
         {
@@ -856,6 +955,8 @@ public sealed partial class MainWindow : Window
             if (ChkWatermark.IsChecked == true) ChkWatermark.IsChecked = false;
             if (ChkPack.IsChecked == true) ChkPack.IsChecked = false;
             if (ChkSplit.IsChecked == true) ChkSplit.IsChecked = false;
+            // PQC 只影响载荷封装与水印签名，包装路线不经过这两步
+            if (ChkPqc.IsChecked == true) ChkPqc.IsChecked = false;
         }
         SourceCombo.Visibility = encOptionVisible ? Visibility.Visible : Visibility.Collapsed;
         ChkPack.Visibility = encOptionVisible ? Visibility.Visible : Visibility.Collapsed;
@@ -868,18 +969,58 @@ public sealed partial class MainWindow : Window
         ChkSha256.Visibility = encOptionVisible ? Visibility.Visible : Visibility.Collapsed;
         // 签名水印只服务于加密动作
         ChkWatermark.Visibility = encOptionVisible ? Visibility.Visible : Visibility.Collapsed;
-        KeyfileEdit.Visibility = !isAsym && !isKeyGen ? Visibility.Visible : Visibility.Collapsed;
-        RecipientPanel.Visibility = isAsym && isEncrypt ? Visibility.Visible : Visibility.Collapsed;
-        IdentityPanel.Visibility = isAsym && !isEncrypt ? Visibility.Visible : Visibility.Collapsed;
+        // 后量子开关同样只在加密动作出现，包装路线用不上
+        ChkPqc.Visibility = encOptionVisible ? Visibility.Visible : Visibility.Collapsed;
+        // 公钥路线没有 KEK，密钥文件行对它无意义
+        KeyfileEdit.Visibility = (!isAsym && !isKeyGen && !wrapPubkey) ? Visibility.Visible : Visibility.Collapsed;
+        // 产物路径由包装区块的输出行决定
+        OutDirRow.Visibility = isWrap ? Visibility.Collapsed : Visibility.Visible;
+        // 包装动作复用收件人 / 身份这两组输入框
+        RecipientPanel.Visibility = (isAsym && isEncrypt) || (isWrapKey && wrapPubkey)
+            ? Visibility.Visible : Visibility.Collapsed;
+        IdentityPanel.Visibility = (isAsym && !isEncrypt) || (ViewModel.IsUnwrapMode && wrapPubkey)
+            ? Visibility.Visible : Visibility.Collapsed;
+        // 同一面板在包装动作下装的是另一种密钥，标签跟着改
+        RecipientLabel.Text = L10n.T(isWrapKey ? "收件人公钥:" : "收件人:");
+        RecipientEdit.PlaceholderText = L10n.T(isWrapKey ? "公钥或公钥文件路径（--wrap-to）" : "公钥或公钥文件路径");
+        IdentityLabel.Text = L10n.T(ViewModel.IsUnwrapMode ? "身份私钥:" : "身份文件:");
         ChkRestoreName.Visibility = ViewModel.ActionIndex == 3 ? Visibility.Visible : Visibility.Collapsed;
         // PQC 在密钥生成时仍有意义（CLI 的 -g 读 --no-pqc），X448 由上一行单独控制；
         // 签名水印只在加密动作下露出（见上）。
         UpdateWatermarkKeyRow();
         BtnRewrap.Visibility = isEncrypt ? Visibility.Visible : Visibility.Collapsed;
+        UpdateWrapPanel();
 
         // 切动作会成批改子控件 Visibility，ScrollViewer 有时不立刻重算滚动区，
         // 表现是滚动条莫名消失（再切一次又好了）。强制走一次布局把它算回来。
         MainScroll.UpdateLayout();
+    }
+
+    // 包装区块的措辞随动作与算法切换
+    private void UpdateWrapPanel()
+    {
+        bool isWrap = ViewModel.IsWrapMode;
+        WrapPanel.Visibility = isWrap ? Visibility.Visible : Visibility.Collapsed;
+        if (!isWrap) return;
+        bool wrapKey = ViewModel.IsWrapKeyMode;
+        bool pubkey = ViewModel.WrapUsesPublicKey;
+        WrapFileLabel.Text = L10n.T(wrapKey ? "32 字节密钥文件" : "包装文件");
+        WrapFileEdit.PlaceholderText = L10n.T(wrapKey
+            ? "恰好 32 字节的数据密钥（DEK）文件"
+            : ".fekw 包装文件");
+        WrapOutLabel.Text = L10n.T(wrapKey ? "包装输出" : "解包输出");
+        WrapOutEdit.PlaceholderText = L10n.T(wrapKey
+            ? "留空则用 <密钥文件>.fekw"
+            : "留空则用 <包装文件>.dek");
+        // 解包时算法写在 blob 头里，下拉只决定「口令还是私钥」，标题随之改口
+        WrapAlgLabel.Text = L10n.T(wrapKey ? "包装算法" : "解密方式");
+        WrapIntroText.Text = L10n.T(wrapKey
+            ? (pubkey
+                ? "把 32 字节数据密钥用收件人公钥封装，不需要口令。"
+                : "用口令派生出的密钥包装 32 字节数据密钥。")
+            : (pubkey
+                ? "从 .fekw 中取回 32 字节数据密钥，需要当初收件人的身份私钥。"
+                : "从 .fekw 中取回 32 字节数据密钥，需要包装时使用的口令。"));
     }
 
     // 水印私钥行：勾选「签名水印」后才显示（该行不改变动作语义，任何加密模式都可用）
@@ -928,6 +1069,46 @@ public sealed partial class MainWindow : Window
                 if (await warn.ShowAsync() != ContentDialogResult.Primary)
                     return;
                 ViewModel.SourceDeleteOk = true;
+            }
+        }
+        // 包装动作的前置校验：CLI 能力、输入路径、公钥材料三样缺一不可
+        if (ViewModel.IsWrapMode)
+        {
+            if (!ViewModel.KeywrapAvailable)
+            {
+                await ShowMessageAsync(L10n.T("密钥包装不可用"),
+                    L10n.T("配套的命令行程序没有密钥包装能力，无法包装或解开密钥。\n请更换带 OpenSSL 的 CLI。"));
+                return;
+            }
+            // 包装输入是单个文件，不走文件清单；缺路径或路径不存在在这里拦下
+            var wrapIn = ViewModel.WrapInput ?? "";
+            if (string.IsNullOrEmpty(wrapIn))
+            {
+                await ShowMessageAsync(L10n.T("缺少密钥文件"),
+                    L10n.T(ViewModel.IsWrapKeyMode
+                        ? "请先选择要包装的 32 字节数据密钥文件。"
+                        : "请先选择要解开的 .fekw 包装文件。"));
+                WrapFileEdit.Focus(FocusState.Programmatic);
+                return;
+            }
+            if (!File.Exists(wrapIn))
+            {
+                await ShowMessageAsync(L10n.T("文件不存在"), L10n.F("找不到：{0}", wrapIn));
+                WrapFileEdit.Focus(FocusState.Programmatic);
+                return;
+            }
+            if (ViewModel.WrapUsesPublicKey)
+            {
+                string material = ViewModel.IsWrapKeyMode ? (ViewModel.Recipient ?? "") : (ViewModel.Identity ?? "");
+                if (string.IsNullOrEmpty(material))
+                {
+                    await ShowMessageAsync(L10n.T("缺少密钥材料"),
+                        L10n.T(ViewModel.IsWrapKeyMode
+                            ? "公钥包装需要收件人公钥：粘贴公钥串或选择一个含公钥的文件。"
+                            : "公钥解包需要当初收件人的身份私钥文件。"));
+                    (ViewModel.IsWrapKeyMode ? RecipientEdit : IdentityEdit).Focus(FocusState.Programmatic);
+                    return;
+                }
             }
         }
         ViewModel.Run();
@@ -1248,7 +1429,7 @@ public sealed partial class MainWindow : Window
         panel.Children.Add(new TextBlock { Text = L10n.T("• 限速：进程级令牌桶限速（YAML max_speed 配置）") });
         panel.Children.Add(new TextBlock { Text = L10n.T("• 配置化：日志/并发/路径策略等运维参数经 YAML 配置"), Margin = new Thickness(0,0,0,8) });
         panel.Children.Add(new TextBlock { Text = L10n.T("命令行用法"), FontWeight = Microsoft.UI.Text.FontWeights.Bold, Margin = new Thickness(0,8,0,4) });
-        panel.Children.Add(new TextBlock { Text = "FileEncryptor -e/-d <FileName> [-o <Path>] [-de] [-m xchacha20|aegis256] [-y]\nFileEncryptor -be/-bd <Path> [-o <Path>] [-de] [-m xchacha20|aegis256] [-y]", FontFamily = new Microsoft.UI.Xaml.Media.FontFamily("Consolas"), Margin = new Thickness(0,0,0,8) });
+        panel.Children.Add(new TextBlock { Text = "FileEncryptor -e/-d <FileName> [-o <Path>] [-de] [-m xchacha20|aegis256|aes-gcm|sm4] [-y]\nFileEncryptor -be/-bd <Path> [-o <Path>] [-de] [-m xchacha20|aegis256|aes-gcm|sm4] [-y]", FontFamily = new Microsoft.UI.Xaml.Media.FontFamily("Consolas"), Margin = new Thickness(0,0,0,8) });
         panel.Children.Add(new TextBlock { Text = L10n.T("密钥来源优先级"), FontWeight = Microsoft.UI.Text.FontWeights.Bold, Margin = new Thickness(0,8,0,4) });
         panel.Children.Add(new TextBlock { Text = L10n.T("-k <keyfile>（密钥文件） > --key-stdin（stdin 管道） > ENCRYPTOR_KEY（环境变量） > 交互式输入；非对称模式用 X25519 身份私钥 > 交互式输入"), TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0,0,0,8) });
         panel.Children.Add(new TextBlock { Text = L10n.T("许可证：GPLv3"), Margin = new Thickness(0,8,0,0) });
@@ -1278,16 +1459,19 @@ public sealed partial class MainWindow : Window
             "keygen" => 4,
             "derive" => 5,
             "pubkey" => 6,
+            "wrap" => 7,
+            "unwrap" => 8,
             _ => ViewModel.ActionIndex
         };
         ViewModel.ModeIndex = rec.Mode switch
         {
             "xchacha20" => 0,
             "aegis256" => 1,
-            "sm4" => 2,
-            "x25519" => 3,
-            "x448" => 3,
-            "asymmetric" => 3,
+            "aes-gcm" => 2,
+            "sm4" => 3,
+            "x25519" => 4,
+            "x448" => 4,
+            "asymmetric" => 4,
             _ => ViewModel.ModeIndex
         };
         // 非对称模式的文件算法一并回填，否则下拉会停在默认项却回放出对应的 -m
@@ -1295,7 +1479,8 @@ public sealed partial class MainWindow : Window
         FileCipherCombo.SelectedIndex = rec.FileCipher switch
         {
             "aegis256" => 1,
-            "sm4" => 2,
+            "aes-gcm" => 2,
+            "sm4" => 3,
             _ => 0
         };
         ViewModel.FileCipherIndex = FileCipherCombo.SelectedIndex;
@@ -1319,6 +1504,11 @@ public sealed partial class MainWindow : Window
         if (!string.IsNullOrEmpty(rec.Recipient)) RecipientEdit.Text = rec.Recipient;
         if (!string.IsNullOrEmpty(rec.Identity)) IdentityEdit.Text = rec.Identity;
         ChkRestoreName.IsChecked = rec.RestoreName;
+        // 算法下拉先设，动作切过去时 PropertyChanged 会顺带刷可见性
+        if (!string.IsNullOrEmpty(rec.WrapAlg))
+            WrapAlgCombo.SelectedIndex = rec.WrapAlg switch { "kwp" => 0, "aes-kw" => 1, "pubkey" => 2, _ => WrapAlgCombo.SelectedIndex };
+        if (!string.IsNullOrEmpty(rec.WrapInput)) WrapFileEdit.Text = rec.WrapInput;
+        if (!string.IsNullOrEmpty(rec.WrapOutput)) WrapOutEdit.Text = rec.WrapOutput;
         ChkForce.IsChecked = rec.Force;
         ChkSha256.IsChecked = rec.Sha256;
         ChkCompress.IsChecked = rec.Compress;

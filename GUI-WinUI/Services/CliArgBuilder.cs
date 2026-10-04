@@ -67,6 +67,12 @@ public static class CliArgBuilder
     public static List<string> BuildArguments(ShellOptions options)
     {
         var args = new List<string>();
+
+        // 密钥包装：与加解密流程完全独立，只有 --wrap-key / --unwrap-key 一组参数。
+        // 口令 / 私钥不落 argv：统一走 --key-stdin 或 -k <file>，理由同水印私钥。
+        if (options.Action == CryptoAction.WrapKey) return BuildWrapArgs(options);
+        if (options.Action == CryptoAction.UnwrapKey) return BuildUnwrapArgs(options);
+
         switch (options.Action)
         {
             case CryptoAction.Encrypt: args.Add("-e"); break;
@@ -210,6 +216,45 @@ public static class CliArgBuilder
         return args;
     }
 
+    // 把 32 字节 DEK 包进 FEKW blob
+    private static List<string> BuildWrapArgs(ShellOptions o)
+    {
+        var args = new List<string> { "--wrap-key", o.WrapInput, "--wrap-alg", WrapAlgToken(o.WrapAlg) };
+        if (!string.IsNullOrEmpty(o.WrapOutput)) { args.Add("--wrap-out"); args.Add(o.WrapOutput); }
+        if (o.WrapAlg == WrapAlg.Pubkey)
+        {
+            // 公钥路线：--wrap-to 接字符串或文件都认，这里给界面填的路径
+            if (!string.IsNullOrEmpty(o.RecipientPath)) { args.Add("--wrap-to"); args.Add(o.RecipientPath); }
+        }
+        else if (!string.IsNullOrEmpty(o.KeyfilePath)) { args.Add("-k"); args.Add(o.KeyfilePath); }
+        else args.Add("--key-stdin");
+        if (o.ForceOverwrite) args.Add("-y");
+        return args;
+    }
+
+    // 从 FEKW blob 取回 DEK
+    private static List<string> BuildUnwrapArgs(ShellOptions o)
+    {
+        var args = new List<string> { "--unwrap-key", o.WrapInput };
+        // 解包时算法写在 blob 头里，但界面上的选择用于决定「口令还是私钥」
+        if (o.WrapAlg != WrapAlg.Pubkey)
+        {
+            if (!string.IsNullOrEmpty(o.KeyfilePath)) { args.Add("-k"); args.Add(o.KeyfilePath); }
+            else args.Add("--key-stdin");
+        }
+        else if (!string.IsNullOrEmpty(o.IdentityPath)) { args.Add("--identity"); args.Add(o.IdentityPath); }
+        if (!string.IsNullOrEmpty(o.WrapOutput)) { args.Add("--unwrap-out"); args.Add(o.WrapOutput); }
+        if (o.ForceOverwrite) args.Add("-y");
+        return args;
+    }
+
+    private static string WrapAlgToken(WrapAlg a) => a switch
+    {
+        WrapAlg.AesKw => "aes-kw",
+        WrapAlg.Pubkey => "pubkey",
+        _ => "kwp"
+    };
+
     // 组装 --split 尺寸串；CLI 的 parse_split_size 认 1024 进制 KB/MB/GB/TB
     private static string FormatSplitSize(double value, SplitUnit unit)
     {
@@ -226,6 +271,7 @@ public static class CliArgBuilder
     private static string ModeToken(CryptoMode m) => m switch
     {
         CryptoMode.Aegis256 => "aegis256",
+        CryptoMode.AesGcm => "aes-gcm",
         CryptoMode.Sm4 => "sm4",
         _ => "xchacha20"
     };
@@ -233,6 +279,7 @@ public static class CliArgBuilder
     private static string FileModeToken(CryptoMode m) => m switch
     {
         CryptoMode.Aegis256 => "aegis256",
+        CryptoMode.AesGcm => "aes-gcm",
         CryptoMode.Sm4 => "sm4",
         _ => "xchacha20"
     };
@@ -261,6 +308,13 @@ public static class CliArgBuilder
                 or CryptoAction.BatchEncrypt or CryptoAction.BatchDecrypt or CryptoAction.Derive)
         {
             sb.Append(L10n.T("  # 密钥经 stdin 管道注入"));
+        }
+        // 包装动作：口令路线走 stdin，公钥路线靠收件人密钥材料
+        if (options.Action is CryptoAction.WrapKey or CryptoAction.UnwrapKey)
+        {
+            if (options.WrapAlg == WrapAlg.Pubkey) sb.Append(L10n.T("  # 使用收件人密钥材料"));
+            else if (!string.IsNullOrEmpty(options.KeyfilePath)) sb.Append(L10n.T("  # 口令来自 -k 文件"));
+            else sb.Append(L10n.T("  # 口令经 stdin 管道注入"));
         }
         // 预览只拼字符串、不真正跑 CLI，临时私钥用完即删
         CleanupWatermarkTemp(options);

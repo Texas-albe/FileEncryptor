@@ -8,13 +8,24 @@ public enum CryptoAction
     BatchDecrypt,
     KeyGen,
     Derive,
-    PubKey
+    PubKey,
+    WrapKey,
+    UnwrapKey
+}
+
+// 密钥包装算法（与载荷加密正交：包装的是密钥，不是文件内容）
+public enum WrapAlg
+{
+    Kwp = 0,        // RFC 5649 AES-256-KWP，长度不受 8 字节倍数限制（默认）
+    AesKw = 1,      // RFC 3394 原始 AES-KW，供旧工具互操作
+    Pubkey = 2      // 收件人公钥封装，不需要口令
 }
 
 public enum CryptoMode
 {
     XChaCha20,
     Aegis256,
+    AesGcm,
     Sm4,
     Asymmetric
 }
@@ -46,7 +57,7 @@ public class ShellOptions
     public SourceDisposition SourceDisposition { get; set; } = SourceDisposition.Keep;
     // 加密压缩包：把目录树 / 多个文件打成单个 .ptd（CLI --pack）
     public bool Pack { get; set; } = false;
-    // 分卷输出：把 .ptd 切成 <base>.001.ptd/002/003…（CLI --split <size>），默认不勾选
+    // 分卷：切成 <base>.001.ptd/002/003…（--split <size>），默认不勾选
     public bool Split { get; set; } = false;
     public double SplitSize { get; set; } = 100;
     public SplitUnit SplitUnit { get; set; } = SplitUnit.MB;
@@ -65,10 +76,16 @@ public class ShellOptions
     public bool UseX448 { get; set; } = false;
     // 控制台模式：口令由 CLI 在控制台交互读取，不经 stdin 管道
     public bool ConsoleMode { get; set; } = false;
-    // 后量子：true=X25519+ML-KEM-768 / ML-DSA-65；false=经典（仅在 KeyGen、水印处下发 --no-pqc）
+    // 后量子：true=X25519+ML-KEM-768 / ML-DSA-65；false=经典（仅 KeyGen 与水印下发 --no-pqc）
     public bool Pqc { get; set; } = true;
     public bool Watermark { get; set; } = false;
     public string WatermarkKeyPath { get; set; } = "";
-    // 本次任务落盘的水印私钥临时文件（每任务独立，避免并发任务互相覆盖；任务结束由 CleanupWatermarkTemp 删除）
+    // 水印私钥临时文件（每任务独立，避免并发互相覆盖；任务结束由 CleanupWatermarkTemp 删除）
     public string? WatermarkTempKeyPath { get; set; } = null;
+    // ===== 密钥包装（WrapKey / UnwrapKey 动作专用）=====
+    // 待包装的 32 字节 DEK 文件（WrapKey）/ 待解开的 .fekw（UnwrapKey）
+    public string WrapInput { get; set; } = "";
+    // 产物路径：包装为 .fekw、解包为 .dek；留空则由 CLI 按输入文件名推导
+    public string WrapOutput { get; set; } = "";
+    public WrapAlg WrapAlg { get; set; } = WrapAlg.Kwp;
 }

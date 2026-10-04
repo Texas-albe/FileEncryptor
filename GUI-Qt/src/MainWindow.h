@@ -4,6 +4,7 @@
 #include <QMainWindow>
 #include <QElapsedTimer>
 #include <QTimer>
+#include <QShowEvent>
 #include <QProcess>
 #include <QTextCursor>
 #include <QTextBlock>
@@ -37,6 +38,7 @@ class QLineEdit;
 class QLabel;
 class QComboBox;
 class QSpinBox;
+class QDoubleSpinBox;
 class QRadioButton;
 class QCheckBox;
 class QPushButton;
@@ -46,6 +48,7 @@ class QGroupBox;
 class QToolBar;
 class QSplitter;
 class QPixmap;
+class QBoxLayout;
 class ViewSettingsDialog;
 
 class MainWindow: public QMainWindow {
@@ -74,6 +77,8 @@ private slots:
     void updateAsymVisibility();
     // SM4 需 OpenSSL 支持：不可用时禁用模式下拉里的对应项
     void updateSm4Visibility();
+    void updatePackVisibility();
+    void updateWrapKeyVisibility();
     void onThemeActionTriggered();
     void onViewSettings();
     void onPreviewClicked();
@@ -81,6 +86,7 @@ private slots:
     void onEditConfig();
     void onThemeDarkChanged(bool dark);
     void resizeEvent(QResizeEvent* e) override;
+    void showEvent(QShowEvent* e) override;
     void onRetryCliDetection();
     void onOpenTaskHistory();
     void onCheckForUpdate();
@@ -97,6 +103,8 @@ private:
     void connectSignals();
     void applyButtonStyles();
     void applyPanelTransparency();
+    // 选项行横排还是竖排：中文恒定横排，英/俄文按实测总宽决定，宽度够仍横排
+    void reflowOptionRows();
     // 国庆节主题（节日窗口生效）
     void applyFlagRedTheme();
     QString locateConfigFile() const;
@@ -115,6 +123,8 @@ private:
     void onProbeFinished(int exitCode, QProcess::ExitStatus status);
 
     ShellOptions collectOptions() const;
+    // 包装算法下拉的当前值；控件未建时回落到默认 KWP
+    WrapAlg currentWrapAlg() const;
     void appendOutput(const QString& text,bool isError);
     void setStatus(const QString& msg);
     void addInputPaths(const QStringList& paths);
@@ -162,6 +172,8 @@ private:
     QRadioButton* m_rbKeyGen=nullptr;
     QRadioButton* m_rbDerive=nullptr;
     QRadioButton* m_rbPubKey=nullptr;
+    QRadioButton* m_rbWrapKey=nullptr;
+    QRadioButton* m_rbUnwrapKey=nullptr;
     QWidget* m_modeRow=nullptr;   // 模式 + 文件算法同行，密钥管理下整行隐藏
     QComboBox* m_modeCombo=nullptr;
     QLabel* m_modeTitle=nullptr;
@@ -172,6 +184,10 @@ private:
     QCheckBox* m_chkForce=nullptr;
     QCheckBox* m_chkPack=nullptr;
     QCheckBox* m_chkSha256=nullptr;
+    QCheckBox* m_chkSplit=nullptr;
+    QWidget* m_splitRow=nullptr;
+    QDoubleSpinBox* m_splitSize=nullptr;
+    QComboBox* m_splitUnit=nullptr;
     QCheckBox* m_chkCompress=nullptr;
     QWidget* m_compressRow=nullptr;
     QCheckBox* m_chkX448=nullptr;
@@ -186,17 +202,43 @@ private:
     QPushButton* m_btnWmKeyBrowse=nullptr;
     bool      m_zstdAvailable=false;
     bool      m_aegisAvailable=true;
+    bool      m_aesGcmAvailable=true;
     bool      m_sm4Available=true;
     // 默认 false：旧 CLI 的 --features 无 pqc 字段时按「不支持」，仅观测到 pqc=1 才启用
     bool      m_pqcAvailable=false;
+    // 同理：--pack 是 2.8.0 才有的开关，旧 CLI 不认 -p，下发后整个任务被拒
+    bool      m_packAvailable=false;
+    // 密钥包装层要 OpenSSL：--features 里 keywrap 字段缺失即视为不支持
+    bool      m_keywrapAvailable=false;
+    // 输出目录行：标签单独留指针，包装动作整行隐藏时不留孤零零的「输出目录」
+    QLabel* m_outDirLabel=nullptr;
     QLineEdit* m_outDirEdit=nullptr;
     QPushButton* m_btnOutDirBrowse=nullptr;
     QLineEdit* m_keyfileEdit=nullptr;
     QPushButton* m_btnKeyfileBrowse=nullptr;
 
     QGroupBox* m_asymWidget=nullptr;
+    // 非对称组的原始标题：包装动作下临时换成「收件人公钥」，切回时按原文恢复
+    QString m_asymTitle;
     QGroupBox* m_keygenWidget=nullptr;
     QLabel* m_keygenIntro=nullptr;
+
+    // 密钥包装区块（WrapKey / UnwrapKey 动作）
+    QGroupBox* m_wrapWidget=nullptr;
+    QWidget* m_wrapFileRow=nullptr;
+    QLabel* m_wrapFileLabel=nullptr;
+    // 选项行的四个横排布局，reflowOptionRows 按实测宽度统一切换方向
+    QList<QBoxLayout*> m_optionRows;
+    QLineEdit* m_wrapFileEdit=nullptr;
+    QPushButton* m_btnWrapFileBrowse=nullptr;
+    QWidget* m_wrapOutRow=nullptr;
+    QLabel* m_wrapOutTitle=nullptr;
+    QLineEdit* m_wrapOutEdit=nullptr;
+    QPushButton* m_btnWrapOutBrowse=nullptr;
+    QWidget* m_wrapAlgRow=nullptr;
+    QComboBox* m_wrapAlgCombo=nullptr;
+    QLabel* m_wrapAlgTitle=nullptr;
+    QLabel* m_wrapIntro=nullptr;
     QWidget* m_recipientRow=nullptr;
     QWidget* m_identityRow=nullptr;
     QLineEdit* m_recipientEdit=nullptr;

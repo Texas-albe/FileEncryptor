@@ -162,6 +162,8 @@ public static class TaskHistoryService
         "keygen" => L10n.T("生成密钥对"),
         "derive" => L10n.T("口令派生密钥对"),
         "pubkey" => L10n.T("导出公钥"),
+        "wrap" => L10n.T("包装密钥"),
+        "unwrap" => L10n.T("解开密钥"),
         _ => actionKey
     };
 }

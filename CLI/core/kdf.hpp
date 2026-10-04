@@ -30,6 +30,10 @@ bool derive_key(const unsigned char* password, size_t pwd_len,
     size_t memlimit,
     size_t key_len=ARGON2_OUTPUT_LEN);
 
+// 进程级 KDF 并发上限（无显式内存预算时为 min(硬件并发, 4)）。
+// 批量调度据此开预派生线程，避免开的线程数超过信号量许可而空转。
+int kdf_max_concurrency();
+
 // 由主密钥域分离派生进度认证子密钥（.prs HMAC 与 AEAD 使用不同子密钥）
 void derive_progress_auth_key(const unsigned char* master_key,
     unsigned char auth_key[crypto_auth_KEYBYTES]);

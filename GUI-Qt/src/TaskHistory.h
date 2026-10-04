@@ -36,6 +36,10 @@ struct TaskRecord {
     QString keyfile;
     QString recipient;
     QString identity;
+    // 密钥包装：待包装/待解开的文件、产物路径与算法（kwp / aes-kw / pubkey）
+    QString wrapInput;
+    QString wrapOutput;
+    QString wrapAlg;
     bool    restoreName=false;
 };
 

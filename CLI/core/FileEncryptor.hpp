@@ -17,7 +17,7 @@
 #define FE_VERSION_MAJOR 2
 #define FE_VERSION_MINOR 8
 #define FE_VERSION_PATCH 1
-#define FE_VERSION_STRING "2.8.0"
+#define FE_VERSION_STRING "2.9.0"
 
 // --force-decrypt：解密时容忍块校验失败与明文哈希不匹配（强制恢复损坏数据）
 extern bool g_force_decrypt;
@@ -33,7 +33,8 @@ enum class CryptoMode: unsigned char {
 // 用 YAML max_speed（字节/秒，支持 KB/MB/GB）初始化，0=不限速；主循环按字节记账超限休眠。
 void init_rate_limiter(uint64_t max_bytes_per_sec);
 
-// 文件名 / 扩展名混淆（v1.7.0） 生成 "<16 位十六进制>.<混淆扩展名>" 基名（不含 .ptd），由口令与输入路径确定性派生， 故续传仍能命中原输出文件。
+// 生成 "<16 位十六进制>.<混淆扩展名>" 基名（不含 .ptd），由口令与输入路径确定性派生，
+// 故续传仍能命中原输出文件
 std::string make_obfuscated_basename(const std::string& in_path,const SecureBuffer& password);
 
 // 从密文末尾加密信封恢复原始文件名（需口令派生密钥）；无尾部/密钥错返回 false。
@@ -64,19 +65,39 @@ bool path_is_symlink(const std::string& path);
 // v2.1.2 起对外暴露：此前非对称分支完全绕过白名单与长度策略（高危）。
 bool validate_io_paths(const std::string& in_path,const std::string& out_path,bool silent);
 
-// UTF-8 安全的原子替换（Windows: MoveFileExW REPLACE_EXISTING；POSIX: rename）。
+// UTF-8 安全原子替换（Win MoveFileExW REPLACE_EXISTING / POSIX rename）
 // 用于「先写 .prt 再落盘」，避免半截明文残留。
 bool replace_file_utf8(const std::string& from,const std::string& to);
 
+// 原子输出守卫：先写 <final>.fe_tmp_<hash>，commit() 才落到最终路径。
+// 进程被强杀（GUI 取消=杀进程树）或崩溃时，最终路径上不会出现半截密文，
+// 只留可辨识的 .fe_tmp_ 残留。临时名由最终路径确定性派生 —— 加密支持断点
+// 续传（.prs），用随机名会让重跑认不出上次进度，续传失效且残留堆积。
+class AtomicOutput {
+public:
+    explicit AtomicOutput(const std::string& final_path);
+    ~AtomicOutput();
+    // 当前应写入的路径：未提交时是临时路径，已提交时是最终路径
+    const std::string& path() const { return committed_ ? final_ : tmp_; }
+    // 自校验等全部通过后再提交；替换失败返回 false（此时最终路径上无半截文件）
+    bool commit();
+    AtomicOutput(const AtomicOutput&) = delete;
+    AtomicOutput& operator=(const AtomicOutput&) = delete;
+private:
+    std::string final_;
+    std::string tmp_;
+    bool committed_ = false;
+};
+
 // 清除 Windows 只读属性位（覆盖写入前调用；POSIX 空操作）。
-// 旧版用 _chmod(_S_IREAD) 收紧权限只是标只读，导致二次 -g/-G 写入 Cannot write；覆盖前清掉。
+// 旧版用 _chmod(_S_IREAD) 只是标只读，二次 -g/-G 会 Cannot write；覆盖前清掉
 void clear_readonly_attribute(const std::string& path);
 
 // 收紧密钥文件权限：仅拥有者可读。Windows 写 DACL（当前用户+SYSTEM，PROTECTED_DACL 阻断继承）
 // 达 0600 语义，POSIX 即 chmod 0600；ACL 失败静默回退。
 void tighten_file_permissions(const std::string& path);
 
-// 加密文件（支持续传）。compress_level：0=不压缩；>0/<0=zstd 级别（1..22，负数 -1..-5 快速档）。
+// 支持续传。compress_level：0=不压缩，>0/<0=zstd 级别（1..22，负数 -1..-5 快速档）
 // 非 0 时磁盘格式升级 v5；未集成 zstd（FE_WITHOUT_ZSTD）时非 0 值由调用方拒绝。
 bool encrypt_file(const std::string& in_path,
     const std::string& out_path,
@@ -87,7 +108,9 @@ bool encrypt_file(const std::string& in_path,
     int compress_level=0,
     bool asym_mode=false,
     const std::vector<std::string>* asym_recipients=nullptr,
-    const WatermarkSpec* wm=nullptr);   // 非空且 enabled：尾部追加机器指纹 + RSA 签名水印
+    const WatermarkSpec* wm=nullptr,    // 非空且 enabled：尾部追加机器指纹 + RSA 签名水印
+    const unsigned char* ext_salt=nullptr,  // 外部预生成盐（批量预派生 KEK 用；续传时忽略）
+    const unsigned char* ext_kek=nullptr);  // 外部预派生 KEK，传入则跳过 Argon2id（续传时忽略）
 
 // 解密文件（支持续传）。ext_key：外部已派生最终密钥，传入则直接复用跳过 KDF/解裹；
 // ext_kek：外部已派生 KEK（批量每文件复用），传入则跳过 Argon2id，仍按版本解裹 DEK。
@@ -165,8 +188,11 @@ void anti_debug_check();
 // 运行时探测 AEGIS-256 是否可用（缺 AES-NI 的 CPU 上不可用）
 bool aegis256_supported();
 
-// 运行时探测 SM4-GCM 是否可用（依赖 OpenSSL 静态链接，FE_WITH_OPENSSL 未开启时恒 false）
+// 探测 SM4-GCM 可用性（依赖 OpenSSL 静态链接，FE_WITH_OPENSSL 未开启时恒 false）
 bool sm4_supported();
+
+// 运行时探测 AES-256-GCM 是否可用（缺 AES-NI 的 CPU 上不可用）
+bool aes_gcm_supported();
 
 // 运行时探测后量子密码是否可用（ML-KEM-768 封装 / ML-DSA-65 签名，依赖 OpenSSL）
 bool pqc_supported();
@@ -180,8 +206,8 @@ bool stdin_is_interactive();
 CryptoMode resolve_encrypt_mode(CryptoMode requested, bool interactive,
     bool& refuse, std::string& message);
 
-// 密钥轮换 / rewrap（v6 容器） 用 old_password 解开 v6 的 wrapped DEK，再以 new_password 派生的新
-// KEK 重新包裹 （key_version 自增），重写头部容器区与 header_hmac；载荷密文不变。旧格式返回 false。
+// 用 old_password 解开 v6 的 wrapped DEK，再以 new_password 派生的新 KEK 重新包裹
+// （key_version 自增），重写容器区与 header_hmac；载荷密文不变。旧格式返回 false。
 bool rewrap_file(const std::string& ptd_path,
     const SecureBuffer& old_password,
     const std::string& new_key_path,

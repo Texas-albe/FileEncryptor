@@ -51,16 +51,16 @@ QString FileEncryptorLocator::locate() {
 
 // 配套 CLI 版本
 QString FileEncryptorLocator::version() {
-    return QStringLiteral("2.8.0");
+    return QStringLiteral("2.9.0");
 }
 
 // GUI 自身版本
 QString FileEncryptorLocator::guiVersion() {
-    return QStringLiteral("2.1.2");
+    return QStringLiteral("2.1.3");
 }
 
 QString FileEncryptorLocator::cliDownloadUrl() {
-    return QStringLiteral("https://github.com/Texas-albe/FileEncryptor/releases/tag/GUI2.1.2_CLI2.8.0");
+    return QStringLiteral("https://github.com/Texas-albe/FileEncryptor/releases/tag/GUI2.1.3_CLI2.9.0");
 }
 
 QStringList FileEncryptorLocator::getExpectedNames() {
