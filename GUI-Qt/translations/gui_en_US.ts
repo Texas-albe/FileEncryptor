@@ -224,7 +224,7 @@
     </message>
     <message>
         <location filename="../src/MainWindow.cpp" line="1454"/>
-        <source>把密文切成多个 .001/.002 分卷；解密时随便挑一卷即可自动合并</source>
+        <source>将密文切分为多个 .001/.002 分卷；解密时任选一卷即可自动合并</source>
         <translation>Split the ciphertext into .001/.002 volumes; for decryption pick any volume and it merges automatically</translation>
     </message>
     <message>
@@ -683,7 +683,7 @@ Raw output: %2</translation>
     </message>
     <message>
         <location filename="../src/MainWindow.cpp" line="2518"/>
-        <source>把当初抄下来的 48 位恢复码填进去（只认数字）：</source>
+        <source>请输入此前抄录的 48 位恢复码（仅限数字）：</source>
         <translation>Type the 48-digit recovery code you wrote down (digits only):</translation>
     </message>
     <message>
@@ -703,12 +703,12 @@ Create it first via &quot;Vault &gt; Create a vault&quot;.</translation>
     </message>
     <message>
         <location filename="../src/MainWindow.cpp" line="2578"/>
-        <source>先输入现在的加密盘密码</source>
+        <source>请输入当前加密盘密码</source>
         <translation>Enter the current vault password</translation>
     </message>
     <message>
         <location filename="../src/MainWindow.cpp" line="2586"/>
-        <source>再输入新密码（要输两遍）</source>
+        <source>再输入新密码（需输入两遍）</source>
         <translation>Enter the new password (type it twice)</translation>
     </message>
     <message>
@@ -751,7 +751,7 @@ Create it first via &quot;Vault &gt; Create a vault&quot;.</translation>
     </message>
     <message>
         <location filename="../src/MainWindow.cpp" line="2693"/>
-        <source>挂上后 1 分钟不操作会自动锁定。</source>
+        <source>挂载后 1 分钟无操作将自动锁定。</source>
         <translation>It locks itself after 1 minute of inactivity.</translation>
     </message>
     <message>
@@ -1053,7 +1053,7 @@ It locks itself after 1 minute of inactivity.</translation>
     </message>
     <message>
         <location filename="../src/MainWindow.cpp" line="598"/>
-        <source>预览只对解密动作有效，请先把动作切到「解密」或「批量解密」。</source>
+        <source>预览仅适用于解密。请先将动作切换到「解密」或「批量解密」。</source>
         <translation>Preview only works for decryption; switch the action to Decrypt or Batch decrypt first.</translation>
     </message>
     <message>
@@ -1073,7 +1073,7 @@ It locks itself after 1 minute of inactivity.</translation>
     </message>
     <message>
         <location filename="../src/MainWindow.cpp" line="1140"/>
-        <source>不解密到文件，先看看密文里的内容</source>
+        <source>仅查看密文内容，不写出解密文件</source>
         <translation>Look inside the ciphertext without decrypting to a file</translation>
     </message>
     <message>
@@ -1224,7 +1224,7 @@ It locks itself after 1 minute of inactivity.</translation>
     </message>
     <message>
         <location filename="../src/MainWindow.cpp" line="1432"/>
-        <source>勾选后产物写入加密盘目录并登记进加密索引；不选则是普通加密</source>
+        <source>勾选后产物写入加密盘目录并登记进加密索引；不勾选则为普通加密</source>
         <translation>When checked the output goes into the vault folder and is recorded in the encrypted index; leave unchecked for normal encryption</translation>
     </message>
     <message>
@@ -1531,7 +1531,7 @@ Task cancelled; the private key was not passed to the command line.</translation
     </message>
     <message>
         <location filename="../src/MainWindow.cpp" line="2713"/>
-        <source>没找到挂载组件 FE-Mounter。请重新安装勾选了「加密盘挂载」的版本，或将 FE-Mounter 放在与本程序同一目录。</source>
+        <source>未找到挂载组件 FE-Mounter。请重新安装并勾选「加密盘挂载」，或将 FE-Mounter 放在本程序同目录。</source>
         <translation>FE-Mounter (the mount component) was not found. Reinstall with "Encrypted vault mounting" selected, or place FE-Mounter next to this program.</translation>
     </message>
     <message>
@@ -2118,7 +2118,7 @@ Enable full file name restoration?
     </message>
     <message>
         <location filename="../src/PreviewDialog.cpp" line="161"/>
-        <source>预览完成，内容如上。预览不会写出解密文件。</source>
+        <source>预览完成。预览不会写出解密文件。</source>
         <translation>Preview complete, content shown above. No decrypted file was written.</translation>
     </message>
     <message>

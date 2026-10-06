@@ -744,7 +744,7 @@ public sealed partial class MainWindow : Window
             await new ContentDialog
             {
                 Title = L10n.T("无法预览"),
-                Content = L10n.T("预览只对解密动作有效，请先把动作切到「解密」或「批量解密」。"),
+                Content = L10n.T("预览仅适用于解密。请先将动作切换到「解密」或「批量解密」。"),
                 CloseButtonText = L10n.T("关闭"),
                 XamlRoot = Content.XamlRoot,
                 RequestedTheme = CurrentTheme,
@@ -937,12 +937,12 @@ public sealed partial class MainWindow : Window
         if (dir == null) return;
         if (File.Exists(Path.Combine(dir, "vault.meta")))
         {
-            await ShowMessageAsync(L10n.T("新建加密盘"), L10n.F("这个文件夹已经是加密盘了：{0}", dir));
+            await ShowMessageAsync(L10n.T("新建加密盘"), L10n.F("该文件夹已是加密盘：{0}", dir));
             return;
         }
         await RunVaultCliAsync(L10n.T("新建加密盘"),
             new List<string> { "--vault-init", dir }, null,
-            L10n.T("加密盘已创建。以后往这个盘里放文件时用的密码，就是这块盘的密码，请记牢。"));
+            L10n.T("加密盘已创建。此后向该盘存入文件时使用的密码即为该盘密码，请妥善保管。"));
     }
 
     // 查看盘内文件：解密索引后列出条目
@@ -963,7 +963,7 @@ public sealed partial class MainWindow : Window
         if (!ViewModel.VaultAvailable) return;
         var dir = await PickVaultPathAsync(L10n.T("修改加密盘密码"), true);
         if (dir == null) return;
-        var oldPw = await AskPasswordAsync(L10n.T("先输入现在的加密盘密码"), false);
+        var oldPw = await AskPasswordAsync(L10n.T("请输入当前加密盘密码"), false);
         if (oldPw == null) return;
 
         var tmp = WriteTempPass(oldPw);
@@ -972,13 +972,13 @@ public sealed partial class MainWindow : Window
             await ShowMessageAsync(L10n.T("修改加密盘密码"), L10n.T("无法写入临时密码文件。"));
             return;
         }
-        var newPw = await AskPasswordAsync(L10n.T("再输入新密码（要输两遍）"), true);
+        var newPw = await AskPasswordAsync(L10n.T("再输入新密码（需输入两遍）"), true);
         if (newPw == null) { try { File.Delete(tmp); } catch { } return; }
 
         await RunVaultCliAsync(L10n.T("修改加密盘密码"),
             new List<string> { "--vault-rekey", dir, "-k", tmp, "--new-key-stdin" },
             ToStdin(newPw),
-            L10n.T("盘中所有文件都已用新密码重新加密。原来的恢复码会失效，请重新生成一个。"),
+            L10n.T("盘中所有文件均已使用新密码重新加密。原恢复码失效，请重新生成。"),
             tmp);
     }
 
@@ -993,7 +993,7 @@ public sealed partial class MainWindow : Window
         await RunVaultCliAsync(L10n.T("生成恢复码"),
             new List<string> { "--vault-recovery", dir, "--recovery-arg", "create", "--key-stdin" },
             ToStdin(pw),
-            L10n.T("请把上面这串恢复码抄到纸上、离线保存。谁拿到它，谁就能打开这块盘。"));
+            L10n.T("请将上方恢复码抄录至纸张并离线保存；持有该恢复码即可打开此加密盘。"));
     }
 
     // 用恢复码找回密码
@@ -1003,11 +1003,11 @@ public sealed partial class MainWindow : Window
         var dir = await PickVaultPathAsync(L10n.T("用恢复码找回密码"), true);
         if (dir == null) return;
         var code = await PromptTextAsync(L10n.T("用恢复码找回密码"),
-            L10n.T("把当初抄下来的 48 位恢复码填进去（只认数字）："), L10n.T("恢复码"));
+            L10n.T("请输入此前抄录的 48 位恢复码（仅限数字）："), L10n.T("恢复码"));
         if (code == null) return;
         await RunVaultCliAsync(L10n.T("用恢复码找回密码"),
             new List<string> { "--vault-recovery", dir, "--recovery-arg", "open " + code }, null,
-            L10n.T("上面显示的就是原来的密码。找回后请尽快改密，并重新生成恢复码。"));
+            L10n.T("上行为原密码。找回后请尽快修改密码并重新生成恢复码。"));
     }
 
     // 选加密盘目录：默认填上次用的那块盘，可直接改路径，也可点「浏览…」用系统选择器。
@@ -1024,7 +1024,7 @@ public sealed partial class MainWindow : Window
         var panel = new StackPanel { Spacing = 10 };
         panel.Children.Add(new TextBlock
         {
-            Text = L10n.T("这块加密盘在哪个文件夹？"),
+            Text = L10n.T("该加密盘位于哪个文件夹？"),
             TextWrapping = TextWrapping.Wrap,
         });
         panel.Children.Add(box);
@@ -1063,7 +1063,7 @@ public sealed partial class MainWindow : Window
         if (requireVault && !File.Exists(Path.Combine(dir, "vault.meta")))
         {
             await ShowMessageAsync(title,
-                L10n.F("这个文件夹还不是加密盘：{0}\n请先用「加密盘 → 新建加密盘」把它建出来。", dir));
+                L10n.F("该文件夹尚未成为加密盘：{0}\n请先用「加密盘 → 新建加密盘」创建。", dir));
             return null;
         }
         // 记住这块盘：下次各菜单项默认就是它
@@ -1118,7 +1118,7 @@ public sealed partial class MainWindow : Window
         var cli = ViewModel.CliPath;
         if (string.IsNullOrEmpty(cli))
         {
-            await ShowMessageAsync(title, L10n.T("还没找到命令行程序，请先用「重新检测 CLI 程序」定位。"));
+            await ShowMessageAsync(title, L10n.T("尚未找到命令行程序，请先用「重新检测 CLI 程序」定位。"));
             return;
         }
         var svc = new CliProcessService();
@@ -1164,7 +1164,7 @@ public sealed partial class MainWindow : Window
         if (mounter == null)
         {
             await ShowMessageAsync(L10n.T("挂载为磁盘"),
-                L10n.T("没找到挂载组件 FE-Mounter。请重新安装勾选了「加密盘挂载」的版本，或将 FE-Mounter 放在与本程序同一目录。"));
+                L10n.T("未找到挂载组件 FE-Mounter。请重新安装并勾选「加密盘挂载」，或将 FE-Mounter 放在本程序同目录。"));
             return;
         }
         // WinFSP 用户态 DLL 必须与 FE-Mounter 同目录（静态导入，缺了进程都起不来）。
@@ -1228,10 +1228,10 @@ public sealed partial class MainWindow : Window
 
         if (ok)
             await ShowMessageAsync(L10n.T("挂载为磁盘"),
-                L10n.F("正在挂载，盘符由后台进程持有。稍等片刻，在「此电脑」里就能看到：{0}", point));
+                L10n.F("正在挂载，盘符由后台进程持有。稍后可在「此电脑」中看到：{0}", point));
         else
             await ShowMessageAsync(L10n.T("挂载为磁盘"),
-                L10n.T("没法启动挂载组件，请确认 FE-Mounter 还在、并且没被杀毒软件拦住。"));
+                L10n.T("无法启动挂载组件。请确认 FE-Mounter 存在，且未被安全软件拦截。"));
     }
 
     private async void OnVaultLock(object sender, RoutedEventArgs e)
@@ -1241,7 +1241,7 @@ public sealed partial class MainWindow : Window
         if (mounter == null)
         {
             await ShowMessageAsync(L10n.T("暂时锁定"),
-                L10n.T("没找到挂载组件 FE-Mounter。"));
+                L10n.T("未找到挂载组件 FE-Mounter。"));
             return;
         }
         var dir = await PickVaultPathAsync(L10n.T("暂时锁定"), true);
@@ -1256,7 +1256,7 @@ public sealed partial class MainWindow : Window
         if (mounter == null)
         {
             await ShowMessageAsync(L10n.T("重新解锁"),
-                L10n.T("没找到挂载组件 FE-Mounter。"));
+                L10n.T("未找到挂载组件 FE-Mounter。"));
             return;
         }
         var dir = await PickVaultPathAsync(L10n.T("重新解锁"), true);
@@ -1595,12 +1595,15 @@ public sealed partial class MainWindow : Window
                 VaultDirEdit.Focus(FocusState.Programmatic);
                 return;
             }
-            // 盘符形式（Z / Z: / Z:\）已移除支持：CLI 会拒盘符根，这里提前拦并说清要填什么
-            bool isDrive = vd.Length > 0 && char.IsLetter(vd[0]) && (vd.Length == 1 || vd[1] == ':');
+            // 盘符根（Z / Z: / Z:\）已移除支持：CLI 会拒盘符根，这里提前拦并说清要填什么。
+            // 仅「去掉尾部斜杠后长度为 1 或 2 的 X / X:」算盘符根；E:\Disks 这类真实目录不能误判。
+            string vdNoSlash = vd.TrimEnd('\\', '/');
+            bool isDrive = vdNoSlash.Length >= 1 && char.IsLetter(vdNoSlash[0])
+                && (vdNoSlash.Length == 1 || (vdNoSlash.Length == 2 && vdNoSlash[1] == ':'));
             if (isDrive)
             {
                 await ShowMessageAsync(L10n.T("不支持填盘符"),
-                    L10n.F("「入加密盘」只接受加密盘的存储目录，不接受盘符。\n\n请改成磁盘上的真实目录，例如 E:\\Disks —— 那才是加密盘数据实际存放的位置；Z: 只是它的挂载视图。", vd));
+                    L10n.T("「入加密盘」需要填写加密盘的存储目录，而不是挂载盘符。\n\n盘符（如 Z:）只是加密盘挂载后的访问视图，数据并不存放在那里。请填写数据实际所在的目录，例如 E:\\Disks。"));
                 VaultDirEdit.Focus(FocusState.Programmatic);
                 return;
             }

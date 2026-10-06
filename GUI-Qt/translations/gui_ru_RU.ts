@@ -224,7 +224,7 @@
     </message>
     <message>
         <location filename="../src/MainWindow.cpp" line="1454"/>
-        <source>把密文切成多个 .001/.002 分卷；解密时随便挑一卷即可自动合并</source>
+        <source>将密文切分为多个 .001/.002 分卷；解密时任选一卷即可自动合并</source>
         <translation>Разбить шифротекст на тома .001/.002; при расшифровке выберите любой том — они объединятся автоматически</translation>
     </message>
     <message>
@@ -688,7 +688,7 @@
     </message>
     <message>
         <location filename="../src/MainWindow.cpp" line="2518"/>
-        <source>把当初抄下来的 48 位恢复码填进去（只认数字）：</source>
+        <source>请输入此前抄录的 48 位恢复码（仅限数字）：</source>
         <translation>Введите записанный 48-значный код восстановления (только цифры):</translation>
     </message>
     <message>
@@ -708,12 +708,12 @@
     </message>
     <message>
         <location filename="../src/MainWindow.cpp" line="2578"/>
-        <source>先输入现在的加密盘密码</source>
+        <source>请输入当前加密盘密码</source>
         <translation>Введите текущий пароль хранилища</translation>
     </message>
     <message>
         <location filename="../src/MainWindow.cpp" line="2586"/>
-        <source>再输入新密码（要输两遍）</source>
+        <source>再输入新密码（需输入两遍）</source>
         <translation>Введите новый пароль (дважды)</translation>
     </message>
     <message>
@@ -756,7 +756,7 @@
     </message>
     <message>
         <location filename="../src/MainWindow.cpp" line="2693"/>
-        <source>挂上后 1 分钟不操作会自动锁定。</source>
+        <source>挂载后 1 分钟无操作将自动锁定。</source>
         <translation>Через минуту бездействия диск заблокируется сам.</translation>
     </message>
     <message>
@@ -1059,7 +1059,7 @@
     </message>
     <message>
         <location filename="../src/MainWindow.cpp" line="598"/>
-        <source>预览只对解密动作有效，请先把动作切到「解密」或「批量解密」。</source>
+        <source>预览仅适用于解密。请先将动作切换到「解密」或「批量解密」。</source>
         <translation>Предпросмотр доступен только для расшифровки; сначала переключите действие на «Расшифровать» или «Пакетная расшифровка».</translation>
     </message>
     <message>
@@ -1079,7 +1079,7 @@
     </message>
     <message>
         <location filename="../src/MainWindow.cpp" line="1140"/>
-        <source>不解密到文件，先看看密文里的内容</source>
+        <source>仅查看密文内容，不写出解密文件</source>
         <translation>Посмотреть содержимое шифротекста, не расшифровывая его в файл</translation>
     </message>
     <message>
@@ -1231,7 +1231,7 @@
     </message>
     <message>
         <location filename="../src/MainWindow.cpp" line="1432"/>
-        <source>勾选后产物写入加密盘目录并登记进加密索引；不选则是普通加密</source>
+        <source>勾选后产物写入加密盘目录并登记进加密索引；不勾选则为普通加密</source>
         <translation>Если отмечено, результат попадает в папку хранилища и записывается в зашифрованный индекс; иначе — обычное шифрование</translation>
     </message>
     <message>
@@ -1538,7 +1538,7 @@
     </message>
     <message>
         <location filename="../src/MainWindow.cpp" line="2713"/>
-        <source>没找到挂载组件 FE-Mounter。请重新安装勾选了「加密盘挂载」的版本，或将 FE-Mounter 放在与本程序同一目录。</source>
+        <source>未找到挂载组件 FE-Mounter。请重新安装并勾选「加密盘挂载」，或将 FE-Mounter 放在本程序同目录。</source>
         <translation>Компонент монтирования FE-Mounter не найден. Переустановите с выбранным «Монтирование хранилища» или положите FE-Mounter рядом с программой.</translation>
     </message>
     <message>
@@ -2126,7 +2126,7 @@
     </message>
     <message>
         <location filename="../src/PreviewDialog.cpp" line="161"/>
-        <source>预览完成，内容如上。预览不会写出解密文件。</source>
+        <source>预览完成。预览不会写出解密文件。</source>
         <translation>Предпросмотр завершён, содержимое выше. Файл расшифровки не записывался.</translation>
     </message>
     <message>

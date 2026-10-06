@@ -158,7 +158,7 @@ void PreviewDialog::onFinished(const CommandResult& r)
     m_nextBtn->setVisible(true);
 
     if (r.exitCode == 0) {
-        m_status->setText(tr("预览完成，内容如上。预览不会写出解密文件。"));
+        m_status->setText(tr("预览完成。预览不会写出解密文件。"));
     } else if (r.wasCancelled) {
         m_status->setText(tr("已取消。"));
     } else {

@@ -40,7 +40,7 @@ public sealed partial class VaultMountDialog : ContentDialog
         // 固定 1 分钟空闲自动锁（FE-Mounter --idle-timeout），只告知、不给开关
         panel.Children.Add(new TextBlock
         {
-            Text = L10n.T("挂上后 1 分钟不操作会自动锁定。"),
+            Text = L10n.T("挂载后 1 分钟无操作将自动锁定。"),
             FontSize = 12,
             TextWrapping = TextWrapping.Wrap,
         });

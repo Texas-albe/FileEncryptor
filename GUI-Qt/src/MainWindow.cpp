@@ -595,7 +595,7 @@ void MainWindow::openPreviewFor(const QString& path) {
     if (act != static_cast<int>(CryptoAction::Decrypt)
         && act != static_cast<int>(CryptoAction::BatchDecrypt)) {
         MsgBox::warn(this, tr("无法预览"),
-            tr("预览只对解密动作有效，请先把动作切到「解密」或「批量解密」。"));
+            tr("预览仅适用于解密。请先将动作切换到「解密」或「批量解密」。"));
         return;
     }
 
@@ -1140,7 +1140,7 @@ QWidget* MainWindow::buildLeftPanel() {
     auto* btnRow2=new QHBoxLayout;
     m_btnClearFiles=new QPushButton(tr("清空"));
     m_btnPreview=new QPushButton(tr("预览..."));
-    m_btnPreview->setToolTip(tr("不解密到文件，先看看密文里的内容"));
+    m_btnPreview->setToolTip(tr("仅查看密文内容，不写出解密文件"));
     btnRow2->addWidget(m_btnPreview);
     btnRow2->addStretch();
     btnRow2->addWidget(m_btnClearFiles);
@@ -1432,7 +1432,7 @@ QWidget* MainWindow::buildCenterPanel() {
     m_chkWatermark->setToolTip(tr("在密文尾部追加一条签名水印"));
     // 加密盘（M1/M4）：入盘勾选 + 库目录
     m_chkIntoVault=new QCheckBox(tr("入加密盘"));
-    m_chkIntoVault->setToolTip(tr("勾选后产物写入加密盘目录并登记进加密索引；不选则是普通加密"));
+    m_chkIntoVault->setToolTip(tr("勾选后产物写入加密盘目录并登记进加密索引；不勾选则为普通加密"));
     m_vaultDirEdit=new QLineEdit(this);
     m_vaultDirEdit->setPlaceholderText(tr("加密盘存储目录（如 E:\\Disks）；也可填本程序挂载过的盘符（如 Z:）"));
     m_vaultDirEdit->setEnabled(false);
@@ -1454,7 +1454,7 @@ QWidget* MainWindow::buildCenterPanel() {
     optsRow->addWidget(m_chkX448);
     optsRow->addWidget(m_chkWatermark);
     m_chkSplit=new QCheckBox(tr("分卷输出"));
-    m_chkSplit->setToolTip(tr("把密文切成多个 .001/.002 分卷；解密时随便挑一卷即可自动合并"));
+    m_chkSplit->setToolTip(tr("将密文切分为多个 .001/.002 分卷；解密时任选一卷即可自动合并"));
     optsRow->addWidget(m_chkSplit);
     optsRow->addStretch();
 
@@ -2143,15 +2143,17 @@ void MainWindow::onRunClicked() {
     // 入盘：目录必须已初始化，否则 CLI 会先报库不存在，产物落不进索引
     if(isEnc && m_chkIntoVault && m_chkIntoVault->isChecked()) {
         QString vd=o.intoVault.trimmed();
-        // 盘符支持已移除：盘符只是挂载视图，CLI 会拒盘符根，这里提前拦并说清要填什么
+        // 盘符根（Z / Z: / Z:\）已移除支持：CLI 会拒盘符根，这里提前拦并说清要填什么。
+        // 仅「去掉尾部斜杠后长度为 1 或 2 的 X / X:」算盘符根；E:\Disks 这类真实目录不能误判。
         {
             QString n=vd;
             while(n.endsWith(QLatin1Char('\\'))||n.endsWith(QLatin1Char('/'))) n.chop(1);
-            if(n.size()>=1&&n.at(0).isLetter()&&(n.size()==1||n.at(1)==QLatin1Char(':'))) {
+            if(n.size()>=1&&n.at(0).isLetter()&&
+               (n.size()==1||(n.size()==2&&n.at(1)==QLatin1Char(':')))) {
                 MsgBox::warn(this,tr("不支持填盘符"),
-                    tr("「入加密盘」只接受加密盘的存储目录，不接受盘符。\n\n"
-                       "请改成磁盘上的真实目录，例如 E:\\Disks —— 那才是加密盘数据实际存放的位置；"
-                       "Z: 只是它的挂载视图。").arg(vd));
+                    tr("「入加密盘」需要填写加密盘的存储目录，而不是挂载盘符。\n\n"
+                       "盘符（如 Z:）只是加密盘挂载后的访问视图，数据并不存放在那里。"
+                       "请填写数据实际所在的目录，例如 E:\\Disks。"));
                 if(m_vaultDirEdit) m_vaultDirEdit->setFocus();
                 return;
             }
@@ -2539,7 +2541,7 @@ void MainWindow::onVaultRecoveryCreate() {
 void MainWindow::onVaultRecoveryOpen() {
     bool ok=false;
     const QString code=QInputDialog::getText(this,tr("用恢复码找回密码"),
-        tr("把当初抄下来的 48 位恢复码填进去（只认数字）："),QLineEdit::Normal,QString(),&ok).trimmed();
+        tr("请输入此前抄录的 48 位恢复码（仅限数字）："),QLineEdit::Normal,QString(),&ok).trimmed();
     if(!ok||code.isEmpty()) return;
     runVaultAction(tr("用恢复码找回密码"),{QStringLiteral("--vault-recovery")},
                    {QStringLiteral("--recovery-arg"),QStringLiteral("open ")+code},false);
@@ -2599,7 +2601,7 @@ void MainWindow::onVaultRekey() {
     std::vector<unsigned char> oldPw,newPw;
     {
         PasswordDialog dlg(this);
-        dlg.setPurpose(tr("先输入现在的加密盘密码"));
+        dlg.setPurpose(tr("请输入当前加密盘密码"));
         dlg.setRequireConfirm(false);
         if(dlg.exec()!=QDialog::Accepted) return;
         oldPw=dlg.takePassword();
@@ -2607,7 +2609,7 @@ void MainWindow::onVaultRekey() {
     }
     {
         PasswordDialog dlg(this);
-        dlg.setPurpose(tr("再输入新密码（要输两遍）"));
+        dlg.setPurpose(tr("再输入新密码（需输入两遍）"));
         dlg.setRequireConfirm(true);
         if(dlg.exec()!=QDialog::Accepted) {
             secure_zero(oldPw.data(),oldPw.size()); oldPw.clear(); return;
@@ -2714,7 +2716,7 @@ bool MainWindow::promptMountPoint(QString& point,bool& rw) {
     lay->addRow(tr("挂载目录"),mpEdit);
 #endif
     // 固定 1 分钟空闲自动锁（M5 --idle-timeout），这里只告知、不给开关
-    lay->addRow(QString(),new QLabel(tr("挂上后 1 分钟不操作会自动锁定。")));
+    lay->addRow(QString(),new QLabel(tr("挂载后 1 分钟无操作将自动锁定。")));
     QCheckBox* rwChk=nullptr;
     if(m_vaultRwAvailable) {
         rwChk=new QCheckBox(tr("可写挂载（需 vault_rw）"));
@@ -2734,7 +2736,7 @@ void MainWindow::onVaultMount() {
     if(!m_vaultAvailable) return;
     if(!locateMounter()) {
         MsgBox::error(this,tr("挂载为磁盘"),
-            tr("没找到挂载组件 FE-Mounter。请重新安装勾选了「加密盘挂载」的版本，或将 FE-Mounter 放在与本程序同一目录。"));
+            tr("未找到挂载组件 FE-Mounter。请重新安装并勾选「加密盘挂载」，或将 FE-Mounter 放在本程序同目录。"));
         return;
     }
 #ifdef Q_OS_WIN

@@ -165,7 +165,7 @@ public sealed class PreviewWindow
         _done = true;
         _nextBtn.Visibility = Visibility.Visible;
         _status.Text = r.ExitCode == 0
-            ? L10n.T("预览完成，内容如上。预览不会写出解密文件。")
+            ? L10n.T("预览完成。预览不会写出解密文件。")
             : L10n.F("预览失败：{0}", r.ErrorString is { Length: > 0 } e ? e : L10n.F("CLI 返回码 {0}", r.ExitCode));
     }
 

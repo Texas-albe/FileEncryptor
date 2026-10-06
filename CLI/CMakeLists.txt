@@ -672,35 +672,38 @@ endif()
 if(_fe_links)
   target_link_libraries(vdisk PRIVATE ${_fe_links})
 endif()
-# vdisk 是共享库：Linux 发行版的 libz.a/libcrypto.a 常为非 PIC（无 -fPIC 编译），
+# vdisk 是共享库：Linux 发行版/源码装的 libz.a / libcrypto.a / libsodium.a 常为非 PIC（无 -fPIC 编译），
 # 直接链进 .so 会报 "relocation R_X86_64_PC32 ... can not be used when making a
 # shared object"。可执行文件不受此限，故只需给共享库换成动态版。
 if(UNIX AND NOT APPLE)
-  foreach(_dep z crypto ssl)
+  foreach(_dep z crypto ssl sodium)
     # _fe_links 里存的是绝对路径（.../libz.a），故按文件名匹配而非裸名
     foreach(_l IN LISTS _fe_links)
       get_filename_component(_ln "${_l}" NAME_WE)
       string(REGEX REPLACE "^lib" "" _ln "${_ln}")   # libz.a -> z
       if(_ln STREQUAL "${_dep}")
-        # 把 .a 换成同名 .so（共享库可链入 .so；发行版静态库常无 -fPIC）
-        string(REGEX REPLACE "\\.a$" ".so" _lso "${_l}")
-        if(EXISTS "${_lso}")
-          # 先移除非 PIC 静态库，再链共享版（顺序无关，链接器取先出现的）
+        # 把 .a 换成同名 .so（共享库可链入 .so；静态库常无 -fPIC）
+        string(REGEX REPLACE "\\.a$" ".so" _lso "${_l}")   # 同目录优先
+        if(NOT EXISTS "${_lso}")
+          # 同目录无 .so（源码装只编了静态）：去系统标准目录找同名共享库
+          find_library(_lso NAMES "${_dep}" HINTS
+                       /usr/lib/${CMAKE_LIBRARY_ARCHITECTURE} /usr/lib64 /usr/lib
+                       /usr/local/lib NO_DEFAULT_PATH)
+        endif()
+        if(_lso AND EXISTS "${_lso}")
+          # 移除非 PIC 静态库，再链共享版
           list(REMOVE_ITEM _fe_links "${_l}")
           list(APPEND _fe_links "${_lso}")
-          set(_vdisk_extra_links ${_vdisk_extra_links} "${_lso}")
           message(STATUS "vdisk(${_dep}): 改用共享库 ${_lso}（静态版非 PIC，无法链入 .so）")
         else()
           message(WARNING "vdisk(${_dep}): 只找到非 PIC 静态库 ${_l}，libvdisk.so 链接可能失败。\n"
-                          "  Linux 装共享版：apt install zlib1g-dev libssl-dev（通常已含 .so）")
+                          "  Linux 装共享版：apt install zlib1g-dev libssl-dev libsodium-dev（通常已含 .so）")
         endif()
         break()
       endif()
     endforeach()
   endforeach()
-  if(_vdisk_extra_links)
-    set_property(TARGET vdisk PROPERTY LINK_LIBRARIES ${_fe_links})
-  endif()
+  set_property(TARGET vdisk PROPERTY LINK_LIBRARIES ${_fe_links})
 endif()
 # 同步 MSVC 运行时库属性（静态 libsodium 需 /MT，否则 vdisk 自身对象默认 /MD 与之冲突 LNK2038）
 get_target_property(_fe_msvc_rt FileEncryptor MSVC_RUNTIME_LIBRARY)
@@ -1012,10 +1015,11 @@ set(CPACK_PACKAGING_INSTALL_PREFIX "/usr")
 set(CPACK_DEBIAN_PACKAGE_MAINTAINER "maintainer@example.com")
 set(CPACK_DEBIAN_PACKAGE_SECTION "utils")
 set(CPACK_DEBIAN_PACKAGE_PRIORITY "optional")
-# 静态链接后无外部 .so 依赖，关闭自动依赖探测，避免把 libsodium 写进 Depends
+# libvdisk.so 是共享库，会动态链接 libz.so / libsodium.so（静态 .a 非 PIC，无法链入 .so），
+# 这些运行时依赖必须显式声明；静态链接的 EXE 本身零外部依赖、保持自包含。
+# 不用 shlibdeps 自动探测：/usr/local 源码安装的 libsodium.so 不被 dpkg 跟踪，会让 dpkg-shlibdeps 报错中断打包。
 set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS OFF)
-# 显式清空依赖声明，确保 DEB 的 Depends 字段为空（零声明依赖、完全自包含）
-set(CPACK_DEBIAN_PACKAGE_DEPENDS "")
+set(CPACK_DEBIAN_PACKAGE_DEPENDS "libsodium23, zlib1g")
 # 但 fe-mounter 挂载加密盘要 dlopen/链接 libfuse3：放进 Suggests（Recommends 会强装），
 # 只在用户真去挂载时才需要，不该让只用法加密的 CLI 用户被拖上 FUSE。
 set(CPACK_DEBIAN_PACKAGE_SUGGESTS "libfuse3-3 (>= 3.0)")
@@ -1023,10 +1027,11 @@ set(CPACK_DEBIAN_PACKAGE_SUGGESTS "libfuse3-3 (>= 3.0)")
 # —— RPM ——
 set(CPACK_RPM_PACKAGE_LICENSE "GPLv3")
 set(CPACK_RPM_PACKAGE_GROUP "Applications/System")
-# 关闭自动依赖探测，避免 rpm 把 libsodium 列为必需（静态链接后无需）
+# libvdisk.so 动态链接 libz.so / libsodium.so，须声明运行时依赖；关闭自动探测以免把静态 EXE 误判带依赖，
+# 改用显式 Requires（libsodium / zlib 的包名；/usr/local 源码版不被 rpm 数据库跟踪，自动探测会生成无法满足的 cap）。
 set(CPACK_RPM_PACKAGE_AUTOREQ OFF)
-# 同时关闭自动 Provides/Requires，确保 RPM 不声明任何依赖
 set(CPACK_RPM_PACKAGE_AUTOREQPROV OFF)
+set(CPACK_RPM_PACKAGE_REQUIRES "libsodium, zlib")
 # 与 DEB 的 Suggests 对位：libfuse3 只是挂载加密盘时需要
 set(CPACK_RPM_PACKAGE_RECOMMENDS "libfuse3")
 
