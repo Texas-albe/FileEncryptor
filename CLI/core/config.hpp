@@ -25,7 +25,7 @@ struct Config {
     // 只管可见输出文件名；原始名始终以加密信封存进密文尾部
     bool        obfuscate_names = true;
 
-    // 口令策略：0=用内置默认(8)；字符类别数 0=不强制；非 ASCII 视为高熵直接放行
+    // 密码策略：0=用内置默认(8)；字符类别数 0=不强制；非 ASCII 视为高熵直接放行
     int         min_password_length = 0;
     int         min_password_classes = 2;
 

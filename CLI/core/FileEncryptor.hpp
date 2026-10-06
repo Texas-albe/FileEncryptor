@@ -14,10 +14,10 @@
 #include <windows.h>
 #endif
 
-#define FE_VERSION_MAJOR 2
-#define FE_VERSION_MINOR 8
-#define FE_VERSION_PATCH 1
-#define FE_VERSION_STRING "2.9.0"
+#define FE_VERSION_MAJOR 3
+#define FE_VERSION_MINOR 0
+#define FE_VERSION_PATCH 0
+#define FE_VERSION_STRING "3.0.0"
 
 // --force-decrypt：解密时容忍块校验失败与明文哈希不匹配（强制恢复损坏数据）
 extern bool g_force_decrypt;
@@ -33,11 +33,11 @@ enum class CryptoMode: unsigned char {
 // 用 YAML max_speed（字节/秒，支持 KB/MB/GB）初始化，0=不限速；主循环按字节记账超限休眠。
 void init_rate_limiter(uint64_t max_bytes_per_sec);
 
-// 生成 "<16 位十六进制>.<混淆扩展名>" 基名（不含 .ptd），由口令与输入路径确定性派生，
+// 生成 "<16 位十六进制>.<混淆扩展名>" 基名（不含 .ptd），由密码与输入路径确定性派生，
 // 故续传仍能命中原输出文件
 std::string make_obfuscated_basename(const std::string& in_path,const SecureBuffer& password);
 
-// 从密文末尾加密信封恢复原始文件名（需口令派生密钥）；无尾部/密钥错返回 false。
+// 从密文末尾加密信封恢复原始文件名（需密码派生密钥）；无尾部/密钥错返回 false。
 // pre_kek：外部已派生 KEK 时传入跳过内部 KDF（批量复用）；out_kek 非空时拷回供缓存。
 bool read_original_name(const std::string& ptd_path,std::string& out_name,const SecureBuffer& password,
     const unsigned char* pre_kek = nullptr, size_t pre_kek_len = 0,
@@ -49,6 +49,10 @@ std::string replace_basename(const std::string& path,const std::string& newbase)
 
 // 递归创建目录
 bool create_directory_recursive(const std::string& path);
+
+// 非帧模式的单行 \r 进度条（批量与入盘共用同一观感）；finish=true 时收尾换行。
+void print_progress(size_t processed,size_t total,
+    std::chrono::steady_clock::time_point start, bool finish=false);
 
 // 判断路径是否为已存在的目录（供单文件 -e/-d 拒绝目录输入时使用）
 bool fe_path_is_directory(const std::string& path);
@@ -110,11 +114,12 @@ bool encrypt_file(const std::string& in_path,
     const std::vector<std::string>* asym_recipients=nullptr,
     const WatermarkSpec* wm=nullptr,    // 非空且 enabled：尾部追加机器指纹 + RSA 签名水印
     const unsigned char* ext_salt=nullptr,  // 外部预生成盐（批量预派生 KEK 用；续传时忽略）
-    const unsigned char* ext_kek=nullptr);  // 外部预派生 KEK，传入则跳过 Argon2id（续传时忽略）
+    const unsigned char* ext_kek=nullptr,   // 外部预派生 KEK，传入则跳过 Argon2id（续传时忽略）
+    uint32_t chunk_override=0);             // 非 0 且在 [4K,1M] 内：覆盖默认 1MiB 块（库内重加密转 64KB 用）
 
 // 解密文件（支持续传）。ext_key：外部已派生最终密钥，传入则直接复用跳过 KDF/解裹；
 // ext_kek：外部已派生 KEK（批量每文件复用），传入则跳过 Argon2id，仍按版本解裹 DEK。
-// asym_identity：非对称容器以身份私钥恢复 DEK（非空时跳过口令 KEK 派生）。
+// asym_identity：非对称容器以身份私钥恢复 DEK（非空时跳过密码 KEK 派生）。
 bool decrypt_file(const std::string& in_path,
     const std::string& out_path,
     const SecureBuffer& password,
@@ -149,12 +154,30 @@ struct PtdMeta {
 };
 bool read_ptd_metadata(const std::string& ptd_path, PtdMeta& meta);
 
+// 随机读（M0 验证）：从 .ptd 非压缩块按 offset/len 提取明文片段，不整文件解密。
+// 压缩文件无法 O(1) 定位，返回 false 且 *out_compressed=true；非对称容器暂不支持。
+// pre_kek：调用方已缓存的该文件 Argon2 密钥材料（32B，= Argon2id(密码, 文件盐)）。
+// 非空则跳过 derive_key（供挂载层 LRU，§4.1）；v6 用它解裹 DEK，v3–v5 直接作主密钥。
+bool random_read_ptd(const std::string& ptd_path,
+    const SecureBuffer& password,
+    uint64_t offset, uint64_t len,
+    std::vector<unsigned char>& out,
+    bool* out_compressed = nullptr,
+    bool silent = false,
+    const unsigned char* pre_kek = nullptr);
+
+// 派生某 .ptd 的 Argon2 密钥材料（= Argon2id(密码, 该文件盐)），写入 out[32]。
+// 与 random_read_ptd 的 pre_kek 同值，供挂载层缓存以避免每次读都跑 Argon2id。
+bool fe_ptd_argon2_key(const std::string& ptd_path,
+    const SecureBuffer& password,
+    unsigned char out[32]);
+
 // 完整性校验（功能3：只验不解）：解密到临时文件比对明文 Blake2b，不落盘最终明文。
 // 成功（密钥正确且内容完整）返回 true；密钥错/损坏/失败返回 false。
 bool verify_ptd(const std::string& ptd_path, const SecureBuffer& password,
                 const std::string& asym_identity=std::string());
 
-// 读取尾部水印记录（无需口令）。pub_pem 非空时按 pqc 指定的算法验签；无水印返回 false。
+// 读取尾部水印记录（无需密码）。pub_pem 非空时按 pqc 指定的算法验签；无水印返回 false。
 bool read_watermark(const std::string& ptd_path, WatermarkInfo& out, const std::string& pub_pem,
                     bool pqc=true);
 
@@ -212,6 +235,12 @@ bool rewrap_file(const std::string& ptd_path,
     const SecureBuffer& old_password,
     const std::string& new_key_path,
     bool new_key_from_stdin);
+
+// 同上，但新密码已在内存中（库改密用；避免把新密码落临时文件）
+bool rewrap_file_with(const std::string& ptd_path,
+    const SecureBuffer& old_password,
+    const SecureBuffer& new_pw,
+    bool quiet=false);
 
 // 跨平台路径打开辅助
 #ifdef _WIN32

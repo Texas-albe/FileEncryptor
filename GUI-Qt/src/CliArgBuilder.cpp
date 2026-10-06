@@ -91,7 +91,7 @@ QStringList CliArgBuilder::buildArguments(const ShellOptions& o) {
         return args;
     }
     // 密钥包装：与加解密流程完全独立，只有 --wrap-key / --unwrap-key 一组参数。
-    // 口令 / 私钥不落 argv：统一走 --key-stdin 或 -k <file>，理由同水印私钥。
+    // 密码 / 私钥不落 argv：统一走 --key-stdin 或 -k <file>，理由同水印私钥。
     if (o.action == CryptoAction::WrapKey) {
         args << QStringLiteral("--wrap-key") << o.wrapInput;
         args << QStringLiteral("--wrap-alg") << wrapAlgToken(o.wrapAlg);
@@ -112,7 +112,7 @@ QStringList CliArgBuilder::buildArguments(const ShellOptions& o) {
     if (o.action == CryptoAction::UnwrapKey) {
         args << QStringLiteral("--unwrap-key") << o.wrapInput;
         if (o.wrapAlg != WrapAlg::Pubkey) {
-            // 解包时算法存在 blob 头里，但 GUI 侧的 alg 选择也用于决定「要不要口令」
+            // 解包时算法存在 blob 头里，但 GUI 侧的 alg 选择也用于决定「要不要密码」
             if (!o.keyfilePath.isEmpty()) {
                 args << QStringLiteral("-k") << o.keyfilePath;
             } else {
@@ -160,6 +160,11 @@ QStringList CliArgBuilder::buildArguments(const ShellOptions& o) {
         }
     }
 
+    // 加密盘入盘（M1/M4）：勾了「入盘」就走 --into-vault，产物入索引；与 -o 互斥（由界面保证）
+    if (isEnc && !o.intoVault.isEmpty()) {
+        args << QStringLiteral("--into-vault") << o.intoVault;
+    }
+
     if (!o.outputDir.isEmpty()) {
         args << QStringLiteral("-o") << o.outputDir;
     }
@@ -196,7 +201,7 @@ QStringList CliArgBuilder::buildArguments(const ShellOptions& o) {
         args << QStringLiteral("-y");
     }
 
-    // 密钥文件：界面把「对称口令文件」与「非对称身份私钥」都填到这里，
+    // 密钥文件：界面把「对称密码文件」与「非对称身份私钥」都填到这里，
     // 非对称时它走 identityPath，因此此处按原样下发即同时覆盖两种用途。
     if (!o.keyfilePath.isEmpty()) {
         args << QStringLiteral("-k") << o.keyfilePath;
@@ -244,7 +249,7 @@ QStringList CliArgBuilder::buildArguments(const ShellOptions& o) {
         }
     }
 
-    // 口令经 stdin 注入：必须早于输入路径，否则会被 -- 吞成输入文件
+    // 密码经 stdin 注入：必须早于输入路径，否则会被 -- 吞成输入文件
     if (!isAsym && o.keyfilePath.isEmpty()) {
         args << QStringLiteral("--key-stdin");
     }
@@ -323,27 +328,27 @@ QString CliArgBuilder::buildPreview(const QString& programPath, const ShellOptio
         return cmd;
     }
     if (o.action == CryptoAction::Derive) {
-        return cmd + QCoreApplication::translate("CliArgBuilder", "   [派生口令经 stdin 注入]");
+        return cmd + QCoreApplication::translate("CliArgBuilder", "   [派生密码经 stdin 注入]");
     }
     if (o.action == CryptoAction::PubKey) {
         return cmd + QCoreApplication::translate("CliArgBuilder", "   [私钥来自 -k 文件]");
     }
-    // 包装动作：口令路线走 stdin，公钥路线靠收件人密钥材料，都不经 -m
+    // 包装动作：密码路线走 stdin，公钥路线靠收件人密钥材料，都不经 -m
     if (o.action == CryptoAction::WrapKey || o.action == CryptoAction::UnwrapKey) {
         if (o.wrapAlg == WrapAlg::Pubkey) {
             return cmd + QCoreApplication::translate("CliArgBuilder", "   [使用收件人密钥材料]");
         }
         if (!o.keyfilePath.isEmpty()) {
-            return cmd + QCoreApplication::translate("CliArgBuilder", "   [口令来自 -k 文件]");
+            return cmd + QCoreApplication::translate("CliArgBuilder", "   [密码来自 -k 文件]");
         }
-        return cmd + QCoreApplication::translate("CliArgBuilder", "   [口令经 stdin 注入]");
+        return cmd + QCoreApplication::translate("CliArgBuilder", "   [密码经 stdin 注入]");
     }
 
     const bool isAsym = (o.mode == CryptoMode::Asymmetric);
     bool usesStdin = false;
     if (!isAsym && o.keyfilePath.isEmpty()) usesStdin = true;
     if (usesStdin) {
-        cmd += QCoreApplication::translate("CliArgBuilder", "   [口令经 stdin 注入]");
+        cmd += QCoreApplication::translate("CliArgBuilder", "   [密码经 stdin 注入]");
     } else if (!o.keyfilePath.isEmpty()) {
         cmd += QCoreApplication::translate("CliArgBuilder", "   [密钥来自 -k 文件]");
     }

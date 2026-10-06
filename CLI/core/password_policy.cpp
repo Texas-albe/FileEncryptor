@@ -5,7 +5,7 @@ namespace fe::password_policy {
 
 namespace {
 
-// 逐字节分类：调用方可直接传口令缓冲区，避免构造未清零的临时 std::string 副本
+// 逐字节分类：调用方可直接传密码缓冲区，避免构造未清零的临时 std::string 副本
 int classify(const char* pw, size_t len, bool& lower, bool& upper,
              bool& digit, bool& symbol, bool& non_ascii) {
     lower = upper = digit = symbol = non_ascii = false;

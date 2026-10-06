@@ -1,7 +1,7 @@
 // 密钥包装层：用 AES-256-KWP(RFC 5649) / AES-KW(RFC 3394) / 公钥封装把 DEK 藏起来。
 // 与载荷加密正交——包装对象是密钥而非文件内容，故不进 -m。
-//   口令路线：Argon2id 派生 KEK -> KWP 包装 DEK
-//   公钥路线：复用非对称层的收件人 stanza，X25519 / X448 / ML-KEM 皆可，无需口令
+//   密码路线：Argon2id 派生 KEK -> KWP 包装 DEK
+//   公钥路线：复用非对称层的收件人 stanza，X25519 / X448 / ML-KEM 皆可，无需密码
 //   AES-KW：RFC 3394 严格 8 字节倍数，供旧工具互操作
 #include "keywrap.hpp"
 #include "FileEncryptor.hpp"

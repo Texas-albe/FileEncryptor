@@ -75,7 +75,7 @@ bool PasswordStrength::meetsPolicy(const QString& password, QString& reason) {
     reason.clear();
     const int len = password.length();
     if (len < kMinPasswordLength) {
-        reason = ps("口令过短（至少 %1 个字符）。").arg(kMinPasswordLength);
+        reason = ps("密码过短（至少 %1 个字符）。").arg(kMinPasswordLength);
         return false;
     }
 
@@ -101,10 +101,10 @@ bool PasswordStrength::meetsPolicy(const QString& password, QString& reason) {
             if (ch != password.at(0)) { allSame = false; break; }
         }
         if (!allSame) return true;
-        reason = ps("口令过弱：请不要使用重复字符。");
+        reason = ps("密码过弱：请不要使用重复字符。");
         return false;
     }
 
-    reason = ps("口令过弱：请至少含 2 类字符（小写/大写/数字/符号），或长度 >= 16。");
+    reason = ps("密码过弱：请至少含 2 类字符（小写/大写/数字/符号），或长度 >= 16。");
     return false;
 }

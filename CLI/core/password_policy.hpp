@@ -1,5 +1,5 @@
 #pragma once
-// 口令策略与强度评分，CLI 与两端 GUI 共用同一套判定
+// 密码策略与强度评分，CLI 与两端 GUI 共用同一套判定
 #include <cstddef>
 #include <string>
 

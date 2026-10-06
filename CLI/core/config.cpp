@@ -157,7 +157,7 @@ bool parse_yaml_config(const std::string& text, Config& cfg, std::string& err, s
     opt_bool("obfuscate_names", cfg.obfuscate_names);
     opt_bool("write_sha256", cfg.write_sha256);
 
-    // 口令强度策略（功能7）
+    // 密码强度策略（功能7）
     auto opt_int2 = [&](const char* key, int& out) {
         const YAML::Node& n = root[key];
         if (n && n.IsScalar()) {
@@ -439,6 +439,12 @@ static std::string get_user_config_dir() {
         return dir + "FileEncryptor";
     }
     return "";
+#elif defined(__ANDROID__)
+    // Android 没有可用的 HOME（进程多以 app 身份运行，HOME 常为 / 或不可写），
+    // 不猜目录：配置只认 XDG_CONFIG_HOME 或 --config 显式指定。
+    const char* xdg = std::getenv("XDG_CONFIG_HOME");
+    if (xdg && *xdg) return std::string(xdg) + "/fileencryptor";
+    return "";
 #else
     const char* xdg = std::getenv("XDG_CONFIG_HOME");
     if (xdg && *xdg) return std::string(xdg) + "/fileencryptor";
@@ -567,7 +573,7 @@ Config load_config() {
             cfg.path_whitelist = def.path_whitelist;
             clamped = true;
         }
-        // 加密强度/口令策略/文件名混淆同样属安全敏感键：CWD 可被预置文件弱化 KDF、放松口令
+        // 加密强度/密码策略/文件名混淆同样属安全敏感键：CWD 可被预置文件弱化 KDF、放松密码
         // 长度要求或关闭名称混淆，一并回退默认，与 log_file/path_whitelist 同等待遇。
         if (cfg.kdf_preset != def.kdf_preset ||
             cfg.min_password_length != def.min_password_length ||

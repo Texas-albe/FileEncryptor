@@ -1,4 +1,4 @@
-namespace FileEncryptorGUI.Models;
+﻿namespace FileEncryptorGUI.Models;
 
 public enum CryptoAction
 {
@@ -18,7 +18,7 @@ public enum WrapAlg
 {
     Kwp = 0,        // RFC 5649 AES-256-KWP，长度不受 8 字节倍数限制（默认）
     AesKw = 1,      // RFC 3394 原始 AES-KW，供旧工具互操作
-    Pubkey = 2      // 收件人公钥封装，不需要口令
+    Pubkey = 2      // 收件人公钥封装，不需要密码
 }
 
 public enum CryptoMode
@@ -54,6 +54,8 @@ public class ShellOptions
     public CryptoMode FileMode { get; set; } = CryptoMode.XChaCha20;
     public List<string> InputPaths { get; set; } = new();
     public string OutputDir { get; set; } = "";
+    // 加密盘：非空且为加密动作时产物入该库并写入加密索引（CLI --into-vault）
+    public string IntoVault { get; set; } = "";
     public SourceDisposition SourceDisposition { get; set; } = SourceDisposition.Keep;
     // 加密压缩包：把目录树 / 多个文件打成单个 .ptd（CLI --pack）
     public bool Pack { get; set; } = false;
@@ -74,7 +76,7 @@ public class ShellOptions
     public int CompressionLevel { get; set; } = 0;
     // 非对称曲线：false=X25519，true=X448（非对称封装与 -g 生成密钥对都走该曲线）
     public bool UseX448 { get; set; } = false;
-    // 控制台模式：口令由 CLI 在控制台交互读取，不经 stdin 管道
+    // 控制台模式：密码由 CLI 在控制台交互读取，不经 stdin 管道
     public bool ConsoleMode { get; set; } = false;
     // 后量子：true=X25519+ML-KEM-768 / ML-DSA-65；false=经典（仅 KeyGen 与水印下发 --no-pqc）
     public bool Pqc { get; set; } = true;

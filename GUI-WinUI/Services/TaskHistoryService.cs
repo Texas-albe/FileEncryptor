@@ -1,4 +1,4 @@
-using System.IO;
+﻿using System.IO;
 using System.Security.AccessControl;
 using System.Security.Principal;
 using System.Text.Json;
@@ -160,7 +160,7 @@ public static class TaskHistoryService
         "batch-encrypt" => L10n.T("批量加密"),
         "batch-decrypt" => L10n.T("批量解密"),
         "keygen" => L10n.T("生成密钥对"),
-        "derive" => L10n.T("口令派生密钥对"),
+        "derive" => L10n.T("密码派生密钥对"),
         "pubkey" => L10n.T("导出公钥"),
         "wrap" => L10n.T("包装密钥"),
         "unwrap" => L10n.T("解开密钥"),

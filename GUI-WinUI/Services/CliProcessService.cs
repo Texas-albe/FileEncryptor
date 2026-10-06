@@ -1,4 +1,4 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -134,13 +134,17 @@ public class CliProcessService
 
         StartConfirmWatch(request.ConfirmFile);
 
-        if (request.ShowConsole && OperatingSystem.IsWindows())
+        // 控制台模式走 cmd.exe 执行临时 .cmd：cmd 按控制台代码页（中文 Windows = GBK/936）
+        // 解码批处理，UTF-8 写出的中文参数会被切成乱码（示例.ppt → 3 个乱码字符.ppt）。
+        // 只在参数能被控制台代码页无损表示时才走控制台，否则回退重定向模式（UTF-16 精确传参）。
+        if (request.ShowConsole && OperatingSystem.IsWindows()
+            && ConsoleEncodingFits(request))
             StartConsole(request);
         else
             StartRedirected(request);
     }
 
-    // 系统控制台模式：进度与口令交互都交给 cmd 窗口
+    // 系统控制台模式：进度与密码交互都交给 cmd 窗口
     private void StartConsole(CommandRequest request)
     {
         var psi = new ProcessStartInfo
@@ -150,7 +154,7 @@ public class CliProcessService
             UseShellExecute = false,
             // 窗口可见：进度与结果都在控制台里
             CreateNoWindow = false,
-            // 口令与 Qt 一样走 stdin 管道，控制台只负责显示
+            // 密码与 Qt 一样走 stdin 管道，控制台只负责显示
             RedirectStandardInput = true,
             RedirectStandardOutput = false,
             RedirectStandardError = false,
@@ -171,7 +175,7 @@ public class CliProcessService
                 {
                     _process.StandardInput.BaseStream.Write(request.StdinData);
                     _process.StandardInput.Flush();
-                    // 口令字节写入后立即清零
+                    // 密码字节写入后立即清零
                     Array.Clear(request.StdinData, 0, request.StdinData.Length);
                 }
                 _process.StandardInput.Close();
@@ -206,7 +210,8 @@ public class CliProcessService
         }
         sb.AppendLine();
         sb.AppendLine("exit /b %errorlevel%");
-        File.WriteAllText(cmdPath, sb.ToString(), new UTF8Encoding(false));
+        // 必须用控制台代码页写：cmd 按它解码，写 UTF-8 会把中文参数解码成乱码
+        File.WriteAllText(cmdPath, sb.ToString(), ConsoleEncoding());
         _consoleCmdFile = cmdPath;
         // /c ""<脚本路径>"" ：路径含空格时外层还要再包一层引号
         return "/c \"\"" + cmdPath + "\"\"";
@@ -214,6 +219,35 @@ public class CliProcessService
 
     // 临时批处理文件用完即删
     private string? _consoleCmdFile;
+
+    // cmd.exe 按控制台代码页（OEM）解码 .cmd，用同一代码页写文件才能无损还原。
+    private static Encoding ConsoleEncoding()
+    {
+        try
+        {
+            var oem = System.Globalization.CultureInfo.CurrentCulture.TextInfo.OEMCodePage;
+            if (oem > 0) return Encoding.GetEncoding(oem);
+        }
+        catch { }
+        return Encoding.Default;
+    }
+
+    // 往返判定：编成字节再解回来若与原文不同，说明该字符在该代码页里无法表示
+    private static bool FitsInConsoleEncoding(string s, Encoding enc)
+    {
+        if (string.IsNullOrEmpty(s)) return true;
+        try { return enc.GetString(enc.GetBytes(s)) == s; }
+        catch { return false; }
+    }
+
+    private static bool ConsoleEncodingFits(CommandRequest request)
+    {
+        var enc = ConsoleEncoding();
+        if (!FitsInConsoleEncoding(request.ProgramPath, enc)) return false;
+        foreach (var a in request.Arguments)
+            if (!FitsInConsoleEncoding(a, enc)) return false;
+        return true;
+    }
 
     private void CleanupConsoleCmd()
     {
@@ -244,6 +278,9 @@ public class CliProcessService
             RedirectStandardError = true,
             // 不弹出控制台窗口
             CreateNoWindow = true,
+            // CLI 输出固定 UTF-8：不显式指定会按系统代码页解码，中文路径/日志会变乱码
+            StandardOutputEncoding = new UTF8Encoding(false),
+            StandardErrorEncoding = new UTF8Encoding(false),
         };
         foreach (var a in request.Arguments) psi.ArgumentList.Add(a);
         if (!string.IsNullOrEmpty(request.WorkingDirectory))
@@ -289,7 +326,7 @@ public class CliProcessService
             }
             finally
             {
-                // 口令字节写入后立即清零
+                // 密码字节写入后立即清零
                 if (request.StdinData.Length > 0)
                     Array.Clear(request.StdinData, 0, request.StdinData.Length);
             }

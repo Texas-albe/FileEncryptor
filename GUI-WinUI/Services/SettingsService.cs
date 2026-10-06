@@ -28,6 +28,9 @@ public class AppSettings
     public string? CustomBackgroundPath { get; set; }
     public string? LastOutputDir { get; set; }
     public string? LastCliPath { get; set; }
+    // 加密盘：上次用的盘目录与盘符，菜单里默认就是它
+    public string? LastVaultDir { get; set; }
+    public string? LastMountPoint { get; set; }
     public int WindowWidth { get; set; } = 1100;
     public int WindowHeight { get; set; } = 720;
     // 界面语言："zh" | "en"

@@ -1,4 +1,4 @@
-// 口令输入弹窗
+// 密码输入弹窗
 #pragma once
 #include <QDialog>
 #include <vector>
@@ -18,7 +18,7 @@ public:
     // 是否二次确认
     void setRequireConfirm(bool on);
 
-    // 取出口令并清空内部
+    // 取出密码并清空内部
     std::vector<unsigned char> takePassword();
 
 private slots:

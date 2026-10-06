@@ -1,4 +1,4 @@
-using Microsoft.UI;
+﻿using Microsoft.UI;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
@@ -10,7 +10,7 @@ public sealed partial class PasswordDialog : ContentDialog
 {
     public string Password => PwdBox.Password;
 
-    // 解密只需输入一次：没有确认框，也不做强度策略校验（既有口令可能不满足现行策略）
+    // 解密只需输入一次：没有确认框，也不做强度策略校验（既有密码可能不满足现行策略）
     public bool NeedConfirm { get; init; } = true;
 
     private PasswordBox PwdBox = null!;
@@ -31,7 +31,7 @@ public sealed partial class PasswordDialog : ContentDialog
 
         PwdBox = new PasswordBox
         {
-            PlaceholderText = L10n.T("口令"),
+            PlaceholderText = L10n.T("密码"),
             PasswordChar = "●",
             PasswordRevealMode = PasswordRevealMode.Peek,
             Width = 320
@@ -45,7 +45,7 @@ public sealed partial class PasswordDialog : ContentDialog
         {
             ConfirmBox = new PasswordBox
             {
-                PlaceholderText = L10n.T("确认口令"),
+                PlaceholderText = L10n.T("确认密码"),
                 PasswordChar = "●",
                 PasswordRevealMode = PasswordRevealMode.Peek,
                 Width = 320
@@ -56,7 +56,7 @@ public sealed partial class PasswordDialog : ContentDialog
         panel.Children.Add(MatchText);
 
         Content = panel;
-        Title = L10n.T("输入口令");
+        Title = L10n.T("输入密码");
         PrimaryButtonText = L10n.T("确定");
         SecondaryButtonText = L10n.T("取消");
         IsPrimaryButtonEnabled = false;
@@ -109,7 +109,7 @@ public sealed partial class PasswordDialog : ContentDialog
     private void ValidateMatch()
     {
         var pwd = PwdBox.Password;
-        // 解密：只校验非空。既有口令可能不满足现行强度策略，据此拒绝会锁死用户自己的文件
+        // 解密：只校验非空。既有密码可能不满足现行强度策略，据此拒绝会锁死用户自己的文件
         if (!NeedConfirm)
         {
             MatchText.Text = "";
@@ -119,8 +119,8 @@ public sealed partial class PasswordDialog : ContentDialog
         var confirm = ConfirmBox?.Password ?? "";
         if (pwd.Length < 6) { MatchText.Text = ""; IsPrimaryButtonEnabled = false; return; }
         if (string.IsNullOrEmpty(confirm)) { MatchText.Text = ""; IsPrimaryButtonEnabled = false; return; }
-        if (pwd != confirm) { MatchText.Text = L10n.T("两次输入的口令不一致"); IsPrimaryButtonEnabled = false; return; }
-        // 确认口令同走策略校验
+        if (pwd != confirm) { MatchText.Text = L10n.T("两次输入的密码不一致"); IsPrimaryButtonEnabled = false; return; }
+        // 确认密码同走策略校验
         if (!PasswordStrengthService.MeetsPolicy(pwd, out var reason))
         {
             MatchText.Text = reason;

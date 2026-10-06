@@ -21,7 +21,7 @@ enum class CryptoAction {
 enum class WrapAlg {
     Kwp,        // RFC 5649 AES-256-KWP，长度不受 8 字节倍数限制（默认）
     AesKw,      // RFC 3394 原始 AES-KW，供旧工具互操作
-    Pubkey      // 收件人公钥封装，不需要口令
+    Pubkey      // 收件人公钥封装，不需要密码
 };
 
 // 加密模式枚举
@@ -82,6 +82,9 @@ struct ShellOptions {
     bool watermark = false;
     // 水印签名私钥 PEM；为空时仍写未签名记录，CLI 不阻断加密
     QString watermarkKeyPath;
+
+    // 加密盘（M1/M4）：非空且为加密动作时，产物入该库并写入加密索引（CLI --into-vault）
+    QString intoVault;
 
     // ===== 密钥包装（WrapKey / UnwrapKey 动作专用）=====
     // 待包装的 32 字节 DEK 文件（WrapKey）/ 待解开的 .fekw（UnwrapKey）

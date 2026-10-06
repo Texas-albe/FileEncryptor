@@ -13,7 +13,7 @@ if(FE_CL_EXECUTABLE)
       CACHE FILEPATH "MSVC 链接器（不按 PATH 搜索）" FORCE)
 endif()
 
-project(FileEncryptorGUI VERSION 2.1.3 LANGUAGES CXX)
+project(FileEncryptorGUI VERSION 3.0.0 LANGUAGES CXX)
 
 # FileEncryptor GUI - Qt6 图形界面（Windows + Linux 双平台；Windows 另有 WinUI3 版本）
 

@@ -1,4 +1,4 @@
-using System.Text;
+﻿using System.Text;
 using FileEncryptorGUI.Models;
 using FileEncryptorGUI.Services;
 using Microsoft.UI;
@@ -130,7 +130,7 @@ public sealed class PreviewWindow
         {
             ProgramPath = _programPath,
             ShowConsole = false,
-            // 口令走 stdin，不进 argv
+            // 密码走 stdin，不进 argv
             StdinData = _password,
         };
         req.Arguments.Add("-d");

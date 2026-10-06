@@ -15,6 +15,9 @@ public:
     static QString cliDownloadUrl();
     // 生成带版本号的候选文件名
     static QStringList getExpectedNames();
+    // 定位 FE-Mounter 挂载持有进程（加密盘盘符挂载；与 CLI 分离的可选组件）
+    static QString locateMounter();
+    static QStringList getMounterExpectedNames();
     // 检查是否存在匹配的 CLI
     static bool existsWithVersion(QString* foundPath=nullptr);
     // 清掉程序目录里版本号低于目标版本的 CLI，返回被删的文件名

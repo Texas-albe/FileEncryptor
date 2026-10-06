@@ -1313,9 +1313,9 @@ static void throttle_consume(uint64_t n) {
     }
 }
 
-static void print_progress(size_t processed,size_t total,
+void print_progress(size_t processed,size_t total,
     std::chrono::steady_clock::time_point start,
-    bool finish=false) {
+    bool finish) {
     static std::mutex print_mutex;
     std::lock_guard<std::mutex> lock(print_mutex);
 
@@ -1362,7 +1362,7 @@ static void print_progress(size_t processed,size_t total,
 }
 
 // 文件名 / 扩展名混淆（v1.7.0）
-// 输出 <16hex>.<3 位小写字母>.ptd；混淆名=Blake2b(Blake2b(口令),路径) 确定性，续传命中同一文件且不泄露原名。
+// 输出 <16hex>.<3 位小写字母>.ptd；混淆名=Blake2b(Blake2b(密码),路径) 确定性，续传命中同一文件且不泄露原名。
 // 伪扩展名固定 3 位纯小写字母（由 seed 字节取模字母表），不复用真实后缀表，避免误判文件类型。
 static constexpr char OBFUSCATED_ALPHA[] = "abcdefghijklmnopqrstuvwxyz";
 
@@ -1427,7 +1427,7 @@ std::string make_obfuscated_basename(const std::string& in_path,const SecureBuff
     ext.reserve(3);
     for(int i=8;i<11;++i) ext.push_back(OBFUSCATED_ALPHA[seed[i]%26]);
     std::string result=fe::util::to_hex(seed, 8) + "." + ext;
-    // key 为口令派生密钥材料、seed 由其派生：用毕清零栈上残留
+    // key 为密码派生密钥材料、seed 由其派生：用毕清零栈上残留
     sodium_memzero(key,sizeof(key));
     sodium_memzero(seed,sizeof(seed));
     return result;
@@ -1554,7 +1554,7 @@ static bool peek_name_footer_len(const std::string& ptd_path, uint64_t& footer_l
     return true;
 }
 
-// 读取尾部水印记录（无需口令）：尾部 [wm_len(4)][记录][FENX...]，wm_len 位于信封起点前 4 字节。
+// 读取尾部水印记录（无需密码）：尾部 [wm_len(4)][记录][FENX...]，wm_len 位于信封起点前 4 字节。
 bool read_watermark(const std::string& ptd_path, WatermarkInfo& out, const std::string& pub_pem,
                     bool pqc) {
     out = WatermarkInfo();
@@ -1643,10 +1643,10 @@ static bool decrypt_name_footer(const std::string& ptd_path,
     return true;
 }
 
-// 公开接口：从密文末尾的加密信封恢复原始文件名。需口令以派生主密钥并解密尾部。
+// 公开接口：从密文末尾的加密信封恢复原始文件名。需密码以派生主密钥并解密尾部。
 // 解密失败（密钥错/无尾部）返回 false，调用方回退到基于 .ptd 文件名的命名。
 // v6 非对称容器：从头部后的收件人 blob 取出 stanza，用身份私钥直接解出 DEK
-// （非对称下 dek_box 为空，口令解裹通道不可用，故必须走收件人 stanza）。
+// （非对称下 dek_box 为空，密码解裹通道不可用，故必须走收件人 stanza）。
 static bool recover_dek_v6_asym(const std::string& ptd_path,
     const std::string& asym_identity, unsigned char* dek_out) {
     std::ifstream f;
@@ -1696,7 +1696,7 @@ bool read_original_name(const std::string& ptd_path, std::string& out_name,
     else            { FileHeaderV4 h=load_header<FileHeaderV4>(hdrbuf); memcpy(salt_buf,h.salt,ARGON2_SALT_LEN); salt_ptr=salt_buf; kdf_ops=h.opslimit; kdf_mem=(size_t)h.memlimit_kb*1024; }
     SecureBuffer kek(ARGON2_OUTPUT_LEN);
     if(asym_identity.empty()) {
-        // 非对称容器口令通道不参与：跳过 Argon2，DEK 从收件人 stanza 直接恢复
+        // 非对称容器密码通道不参与：跳过 Argon2，DEK 从收件人 stanza 直接恢复
         if(pre_kek && pre_kek_len >= ARGON2_OUTPUT_LEN) {
             std::memcpy(kek.data(), pre_kek, ARGON2_OUTPUT_LEN);
         } else if(!derive_key(password.data(),password.size(),salt_ptr,kek.data(),kdf_ops,kdf_mem)) {
@@ -1783,46 +1783,184 @@ bool read_ptd_metadata(const std::string& ptd_path, PtdMeta& meta) {
     return true;
 }
 
+// M0：加密盘随机块读。非压缩块 O(1) 定位提取明文，不整文件解密。
+// 压缩文件变长块无法 O(1) 定位，返回 false 且 *out_compressed=true；非对称容器暂不支持。
+bool random_read_ptd(const std::string& ptd_path, const SecureBuffer& password,
+                     uint64_t offset, uint64_t len,
+                     std::vector<unsigned char>& out,
+                     bool* out_compressed, bool silent, const unsigned char* pre_kek) {
+    out.clear();
+    if(out_compressed) *out_compressed=false;
+    if(len==0) return true;
+
+    PtdMeta meta;
+    if(!read_ptd_metadata(ptd_path, meta) || !meta.valid) {
+        if(!silent) fprintf(stderr,"Cannot read .ptd metadata or invalid file.\n");
+        return false;
+    }
+    if(meta.compression!=0) {
+        if(out_compressed) *out_compressed=true;
+        return false;
+    }
+    if(offset>=meta.orig_size) return true;
+    if(offset+len>meta.orig_size) len=meta.orig_size-offset;
+
+    // 原始头部：供 build_aad_with_metadata 与 v6 dek_box/recip_len
+    unsigned char hdrbuf[320];
+    unsigned char ver=0;
+    uint32_t recip_len=0;
+    unsigned char dek_box[64]={0};
+    unsigned char dek_nonce[24]={0};
+    {
+        std::ifstream hf;
+        if(!open_stream(hf,ptd_path,std::ios::binary) || !hf.read(reinterpret_cast<char*>(hdrbuf),5)) {
+            if(!silent) fprintf(stderr,"Cannot open input file.\n");
+            return false;
+        }
+        ver=hdrbuf[4];
+        size_t hs=header_size_for_version(ver);
+        if(!hf.read(reinterpret_cast<char*>(hdrbuf+5),(std::streamoff)(hs-5))) {
+            if(!silent) fprintf(stderr,"Read header failed.\n");
+            return false;
+        }
+    }
+    if(ver==6) {
+        auto h=load_header<FileHeaderV6>(hdrbuf);
+        recip_len=get_recip_len(h.reserved);
+        memcpy(dek_box,h.dek_box,sizeof(dek_box));
+        memcpy(dek_nonce,h.dek_nonce,sizeof(dek_nonce));
+    } else if(ver!=3 && ver!=VERSION && ver!=5) {
+        if(!silent) fprintf(stderr,"Legacy version %u does not support random read.\n",ver);
+        return false;
+    }
+    if(recip_len>0) {
+        if(!silent) fprintf(stderr,"Random read not supported for asymmetric containers (recip_len>0).\n");
+        return false;
+    }
+
+    // salt/iv 由 meta hex 解码（避免再次解析头部取指针）
+    unsigned char salt_buf[ARGON2_SALT_LEN];
+    size_t iv_len=meta.iv_hex.size()/2;
+    unsigned char iv_buf[32];
+    if(sodium_hex2bin(salt_buf,ARGON2_SALT_LEN,meta.salt_hex.data(),meta.salt_hex.size(),nullptr,nullptr,nullptr)!=0) {
+        if(!silent) fprintf(stderr,"Invalid salt hex.\n");
+        return false;
+    }
+    if(sodium_hex2bin(iv_buf,iv_len,meta.iv_hex.data(),meta.iv_hex.size(),nullptr,nullptr,nullptr)!=0) {
+        if(!silent) fprintf(stderr,"Invalid iv hex.\n");
+        return false;
+    }
+
+    SecureBuffer key(ARGON2_OUTPUT_LEN);
+    size_t aad_hdr_len;
+    if(ver==6) {
+        SecureBuffer kek(ARGON2_OUTPUT_LEN);
+        if(pre_kek) {
+            memcpy(kek.data(), pre_kek, ARGON2_OUTPUT_LEN);
+        } else if(!derive_key(password.data(),password.size(),salt_buf,kek.data(),meta.opslimit,(size_t)meta.memlimit_kb*1024)) {
+            if(!silent) fprintf(stderr,"Key derivation failed.\n");
+            return false;
+        }
+        unsigned char dek[32];
+        if(!unwrap_dek(dek_box, kek.data(), dek_nonce, dek)) {
+            report_auth_error(silent,"Failed to unwrap DEK (wrong password or corrupted container).");
+            return false;
+        }
+        memcpy(key.data(), dek, 32);
+        sodium_memzero(dek, sizeof(dek));
+        sodium_memzero(kek.data(), kek.size());
+        aad_hdr_len=HEADER_AAD_COVER_V6;
+    } else {
+        if(pre_kek) {
+            memcpy(key.data(), pre_kek, ARGON2_OUTPUT_LEN);
+        } else if(!derive_key(password.data(),password.size(),salt_buf,key.data(),meta.opslimit,(size_t)meta.memlimit_kb*1024)) {
+            if(!silent) fprintf(stderr,"Key derivation failed.\n");
+            return false;
+        }
+        aad_hdr_len=header_hmac_cover(ver);
+    }
+    std::vector<unsigned char> aad=build_aad_with_metadata(hdrbuf,aad_hdr_len,meta.chunk_size,meta.total_chunks,meta.orig_size);
+
+    size_t tag_size=tag_size_for_mode(meta.mode);
+    uint64_t hdr_size=header_size_for_version(ver);
+    uint64_t base=hdr_size + (uint64_t)recip_len + 16;
+    uint32_t chunk_size=meta.chunk_size;
+    uint64_t stride=chunk_size+tag_size;
+    uint64_t orig_size=meta.orig_size;
+    uint32_t start_chunk=(uint32_t)(offset/chunk_size);
+    uint32_t end_chunk=(uint32_t)((offset+len-1)/chunk_size);
+
+    unsigned char nonce[32]={0};
+    memcpy(nonce, iv_buf, iv_len);
+    bool use_increment=(ver==VERSION||ver==5||ver==6);
+    if(use_increment) for(uint32_t k=0;k<start_chunk;++k) sodium_increment(nonce,iv_len);
+    else { uint64_t idx=start_chunk; fe::util::xor_le64_tail(nonce, iv_len, idx); }
+
+    std::ifstream fin;
+    if(!open_stream(fin,ptd_path,std::ios::binary)) {
+        if(!silent) fprintf(stderr,"Cannot open input file.\n");
+        return false;
+    }
+    fin.seekg((std::streamoff)(base + (uint64_t)start_chunk*stride));
+    std::unique_ptr<Cipher> ciph=create_cipher(meta.mode);
+    if(!ciph) { if(!silent) fprintf(stderr,"Unsupported encryption mode.\n"); return false; }
+
+    out.assign(len,0);
+    uint64_t out_pos=0;
+    bool ok=true;
+    for(uint32_t i=start_chunk; i<=end_chunk; ++i) {
+        uint64_t chunk_start=(uint64_t)i*chunk_size;
+        size_t chunk_plain=(size_t)std::min<uint64_t>(chunk_size, orig_size-chunk_start);
+        size_t expected=chunk_plain+tag_size;
+        std::vector<unsigned char> ct(expected);
+        fin.read(reinterpret_cast<char*>(ct.data()), (std::streamsize)expected);
+        if((size_t)fin.gcount()!=(size_t)expected) { ok=false; break; }
+        if(!use_increment){ memcpy(nonce, iv_buf, iv_len); fe::util::xor_le64_tail(nonce, iv_len, (uint64_t)i); }
+        unsigned long long frame_len=0;
+        std::vector<unsigned char> pt(chunk_plain);
+        int rc=ciph->decrypt(ct.data(), expected, aad.data(), aad.size(), nonce, key.data(), pt.data(), frame_len);
+        if(rc!=0) { report_auth_error(silent,"Decryption failed (invalid key or corrupted data)."); ok=false; break; }
+        uint64_t take_from=std::max<uint64_t>(chunk_start, offset);
+        uint64_t take_to=std::min<uint64_t>(chunk_start+chunk_plain, offset+len);
+        uint64_t take_len=take_to-take_from;
+        memcpy(out.data()+out_pos, pt.data()+(take_from-chunk_start), take_len);
+        out_pos+=take_len;
+        if(use_increment && i<end_chunk) sodium_increment(nonce, iv_len);
+    }
+    out.resize(out_pos);
+    sodium_memzero(key.data(), key.size());
+    return ok;
+}
+
+// 派生某 .ptd 的 Argon2 密钥材料（供挂载层 LRU 缓存，见 random_read_ptd 的 pre_kek）。
+bool fe_ptd_argon2_key(const std::string& ptd_path, const SecureBuffer& password,
+                       unsigned char out[32]) {
+    PtdMeta meta;
+    if(!read_ptd_metadata(ptd_path, meta) || !meta.valid) return false;
+    unsigned char salt_buf[ARGON2_SALT_LEN];
+    if(sodium_hex2bin(salt_buf,ARGON2_SALT_LEN,meta.salt_hex.data(),meta.salt_hex.size(),
+                      nullptr,nullptr,nullptr)!=0) return false;
+    return derive_key(password.data(),password.size(),salt_buf,out,
+                      meta.opslimit,(size_t)meta.memlimit_kb*1024);
+}
+
 // 完整性校验（功能3：只验不解）
 bool verify_ptd(const std::string& ptd_path, const SecureBuffer& password,
                 const std::string& asym_identity) {
     // 自校验：直接流式解密并计算明文哈希，不再落盘 .verify.tmp（消除 4 倍 I/O）。
     // decrypt_file 在 verify_only 模式下当且仅当明文长度与存储哈希均匹配时返回 true；
-    // asym_identity 非空时按非对称容器用身份私钥解裹 DEK，故 -V 不再只支持对称口令文件。
+    // asym_identity 非空时按非对称容器用身份私钥解裹 DEK，故 -V 不再只支持对称密码文件。
     return decrypt_file(ptd_path, ptd_path, password,
         nullptr, false, false, nullptr, nullptr, 0, true, 0, asym_identity);
 }
 
 // 密钥轮换 / rewrap（v6 容器）
 // old_password 解出 wrapped DEK，new_password 派生新 KEK 重裹（key_version 自增），重写头部容器区与 hmac，载荷不动；仅 v6+。
-bool rewrap_file(const std::string& ptd_path,
+bool rewrap_file_with(const std::string& ptd_path,
     const SecureBuffer& old_password,
-    const std::string& new_key_path,
-    bool new_key_from_stdin) {
-    // 读取新口令（与 CLI 密钥源约定一致：密钥文件原始字节 / 整段 stdin）
-    SecureBuffer new_pw;
-    if(!new_key_path.empty()) {
-        std::ifstream kf;
-        if(!open_stream(kf,new_key_path,std::ios::binary)) {
-            fprintf(stderr,"Cannot open new key file: %s\n",new_key_path.c_str());
-            return false;
-        }
-        std::vector<char> kbuf((std::istreambuf_iterator<char>(kf)),
-                               std::istreambuf_iterator<char>());
-        kf.close();
-        if(kbuf.empty()) { fprintf(stderr,"New key file is empty: %s\n",new_key_path.c_str()); return false; }
-        new_pw=SecureBuffer(kbuf.data(),kbuf.size());
-        sodium_memzero(kbuf.data(),kbuf.size()); kbuf.clear();
-    } else if(new_key_from_stdin) {
-        std::vector<char> sbuf((std::istreambuf_iterator<char>(std::cin)),
-                               std::istreambuf_iterator<char>());
-        if(sbuf.empty()) { fprintf(stderr,"No new key material received from stdin.\n"); return false; }
-        new_pw=SecureBuffer(sbuf.data(),sbuf.size());
-        sodium_memzero(sbuf.data(),sbuf.size()); sbuf.clear();
-    } else {
-        fprintf(stderr,"rewrap requires a new key source (--new-key-file <file> or --new-key-stdin).\n");
-        return false;
-    }
+    const SecureBuffer& new_pw,
+    bool quiet) {
+    if(new_pw.empty()) { fprintf(stderr,"rewrap requires a new password.\n"); return false; }
 
     // 只读方式打开，先校验 magic / 版本
     std::fstream f;
@@ -1851,7 +1989,7 @@ bool rewrap_file(const std::string& ptd_path,
     }
     OutputLockGuard lock_guard{lock_path,true};
 
-    // 用旧口令派生 KEK，解开 DEK（同时校验旧口令正确性）
+    // 用旧密码派生 KEK，解开 DEK（同时校验旧密码正确性）
     SecureBuffer old_kek(ARGON2_OUTPUT_LEN);
     if(!derive_key(old_password.data(),old_password.size(),h.salt,old_kek.data(),
             h.opslimit,(size_t)h.memlimit_kb*1024)) {
@@ -1866,7 +2004,7 @@ bool rewrap_file(const std::string& ptd_path,
     }
     sodium_memzero(old_kek.data(),old_kek.size());
 
-    // 用新口令派生新 KEK，重裹 DEK（重新随机 nonce + box）。DEK 保持不变。
+    // 用新密码派生新 KEK，重裹 DEK（重新随机 nonce + box）。DEK 保持不变。
     SecureBuffer new_kek(ARGON2_OUTPUT_LEN);
     if(!derive_key(new_pw.data(),new_pw.size(),h.salt,new_kek.data(),
             h.opslimit,(size_t)h.memlimit_kb*1024)) {
@@ -1901,11 +2039,41 @@ bool rewrap_file(const std::string& ptd_path,
     }
     f.flush();
     f.close();
-    printf("rewrap: container '%s' rotated to key_version=%u (payload ciphertext untouched).\n",
+    if(!quiet) printf("rewrap: container '%s' rotated to key_version=%u (payload ciphertext untouched).\n",
         ptd_path.c_str(), kv);
     return true;
 }
 
+// CLI 侧包装：新密码来自密钥文件 / stdin（原始字节）
+bool rewrap_file(const std::string& ptd_path,
+    const SecureBuffer& old_password,
+    const std::string& new_key_path,
+    bool new_key_from_stdin) {
+    SecureBuffer new_pw;
+    if(!new_key_path.empty()) {
+        std::ifstream kf;
+        if(!open_stream(kf,new_key_path,std::ios::binary)) {
+            fprintf(stderr,"Cannot open new key file: %s\n",new_key_path.c_str());
+            return false;
+        }
+        std::vector<char> kbuf((std::istreambuf_iterator<char>(kf)),
+                               std::istreambuf_iterator<char>());
+        kf.close();
+        if(kbuf.empty()) { fprintf(stderr,"New key file is empty: %s\n",new_key_path.c_str()); return false; }
+        new_pw=SecureBuffer(kbuf.data(),kbuf.size());
+        sodium_memzero(kbuf.data(),kbuf.size()); kbuf.clear();
+    } else if(new_key_from_stdin) {
+        std::vector<char> sbuf((std::istreambuf_iterator<char>(std::cin)),
+                               std::istreambuf_iterator<char>());
+        if(sbuf.empty()) { fprintf(stderr,"No new key material received from stdin.\n"); return false; }
+        new_pw=SecureBuffer(sbuf.data(),sbuf.size());
+        sodium_memzero(sbuf.data(),sbuf.size()); sbuf.clear();
+    } else {
+        fprintf(stderr,"rewrap requires a new key source (--new-key-file <file> or --new-key-stdin).\n");
+        return false;
+    }
+    return rewrap_file_with(ptd_path, old_password, new_pw, false);
+}
 
 bool encrypt_file(const std::string& in_path,
     const std::string& out_path,
@@ -1918,11 +2086,12 @@ bool encrypt_file(const std::string& in_path,
     const std::vector<std::string>* asym_recipients,
     const WatermarkSpec* wm,
     const unsigned char* ext_salt,
-    const unsigned char* ext_kek) {
+    const unsigned char* ext_kek,
+    uint32_t chunk_override) {
 
     disable_core_dump();
 
-    // 非对称加密：DEK 仅由收件人包装，不经口令，且暂不支持断点续传（强制全新写入）。
+    // 非对称加密：DEK 仅由收件人包装，不经密码，且暂不支持断点续传（强制全新写入）。
     std::vector<unsigned char> recip_blob_out;
     if(asym_mode) resume=false;
 
@@ -1937,7 +2106,7 @@ bool encrypt_file(const std::string& in_path,
         fprintf(stderr,"Output path contains directory traversal\n");
         return false;
     }
-    // 非对称模式：DEK 仅由收件人公钥包装，不依赖口令，故不做口令长度下限校验。
+    // 非对称模式：DEK 仅由收件人公钥包装，不依赖密码，故不做密码长度下限校验。
     const bool asym_active = asym_mode && asym_recipients && !asym_recipients->empty();
     if(password.size()<PASSWORD_MIN_LEN && !asym_active) {
         fprintf(stderr,"Password too short (min %zu characters)\n",PASSWORD_MIN_LEN);
@@ -1960,7 +2129,8 @@ bool encrypt_file(const std::string& in_path,
     // （声明在所有 goto cleanup 之前，避免 C4533 跳过初始化。）
     auto last_prs_save=std::chrono::steady_clock::now();
 
-    uint32_t chunk_size=CHUNK_SIZE;
+    uint32_t chunk_size=(chunk_override>=MIN_CHUNK_SIZE&&chunk_override<=MAX_CHUNK_SIZE)
+                        ? chunk_override : CHUNK_SIZE;
     uint64_t total_chunks_64=(total_size+chunk_size-1)/chunk_size;
     if(total_chunks_64>UINT32_MAX) {
         fprintf(stderr,"File too large: %llu chunks exceeds uint32_t limit (%u).\n",
@@ -2064,7 +2234,7 @@ bool encrypt_file(const std::string& in_path,
             }
         }
         else if(existing_is_v6) {
-            // v6 续传：口令派生 KEK，解开 wrapped DEK（同时校验口令正确性），DEK 即载荷密钥
+            // v6 续传：密码派生 KEK，解开 wrapped DEK（同时校验密码正确性），DEK 即载荷密钥
             FileHeaderV6* h=&existing_v6;
             SecureBuffer kek(ARGON2_OUTPUT_LEN);
             if(!derive_key(password.data(),password.size(),h->salt,kek.data(),
@@ -2300,7 +2470,7 @@ bool encrypt_file(const std::string& in_path,
 
         // v6 容器：派生 KEK（Argon2id(password,salt)），生成随机 DEK，以德克包裹进容器；
         // 载荷 AEAD 密钥 = DEK，KEK 仅用于包裹/解裹（密钥轮换零重加密的基础）。
-        // 非对称模式：DEK 仅经收件人公钥包装进容器 blob，KEK 不派生（允许空口令）。
+        // 非对称模式：DEK 仅经收件人公钥包装进容器 blob，KEK 不派生（允许空密码）。
         SecureBuffer kek(ARGON2_OUTPUT_LEN);
         if(asym_active) {
             sodium_memzero(kek.data(), kek.size());
@@ -2316,7 +2486,7 @@ bool encrypt_file(const std::string& in_path,
             randombytes_buf(dek,sizeof(dek));
             put_be32(reinterpret_cast<unsigned char*>(&header.container_len), V6_CONTAINER_LEN);
             if(asym_active) {
-                // 非对称：DEK 以收件人公钥包装进容器收件人 blob，不再经口令 KEK。
+                // 非对称：DEK 以收件人公钥包装进容器收件人 blob，不再经密码 KEK。
                 std::vector<RecipientStanza> stanzas;
                 AsymOutcome aw=fe_wrap_dek_to_recipients(dek,*asym_recipients,stanzas);
                 if(!aw.ok) {
@@ -2328,7 +2498,7 @@ bool encrypt_file(const std::string& in_path,
                     sodium_memzero(dek,sizeof(dek)); ok=false; goto cleanup;
                 }
                 put_recip_len(header.reserved, (uint32_t)recip_blob_out.size());
-                // dek_box 留零：对称口令路径不使用，DEK 仅存于收件人 blob
+                // dek_box 留零：对称密码路径不使用，DEK 仅存于收件人 blob
                 memset(header.dek_box, 0, sizeof(header.dek_box));
             } else {
                 if(!wrap_dek(dek, kek.data(), header.dek_nonce, header.dek_box)) {
@@ -2607,7 +2777,7 @@ bool decrypt_file(const std::string& in_path,
         if(!silent) fprintf(stderr,"Output path contains directory traversal\n");
         return false;
     }
-    // 口令仅在「无外部密钥且非非对称恢复」时才必需：ext_key 供加密端自校验直接复用 DEK。
+    // 密码仅在「无外部密钥且非非对称恢复」时才必需：ext_key 供加密端自校验直接复用 DEK。
     if(password.size()<PASSWORD_MIN_LEN && asym_identity.empty() && !ext_key) {
         if(!silent) fprintf(stderr,"Password too short (min %zu characters)\n",PASSWORD_MIN_LEN);
         return false;
@@ -2865,7 +3035,7 @@ bool decrypt_file(const std::string& in_path,
     // ext_key：外部最终密钥（自校验用），直接复用跳过 KDF 与解裹。
     const bool have_kek = (ext_kek && ext_kek_len >= ARGON2_OUTPUT_LEN);
     if(is_v6) {
-        // v6 非对称容器：以身份私钥从收件人 stanza 恢复 DEK，跳过口令 KEK 派生。
+        // v6 非对称容器：以身份私钥从收件人 stanza 恢复 DEK，跳过密码 KEK 派生。
         if(!asym_identity.empty()) {
             if(recip_stanzas.empty()) {
                 report_auth_error(silent, "Asymmetric container has no recipient entries.");
@@ -2880,7 +3050,7 @@ bool decrypt_file(const std::string& in_path,
             memcpy(key.data(), dek, 32);
             sodium_memzero(dek, sizeof(dek));
         }
-        // v6 容器：KEK 解裹 DEK（同时校验口令正确性），DEK 即载荷密钥。
+        // v6 容器：KEK 解裹 DEK（同时校验密码正确性），DEK 即载荷密钥。
         else if(have_kek) {
             unsigned char dek[32];
             if(!unwrap_dek(hv6.dek_box, ext_kek, hv6.dek_nonce, dek)) {
@@ -3804,7 +3974,7 @@ bool process_files(const std::vector<std::string>& input_paths,
     // 阶段里，16 个 worker 会堵在 4 个信号量许可上，实际只有 4 路在干活。
     std::unordered_map<std::string, std::array<unsigned char,ARGON2_SALT_LEN>> salt_cache;
     if(encrypt) {
-        // 盐先于派生随机生成：加密侧 KEK 只依赖 (口令, 盐, ops, mem)，可提前算好
+        // 盐先于派生随机生成：加密侧 KEK 只依赖 (密码, 盐, ops, mem)，可提前算好
         salt_cache.reserve(files_to_process.size());
         for(const auto& f:files_to_process) {
             std::array<unsigned char,ARGON2_SALT_LEN> s;
@@ -3848,7 +4018,7 @@ bool process_files(const std::vector<std::string>& input_paths,
                                            ops,(size_t)memkb*1024);
                         sodium_memzero(salt,sizeof(salt));
                     }
-                    // 读头失败或口令派生失败都不缓存：worker 会自行派生并给出原样报错
+                    // 读头失败或密码派生失败都不缓存：worker 会自行派生并给出原样报错
                     if(!got) continue;
                     std::lock_guard<std::mutex> lk(kdf_mu);
                     kek_cache.emplace(f,std::move(kek));

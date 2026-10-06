@@ -109,7 +109,7 @@ void PreviewDialog::start(const PreviewRequest& req)
 
     CommandRequest cr;
     cr.programPath = req.programPath;
-    // --preview 只落 stdout 明文前缀；口令走 stdin，不进 argv
+    // --preview 只落 stdout 明文前缀；密码走 stdin，不进 argv
     cr.arguments << QStringLiteral("-d")
                  << QStringLiteral("--preview")
                  << QStringLiteral("--max-bytes") << QString::number(req.maxBytes)
@@ -162,7 +162,7 @@ void PreviewDialog::onFinished(const CommandResult& r)
     } else if (r.wasCancelled) {
         m_status->setText(tr("已取消。"));
     } else {
-        // 口令错 / 文件损坏 / 非对称缺私钥，CLI 的原因都在 stderr 里
+        // 密码错 / 文件损坏 / 非对称缺私钥，CLI 的原因都在 stderr 里
         m_status->setText(tr("预览失败：%1").arg(m_errText.isEmpty()
             ? tr("CLI 返回码 %1").arg(r.exitCode) : m_errText.trimmed()));
     }

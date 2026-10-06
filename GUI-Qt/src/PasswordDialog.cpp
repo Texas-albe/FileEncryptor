@@ -45,19 +45,19 @@ static QIcon makeEyeIcon(bool visible, const QColor& color) {
 }
 
 PasswordDialog::PasswordDialog(QWidget* parent) : QDialog(parent) {
-    setWindowTitle(tr("输入口令"));
+    setWindowTitle(tr("输入密码"));
     setMinimumWidth(380);
 
     auto* lay = new QVBoxLayout(this);
     lay->setSpacing(8);
 
-    auto* purpose = new QLabel(tr("请输入口令："));
+    auto* purpose = new QLabel(tr("请输入密码："));
     m_purposeLabel = purpose;
     lay->addWidget(purpose);
 
     m_pw = new QLineEdit;
     m_pw->setEchoMode(QLineEdit::Password);
-    m_pw->setPlaceholderText(tr("口令（经 stdin 注入子进程，不留盘）"));
+    m_pw->setPlaceholderText(tr("密码（经 stdin 注入子进程，不留盘）"));
     setupEye(m_pw);
     lay->addWidget(m_pw);
 
@@ -135,14 +135,14 @@ void PasswordDialog::onTextChanged() {
 bool PasswordDialog::validate(QString& reason) {
     const QString pw = m_pw->text();
     if (pw.isEmpty()) {
-        reason = tr("口令不能为空。");
+        reason = tr("密码不能为空。");
         return false;
     }
     if (!PasswordStrength::meetsPolicy(pw, reason)) {
         return false;
     }
     if (m_requireConfirm && m_confirm->text() != pw) {
-        reason = tr("两次输入的口令不一致。");
+        reason = tr("两次输入的密码不一致。");
         return false;
     }
     return true;
@@ -151,10 +151,10 @@ bool PasswordDialog::validate(QString& reason) {
 void PasswordDialog::onAccept() {
     QString reason;
     if (!validate(reason)) {
-        MsgBox::error(this, tr("口令无效"), reason);
+        MsgBox::error(this, tr("密码无效"), reason);
         return;
     }
-    // 取出口令并清零缓冲
+    // 取出密码并清零缓冲
     QByteArray b = m_pw->text().toUtf8();
     m_secret.assign(b.begin(), b.end());
     secure_zero(b.data(), size_t(b.size()));

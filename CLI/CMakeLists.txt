@@ -12,7 +12,7 @@ if(WIN32)
   endif()
 endif()
 
-project(FileEncryptorCLI VERSION 2.9.0 LANGUAGES CXX)
+project(FileEncryptorCLI VERSION 3.0.0 LANGUAGES CXX)
 
 # FileEncryptor CLI - 命令行加密工具（独立项目），产出 FileEncryptorCLI(.exe)，GUI 经 QProcess 调用。
 # 静态链接 libsodium + yaml-cpp，二进制零外部依赖，可直接打包 DEB/RPM。
@@ -29,6 +29,23 @@ set(CMAKE_INTERPROCEDURAL_OPTIMIZATION_RELEASE ON)
 # 故强制以 UTF-8 读取源文件。
 if(MSVC)
   add_compile_options(/utf-8)
+endif()
+
+# ---------- Android 适配 ----------
+# 源码层已用 __ANDROID__ 分支处理平台差异（无交互终端、无 dmi/MAC、无 HOME）；
+# 这里只做构建侧裁剪与前提校验。NDK 工具链用法：
+#   cmake -G Ninja -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK/build/cmake/android.toolchain.cmake \
+#         -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-26 -DANDROID_STL=c++_static \
+#         -DSODIUM_ROOT=<ndk 交叉编译出的 libsodium 前缀> ...
+# std::filesystem 只有 libc++ 提供：gnustl / system 运行时没有该库，必须选 c++_static 或 c++_shared。
+if(ANDROID)
+  if(NOT ANDROID_STL MATCHES "c\\+\\+_")
+    message(FATAL_ERROR "ANDROID_STL 必须是 c++_static 或 c++_shared：本工程使用 std::filesystem，"
+                        "gnustl / system 运行时不提供。")
+  endif()
+  message(STATUS "Android: 挂载（FUSE / WinFSP）与常驻服务在 Android 不可用，已跳过；"
+                 "机器标识与配置目录推断也已降级，见 config.cpp / machine_id.cpp。")
+  add_compile_definitions(FE_PLATFORM_ANDROID=1)
 endif()
 
 # ---------- 工程化开关 ----------
@@ -311,6 +328,7 @@ set(SOURCES
   core/split_volumes.cpp
   core/archive.cpp
   core/keywrap.cpp
+  core/vault_index.cpp
   cli/main.cpp)
 
 # Windows 图标资源（嵌入 exe；Linux/macOS 无 .rc）
@@ -623,6 +641,182 @@ if(NOT FE_ZSTD_FOUND)
   target_compile_definitions(FileEncryptor PRIVATE FE_WITHOUT_ZSTD)
 endif()
 
+# ============ libvdisk（加密盘共享库：Windows=vdisk.dll / Linux=libvdisk.so）+ FE-Mounter ============
+# 加密盘引擎以共享库产出，对外只暴露设计文档 §5.2 的 C ABI（符号最小化，§5.1#7）；
+# FE-Mounter 进程用绝对路径动态加载它并持有挂载（§5.1#3）。
+# 依赖（libsodium/zstd/OpenSSL/yaml-cpp）直接复用已装配好的 FileEncryptor 目标：
+# 用 get_target_property 转移 include / 定义 / 编译选项 / 链接库，零重复维护、随 exe 同步。
+set(VDISK_CORE_SOURCES
+  core/FileEncryptor.cpp core/cipher.cpp core/ptd_format.cpp core/kdf.cpp
+  core/source_handling.cpp core/config.cpp core/keylib.cpp core/progress_frame.cpp
+  core/asym_crypto.cpp core/mapped_file.cpp core/password_policy.cpp
+  core/machine_id.cpp core/watermark.cpp core/split_volumes.cpp core/archive.cpp
+  core/keywrap.cpp core/vault_index.cpp core/vdisk_abi.cpp)
+
+add_library(vdisk SHARED ${VDISK_CORE_SOURCES})
+add_library(FileEncryptor::vdisk ALIAS vdisk)
+
+get_target_property(_fe_incs  FileEncryptor INCLUDE_DIRECTORIES)
+get_target_property(_fe_defs  FileEncryptor COMPILE_DEFINITIONS)
+get_target_property(_fe_opts  FileEncryptor COMPILE_OPTIONS)
+get_target_property(_fe_links FileEncryptor LINK_LIBRARIES)
+if(_fe_incs)
+  target_include_directories(vdisk PRIVATE ${_fe_incs})
+endif()
+if(_fe_defs)
+  target_compile_definitions(vdisk PRIVATE ${_fe_defs})
+endif()
+if(_fe_opts)
+  target_compile_options(vdisk PRIVATE ${_fe_opts})
+endif()
+if(_fe_links)
+  target_link_libraries(vdisk PRIVATE ${_fe_links})
+endif()
+# vdisk 是共享库：Linux 发行版的 libz.a/libcrypto.a 常为非 PIC（无 -fPIC 编译），
+# 直接链进 .so 会报 "relocation R_X86_64_PC32 ... can not be used when making a
+# shared object"。可执行文件不受此限，故只需给共享库换成动态版。
+if(UNIX AND NOT APPLE)
+  foreach(_dep z crypto ssl)
+    # _fe_links 里存的是绝对路径（.../libz.a），故按文件名匹配而非裸名
+    foreach(_l IN LISTS _fe_links)
+      get_filename_component(_ln "${_l}" NAME_WE)
+      string(REGEX REPLACE "^lib" "" _ln "${_ln}")   # libz.a -> z
+      if(_ln STREQUAL "${_dep}")
+        # 把 .a 换成同名 .so（共享库可链入 .so；发行版静态库常无 -fPIC）
+        string(REGEX REPLACE "\\.a$" ".so" _lso "${_l}")
+        if(EXISTS "${_lso}")
+          # 先移除非 PIC 静态库，再链共享版（顺序无关，链接器取先出现的）
+          list(REMOVE_ITEM _fe_links "${_l}")
+          list(APPEND _fe_links "${_lso}")
+          set(_vdisk_extra_links ${_vdisk_extra_links} "${_lso}")
+          message(STATUS "vdisk(${_dep}): 改用共享库 ${_lso}（静态版非 PIC，无法链入 .so）")
+        else()
+          message(WARNING "vdisk(${_dep}): 只找到非 PIC 静态库 ${_l}，libvdisk.so 链接可能失败。\n"
+                          "  Linux 装共享版：apt install zlib1g-dev libssl-dev（通常已含 .so）")
+        endif()
+        break()
+      endif()
+    endforeach()
+  endforeach()
+  if(_vdisk_extra_links)
+    set_property(TARGET vdisk PROPERTY LINK_LIBRARIES ${_fe_links})
+  endif()
+endif()
+# 同步 MSVC 运行时库属性（静态 libsodium 需 /MT，否则 vdisk 自身对象默认 /MD 与之冲突 LNK2038）
+get_target_property(_fe_msvc_rt FileEncryptor MSVC_RUNTIME_LIBRARY)
+if(MSVC AND _fe_msvc_rt)
+  set_target_properties(vdisk PROPERTIES MSVC_RUNTIME_LIBRARY "${_fe_msvc_rt}")
+endif()
+target_compile_definitions(vdisk PRIVATE VDISK_BUILD)   # 打开 vdisk.h 的 dllexport/visibility
+
+# 输出与 exe 同目录（VS 生成器下同为 bin/<Config>/），FE-Mounter 才能同目录绝对路径加载。
+set_target_properties(vdisk PROPERTIES
+  RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
+  LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
+  ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
+  CXX_VISIBILITY_PRESET hidden          # GCC/Clang：默认隐藏内部符号，仅 VDISK_API 可见
+  VISIBILITY_INLINES_HIDDEN ON)
+if(MSVC)
+  # CFG：编译与链接两侧都要给（与 exe 一致）
+  target_compile_options(vdisk PRIVATE /guard:cf)
+  target_link_options(vdisk PRIVATE /guard:cf)
+endif()
+
+# ---- FE-Mounter：加载 libvdisk 的 holder 进程（不链接核心，运行时 dlopen/LoadLibrary）----
+# 独立可执行文件，不属于 CLI 本体：CLI 只做文件加密/解密，加密盘挂载是可选能力
+# （GUI MSI 里作为可勾选的 VaultFeature）。默认不随 CLI 构建，需要时：
+#   -D FE_BUILD_MOUNT=ON（与 CLI 一起构建）
+#   或直接用 FE-Mounter/CMakeLists.txt 单独构建（产出会自动放到 CLI 的 bin 目录）
+option(FE_BUILD_MOUNT "Build FE-Mounter (encrypted vault mount holder)" OFF)
+if(ANDROID AND FE_BUILD_MOUNT)
+  # Android 既无 FUSE 挂载权限也无 WinFSP，holder 进程在此毫无意义
+  message(WARNING "Android 不支持挂载：已强制关闭 FE_BUILD_MOUNT。")
+  set(FE_BUILD_MOUNT OFF)
+endif()
+if(FE_BUILD_MOUNT)
+# 代码按职责拆分在 FE-Mounter/：main(入口/FUSE) fe_vdisk(加载/工具) fe_ipc(§5.1) fe_service(常驻) fe_winfsp(Windows挂载)
+set(FE_MOUNT_SOURCES
+  ${CMAKE_CURRENT_SOURCE_DIR}/../FE-Mounter/main.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/../FE-Mounter/fe_vdisk.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/../FE-Mounter/fe_ipc.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/../FE-Mounter/fe_service.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/../FE-Mounter/fe_winfsp.cpp)
+add_executable(FE-Mounter ${FE_MOUNT_SOURCES})
+target_include_directories(FE-Mounter PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+set_target_properties(FE-Mounter PROPERTIES
+  RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
+if(MSVC)
+  target_compile_options(FE-Mounter PRIVATE /guard:cf)
+  target_link_options(FE-Mounter PRIVATE /guard:cf)
+endif()
+if(UNIX)
+  target_link_libraries(FE-Mounter PRIVATE ${CMAKE_DL_LIBS})   # dlopen
+endif()
+
+# ---- fuse3（Linux 只读挂载，M2）----
+# pkg-config 探测；未装 libfuse3-dev 时 FE-Mounter 仍可构建（selftest/cat/bench/
+# lifecycle/ipc 全部可用，仅缺 mount 子命令），不硬失败。
+if(UNIX AND NOT APPLE)
+  find_package(PkgConfig QUIET)
+  if(PKG_CONFIG_FOUND)
+    pkg_check_modules(FUSE3 QUIET fuse3>=3.0)
+  endif()
+  if(FUSE3_FOUND)
+    target_compile_definitions(FE-Mounter PRIVATE FE_HAVE_FUSE=1)
+    # 源码按 <fuse3/fuse.h> 写，故要 includedir（.../include），不是 pkg-config Cflags
+    # 里那个已带 /fuse3 的路径，也不是 INCLUDE_DIRS（那是 .../include/fuse3，层级差一层）。
+    if(FUSE3_INCLUDEDIR)
+      target_include_directories(FE-Mounter PRIVATE "${FUSE3_INCLUDEDIR}")
+    endif()
+    target_link_libraries(FE-Mounter PRIVATE ${FUSE3_LIBRARIES})
+    target_link_directories(FE-Mounter PRIVATE ${FUSE3_LIBRARY_DIRS})
+    message(STATUS "fuse3: ${FUSE3_VERSION} (${FUSE3_LIBRARIES}, inc=${FUSE3_INCLUDEDIR})")
+  else()
+    message(STATUS "fuse3: 未找到（装 libfuse3-dev 启用 Linux mount 子命令）")
+  endif()
+endif()
+
+# ---- WinFSP（Windows 原生只读挂载，M3）----
+# 可选 SDK：环境变量 FEWIN_FSP_ROOT 或默认安装位置；找到才定义 FE_HAVE_WINFSP，
+# 未装则 FE-Mounter 仅提供 selftest/cat/bench/lifecycle（挂载能力缺席，不报错）。
+if(WIN32)
+  set(FE_HAVE_WINFSP OFF)
+  set(_winfsp_root "$ENV{FEWIN_FSP_ROOT}")
+  if(NOT _winfsp_root)
+    foreach(_p "C:/Program Files (x86)/WinFsp" "C:/Program Files/WinFsp")
+      if(EXISTS "${_p}/inc/winfsp/winfsp.h")
+        set(_winfsp_root "${_p}")
+        break()
+      endif()
+    endforeach()
+  endif()
+  if(_winfsp_root AND EXISTS "${_winfsp_root}/inc/winfsp/winfsp.h")
+    if(CMAKE_SIZEOF_VOID_P EQUAL 8)
+      set(_winfsp_lib "${_winfsp_root}/lib/winfsp-x64.lib")
+    else()
+      set(_winfsp_lib "${_winfsp_root}/lib/winfsp-x86.lib")
+    endif()
+    if(EXISTS "${_winfsp_lib}")
+      set(FE_HAVE_WINFSP ON)
+      # winfsp.h 内部 #include <winfsp/fsctl.h>，故 inc 与 inc/winfsp 都要在路径上
+      target_include_directories(FE-Mounter PRIVATE "${_winfsp_root}/inc" "${_winfsp_root}/inc/winfsp")
+      target_compile_definitions(FE-Mounter PRIVATE FE_HAVE_WINFSP=1)
+      target_link_libraries(FE-Mounter PRIVATE "${_winfsp_lib}")
+      # usermode 驱动 DLL 复制到 exe 同目录：FE-Mounter 静态导入 winfsp-x64.dll，
+      # 缺失则进程加载即 0xC0000135（SDK 装在 Program Files 不在搜索路径）
+      add_custom_command(TARGET FE-Mounter POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${_winfsp_root}/bin/winfsp-x64.dll" "$<TARGET_FILE_DIR:FE-Mounter>/")
+      message(STATUS "WinFSP: ${_winfsp_root} (${_winfsp_lib})")
+    else()
+      message(WARNING "找到 WinFSP 头但缺 ${_winfsp_lib}；FE-Mounter 不含挂载能力。")
+    endif()
+  else()
+    message(STATUS "WinFSP: 未找到 SDK（设 FEWIN_FSP_ROOT 指向安装目录以启用 Windows 挂载）")
+  endif()
+endif()   # WIN32（WinFsp 探测）
+endif()   # FE_BUILD_MOUNT
+
 # 构建期静态链接校验（Linux/macOS）：确认 zstd 已静态打进可执行文件，而非动态依赖 libzstd.so。
 if(UNIX AND NOT APPLE AND FE_ZSTD_STATIC)
   find_program(OBJDUMP_EXECUTABLE NAMES objdump)
@@ -764,6 +958,38 @@ else()
                  "先构建 Updater 再打包即可得到它。")
 endif()
 
+# ---- Linux：加密盘挂载组件（FE-Mounter + libvdisk.so）----
+# 与 Windows MSI 的 VaultFeature 对位：不选/不装也不影响 CLI 本体（文件加密解密照常），
+# 只是不能把加密盘挂成目录。FE-Mounter 是独立工程，产物由它自己的构建树产出，
+# 这里按若干候选路径取现成二进制（同 Updater 的做法，不在本工程里重编一遍）。
+if(NOT WIN32)
+  # libvdisk.so 是本工程 vdisk 目标的直接产物，装 /usr/lib（fe-mounter 在 /usr/bin，
+  # 两者不同目录：fe_vdisk.cpp 的 default_lib_path() 会按序探测系统库目录）
+  install(TARGETS vdisk LIBRARY DESTINATION lib)
+
+  set(_fe_mount_candidates
+      "${CMAKE_SOURCE_DIR}/../FE-Mounter/out/bin/FE-Mounter"
+      "${CMAKE_SOURCE_DIR}/../FE-Mounter/out/bin/Release/FE-Mounter"
+      "${CMAKE_BINARY_DIR}/bin/FE-Mounter")
+  set(FE_MOUNT_STAGE "")
+  foreach(_c IN LISTS _fe_mount_candidates)
+    if(NOT FE_MOUNT_STAGE AND EXISTS "${_c}")
+      set(FE_MOUNT_STAGE "${_c}")
+    endif()
+  endforeach()
+  if(FE_MOUNT_STAGE)
+    install(PROGRAMS "${FE_MOUNT_STAGE}" DESTINATION bin RENAME fe-mounter
+            PERMISSIONS OWNER_EXECUTE OWNER_READ
+                        GROUP_EXECUTE GROUP_READ
+                        WORLD_EXECUTE WORLD_READ)
+    message(STATUS "[package] 加密盘挂载组件: ${FE_MOUNT_STAGE} -> /usr/bin/fe-mounter")
+  else()
+    message(STATUS "[package] 未找到 FE-Mounter（试过 ${_fe_mount_candidates}）："
+                   "DEB/RPM 不含加密盘挂载组件，只装 CLI 本体。"
+                   "先构建 FE-Mounter/CMakeLists.txt 再打包即可得到它。")
+  endif()
+endif()
+
 set(CPACK_PACKAGE_NAME "file-encryptor-cli")
 set(CPACK_PACKAGE_VERSION "${PROJECT_VERSION}")   # 与 project(VERSION) 同步
 set(CPACK_PACKAGE_VENDOR "FileEncryptor")
@@ -790,6 +1016,9 @@ set(CPACK_DEBIAN_PACKAGE_PRIORITY "optional")
 set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS OFF)
 # 显式清空依赖声明，确保 DEB 的 Depends 字段为空（零声明依赖、完全自包含）
 set(CPACK_DEBIAN_PACKAGE_DEPENDS "")
+# 但 fe-mounter 挂载加密盘要 dlopen/链接 libfuse3：放进 Suggests（Recommends 会强装），
+# 只在用户真去挂载时才需要，不该让只用法加密的 CLI 用户被拖上 FUSE。
+set(CPACK_DEBIAN_PACKAGE_SUGGESTS "libfuse3-3 (>= 3.0)")
 
 # —— RPM ——
 set(CPACK_RPM_PACKAGE_LICENSE "GPLv3")
@@ -798,6 +1027,8 @@ set(CPACK_RPM_PACKAGE_GROUP "Applications/System")
 set(CPACK_RPM_PACKAGE_AUTOREQ OFF)
 # 同时关闭自动 Provides/Requires，确保 RPM 不声明任何依赖
 set(CPACK_RPM_PACKAGE_AUTOREQPROV OFF)
+# 与 DEB 的 Suggests 对位：libfuse3 只是挂载加密盘时需要
+set(CPACK_RPM_PACKAGE_RECOMMENDS "libfuse3")
 
 # ---------- 模糊测试 harness（可选） ----------
 # FE_BUILD_FUZZ=ON 构建 FileEncryptorFuzz：驱动 CLI/fuzz/fuzz_ptd_header.cpp。

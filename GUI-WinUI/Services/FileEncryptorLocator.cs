@@ -7,12 +7,12 @@ namespace FileEncryptorGUI.Services;
 // 探测 CLI 路径
 public static class FileEncryptorLocator
 {
-    public const string GuiVersion = "2.1.3";
+    public const string GuiVersion = "3.0.0";
     public static string CliDownloadUrl =>
         $"https://github.com/Texas-albe/FileEncryptor/releases/tag/GUI{GuiVersion}_CLI{ExpectedCliVersion}";
 
     // 配套 CLI 版本
-    public static string ExpectedCliVersion => "2.9.0";
+    public static string ExpectedCliVersion => "3.0.0";
 
     public static string[] GetExpectedNames()
     {
@@ -20,11 +20,48 @@ public static class FileEncryptorLocator
         return new[]
         {
             $"FileEncryptorCLI-{ver}-cmd-Windows.exe",
+            // 预发布后缀：CMake project(VERSION) 只支持数值版，产物名无 -alpha.N
+            "FileEncryptorCLI-3.0.0-cmd-Windows.exe",
             "FileEncryptorCLI.exe",
             "FileEncryptor.exe",
             "file-encryptor-cli.exe",
             "fe.exe",
         };
+    }
+
+    // 加密盘挂载持有进程：与 CLI 分离的可选组件（MSI 的 VaultFeature 才装）
+    public static string[] GetMounterExpectedNames()
+    {
+        if (OperatingSystem.IsWindows())
+            return new[] { "FE-Mounter.exe", "fe-mounter.exe" };
+        return new[] { "FE-Mounter", "fe-mounter" };
+    }
+
+    public static string? LocateMounter()
+    {
+        var envPath = Environment.GetEnvironmentVariable("FE_MOUNTER_EXE");
+        if (!string.IsNullOrEmpty(envPath) && IsExecutable(envPath)) return envPath;
+
+        var names = GetMounterExpectedNames();
+        var selfDir = AppContext.BaseDirectory;
+        var found = FindInDir(selfDir, names);
+        if (found != null) return found;
+
+        var installDir = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "FileEncryptor");
+        found = FindInDir(installDir, names);
+        if (found != null) return found;
+
+        var pathEnv = Environment.GetEnvironmentVariable("PATH");
+        if (!string.IsNullOrEmpty(pathEnv))
+        {
+            foreach (var p in pathEnv.Split(Path.PathSeparator))
+            {
+                found = FindInDir(p, names);
+                if (found != null) return found;
+            }
+        }
+        return null;
     }
 
     private static bool IsExecutable(string path)

@@ -98,8 +98,8 @@ struct FileHeaderV5 {
 };
 #pragma pack(pop)
 
-// v6 容器：v5 前缀之后追加固定容器扩展区。载荷由随机 DEK 加密，DEK 再用口令派生的
-// KEK（Argon2id）包裹；解耦口令与密文，是密钥轮换（rewrap）零重加密的基础。
+// v6 容器：v5 前缀之后追加固定容器扩展区。载荷由随机 DEK 加密，DEK 再用密码派生的
+// KEK（Argon2id）包裹；解耦密码与密文，是密钥轮换（rewrap）零重加密的基础。
 #pragma pack(push, 1)
 struct FileHeaderV6 {
     unsigned char magic[4];
@@ -153,7 +153,7 @@ size_t header_size_for_version(unsigned char ver);
 // 按版本返回 header_hmac 覆盖字节数
 size_t header_hmac_cover(unsigned char ver);
 
-// 明文 = 16 字节固定标记 || 32 字节 DEK；标记用于恒定时间校验口令正确性
+// 明文 = 16 字节固定标记 || 32 字节 DEK；标记用于恒定时间校验密码正确性
 bool wrap_dek(const unsigned char* dek, const unsigned char* kek,
               unsigned char nonce[24], unsigned char box[64]);
 bool unwrap_dek(const unsigned char* box, const unsigned char* kek,

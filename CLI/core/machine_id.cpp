@@ -168,6 +168,9 @@ static std::string read_text_file(const char* path) {
 }
 
 static std::string linux_board_serial() {
+#ifdef __ANDROID__
+    return std::string();   // Android 无 dmi，/var/lib/dbus/machine-id 也不可读
+#endif
     static const char* paths[] = {
         "/sys/class/dmi/id/product_uuid",
         "/sys/class/dmi/id/board_serial",
@@ -184,6 +187,10 @@ static std::string linux_board_serial() {
 
 // 区块 linux MAC：第一块已启用且非回环的链路层地址
 static bool linux_first_mac(std::string& mac_hex) {
+#ifdef __ANDROID__
+    (void)mac_hex;
+    return false;   // Android 10+ 限制 MAC 访问，getifaddrs 只返回全零地址
+#endif
     struct ifaddrs* ifa = nullptr;
     if (getifaddrs(&ifa) != 0 || !ifa) return false;
     bool found = false;

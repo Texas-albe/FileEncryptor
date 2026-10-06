@@ -33,7 +33,7 @@ AsymOutcome fe_recover_dek_from_stanzas(const std::vector<RecipientStanza>& stan
 // 身份私钥（"AGE-SECRET-KEY-..."）反推收件人公钥（"age1..."）
 AsymOutcome fe_identity_to_recipient(const std::string& identity, std::string& pub);
 
-// Argon2id → 私钥 → 公钥，确定性派生。salt 空则内部生成，同口令+同盐 ⇒ 同密钥对。
+// Argon2id → 私钥 → 公钥，确定性派生。salt 空则内部生成，同密码+同盐 ⇒ 同密钥对。
 // priv 敏感，调用方负责清零。
 AsymOutcome fe_derive_keypair(const char* pw, size_t pw_len,
                               std::vector<unsigned char>& salt,

@@ -10,11 +10,11 @@ class QPlainTextEdit;
 class QSpinBox;
 class QPushButton;
 
-// 预览请求：外部负责填好 programPath / filePath / 口令
+// 预览请求：外部负责填好 programPath / filePath / 密码
 struct PreviewRequest {
     QString programPath;
     QString filePath;
-    // 为空表示非对称/无需口令
+    // 为空表示非对称/无需密码
     QByteArray password;
     // 预览字节数
     int maxBytes = 4096;

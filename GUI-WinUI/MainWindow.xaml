@@ -39,6 +39,20 @@
                         <ToggleMenuFlyoutItem x:Name="MenuLangEn" Text="English" Click="OnLangEn" />
                         <ToggleMenuFlyoutItem x:Name="MenuLangRu" Text="Русский" Click="OnLangRu" />
                     </MenuFlyoutSubItem>
+                    <MenuFlyoutSeparator />
+                    <!-- 加密盘：库管理（CLI 子命令）+ 挂载控制端（FE-Mounter 常驻持有，锁定/解锁走受限 IPC） -->
+                    <MenuFlyoutSubItem x:Name="MenuVault" Text="加密盘" IsEnabled="{x:Bind ViewModel.VaultAvailable, Mode=OneWay}">
+                        <MenuFlyoutItem x:Name="MenuVaultInit" Text="新建加密盘..." Click="OnVaultInit" />
+                        <MenuFlyoutItem x:Name="MenuVaultList" Text="查看盘内文件..." Click="OnVaultList" />
+                        <MenuFlyoutSeparator />
+                        <MenuFlyoutItem x:Name="MenuVaultRekey" Text="修改加密盘密码..." Click="OnVaultRekey" />
+                        <MenuFlyoutItem x:Name="MenuVaultRecoveryCreate" Text="生成恢复码..." Click="OnVaultRecoveryCreate" />
+                        <MenuFlyoutItem x:Name="MenuVaultRecoveryOpen" Text="用恢复码找回密码..." Click="OnVaultRecoveryOpen" />
+                        <MenuFlyoutSeparator />
+                        <MenuFlyoutItem x:Name="MenuVaultMount" Text="挂载为磁盘..." Click="OnVaultMount" />
+                        <MenuFlyoutItem x:Name="MenuVaultLock" Text="暂时锁定" Click="OnVaultLock" />
+                        <MenuFlyoutItem x:Name="MenuVaultUnlock" Text="重新解锁..." Click="OnVaultUnlock" />
+                    </MenuFlyoutSubItem>
                 </controls:MenuBarItem>
                 <controls:MenuBarItem x:Name="MenuAbout" Title="关于">
                     <MenuFlyoutItem x:Name="MenuCheckUpdate" Text="检查更新..." Click="OnCheckForUpdate" />
@@ -68,6 +82,7 @@
                                  选中态改由 Checked/Unchecked 事件 + DataContext 同步。 -->
                             <DataTemplate x:DataType="models:SelectablePath">
                                 <CheckBox HorizontalAlignment="Stretch"
+                                          Loaded="OnItemLoaded"
                                           Checked="OnItemCheckedChanged" Unchecked="OnItemCheckedChanged">
                                     <TextBlock Text="{x:Bind Path}" TextTrimming="CharacterEllipsis" />
                                 </CheckBox>
@@ -121,7 +136,7 @@
                                           VerticalScrollBarVisibility="Disabled" Padding="0,2,14,14">
                             <StackPanel x:Name="KeyMgmtRow" Orientation="Horizontal" Spacing="16">
                                 <RadioButton x:Name="RbKeyGen" Content="生成密钥对" GroupName="KeyMgmt" Checked="OnKeyMgmtRadioChecked" />
-                                <RadioButton x:Name="RbDerive" Content="口令派生密钥对" GroupName="KeyMgmt" Checked="OnKeyMgmtRadioChecked" />
+                                <RadioButton x:Name="RbDerive" Content="密码派生密钥对" GroupName="KeyMgmt" Checked="OnKeyMgmtRadioChecked" />
                                 <RadioButton x:Name="RbPubKey" Content="导出公钥" GroupName="KeyMgmt" Checked="OnKeyMgmtRadioChecked" />
                             </StackPanel>
                             </ScrollViewer>
@@ -135,7 +150,7 @@
                                           VerticalScrollBarVisibility="Disabled" Padding="0,2,14,14">
                             <StackPanel x:Name="WrapRow" Orientation="Horizontal" Spacing="16">
                                 <RadioButton x:Name="RbWrapKey" Content="包装密钥" GroupName="Wrap" Checked="OnWrapRadioChecked"
-                                             ToolTipService.ToolTip="把一份 32 字节的数据密钥单独包进 .fekw 文件，用口令或收件人公钥保护" />
+                                             ToolTipService.ToolTip="把一份 32 字节的数据密钥单独包进 .fekw 文件，用密码或收件人公钥保护" />
                                 <RadioButton x:Name="RbUnwrapKey" Content="解开密钥" GroupName="Wrap" Checked="OnWrapRadioChecked"
                                              ToolTipService.ToolTip="把 .fekw 里的数据密钥还原成 32 字节文件" />
                             </StackPanel>
@@ -166,7 +181,7 @@
                                                    ToolTipService.ToolTip="包装密钥的算法">
                                     <controls:ComboBoxItem Content="AES-256-KWP（推荐，长度不限）" />
                                     <controls:ComboBoxItem Content="AES-KW（兼容旧工具）" />
-                                    <controls:ComboBoxItem Content="收件人公钥（不需要口令）" />
+                                    <controls:ComboBoxItem Content="收件人公钥（不需要密码）" />
                                 </controls:ComboBox>
                             </Grid>
                             <TextBlock x:Name="WrapIntroText" TextWrapping="Wrap"
@@ -217,6 +232,17 @@
                             <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="4">
                                 <TextBox x:Name="OutDirEdit" PlaceholderText="留空 = 输出到源文件目录" Width="320" TextChanged="OnOutDirChanged" />
                                 <Button Content="浏览..." Click="OnBrowseOutDir" />
+                            </StackPanel>
+                        </Grid>
+
+                        <!-- 加密盘：勾选后产物入盘并登记进加密索引（CLI 3.0.0+） -->
+                        <Grid ColumnDefinitions="120,*" x:Name="VaultRow" Visibility="Collapsed">
+                            <TextBlock Grid.Column="0" Text="加密盘" VerticalAlignment="Center" TextWrapping="Wrap" />
+                            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                                <CheckBox x:Name="ChkIntoVault" Content="入加密盘" Checked="OnIntoVaultChanged" Unchecked="OnIntoVaultChanged"
+                                          VerticalAlignment="Center" ToolTipService.ToolTip="勾选后产物写入加密盘目录并登记进加密索引；不选则是普通加密" />
+                                <TextBox x:Name="VaultDirEdit" PlaceholderText="加密盘目录或盘符（如 Z:）" Width="240" IsEnabled="False" TextChanged="OnVaultDirChanged" />
+                                <Button x:Name="BtnVaultBrowse" Content="浏览..." Click="OnBrowseVaultDir" IsEnabled="False" />
                             </StackPanel>
                         </Grid>
 

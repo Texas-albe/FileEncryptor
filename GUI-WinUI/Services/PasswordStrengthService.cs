@@ -1,4 +1,4 @@
-namespace FileEncryptorGUI.Services;
+﻿namespace FileEncryptorGUI.Services;
 
 public enum StrengthLevel { Empty, Weak, Medium, Strong }
 
@@ -84,7 +84,7 @@ public static class PasswordStrengthService
         int len = password.Length;
         if (len < MinPasswordLength)
         {
-            reason = L10n.F("口令过短（至少 {0} 个字符）。", MinPasswordLength);
+            reason = L10n.F("密码过短（至少 {0} 个字符）。", MinPasswordLength);
             return false;
         }
 
@@ -112,11 +112,11 @@ public static class PasswordStrengthService
                 if (password[i] != password[0]) { allSame = false; break; }
             }
             if (!allSame) return true;
-            reason = L10n.T("口令过弱：请不要使用重复字符。");
+            reason = L10n.T("密码过弱：请不要使用重复字符。");
             return false;
         }
 
-        reason = L10n.T("口令过弱：请至少含 2 类字符（小写/大写/数字/符号），或长度 >= 16。");
+        reason = L10n.T("密码过弱：请至少含 2 类字符（小写/大写/数字/符号），或长度 >= 16。");
         return false;
     }
 }

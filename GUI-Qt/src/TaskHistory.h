@@ -41,6 +41,9 @@ struct TaskRecord {
     QString wrapOutput;
     QString wrapAlg;
     bool    restoreName=false;
+    // 打包为一个文件（--pack）与入加密盘（--into-vault）：复原历史任务时需一并回填
+    bool    pack=false;
+    QString intoVault;
 };
 
 class TaskHistory {

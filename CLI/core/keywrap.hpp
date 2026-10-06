@@ -20,7 +20,7 @@ const char* keywrap_alg_name(uint8_t by);
 
 // 包装 DEK。kwp/aes-kw 路线 kek 与 salt 必填（salt 写入头部供解包复现），to_pub 忽略。
 // pubkey 路线 to_pub 必填，复用非对称层的 stanza，故 X25519/X448/ML-KEM 都支持，
-// 不需要口令与 KDF。
+// 不需要密码与 KDF。
 bool keywrap_pack(const unsigned char* dek, size_t dek_len,
                   const unsigned char* kek, uint8_t by,
                   const std::string& to_pub,
@@ -29,7 +29,7 @@ bool keywrap_pack(const unsigned char* dek, size_t dek_len,
                   std::string& error);
 
 // 解包 DEK。kwp/aes-kw 给 kek，pubkey 给身份私钥串。
-// 失败文案不区分口令错与数据被改，避免侧信道。
+// 失败文案不区分密码错与数据被改，避免侧信道。
 bool keywrap_unpack(const unsigned char* blob, size_t blob_len,
                     const unsigned char* kek,
                     const std::string& identity,

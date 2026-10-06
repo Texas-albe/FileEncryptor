@@ -60,6 +60,10 @@
 #include <QDropEvent>
 #include <QMimeData>
 #include <QDirIterator>
+#include <QFormLayout>
+#include <QDialogButtonBox>
+#include <QDialog>
+#include <QTemporaryFile>
 #include <QDateTime>
 #include <QUrl>
 #include <QSaveFile>
@@ -87,6 +91,7 @@
 #include <QTemporaryFile>
 #include <QThread>
 #include <QTimer>
+#include <QInputDialog>
 #include <QtConcurrent/QtConcurrentRun>
 #include <QFutureWatcher>
 #include <QElapsedTimer>
@@ -262,6 +267,26 @@ void MainWindow::buildMenu() {
     connect(actRetryCli,&QAction::triggered,this,&MainWindow::onRetryCliDetection);
     toolsMenu->addSeparator();
 
+    // 加密盘：库管理（CLI 子命令）+ 挂载控制端。与 WinUI 前端保持同一套 8 项，
+    // 重建索引/库内重加密/删除恢复密钥属内部维护动作，不进 GUI
+    m_vaultMenu=toolsMenu->addMenu(tr("加密盘"));
+    auto addVaultAct=[&](const QString& label,const QString& tip,void(MainWindow::*slot)()) {
+        auto* a=m_vaultMenu->addAction(label);
+        a->setToolTip(tip);
+        connect(a,&QAction::triggered,this,slot);
+    };
+    addVaultAct(tr("新建加密盘..."),tr("在选中的空文件夹里建一块加密盘"),&MainWindow::onVaultInit);
+    addVaultAct(tr("查看盘内文件..."),tr("列出这块盘里已登记的文件"),&MainWindow::onVaultList);
+    m_vaultMenu->addSeparator();
+    addVaultAct(tr("修改加密盘密码..."),tr("把盘里所有文件和索引都换成新密码"),&MainWindow::onVaultRekey);
+    addVaultAct(tr("生成恢复码..."),tr("生成 48 位恢复码，忘密码时能取回原密码"),&MainWindow::onVaultRecoveryCreate);
+    addVaultAct(tr("用恢复码找回密码..."),tr("输入当初抄下的恢复码，取回这块盘的密码"),&MainWindow::onVaultRecoveryOpen);
+    m_vaultMenu->addSeparator();
+    // M3/M4 控制端：挂载由 FE-Mounter 常驻持有，锁定/解锁经受限 IPC（CLI 不持有挂载）
+    addVaultAct(tr("挂载为磁盘..."),tr("把加密盘挂成盘符，1 分钟不操作会自动锁定"),&MainWindow::onVaultMount);
+    addVaultAct(tr("暂时锁定"),tr("立刻锁住已挂载的盘，清空内存里的密钥"),&MainWindow::onVaultLock);
+    addVaultAct(tr("重新解锁..."),tr("用密码解锁已锁定的盘"),&MainWindow::onVaultUnlock);
+
     auto* langMenu=toolsMenu->addMenu(tr("语言(&L)"));
     auto* langGroup=new QActionGroup(langMenu);
     auto addLang=[&](const QString& label,const QString& id) {
@@ -395,6 +420,9 @@ void MainWindow::handleCheckResult(const QByteArray& out, const QString& updater
         return;
     }
     const QJsonObject o = doc.object();
+    // 本地的 GUI 与配套 CLI 版本，任何结果都带上，避免只看 GUI 版本号
+    const QString curVer = tr("GUI %1 / CLI %2")
+        .arg(FileEncryptorLocator::guiVersion(), FileEncryptorLocator::version());
     if (!o.value(QStringLiteral("ok")).toBool()) {
         // 把更新器给的具体原因（网络/超时/证书/限流）显示出来，别只丢一个错误码
         const QString code = o.value(QStringLiteral("error")).toString();
@@ -410,7 +438,9 @@ void MainWindow::handleCheckResult(const QByteArray& out, const QString& updater
         QMessageBox box(this);
         box.setWindowTitle(tr("发现新版本"));
         box.setText(tr("发现新版本 %1。").arg(latest));
-        box.setInformativeText(notes + QStringLiteral("\n\n") + tr("是否现在下载并安装？"));
+        box.setInformativeText(notes + QStringLiteral("\n\n") +
+            tr("当前版本：%1").arg(curVer) + QStringLiteral("\n\n") +
+            tr("是否现在下载并安装？"));
         box.setStandardButtons(QMessageBox::Yes | QMessageBox::No);
         box.setDefaultButton(QMessageBox::Yes);
         if (box.exec() == QMessageBox::Yes)
@@ -421,7 +451,7 @@ void MainWindow::handleCheckResult(const QByteArray& out, const QString& updater
                 o.value(QStringLiteral("size")).toVariant().toLongLong());
     } else {
         QMessageBox::information(this, tr("检查更新"),
-            tr("已是最新版本（%1）。").arg(o.value(QStringLiteral("current_version")).toString()));
+            tr("已是最新版本（%1）。").arg(curVer));
     }
 }
 
@@ -570,14 +600,14 @@ void MainWindow::openPreviewFor(const QString& path) {
     }
 
     QByteArray pw;
-    // 与 updateAsymVisibility 同一判据：解密时填了私钥文件即走非对称，不需要口令
+    // 与 updateAsymVisibility 同一判据：解密时填了私钥文件即走非对称，不需要密码
     const bool asymDecrypt = (act == static_cast<int>(CryptoAction::Decrypt))
         && m_identityEdit && !m_identityEdit->text().trimmed().isEmpty();
     if (asymDecrypt) {
-        // 非对称解密靠私钥文件（CLI 自行识别），不问口令
+        // 非对称解密靠私钥文件（CLI 自行识别），不问密码
     } else {
         PasswordDialog dlg(this);
-        dlg.setPurpose(tr("解密口令（用于预览）"));
+        dlg.setPurpose(tr("解密密码（用于预览）"));
         dlg.setRequireConfirm(false);
         if (dlg.exec() != QDialog::Accepted) return;
         const std::vector<unsigned char> v = dlg.takePassword();
@@ -1027,10 +1057,23 @@ void MainWindow::onProbeFinished(int, QProcess::ExitStatus) {
     m_packAvailable=out.contains(QStringLiteral("pack=1"));
     // 包装层要 OpenSSL：字段缺失即视为不支持，否则会下发旧 CLI 不认的 --wrap-key
     m_keywrapAvailable=out.contains(QStringLiteral("keywrap=1"));
+    // 加密盘同理：vault=1 才有 --into-vault / vault-* 子命令（3.0.0+）
+    m_vaultAvailable=out.contains(QStringLiteral("vault=1"));
+    // 可写挂载能力：vault_rw=1 才允许「可写挂载」（M6）
+    m_vaultRwAvailable=out.contains(QStringLiteral("vault_rw=1"));
+    // 顺带探测 FE-Mounter（挂载组件），失败时挂载动作会提示用户
+    locateMounter();
+    if(m_vaultMenu) {
+        m_vaultMenu->setEnabled(m_vaultAvailable);
+        m_vaultMenu->setToolTipsVisible(true);
+    }
     updateSm4Visibility();
     updatePackVisibility();
     updateWrapKeyVisibility();
     updateAsymVisibility();
+    // 探测完成可能早于界面默认动作（m_rbEncrypt->setChecked 不发信号）落定：下一事件循环再刷一次，
+    // 确保「入加密盘」显隐与当前动作一致，免得要切模式才出现。
+    QTimer::singleShot(0, this, [this]{ updateAsymVisibility(); });
 }
 
 void MainWindow::onRetryCliDetection() {
@@ -1123,11 +1166,11 @@ QWidget* MainWindow::buildCenterPanel() {
     m_rbBatchEncrypt=new QRadioButton(tr("批量加密"));
     m_rbBatchDecrypt=new QRadioButton(tr("批量解密"));
     m_rbKeyGen=new QRadioButton(tr("生成密钥对"));
-    m_rbDerive=new QRadioButton(tr("口令派生密钥对"));
+    m_rbDerive=new QRadioButton(tr("密码派生密钥对"));
     m_rbPubKey=new QRadioButton(tr("导出公钥"));
     m_rbWrapKey=new QRadioButton(tr("包装密钥"));
     m_rbUnwrapKey=new QRadioButton(tr("解开密钥"));
-    m_rbWrapKey->setToolTip(tr("把一份 32 字节的数据密钥单独包进 .fekw 文件，用口令或收件人公钥保护"));
+    m_rbWrapKey->setToolTip(tr("把一份 32 字节的数据密钥单独包进 .fekw 文件，用密码或收件人公钥保护"));
     m_rbUnwrapKey->setToolTip(tr("把 .fekw 里的数据密钥还原成 32 字节文件"));
     m_actionGroup=new QButtonGroup(this);
     m_actionGroup->addButton(m_rbEncrypt,static_cast<int>(CryptoAction::Encrypt));
@@ -1284,7 +1327,7 @@ QWidget* MainWindow::buildCenterPanel() {
     lay->addWidget(m_keygenWidget,row,0,1,2);
     row++;
 
-    // 密钥包装：文件选择 + 算法下拉。口令/公钥沿用上面的收件人行与密钥行，不重复造。
+    // 密钥包装：文件选择 + 算法下拉。密码/公钥沿用上面的收件人行与密钥行，不重复造。
     m_wrapWidget=new QGroupBox(tr("密钥包装"));
     {
         auto* wv=new QVBoxLayout(m_wrapWidget);
@@ -1328,7 +1371,7 @@ QWidget* MainWindow::buildCenterPanel() {
             m_wrapAlgCombo=new QComboBox;
             m_wrapAlgCombo->addItem(tr("AES-256-KWP（推荐，长度不限）"),static_cast<int>(WrapAlg::Kwp));
             m_wrapAlgCombo->addItem(tr("AES-KW（兼容旧工具）"),static_cast<int>(WrapAlg::AesKw));
-            m_wrapAlgCombo->addItem(tr("收件人公钥（不需要口令）"),static_cast<int>(WrapAlg::Pubkey));
+            m_wrapAlgCombo->addItem(tr("收件人公钥（不需要密码）"),static_cast<int>(WrapAlg::Pubkey));
             m_wrapAlgCombo->setToolTip(tr("包装密钥的算法"));
             ar->addWidget(m_wrapAlgCombo,1);
         }
@@ -1387,6 +1430,22 @@ QWidget* MainWindow::buildCenterPanel() {
     m_chkX448->setToolTip(tr("勾选后非对称封装使用 X448，不勾选则使用 X25519"));
     m_chkWatermark=new QCheckBox(tr("签名水印"));
     m_chkWatermark->setToolTip(tr("在密文尾部追加一条签名水印"));
+    // 加密盘（M1/M4）：入盘勾选 + 库目录
+    m_chkIntoVault=new QCheckBox(tr("入加密盘"));
+    m_chkIntoVault->setToolTip(tr("勾选后产物写入加密盘目录并登记进加密索引；不选则是普通加密"));
+    m_vaultDirEdit=new QLineEdit(this);
+    m_vaultDirEdit->setPlaceholderText(tr("加密盘存储目录（如 E:\\Disks）；也可填本程序挂载过的盘符（如 Z:）"));
+    m_vaultDirEdit->setEnabled(false);
+    m_btnVaultBrowse=new QPushButton(tr("选择…"),this);
+    m_btnVaultBrowse->setEnabled(false);
+    connect(m_chkIntoVault,&QCheckBox::toggled,this,[this](bool on){
+        m_vaultDirEdit->setEnabled(on);
+        m_btnVaultBrowse->setEnabled(on);
+    });
+    connect(m_btnVaultBrowse,&QPushButton::clicked,this,[this]{
+        const QString d=QFileDialog::getExistingDirectory(this,tr("选择加密盘目录"));
+        if(!d.isEmpty()) m_vaultDirEdit->setText(d);
+    });
     optsRow->addWidget(m_sourceCombo);
     optsRow->addWidget(m_chkForce);
     optsRow->addWidget(m_chkPack);
@@ -1398,6 +1457,15 @@ QWidget* MainWindow::buildCenterPanel() {
     m_chkSplit->setToolTip(tr("把密文切成多个 .001/.002 分卷；解密时随便挑一卷即可自动合并"));
     optsRow->addWidget(m_chkSplit);
     optsRow->addStretch();
+
+    // 入盘单独一行：带目录输入框，和开关挤在一排放不下
+    auto* vaultRow=new QHBoxLayout();
+    vaultRow->addWidget(m_chkIntoVault);
+    vaultRow->addWidget(m_vaultDirEdit,1);
+    vaultRow->addWidget(m_btnVaultBrowse);
+    m_optionRows<<vaultRow;
+    lay->addLayout(vaultRow,row,1);
+    row++;
     m_optionRows<<optsRow;
     lay->addLayout(optsRow,row,1);
     row++;
@@ -1451,7 +1519,7 @@ QWidget* MainWindow::buildCenterPanel() {
     m_btnRun=new QPushButton(tr("▶ 运行"));
     m_btnCancel=new QPushButton(tr("■ 取消"));
     m_btnRewrap=new QPushButton(tr("密钥轮换"));
-    m_btnRewrap->setToolTip(tr("用新口令重新包裹文件密钥，密文不动、零重加密开销"));
+    m_btnRewrap->setToolTip(tr("用新密码重新包裹文件密钥，密文不动、零重加密开销"));
     m_btnCancel->setEnabled(false);
     runRow->addWidget(m_btnRewrap);
     runRow->addStretch();
@@ -1527,7 +1595,7 @@ void MainWindow::connectSignals() {
     if(m_wrapOutEdit) connect(m_wrapOutEdit,&QLineEdit::textChanged,this,refresh);
     if(m_wrapAlgCombo) {
         connect(m_wrapAlgCombo,QOverload<int>::of(&QComboBox::currentIndexChanged),this,refresh);
-        // 算法决定「口令还是私钥」，切换后区块显隐要重算
+        // 算法决定「密码还是私钥」，切换后区块显隐要重算
         connect(m_wrapAlgCombo,QOverload<int>::of(&QComboBox::currentIndexChanged),
             this,[this](int){ updateAsymVisibility(); });
     }
@@ -1678,7 +1746,7 @@ void MainWindow::updateAsymVisibility() {
     const bool asym=(!isKeyAction)&&(!isWrapAction)&&
         (m_modeCombo->currentData().toInt()==static_cast<int>(CryptoMode::Asymmetric));
 
-    // 解密不看模式：模式下拉若停在非对称，下一次对称解密会被判成非对称而不弹口令框
+    // 解密不看模式：模式下拉若停在非对称，下一次对称解密会被判成非对称而不弹密码框
     if(asymDecrypt&&asym) {
         for(int i=0;i<m_modeCombo->count();++i) {
             if(m_modeCombo->itemData(i).toInt()==static_cast<int>(CryptoMode::XChaCha20)) {
@@ -1718,6 +1786,14 @@ void MainWindow::updateAsymVisibility() {
     if(m_sourceCombo) m_sourceCombo->setVisible(encFields);
     if(m_chkPack) m_chkPack->setVisible(encFields && m_packAvailable);
     if(m_chkSplit) m_chkSplit->setVisible(encFields);
+    // 入盘：仅加密动作 + CLI 支持时显示；不支持则顺手清掉勾选，避免带着无效参数下发
+    const bool vaultShown = encFields && m_vaultAvailable;
+    if(m_chkIntoVault) {
+        m_chkIntoVault->setVisible(vaultShown);
+        if(!vaultShown && m_chkIntoVault->isChecked()) m_chkIntoVault->setChecked(false);
+    }
+    if(m_vaultDirEdit) m_vaultDirEdit->setVisible(vaultShown);
+    if(m_btnVaultBrowse) m_btnVaultBrowse->setVisible(vaultShown);
     if(!encFields) {
         // 藏起来的开关清掉勾选，CLI 不会收到对当前动作无意义的开关
         if(m_chkSha256&&m_chkSha256->isChecked()) m_chkSha256->setChecked(false);
@@ -1740,18 +1816,18 @@ void MainWindow::updateAsymVisibility() {
         m_keygenWidget->setTitle(tr("随机生成密钥对"));
         m_keygenIntro->setText(tr("在输出目录随机生成一对 %1 密钥：公钥打印到输出面板，私钥写入 rage_private.txt。").arg(curve));
     } else if(derive) {
-        m_keygenWidget->setTitle(tr("口令派生密钥对"));
-        m_keygenIntro->setText(tr("由口令派生一对 X25519 密钥：公钥打印到输出面板，私钥写入 rage_private.txt，"
+        m_keygenWidget->setTitle(tr("密码派生密钥对"));
+        m_keygenIntro->setText(tr("由密码派生一对 X25519 密钥：公钥打印到输出面板，私钥写入 rage_private.txt，"
                                   "盐写入 rage_derive_salt.txt（复现同一密钥对必需）。"));
     } else if(pubkey) {
         m_keygenWidget->setTitle(tr("由私钥导出公钥"));
         m_keygenIntro->setText(tr("读取私钥文件反推出对应公钥，打印到输出面板。"));
     } else if(asymDecrypt) {
         m_keygenWidget->setTitle(tr("非对称解密"));
-        m_keygenIntro->setText(tr("填写身份私钥文件即可解密选中的 .ptd，无需口令。"));
+        m_keygenIntro->setText(tr("填写身份私钥文件即可解密选中的 .ptd，无需密码。"));
     } else if(unwrap && wrapPubkey) {
         m_keygenWidget->setTitle(tr("公钥解包"));
-        m_keygenIntro->setText(tr("该 .fekw 由收件人公钥封装，填写对应身份私钥文件即可取回数据密钥，无需口令。"));
+        m_keygenIntro->setText(tr("该 .fekw 由收件人公钥封装，填写对应身份私钥文件即可取回数据密钥，无需密码。"));
     }
 
     // 包装区块：文件清单不参与，输出目录也不参与（产物路径由包装/解包输出行决定）
@@ -1770,19 +1846,19 @@ void MainWindow::updateAsymVisibility() {
         m_wrapOutEdit->setPlaceholderText(wrap
             ? tr("留空则用 <密钥文件>.fekw")
             : tr("留空则用 <包装文件>.dek"));
-        // 解包时算法写在 blob 头里，下拉只决定「口令还是私钥」，标题随之改口
+        // 解包时算法写在 blob 头里，下拉只决定「密码还是私钥」，标题随之改口
         m_wrapAlgTitle->setText(wrap ? tr("包装算法：") : tr("解密方式："));
         m_wrapAlgCombo->setToolTip(wrap
             ? tr("包装密钥的算法")
             : tr("包装时的算法已记录在 .fekw 里，此处只用于选择解密凭据"));
         if(wrap) {
             m_wrapIntro->setText(wrapPubkey
-                ? tr("把 32 字节数据密钥用收件人公钥封装，不需要口令。")
-                : tr("用口令派生出的密钥包装 32 字节数据密钥。"));
+                ? tr("把 32 字节数据密钥用收件人公钥封装，不需要密码。")
+                : tr("用密码派生出的密钥包装 32 字节数据密钥。"));
         } else {
             m_wrapIntro->setText(wrapPubkey
                 ? tr("从 .fekw 中取回 32 字节数据密钥，需要当初收件人的身份私钥。")
-                : tr("从 .fekw 中取回 32 字节数据密钥，需要包装时使用的口令。"));
+                : tr("从 .fekw 中取回 32 字节数据密钥，需要包装时使用的密码。"));
         }
     }
 
@@ -1916,6 +1992,10 @@ ShellOptions MainWindow::collectOptions() const {
     o.sourceDisposition=m_sourceCombo ? m_sourceCombo->currentData().toInt() : 0;
     o.forceOverwrite=m_chkForce->isChecked();
     o.pack=(m_chkPack && m_chkPack->isChecked());
+    // 入盘：勾了才把库目录传下去；目录留空由校验拦（空串 = 普通加密）
+    if(m_chkIntoVault && m_chkIntoVault->isChecked()) {
+        o.intoVault=m_vaultDirEdit ? m_vaultDirEdit->text().trimmed() : QString();
+    }
     o.split=(m_chkSplit && m_chkSplit->isChecked());
     if(m_splitSize) o.splitSize=m_splitSize->value();
     if(m_splitUnit) o.splitUnit=m_splitUnit->currentIndex();
@@ -1946,7 +2026,7 @@ ShellOptions MainWindow::collectOptions() const {
         if(asymDecrypt) o.keyfilePath=o.identityPath;
         else if(o.action==CryptoAction::PubKey) o.keyfilePath=o.identityPath;
         else if(o.action==CryptoAction::WrapKey) {
-            // 公钥路线没有 KEK，密钥文件行对它无意义，留着会被误当成口令来源下发
+            // 公钥路线没有 KEK，密钥文件行对它无意义，留着会被误当成密码来源下发
             o.keyfilePath=(o.wrapAlg==WrapAlg::Pubkey) ? QString() : o.keyfilePath;
         }
         else if(o.mode==CryptoMode::Asymmetric) o.keyfilePath.clear();
@@ -1989,6 +2069,7 @@ QString MainWindow::resolveRecipients(const QString& raw) const {
 }
 
 // 运行
+
 void MainWindow::onRunClicked() {
     if(!checkCliExists(true)) {
         return;
@@ -2059,6 +2140,47 @@ void MainWindow::onRunClicked() {
     bool isBatch=(o.action==CryptoAction::BatchEncrypt||
         o.action==CryptoAction::BatchDecrypt);
     bool isEnc=(o.action==CryptoAction::Encrypt||o.action==CryptoAction::BatchEncrypt);
+    // 入盘：目录必须已初始化，否则 CLI 会先报库不存在，产物落不进索引
+    if(isEnc && m_chkIntoVault && m_chkIntoVault->isChecked()) {
+        QString vd=o.intoVault.trimmed();
+        // 盘符支持已移除：盘符只是挂载视图，CLI 会拒盘符根，这里提前拦并说清要填什么
+        {
+            QString n=vd;
+            while(n.endsWith(QLatin1Char('\\'))||n.endsWith(QLatin1Char('/'))) n.chop(1);
+            if(n.size()>=1&&n.at(0).isLetter()&&(n.size()==1||n.at(1)==QLatin1Char(':'))) {
+                MsgBox::warn(this,tr("不支持填盘符"),
+                    tr("「入加密盘」只接受加密盘的存储目录，不接受盘符。\n\n"
+                       "请改成磁盘上的真实目录，例如 E:\\Disks —— 那才是加密盘数据实际存放的位置；"
+                       "Z: 只是它的挂载视图。").arg(vd));
+                if(m_vaultDirEdit) m_vaultDirEdit->setFocus();
+                return;
+            }
+        }
+        o.intoVault=vd;
+        if(m_vaultDirEdit) m_vaultDirEdit->setText(vd);
+        if(vd.isEmpty()) {
+            MsgBox::warn(this,tr("缺少加密盘目录"),tr("勾选「入加密盘」后请选择加密盘的存储目录，例如 E:\\Disks。"));
+            if(m_vaultDirEdit) m_vaultDirEdit->setFocus();
+            return;
+        }
+        // 支持直接指定：① 已有加密盘（含 vault.meta）直接追加；
+        // ② 空目录 / 尚无 vault.meta 的目录由 CLI 自动初始化为新盘，不再强制先手工建盘。
+        QFileInfo vi(vd);
+        if(!vi.exists()||!vi.isDir()) {
+            MsgBox::warn(this,tr("加密盘目录无效"),tr("找不到该目录：%1\n请重新选择，或到「工具 → 加密盘 → 初始化新盘」建一个。").arg(vd));
+            if(m_vaultDirEdit) m_vaultDirEdit->setFocus();
+            return;
+        }
+        if(vi.isDir()&&!QDir(vd).isEmpty()
+           &&!QFileInfo::exists(vd+QStringLiteral("/vault.meta"))) {
+            // 非空且不是盘：大概率选错了目录，问一句再自动初始化，避免误把普通文件夹变成盘
+            if(!MsgBox::confirm(this,tr("初始化为新加密盘"),
+                tr("该目录不是已初始化的加密盘：%1\n是否把它初始化为新的加密盘并写入文件？").arg(vd))) {
+                if(m_vaultDirEdit) m_vaultDirEdit->setFocus();
+                return;
+            }
+        }
+    }
     if(isWrapAct) {
         // 包装输入是单个文件，不走文件清单；缺路径或路径不存在都在这里拦下
         if(o.wrapInput.isEmpty()) {
@@ -2147,7 +2269,7 @@ void MainWindow::onRunClicked() {
         }
     }
 
-    // 口令弹窗
+    // 密码弹窗
     const bool wrapPassword=isWrapAct && o.wrapAlg!=WrapAlg::Pubkey
         && o.keyfilePath.isEmpty();
     bool symNeedsPassword = wrapPassword || (!isAsym && o.keyfilePath.isEmpty()
@@ -2162,10 +2284,10 @@ void MainWindow::onRunClicked() {
                    "是否启用「完整文件名还原」？\n（无论是否启用，输出文件的扩展名都会保留。）"));
         }
         PasswordDialog dlg(this);
-        dlg.setPurpose(isDerive ? tr("口令派生")
-            : isWrap ? tr("包装口令")
-            : isUnwrap ? tr("解包口令")
-            : (isEnc ? tr("加密口令") : tr("解密口令")));
+        dlg.setPurpose(isDerive ? tr("密码派生")
+            : isWrap ? tr("包装密码")
+            : isUnwrap ? tr("解包密码")
+            : (isEnc ? tr("加密密码") : tr("解密密码")));
         // 解密与解包都只输一次：原文只有确认，无法确认它与本次输入一致
         dlg.setRequireConfirm(o.action==CryptoAction::Encrypt
             || o.action==CryptoAction::BatchEncrypt || o.action==CryptoAction::Derive
@@ -2221,7 +2343,7 @@ void MainWindow::onRunClicked() {
         req.extraEnv.insert(QStringLiteral("COLUMNS"),QString::number(cols));
     }
 
-    // 公钥路线没有口令可注入；包装动作的口令同样走 --key-stdin
+    // 公钥路线没有密码可注入；包装动作的密码同样走 --key-stdin
     if(!(isKeyGen||isPubKey) && !isAsym && o.keyfilePath.isEmpty() && !pw.empty()) {
         req.stdinData=QByteArray(reinterpret_cast<const char*>(pw.data()),(int)pw.size());
     }
@@ -2282,7 +2404,7 @@ void MainWindow::onRewrapClicked() {
     std::vector<unsigned char> oldPw;
     {
         PasswordDialog dlg(this);
-        dlg.setPurpose(tr("旧口令（当前容器口令）"));
+        dlg.setPurpose(tr("旧密码（当前容器密码）"));
         dlg.setRequireConfirm(false);
         if(dlg.exec()!=QDialog::Accepted) return;
         oldPw=dlg.takePassword();
@@ -2291,7 +2413,7 @@ void MainWindow::onRewrapClicked() {
     std::vector<unsigned char> newPw;
     {
         PasswordDialog dlg(this);
-        dlg.setPurpose(tr("新口令（轮换后）"));
+        dlg.setPurpose(tr("新密码（轮换后）"));
         dlg.setRequireConfirm(true);
         if(dlg.exec()!=QDialog::Accepted) {
             secure_zero(oldPw.data(),oldPw.size()); oldPw.clear();
@@ -2307,7 +2429,7 @@ void MainWindow::onRewrapClicked() {
     QTemporaryFile rewTmp(QDir::tempPath()+QStringLiteral("/fileencryptor_rewrap_XXXXXX"));
     rewTmp.setAutoRemove(false);
     if(!rewTmp.open()) {
-        MsgBox::error(this,tr("密钥轮换"),tr("无法写入临时新口令文件。"));
+        MsgBox::error(this,tr("密钥轮换"),tr("无法写入临时新密码文件。"));
         secure_zero(oldPw.data(),oldPw.size()); oldPw.clear();
         secure_zero(newPw.data(),newPw.size()); newPw.clear();
         return;
@@ -2320,7 +2442,7 @@ void MainWindow::onRewrapClicked() {
     rewTmp.close();
     if(!rewOk) {
         QFile::remove(tmp);
-        MsgBox::error(this,tr("密钥轮换"),tr("无法落盘临时新口令文件。"));
+        MsgBox::error(this,tr("密钥轮换"),tr("无法落盘临时新密码文件。"));
         secure_zero(oldPw.data(),oldPw.size()); oldPw.clear();
         secure_zero(newPw.data(),newPw.size()); newPw.clear();
         return;
@@ -2350,6 +2472,409 @@ void MainWindow::onRewrapClicked() {
         secure_zero(req.stdinData.data(),(size_t)req.stdinData.size());
         req.stdinData.clear();
     }
+}
+
+// 加密盘库管理：选目录 → 拼参数 → 交给 m_executor，输出进回显区。
+// head/tail 分开是因为 --vault-recovery 的值必须紧跟自己，中间不能被 --recovery-arg 抢走。
+// requireVault=false 用于「新建加密盘」：那时目录里还没有 vault.meta，不能按已初始化盘校验。
+void MainWindow::runVaultAction(const QString& title,const QStringList& head,
+                                const QStringList& tail,bool needPw,bool requireVault) {
+    if(!checkCliExists(true)) return;
+    if(m_fileEncryptorPath.isEmpty()) {
+        m_fileEncryptorPath=FileEncryptorLocator::locate();
+        if(m_fileEncryptorPath.isEmpty()) { showCliNotFoundError(title); return; }
+    }
+    if(m_executor&&m_executor->isRunning()) {
+        MsgBox::warn(this,tr("正在运行"),tr("请等待当前任务结束或先取消。"));
+        return;
+    }
+    const QString dir=pickVaultDir(title,requireVault);
+    if(dir.isEmpty()) return;
+
+    QStringList a=head;
+    a<<dir<<tail;
+    std::vector<unsigned char> pw;
+    if(needPw) {
+        PasswordDialog dlg(this);
+        dlg.setPurpose(tr("加密盘密码"));
+        dlg.setRequireConfirm(false);
+        if(dlg.exec()!=QDialog::Accepted) return;
+        pw=dlg.takePassword();
+        if(pw.empty()) return;
+        a<<QStringLiteral("--key-stdin");
+    }
+
+    CommandRequest req;
+    req.programPath=m_fileEncryptorPath;
+    req.arguments=a;
+    if(!pw.empty()) {
+        req.stdinData=QByteArray(reinterpret_cast<const char*>(pw.data()),(int)pw.size());
+        secure_zero(pw.data(),pw.size()); pw.clear();
+    }
+
+    m_outputView->clear();
+    appendOutput(QStringLiteral(">>> %1 %2\n").arg(m_fileEncryptorPath,a.join(QLatin1Char(' '))),false);
+    appendOutput(title+QStringLiteral("\n"),false);
+    m_btnRun->setEnabled(false);
+    if(m_btnRewrap) m_btnRewrap->setEnabled(false);
+    m_btnCancel->setEnabled(true);
+    setStatus(tr("运行中..."));
+    m_executor->execute(req);
+    if(!req.stdinData.isEmpty()) {
+        secure_zero(req.stdinData.data(),(size_t)req.stdinData.size());
+        req.stdinData.clear();
+    }
+}
+
+void MainWindow::onVaultInit() {
+    runVaultAction(tr("新建加密盘"),{QStringLiteral("--vault-init")},{},false,false);
+}
+void MainWindow::onVaultList() {
+    runVaultAction(tr("查看盘内文件"),{QStringLiteral("--vault-list")},{},true);
+}
+void MainWindow::onVaultRecoveryCreate() {
+    runVaultAction(tr("生成恢复码"),{QStringLiteral("--vault-recovery")},
+                   {QStringLiteral("--recovery-arg"),QStringLiteral("create")},true);
+}
+void MainWindow::onVaultRecoveryOpen() {
+    bool ok=false;
+    const QString code=QInputDialog::getText(this,tr("用恢复码找回密码"),
+        tr("把当初抄下来的 48 位恢复码填进去（只认数字）："),QLineEdit::Normal,QString(),&ok).trimmed();
+    if(!ok||code.isEmpty()) return;
+    runVaultAction(tr("用恢复码找回密码"),{QStringLiteral("--vault-recovery")},
+                   {QStringLiteral("--recovery-arg"),QStringLiteral("open ")+code},false);
+}
+
+// 目录/盘符记忆：下次挂载、锁定、解锁默认就是上次选的那个盘
+// 上次用的盘符/目录（QSettings 记忆）。盘符空时：Windows 回落 Z:，
+// Linux 回落 ~/fe_vault（FUSE 只能挂目录，不能用盘符）
+QString MainWindow::lastMountPoint() const {
+    QSettings s(QStringLiteral("FileEncryptor"),QStringLiteral("FileEncryptorGUI"));
+    const QString v=s.value(QStringLiteral("vault/lastMountPoint")).toString().trimmed();
+    if(!v.isEmpty()) return v;
+#ifdef Q_OS_WIN
+    return QStringLiteral("Z:");
+#else
+    return QDir::homePath()+QStringLiteral("/fe_vault");
+#endif
+}
+QString MainWindow::lastVaultDir() const {
+    QSettings s(QStringLiteral("FileEncryptor"),QStringLiteral("FileEncryptorGUI"));
+    return s.value(QStringLiteral("vault/lastDir")).toString().trimmed();
+}
+void MainWindow::rememberVault(const QString& dir,const QString& point) {
+    QSettings s(QStringLiteral("FileEncryptor"),QStringLiteral("FileEncryptorGUI"));
+    if(!dir.isEmpty()) s.setValue(QStringLiteral("vault/lastDir"),dir);
+    if(!point.isEmpty()) s.setValue(QStringLiteral("vault/lastMountPoint"),point);
+}
+
+// 选目录：默认落在上次用的那块盘；requireVault 时不是已初始化的盘就拒掉
+QString MainWindow::pickVaultDir(const QString& title,bool requireVault) {
+    const QString start=lastVaultDir();
+    const QString dir=QFileDialog::getExistingDirectory(this,title,
+        start.isEmpty()?QString():QDir(start).exists()?start:QString());
+    if(dir.isEmpty()) return QString();
+    if(requireVault&&!QFile::exists(dir+QDir::separator()+QStringLiteral("vault.meta"))) {
+        MsgBox::error(this,title,
+            tr("这个文件夹还不是加密盘：%1\n请先用「加密盘 → 新建加密盘」把它建出来。").arg(dir));
+        return QString();
+    }
+    return dir;
+}
+
+// 改盘密码要新旧两个密码：stdin 已被 --new-key-stdin 占用，旧密码只能走临时密钥文件
+void MainWindow::onVaultRekey() {
+    if(!checkCliExists(true)) return;
+    if(m_fileEncryptorPath.isEmpty()) {
+        m_fileEncryptorPath=FileEncryptorLocator::locate();
+        if(m_fileEncryptorPath.isEmpty()) { showCliNotFoundError(tr("修改加密盘密码")); return; }
+    }
+    if(m_executor&&m_executor->isRunning()) {
+        MsgBox::warn(this,tr("正在运行"),tr("请等待当前任务结束或先取消。"));
+        return;
+    }
+    const QString dir=pickVaultDir(tr("修改加密盘密码"),true);
+    if(dir.isEmpty()) return;
+
+    std::vector<unsigned char> oldPw,newPw;
+    {
+        PasswordDialog dlg(this);
+        dlg.setPurpose(tr("先输入现在的加密盘密码"));
+        dlg.setRequireConfirm(false);
+        if(dlg.exec()!=QDialog::Accepted) return;
+        oldPw=dlg.takePassword();
+        if(oldPw.empty()) return;
+    }
+    {
+        PasswordDialog dlg(this);
+        dlg.setPurpose(tr("再输入新密码（要输两遍）"));
+        dlg.setRequireConfirm(true);
+        if(dlg.exec()!=QDialog::Accepted) {
+            secure_zero(oldPw.data(),oldPw.size()); oldPw.clear(); return;
+        }
+        newPw=dlg.takePassword();
+        if(newPw.empty()) {
+            secure_zero(oldPw.data(),oldPw.size()); oldPw.clear(); return;
+        }
+    }
+    QTemporaryFile keyTmp(QDir::tempPath()+QStringLiteral("/fe_vaultkey_XXXXXX"));
+    keyTmp.setAutoRemove(false);
+    if(!keyTmp.open()) {
+        MsgBox::error(this,tr("修改加密盘密码"),tr("无法写入临时密码文件。"));
+        secure_zero(oldPw.data(),oldPw.size()); oldPw.clear();
+        secure_zero(newPw.data(),newPw.size()); newPw.clear();
+        return;
+    }
+    keyTmp.setPermissions(QFileDevice::ReadOwner|QFileDevice::WriteOwner);
+    keyTmp.write(reinterpret_cast<const char*>(oldPw.data()),(qint64)oldPw.size());
+    keyTmp.flush();
+    const bool wrote=(keyTmp.error()==QFile::NoError);
+    const QString tmp=keyTmp.fileName();
+    keyTmp.close();
+    if(!wrote) {
+        QFile::remove(tmp);
+        MsgBox::error(this,tr("修改加密盘密码"),tr("无法写入临时密码文件。"));
+        secure_zero(oldPw.data(),oldPw.size()); oldPw.clear();
+        secure_zero(newPw.data(),newPw.size()); newPw.clear();
+        return;
+    }
+    secure_zero(oldPw.data(),oldPw.size()); oldPw.clear();
+
+    CommandRequest req;
+    req.programPath=m_fileEncryptorPath;
+    req.arguments<<QStringLiteral("--vault-rekey")<<dir
+                 <<QStringLiteral("-k")<<tmp
+                 <<QStringLiteral("--new-key-stdin");
+    req.stdinData=QByteArray(reinterpret_cast<const char*>(newPw.data()),(int)newPw.size());
+    secure_zero(newPw.data(),newPw.size()); newPw.clear();
+
+    m_rewrapTempKey=tmp;
+    m_outputView->clear();
+    appendOutput(QStringLiteral(">>> %1 --vault-rekey \"%2\" -k <临时文件> --new-key-stdin\n")
+        .arg(m_fileEncryptorPath,dir),false);
+    appendOutput(tr("--- 修改加密盘密码（轮换全部容器 + 重封索引）---")+QStringLiteral("\n"),false);
+    m_btnRun->setEnabled(false);
+    if(m_btnRewrap) m_btnRewrap->setEnabled(false);
+    m_btnCancel->setEnabled(true);
+    setStatus(tr("运行中..."));
+    m_executor->execute(req);
+    if(!req.stdinData.isEmpty()) {
+        secure_zero(req.stdinData.data(),(size_t)req.stdinData.size());
+        req.stdinData.clear();
+    }
+}
+
+// ===== 加密盘控制端（挂载/锁定/解锁）=====
+// M3/M4 未完项：挂载由 FE-Mounter 常驻持有，锁定/解锁经受限 IPC（CLI 不持有挂载）
+
+bool MainWindow::locateMounter() {
+    if(m_mounterPath.isEmpty()||!QFileInfo(m_mounterPath).isExecutable())
+        m_mounterPath=FileEncryptorLocator::locateMounter();
+    return !m_mounterPath.isEmpty();
+}
+
+// detached 启动 FE-Mounter：pass 非空时落临时密码文件走 --pass-file，启动后延时删除
+void MainWindow::launchMounterDetached(const QStringList& args,const QByteArray& pass) {
+    QString tmpPath;
+    QStringList a=args;
+    if(!pass.isEmpty()) {
+        QTemporaryFile f(QDir::tempPath()+QStringLiteral("/fe_mountpw_XXXXXX"));
+        f.setAutoRemove(false);
+        if(f.open()) {
+            f.setPermissions(QFileDevice::ReadOwner|QFileDevice::WriteOwner);
+            f.write(pass);
+            f.flush();
+            f.close();
+            tmpPath=f.fileName();
+            a<<QStringLiteral("--pass-file")<<tmpPath;
+        }
+    }
+    const QString wd=QFileInfo(m_mounterPath).absolutePath();
+    const bool ok=QProcess::startDetached(m_mounterPath,a,wd);
+    if(!tmpPath.isEmpty()) {
+        // FE-Mounter 启动时即读取并关闭密码文件，稍后删除临时件
+        QTimer::singleShot(1500,this,[tmpPath] { QFile::remove(tmpPath); });
+    }
+    if(!ok)
+        MsgBox::error(this,tr("挂载为磁盘"),tr("没法启动挂载组件，请确认 FE-Mounter.exe 还在、并且没被杀毒软件拦住。"));
+}
+
+// 挂载点对话框：Windows 填盘符（Z:，默认上次用的）/ Linux 填目录（~/fe_vault），
+// 外加可写勾选（仅 vault_rw 时）
+bool MainWindow::promptMountPoint(QString& point,bool& rw) {
+    QDialog dlg(this);
+    dlg.setWindowTitle(tr("挂载为磁盘"));
+    auto* lay=new QFormLayout(&dlg);
+    auto* mpEdit=new QLineEdit(lastMountPoint());
+#ifdef Q_OS_WIN
+    mpEdit->setPlaceholderText(tr("盘符如 Z: 或目录如 C:\\fe_mnt"));
+    lay->addRow(tr("盘符"),mpEdit);
+#else
+    mpEdit->setPlaceholderText(tr("挂载目录，如 ~/fe_vault"));
+    lay->addRow(tr("挂载目录"),mpEdit);
+#endif
+    // 固定 1 分钟空闲自动锁（M5 --idle-timeout），这里只告知、不给开关
+    lay->addRow(QString(),new QLabel(tr("挂上后 1 分钟不操作会自动锁定。")));
+    QCheckBox* rwChk=nullptr;
+    if(m_vaultRwAvailable) {
+        rwChk=new QCheckBox(tr("可写挂载（需 vault_rw）"));
+        lay->addRow(QString(),rwChk);
+    }
+    auto* btns=new QDialogButtonBox(QDialogButtonBox::Ok|QDialogButtonBox::Cancel);
+    connect(btns,&QDialogButtonBox::accepted,&dlg,&QDialog::accept);
+    connect(btns,&QDialogButtonBox::rejected,&dlg,&QDialog::reject);
+    lay->addRow(btns);
+    if(dlg.exec()!=QDialog::Accepted) return false;
+    point=mpEdit->text().trimmed();
+    rw=rwChk?rwChk->isChecked():false;
+    return !point.isEmpty();
+}
+
+void MainWindow::onVaultMount() {
+    if(!m_vaultAvailable) return;
+    if(!locateMounter()) {
+        MsgBox::error(this,tr("挂载为磁盘"),
+            tr("没找到挂载组件 FE-Mounter。请重新安装勾选了「加密盘挂载」的版本，或将 FE-Mounter 放在与本程序同一目录。"));
+        return;
+    }
+#ifdef Q_OS_WIN
+    // WinFSP 用户态 DLL 必须与 FE-Mounter 同目录（静态导入，缺了进程都起不来）。
+    // 先自查一遍，否则用户只看到「盘没挂上」，没有任何线索。
+    if(!QFile::exists(QFileInfo(m_mounterPath).absolutePath()+QStringLiteral("/winfsp-x64.dll"))) {
+        MsgBox::error(this,tr("挂载为磁盘"),
+            tr("挂载组件缺少 WinFSP 运行时（winfsp-x64.dll），无法挂载。\n请重新安装本程序（安装时勾选「加密盘挂载」）。"));
+        return;
+    }
+#endif
+    if(m_executor&&m_executor->isRunning()) {
+        MsgBox::warn(this,tr("正在运行"),tr("请等待当前任务结束或先取消。"));
+        return;
+    }
+    const QString dir=pickVaultDir(tr("挂载为磁盘"),true);
+    if(dir.isEmpty()) return;
+    QString point; bool rw=false;
+    if(!promptMountPoint(point,rw)) return;
+#ifndef Q_OS_WIN
+    // FUSE 只能挂目录：默认目录（~/fe_vault）可能还不存在，现场建出来
+    if(!QFileInfo::exists(point)&&!QDir().mkpath(point)) {
+        MsgBox::error(this,tr("挂载为磁盘"),
+            tr("建不出挂载目录：%1\n请换一个已有目录，或手动创建它。").arg(point));
+        return;
+    }
+#endif
+
+    PasswordDialog pd(this);
+    pd.setPurpose(tr("加密盘密码"));
+    pd.setRequireConfirm(false);
+    if(pd.exec()!=QDialog::Accepted) return;
+    auto pw=pd.takePassword();
+    if(pw.empty()) return;
+
+    // 记住这次的盘：下次挂载/锁定/解锁默认就是它
+    rememberVault(dir,point);
+
+    // 记录挂载点进 vault.meta（下次可直接复用），失败不阻断挂载；fire-and-forget
+    if(!m_fileEncryptorPath.isEmpty())
+        QProcess::startDetached(m_fileEncryptorPath,
+            QStringList{QStringLiteral("--vault-mount"),dir,
+                        QStringLiteral("--mount-point"),point});
+
+    QStringList args;
+#ifdef Q_OS_WIN
+    args<<QStringLiteral("winmount")<<point;
+#else
+    args<<QStringLiteral("mount")<<point;
+#endif
+    args<<QStringLiteral("--vault")<<dir;
+    if(rw) args<<QStringLiteral("--rw");
+    // M5 空闲自动锁：GUI 挂载固定 60 秒
+    args<<QStringLiteral("--idle-timeout")<<QStringLiteral("60");
+
+    QByteArray passBytes(reinterpret_cast<const char*>(pw.data()),(int)pw.size());
+    secure_zero(pw.data(),pw.size()); pw.clear();
+    launchMounterDetached(args,passBytes);
+    MsgBox::info(this,tr("挂载为磁盘"),
+        tr("正在挂载，盘符由后台进程持有。稍等片刻，在「此电脑」里就能看到：%1\n1 分钟不操作会自动锁定。").arg(point));
+}
+
+// 锁定/解锁走 FE-Mounter 的 ipc-call（短命令，经 m_executor 回显输出）
+void MainWindow::onVaultLock() {
+    if(!m_vaultAvailable) return;
+    if(!locateMounter()) {
+        MsgBox::error(this,tr("暂时锁定"),tr("没找到挂载组件 FE-Mounter.exe。"));
+        return;
+    }
+    if(m_executor&&m_executor->isRunning()) {
+        MsgBox::warn(this,tr("正在运行"),tr("请等待当前任务结束或先取消。"));
+        return;
+    }
+    const QString dir=pickVaultDir(tr("暂时锁定"),true);
+    if(dir.isEmpty()) return;
+    CommandRequest req;
+    req.programPath=m_mounterPath;
+    req.arguments<<QStringLiteral("ipc-call")<<QStringLiteral("--vault")<<dir
+                <<QStringLiteral("lock");
+    m_outputView->clear();
+    appendOutput(QStringLiteral(">>> %1 ipc-call --vault \"%2\" lock\n").arg(m_mounterPath,dir),false);
+    appendOutput(tr("--- 暂时锁定（清空内存密钥） ---")+QStringLiteral("\n"),false);
+    m_btnRun->setEnabled(false);
+    if(m_btnRewrap) m_btnRewrap->setEnabled(false);
+    m_btnCancel->setEnabled(true);
+    setStatus(tr("运行中..."));
+    m_executor->execute(req);
+}
+
+void MainWindow::onVaultUnlock() {
+    if(!m_vaultAvailable) return;
+    if(!locateMounter()) {
+        MsgBox::error(this,tr("重新解锁"),tr("没找到挂载组件 FE-Mounter.exe。"));
+        return;
+    }
+    if(m_executor&&m_executor->isRunning()) {
+        MsgBox::warn(this,tr("正在运行"),tr("请等待当前任务结束或先取消。"));
+        return;
+    }
+    const QString dir=pickVaultDir(tr("重新解锁"),true);
+    if(dir.isEmpty()) return;
+    PasswordDialog pd(this);
+    pd.setPurpose(tr("加密盘密码"));
+    pd.setRequireConfirm(false);
+    if(pd.exec()!=QDialog::Accepted) return;
+    auto pw=pd.takePassword();
+    if(pw.empty()) return;
+
+    // 临时密码文件：ipc-call unlock 启动时读取后即删除
+    QString tmpPath;
+    {
+        QTemporaryFile f(QDir::tempPath()+QStringLiteral("/fe_mountpw_XXXXXX"));
+        f.setAutoRemove(false);
+        if(f.open()) {
+            f.setPermissions(QFileDevice::ReadOwner|QFileDevice::WriteOwner);
+            f.write(reinterpret_cast<const char*>(pw.data()),(qint64)pw.size());
+            f.flush(); f.close();
+            tmpPath=f.fileName();
+        }
+    }
+    secure_zero(pw.data(),pw.size()); pw.clear();
+    if(tmpPath.isEmpty()) {
+        MsgBox::error(this,tr("重新解锁"),tr("无法写入临时密码文件。"));
+        return;
+    }
+
+    CommandRequest req;
+    req.programPath=m_mounterPath;
+    req.arguments<<QStringLiteral("ipc-call")<<QStringLiteral("--vault")<<dir
+                <<QStringLiteral("unlock")<<QStringLiteral("--pass-file")<<tmpPath;
+    m_outputView->clear();
+    appendOutput(QStringLiteral(">>> %1 ipc-call --vault \"%2\" unlock <临时文件>\n").arg(m_mounterPath,dir),false);
+    appendOutput(tr("--- 重新解锁 ---")+QStringLiteral("\n"),false);
+    m_btnRun->setEnabled(false);
+    if(m_btnRewrap) m_btnRewrap->setEnabled(false);
+    m_btnCancel->setEnabled(true);
+    setStatus(tr("运行中..."));
+    m_executor->execute(req);
+    // ipc-call 是短命令，启动后即读取并关闭密码文件，稍后删除
+    QTimer::singleShot(2000,this,[tmpPath] { QFile::remove(tmpPath); });
 }
 
 void MainWindow::onCancelClicked() {
@@ -2736,6 +3261,8 @@ void MainWindow::beginTaskRecord(const ShellOptions& o) {
     m_currentTask.wrapAlg=(o.action==CryptoAction::WrapKey||o.action==CryptoAction::UnwrapKey)
         ? wrapAlgKey(o.wrapAlg) : QString();
     m_currentTask.restoreName=o.restoreName;
+    m_currentTask.pack=o.pack;
+    m_currentTask.intoVault=o.intoVault;
     m_runTimer.start();
 }
 
@@ -2825,6 +3352,15 @@ void MainWindow::applyTaskRecord(const TaskRecord& rec) {
     }
     if(m_chkX448) m_chkX448->setChecked(rec.mode==QStringLiteral("x448"));
     if(!rec.outputDir.isEmpty()) m_outDirEdit->setText(rec.outputDir);
+
+    // 打包为一个文件 / 入加密盘：控件可用时才回填，否则下一次可见性刷新会把它清掉
+    if(m_chkPack && m_packAvailable) m_chkPack->setChecked(rec.pack);
+    if(m_chkIntoVault && !rec.intoVault.isEmpty()) {
+        m_chkIntoVault->setChecked(true);
+        if(m_vaultDirEdit) m_vaultDirEdit->setText(rec.intoVault);
+    } else if(m_chkIntoVault) {
+        m_chkIntoVault->setChecked(false);
+    }
 
     if(m_sourceCombo) {
         const int idx=m_sourceCombo->findData(rec.sourceIndex);

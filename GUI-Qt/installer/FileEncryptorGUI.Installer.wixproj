@@ -1,7 +1,9 @@
 <Project Sdk="WixToolset.Sdk/4.0.5">
   <PropertyGroup>
     <!-- 版本唯一来源：Product.wxs 通过 $(var.Version) 消费，MSI 版本与输出文件名一起变 -->
-    <GuiVersion>2.1.3</GuiVersion>
+    <GuiVersion>3.0.0</GuiVersion>
+    <!-- CLI 产物名由 CMake project(VERSION) 拼出，只支持数值版（无 -alpha.N），故独立定义 -->
+    <CliVersion>3.0.0</CliVersion>
     <OutputType>Package</OutputType>
     <OutputName>FileEncryptorGUI-$(GuiVersion)-Qt-Windows</OutputName>
     <Platform>x64</Platform>
@@ -20,13 +22,38 @@
     <QtStageSrcDir>$(QtBuildDir)\</QtStageSrcDir>
     <!-- 暂存目录：WiX 只引用固定文件名，Qt 的 exe 名带版本号，在这里统一重命名 -->
     <QtStageDir>$(MSBuildThisFileDirectory)bin\qt\</QtStageDir>
-    <DefineConstants>PublishDir=$(QtStageDir);Version=$(GuiVersion)</DefineConstants>
+    <!-- CLI 构建产物（供并入 MSI；与 GUI 同装到 INSTALLFOLDER） -->
+    <!-- FE-Mounter 的独立构建目录（FE-Mounter/CMakeLists.txt，产物并入 CliBuildDir） -->
+    <MounterBuildDir>$(MSBuildThisFileDirectory)..\..\CLI\out\build\fe-mounter</MounterBuildDir>
+    <CliBuildDir>$(MSBuildThisFileDirectory)..\..\CLI\out\build\windows-release\bin\Release\</CliBuildDir>
+    <DefineConstants>PublishDir=$(QtStageDir);Version=$(GuiVersion);ProductVersion=3.0.0</DefineConstants>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <!-- Ninja+cl 需要 vcvars 注入的 INCLUDE/LIB/PATH 才能编译；VS 内构建时 VSINSTALLDIR 有值，命令行 msbuild 时回退到本机安装路径 -->
+    <VcVarsBat Condition="'$(VcVarsBat)'=='' and '$(VSINSTALLDIR)'!=''">$(VSINSTALLDIR)\VC\Auxiliary\Build\vcvars64.bat</VcVarsBat>
+    <VcVarsBat Condition="'$(VcVarsBat)'==''">E:\Microsoft Visual Studio\VC\Auxiliary\Build\vcvars64.bat</VcVarsBat>
+    <!-- 必须用 VS 内置 cmake：PATH 里 Strawberry 等旧版 cmake 不认识 "Visual Studio 18 2026" 生成器（FE-Mounter 用 VS 生成器配置） -->
+    <CMakeExe Condition="'$(CMakeExe)'=='' and '$(VSINSTALLDIR)'!=''">$(VSINSTALLDIR)\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe</CMakeExe>
+    <CMakeExe Condition="'$(CMakeExe)'==''">E:\MICROSOFT VISUAL STUDIO\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe</CMakeExe>
+    <!-- 构建脚本：复刻 vcvars_env.py 的环境补偿（先 vcvars 设好 MSVC/SDK 环境，再补本机缺失的 SDK um/ucrt 库路径），
+         然后跑 cmake build。用独立 .bat 而非 cmd /c 内联，避免 %LIB% 解析期展开冲掉 vcvars 设置的库路径。 -->
+    <BuildHelper>$(MSBuildThisFileDirectory)..\..\.workbuddy\build_with_vcvars.bat</BuildHelper>
   </PropertyGroup>
 
   <!-- 构建 MSI 前先编 Qt GUI，VS 里点一次「生成」就能出安装包，不必手动先过一遍 CMake -->
   <Target Name="BuildQtBeforePackage" BeforeTargets="BeforeBuild">
-    <Exec Command="cmake --build &quot;$(QtBuildDir)&quot; --target FileEncryptorGUI --config $(Configuration)"
+    <Exec Command="&quot;$(BuildHelper)&quot; &quot;$(VcVarsBat)&quot; &quot;$(CMakeExe)&quot; &quot;$(QtBuildDir)&quot; $(Configuration) --target FileEncryptorGUI"
           Condition="Exists('$(QtBuildDir)CMakeCache.txt')" />
+  </Target>
+
+  <!-- CLI 与 FE-Mounter 已拆成两个 CMake 目标（FE-Mounter 在 GUI MSI 里是可选项），
+       故出包前分别构建；两者产物同落 bin/$(Configuration)，Stage 阶段统一取。 -->
+  <Target Name="BuildCliBeforePackage" BeforeTargets="BeforeBuild">
+    <Exec Command="&quot;$(BuildHelper)&quot; &quot;$(VcVarsBat)&quot; &quot;$(CMakeExe)&quot; &quot;$(MSBuildThisFileDirectory)..\..\CLI\out\build\windows-release&quot; $(Configuration)"
+          Condition="Exists('$(MSBuildThisFileDirectory)..\..\CLI\out\build\windows-release\CMakeCache.txt')" />
+    <Exec Command="&quot;$(BuildHelper)&quot; &quot;$(VcVarsBat)&quot; &quot;$(CMakeExe)&quot; &quot;$(MounterBuildDir)&quot; $(Configuration)"
+          Condition="Exists('$(MounterBuildDir)\CMakeCache.txt')" />
   </Target>
 
   <!-- 构建 MSI 前把 Qt GUI 与 Updater 拷进暂存目录，供 Product.wxs 引用 -->
@@ -43,5 +70,51 @@
           DestinationFiles="$(QtStageDir)\Updater.exe"
           SkipUnchangedFiles="true"
           Condition="Exists('$(QtStageSrcDir)Updater.exe')" />
+    <!-- CLI 工具链：重命名带版本号 exe 为固定名，便于 Product.wxs 引用。
+         产物目录逐个文件解析：CLI 主构建是 Ninja 单配置，产物直接落 bin\；
+         FE-Mounter 走 VS 生成器，产物落 bin\Release\。写死一个目录会取到
+         另一个目录里的陈旧副本（表现为装出来的 CLI 是旧版）。 -->
+    <PropertyGroup>
+      <CliBinRoot>$(CliBuildDir)..\bin\</CliBinRoot>
+      <P_CliExe Condition="Exists('$(CliBinRoot)FileEncryptorCLI-$(CliVersion)-cmd-Windows.exe')">$(CliBinRoot)FileEncryptorCLI-$(CliVersion)-cmd-Windows.exe</P_CliExe>
+      <P_CliExe Condition="'$(P_CliExe)'==''">$(CliBuildDir)FileEncryptorCLI-$(CliVersion)-cmd-Windows.exe</P_CliExe>
+      <P_Vdisk Condition="Exists('$(CliBinRoot)vdisk.dll')">$(CliBinRoot)vdisk.dll</P_Vdisk>
+      <P_Vdisk Condition="'$(P_Vdisk)'==''">$(CliBuildDir)vdisk.dll</P_Vdisk>
+      <P_Mounter Condition="Exists('$(CliBinRoot)FE-Mounter.exe')">$(CliBinRoot)FE-Mounter.exe</P_Mounter>
+      <P_Mounter Condition="'$(P_Mounter)'==''">$(CliBuildDir)FE-Mounter.exe</P_Mounter>
+      <P_Winfsp Condition="Exists('$(CliBinRoot)winfsp-x64.dll')">$(CliBinRoot)winfsp-x64.dll</P_Winfsp>
+      <P_Winfsp Condition="'$(P_Winfsp)'==''">$(CliBuildDir)winfsp-x64.dll</P_Winfsp>
+      <P_Launcher Condition="Exists('$(CliBinRoot)launcher-x64.exe')">$(CliBinRoot)launcher-x64.exe</P_Launcher>
+      <P_Launcher Condition="'$(P_Launcher)'==''">$(CliBuildDir)launcher-x64.exe</P_Launcher>
+    </PropertyGroup>
+    <Copy SourceFiles="$(P_CliExe)"
+          DestinationFiles="$(QtStageDir)\FileEncryptorCLI.exe"
+          SkipUnchangedFiles="true"
+          Condition="Exists('$(P_CliExe)')" />
+    <Copy SourceFiles="$(P_Vdisk)"
+          DestinationFiles="$(QtStageDir)\vdisk.dll"
+          SkipUnchangedFiles="true"
+          Condition="Exists('$(P_Vdisk)')" />
+    <Copy SourceFiles="$(P_Mounter)"
+          DestinationFiles="$(QtStageDir)\FE-Mounter.exe"
+          SkipUnchangedFiles="true"
+          Condition="Exists('$(P_Mounter)')" />
+    <!-- WinFSP 用户态运行时：FE-Mounter 静态导入 winfsp-x64.dll，缺它进程根本起不来
+         （表现为「挂载盘用不了」且没有任何提示）。launcher 是 WinFSP 服务启动器，
+         目标机没预装 WinFSP 时由它拉起服务。两者都必须与 FE-Mounter.exe 同目录。 -->
+    <Copy SourceFiles="$(P_Winfsp);$(P_Launcher)"
+          DestinationFolder="$(QtStageDir)"
+          SkipUnchangedFiles="true"
+          Condition="Exists('$(P_Winfsp)')" />
+    <!-- 暂存区缺件要显式告警：Copy 的 Exists 条件会静默跳过，最后表现为
+         「安装包里没有 CLI / FE-Mounter / WinFSP」，比构建失败更难查。 -->
+    <Warning Condition="!Exists('$(P_CliExe)')"
+             Text="[installer] 未找到 FileEncryptorCLI-$(CliVersion)-cmd-Windows.exe（已查 bin\ 与 bin\Release\）：安装包将不含 CLI 程序。请先构建 CLI。" />
+    <Warning Condition="!Exists('$(P_Vdisk)')"
+             Text="[installer] 未找到 vdisk.dll：安装包将不含加密盘库，入盘与挂载都不可用。请先构建 CLI。" />
+    <Warning Condition="!Exists('$(P_Mounter)')"
+             Text="[installer] 未找到 FE-Mounter.exe：安装包将不含加密盘挂载组件。请先构建 FE-Mounter 工程。" />
+    <Warning Condition="!Exists('$(P_Winfsp)')"
+             Text="[installer] 未找到 winfsp-x64.dll：安装包将不含 WinFSP 运行时，盘符挂载无法工作。请确认构建 FE-Mounter 时能找到 WinFSP SDK。" />
   </Target>
 </Project>

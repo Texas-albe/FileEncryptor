@@ -1,4 +1,4 @@
-using System.Collections.ObjectModel;
+﻿using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.IO;
 using System.Text;
@@ -33,6 +33,8 @@ public class MainViewModel : ObservableObject
     private bool _packAvailable = true;
     // 密钥包装能力：--features 缺 keywrap=1 的旧 CLI 不认 --wrap-key（fail-closed）
     private bool _keywrapAvailable;
+    // 加密盘能力：--features 缺 vault=1 的旧 CLI 不认 --into-vault（fail-closed）
+    private bool _vaultAvailable;
     private readonly Stopwatch _runTimer = new();
     private int _doneFiles, _skipFiles, _failFiles, _totalFiles;
     private string _currentFile = "";
@@ -84,9 +86,9 @@ public class MainViewModel : ObservableObject
     public bool IsWrapMode => ActionIndex is 7 or 8;
     public bool IsWrapKeyMode => ActionIndex == 7;
     public bool IsUnwrapMode => ActionIndex == 8;
-    // 公钥路线没有 KEK，不需要口令
+    // 公钥路线没有 KEK，不需要密码
     public bool WrapUsesPublicKey => WrapAlgIndex == 2;
-    // 解密与解包只需输入一次口令（1=解密 / 3=批解密 / 8=解包）
+    // 解密与解包只需输入一次密码（1=解密 / 3=批解密 / 8=解包）
     public bool PasswordNeedsConfirm => ActionIndex is not (1 or 3 or 8);
 
     // 包装算法：0=KWP 1=AES-KW 2=收件人公钥，与 WrapAlgCombo 索引对齐
@@ -130,6 +132,36 @@ public class MainViewModel : ObservableObject
             if (_packAvailable == value) return;
             SetProperty(ref _packAvailable, value);
             if (!value) Pack = false;   // 不支持就别让用户以为已启用
+            RefreshCommandPreview();
+        }
+    }
+
+    // 加密盘：勾选后产物入该目录并登记进加密索引（CLI --into-vault）
+    private string _intoVault = "";
+    public string IntoVault { get => _intoVault; set { SetProperty(ref _intoVault, value); RefreshCommandPreview(); } }
+
+    // 加密盘能力探测：--features 缺 vault=1 的旧 CLI 不认 --into-vault
+    public bool VaultAvailable
+    {
+        get => _vaultAvailable;
+        set
+        {
+            if (_vaultAvailable == value) return;
+            SetProperty(ref _vaultAvailable, value);
+            if (!value) IntoVault = "";   // 不支持就清掉，免得残留路径又被下发
+            RefreshCommandPreview();
+        }
+    }
+
+    // 可写挂载能力：--features 缺 vault_rw=1 的旧 CLI / 不装 M6 时不出现「可写挂载」（fail-closed）
+    private bool _vaultRwAvailable;
+    public bool VaultRwAvailable
+    {
+        get => _vaultRwAvailable;
+        set
+        {
+            if (_vaultRwAvailable == value) return;
+            SetProperty(ref _vaultRwAvailable, value);
             RefreshCommandPreview();
         }
     }
@@ -270,6 +302,8 @@ public class MainViewModel : ObservableObject
             _pqcAvailable = output.Contains("pqc=1");
             _packAvailable = output.Contains("pack=1");
             _keywrapAvailable = output.Contains("keywrap=1");
+            _vaultAvailable = output.Contains("vault=1");
+            _vaultRwAvailable = output.Contains("vault_rw=1");
             _dispatcher.TryEnqueue(() =>
             {
                 OnPropertyChanged(nameof(ZstdAvailable));
@@ -278,6 +312,8 @@ public class MainViewModel : ObservableObject
                 OnPropertyChanged(nameof(PqcAvailable));
                 OnPropertyChanged(nameof(PackAvailable));
                 OnPropertyChanged(nameof(KeywrapAvailable));
+                OnPropertyChanged(nameof(VaultAvailable));
+                OnPropertyChanged(nameof(VaultRwAvailable));
                 if (!_packAvailable) Pack = false;   // 旧 CLI 不支持打包，强制取消勾选
             });
         }
@@ -286,12 +322,12 @@ public class MainViewModel : ObservableObject
     }
 
     // ===== 运行 =====
-    // 默认走系统控制台：进度与口令交互都在控制台完成
+    // 默认走系统控制台：进度与密码交互都在控制台完成
     public bool UseSystemConsole { get; set; } = true;
 
     public void RunWithPassword(string password)
     {
-        // 与 Qt / 交互式一致：原样发送口令字节，不追加换行
+        // 与 Qt / 交互式一致：原样发送密码字节，不追加换行
         StartCli(Encoding.UTF8.GetBytes(password), UseSystemConsole);
     }
 
@@ -336,6 +372,12 @@ public class MainViewModel : ObservableObject
             ConfirmFile = confirmFile,
         };
         req.ExtraEnv["FILEENCRYPTOR_CONFIRM_FILE"] = confirmFile;
+        // 批量（含入加密盘）开帧式进度：哨兵帧可被界面整帧解析后原地重绘
+        if (opts.Action is CryptoAction.BatchEncrypt or CryptoAction.BatchDecrypt)
+        {
+            req.ExtraEnv["FILEENCRYPTOR_PROGRESS_FRAME"] = "1";
+            req.ExtraEnv["COLUMNS"] = "100";
+        }
 
         _doneFiles = _skipFiles = _failFiles = 0;
         _totalFiles = InputPaths.Count(p => p.IsSelected);
@@ -387,6 +429,8 @@ public class MainViewModel : ObservableObject
             Watermark = Watermark,
             // 私钥明文不落盘任务历史，只留占位（恢复任务时提示重新输入）
             WatermarkKey = CliArgBuilder.IsPrivateKeyMaterial(WatermarkKey) ? "<protected>" : (WatermarkKey ?? ""),
+            Pack = opts.Pack,
+            IntoVault = opts.IntoVault ?? "",
         };
 
         _cli.Execute(req);
@@ -396,15 +440,15 @@ public class MainViewModel : ObservableObject
 
     public void Run()
     {
-        // 需要口令时先由 GUI 采集，再传给 CLI
+        // 需要密码时先由 GUI 采集，再传给 CLI
         if (NeedsPassword()) PasswordRequested?.Invoke();
         else StartCli(Array.Empty<byte>(), UseSystemConsole);
     }
 
-    // 对称模式且未指定密钥文件/身份时才需要口令
+    // 对称模式且未指定密钥文件/身份时才需要密码
     private bool NeedsPassword()
     {
-        // 公钥路线没有 KEK，口令与身份都不参与
+        // 公钥路线没有 KEK，密码与身份都不参与
         if (IsWrapMode) return !WrapUsesPublicKey && string.IsNullOrEmpty(Keyfile);
         if (IsAsymmetric) return false;
         if (!string.IsNullOrEmpty(Keyfile)) return false;
@@ -567,6 +611,8 @@ public class MainViewModel : ObservableObject
             FileMode = fileMode,
             InputPaths = new List<string>(InputPaths.Where(p => p.IsSelected).Select(p => p.Path)),
             OutputDir = OutputDir,
+            // 加密盘：不支持或未勾选时为空，CLI 侧就看不出这是入盘任务
+            IntoVault = VaultAvailable ? (IntoVault ?? "") : "",
             SourceDisposition = (SourceDisposition)SourceIndex,
             Pack = Pack,
             Split = Split,
@@ -660,7 +706,7 @@ public class MainViewModel : ObservableObject
         CryptoAction.BatchEncrypt => "批量加密",
         CryptoAction.BatchDecrypt => "批量解密",
         CryptoAction.KeyGen => "生成密钥对",
-        CryptoAction.Derive => "口令派生密钥对",
+        CryptoAction.Derive => "密码派生密钥对",
         CryptoAction.PubKey => "导出公钥",
         CryptoAction.WrapKey => "包装密钥",
         CryptoAction.UnwrapKey => "解开密钥",

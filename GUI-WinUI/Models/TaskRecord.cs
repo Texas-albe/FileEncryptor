@@ -39,4 +39,7 @@ public class TaskRecord
     [JsonPropertyName("pqc")] public bool Pqc { get; set; } = true;
     [JsonPropertyName("watermark")] public bool Watermark { get; set; }
     [JsonPropertyName("watermarkKey")] public string WatermarkKey { get; set; } = "";
+    // 打包为一个文件（--pack）与入加密盘（--into-vault）：任务还原时一并回填
+    [JsonPropertyName("pack")] public bool Pack { get; set; }
+    [JsonPropertyName("intoVault")] public string IntoVault { get; set; } = "";
 }

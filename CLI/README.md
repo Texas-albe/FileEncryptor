@@ -29,7 +29,7 @@
   - `AEGIS-256` —— 在支持 **AES-NI** 的 CPU 上性能极高（32 字节 nonce / 32 字节 tag 的 AEAD）。
   - `AES-256-GCM` 仅用于**解密旧版 v1/v2 文件**，新加密不再使用。
   - `SM4-GCM`（`-m sm4`）—— 16 字节密钥 / 12 字节 nonce / 16 字节 tag，由 OpenSSL 提供，需构建时启用 OpenSSL。
-  - 非对称（`-m x25519` / `-m x448`）—— 随机 DEK 经收件人公钥（X25519 / X448）ECDH 封装后写入 `.ptd` 容器，支持多收件人、无需共享口令。
+  - 非对称（`-m x25519` / `-m x448`）—— 随机 DEK 经收件人公钥（X25519 / X448）ECDH 封装后写入 `.ptd` 容器，支持多收件人、无需共享密码。
 - **密钥派生**：Argon2id（默认 `opslimit=4` / `memlimit=128 MB`），参数随文件头持久化，未来可无损增强。
 - **完整性保护**
   - 每文件 `salt` + `iv` 随机生成；每块 `nonce = sodium_increment(iv)` 逐块自增，杜绝 nonce 复用。
@@ -38,7 +38,7 @@
 - **可续传加密 / 解密**：中断后重跑可从中断点继续（含算法模式一致性校验，断点损坏或模式不匹配则安全从头重写）。
 - **批量处理**：支持目录递归、多线程并行（并发数由 YAML `worker_threads` 配置）、源文件删除（`-de`）、强制覆盖（`-y`）、断点续传（重跑自动从 `.progress` 继续）。
 - **防御文件头篡改（v4 头 HMAC 安全信封）**：v4 在 v3 头部基础上追加 32 字节 `header_hmac`，由"元数据认证密钥"（与主密钥域分离派生，标签 `FE_header_auth_v4`）对文件头前 77 字节（magic / version / mode / Argon2 参数 / salt / iv）做独立 HMAC-SHA512/256 认证；替换 salt / iv / mode 等头字段的篡改会在解密端被拒绝（仅通用错误，不泄露细节），文件头成为"安全信封"。
-- **密钥内存安全（RAII SecureBuffer）**：所有口令 / 密钥 / 派生中间密钥统一由 `SecureBuffer` 持有（构造 `sodium_mlock` 锁页，析构自动 `sodium_memzero` + `sodium_munlock`）；禁止拷贝、允许移动（所有权转移避免双清零），任何正常返回或异常展开路径都不遗留明文密钥在堆内存。
+- **密钥内存安全（RAII SecureBuffer）**：所有密码 / 密钥 / 派生中间密钥统一由 `SecureBuffer` 持有（构造 `sodium_mlock` 锁页，析构自动 `sodium_memzero` + `sodium_munlock`）；禁止拷贝、允许移动（所有权转移避免双清零），任何正常返回或异常展开路径都不遗留明文密钥在堆内存。
 - **续传进度文件双重保护（防重放）**：`.progress` 的 HMAC 额外绑定"源文件标识" `compute_progress_binding`（规范化路径 + 大小 + mtime），旧的有效 `.progress` 无法被重放到不同文件（路径 / mtime / size 任一变化即 HMAC 失配），合法中断续传则可正常恢复。
 - **精确错误处理与信息泄露防护（`-v`）**：默认（非 `-v` 且非 DEBUG 日志）所有认证失败（密码错误 / 文件头被改 / 明文哈希不符 / 进度损坏）只返回通用错误；仅 `-v` 才在 stderr 暴露具体原因。
 - **路径处理与资源耗尽防御**：`validate_io_paths` 先 `path_has_traversal` 拒绝任何 `..` 组件，再 `normalize_path_lexical`（解析 `.` / `..`、统一分隔符）做白名单前缀与长度比较；新增 YAML `max_open_files`（默认 256），批量 / 高并发时并发线程数上限 = `max_open_files / 3`。
@@ -161,15 +161,15 @@ FileEncryptorCLI <动作> <输入路径...> [选项]
     -h / --help / -?  显示帮助
   密钥管理（非对称）：
     -g                随机生成密钥对（-x448 用 X448）（公钥→stdout 并写 <dir>/rage_public.txt，私钥→<dir>/rage_private.txt）
-    -G                由口令确定性派生 X25519 密钥对（Argon2id），输出同 -g，另写 <dir>/rage_derive_salt.txt
+    -G                由密码确定性派生 X25519 密钥对（Argon2id），输出同 -g，另写 <dir>/rage_derive_salt.txt
     -Y                由私钥文件（-k）反推并打印对应公钥
     -L / --keylib     管理本机密钥库：list | add | remove | show | pub | export
     --salt <hex|file> -G 使用的盐（16 字节；省略则随机）
   只读 / 运维：
     -H / --info          只读查看密文头元数据（版本 / 算法 / Argon2 参数 / salt / iv / 明文哈希 / 是否带文件名信封），不解密、不校验密钥正确性
-    -V / --verify        完整性校验（只验不解，不落盘明文）；对称用口令文件、非对称（-m x25519/x448）用身份私钥；通过输出 OK、失败输出 FAILED
-    -R / --recover-name  由口令（非对称用身份私钥；私钥串以 AGE-SECRET-KEY- / MLKEM1SEC- / X448SEC- 开头即自动按非对称处理）离线还原混淆文件名（打印原始名；配合 --rename 把 .ptd 原地重命名为 <原始名>.ptd）
-    --watermark-extract  只读提取水印记录（不需口令）：打印机器指纹 / 指纹来源 / 时间戳 / nonce，
+    -V / --verify        完整性校验（只验不解，不落盘明文）；对称用密码文件、非对称（-m x25519/x448）用身份私钥；通过输出 OK、失败输出 FAILED
+    -R / --recover-name  由密码（非对称用身份私钥；私钥串以 AGE-SECRET-KEY- / MLKEM1SEC- / X448SEC- 开头即自动按非对称处理）离线还原混淆文件名（打印原始名；配合 --rename 把 .ptd 原地重命名为 <原始名>.ptd）
+    --watermark-extract  只读提取水印记录（不需密码）：打印机器指纹 / 指纹来源 / 时间戳 / nonce，
                          带 --wm-verify 时同步验签（通过退出码 0，失败 / 无水印为 1）
 
 选项：
@@ -221,9 +221,9 @@ FileEncryptorCLI <动作> <输入路径...> [选项]
 # 生成 X25519 密钥对：公钥打到 stdout（可重定向），私钥落到文件
 FileEncryptorCLI -g -o ./keys > pubkey.txt
 
-# 由口令派生密钥对（口令经 stdin 传入；同口令 + 同盐永远得到同一对密钥）
+# 由密码派生密钥对（密码经 stdin 传入；同密码 + 同盐永远得到同一对密钥）
 FileEncryptorCLI -G -o ./keys --key-stdin > pubkey.txt
-# 用已有的盐 + 同一个口令重新派生出同一对密钥（私钥文件丢了也能找回）
+# 用已有的盐 + 同一个密码重新派生出同一对密钥（私钥文件丢了也能找回）
 FileEncryptorCLI -G -o ./keys --key-stdin --salt ./keys/rage_derive_salt.txt
 
 # 由私钥反推公钥
@@ -251,7 +251,7 @@ FileEncryptorCLI -L remove backup
 示例：
 
 ```bash
-# 交互式输入口令，加密单个文件（默认 XChaCha20）
+# 交互式输入密码，加密单个文件（默认 XChaCha20）
 FileEncryptorCLI secret.docx
 
 # 用 AEGIS-256 批量加密目录（并发数写进 fileencryptor.yaml 的 worker_threads），成功后删除源
@@ -292,8 +292,8 @@ FileEncryptorCLI -bd ./encrypted_dir -o ./decrypted
 | `path_whitelist_enabled` | `false` | 是否启用路径白名单 |
 | `progress_rotation` | `true` | 覆盖 `.progress` 前先备份 `.progress.bak` |
 | `obfuscate_names` | `true` | 输出文件名混淆（v1.7.0+） |
-| `min_password_length` | `8` | 交互式加密 / `-G` 派生的最小口令长度（非交互密钥源只做 ≥6 兜底） |
-| `min_password_classes` | `2` | 口令至少包含的字符类别数（大写 / 小写 / 数字 / 符号）；非 ASCII 口令直接放行 |
+| `min_password_length` | `8` | 交互式加密 / `-G` 派生的最小密码长度（非交互密钥源只做 ≥6 兜底） |
+| `min_password_classes` | `2` | 密码至少包含的字符类别数（大写 / 小写 / 数字 / 符号）；非 ASCII 密码直接放行 |
 | `kdf_preset` | `standard` | 新密文 KDF 强度：`fast`(ops3/mem64MB) / `standard`(ops4/mem128MB) / `strong`(ops6/mem512MB) |
 | `write_sha256` | `false` | 加密后是否默认生成 `<out>.ptd.sha256` 校验单 |
 
@@ -309,7 +309,7 @@ FileEncryptorCLI -bd ./encrypted_dir -o ./decrypted
 
 ## 非对称加密（X25519 / X448）
 
-非对称模式（`-m x25519` / `-m x448`）采用**混合加密**：每个文件用随机 DEK 加密，再用收件人公钥（X25519 或 X448）把 DEK 封装进 `.ptd` v6 容器的收件人条目区。无需与对方共享口令，只需交换公钥；可指定多个收件人（每人都能独立解密），同一容器可混合两种曲线。底层由 OpenSSL `EVP_PKEY` 完成 ECDH。
+非对称模式（`-m x25519` / `-m x448`）采用**混合加密**：每个文件用随机 DEK 加密，再用收件人公钥（X25519 或 X448）把 DEK 封装进 `.ptd` v6 容器的收件人条目区。无需与对方共享密码，只需交换公钥；可指定多个收件人（每人都能独立解密），同一容器可混合两种曲线。底层由 OpenSSL `EVP_PKEY` 完成 ECDH。
 
 - **密钥对生成**：`-g`（`-x448` 切到 X448）——**公钥打印到 stdout**（便于重定向 / 管道给 `-r`），**公钥同时写入 `-o <dir>/rage_public.txt`**、**私钥写入 `-o <dir>/rage_private.txt`**（同名覆盖保护同私钥）；提示信息一律走 stderr，保证 stdout 是干净的一行公钥。
 - **加密**：`-r <pub|file>` 给收件人公钥——可直接是 `age1...` / `X448-...` 字符串，也可以是公钥文件（每行一个，可空行 / `#` 注释 / `publickey:` 前缀），输出 `<名>.ptd`。
@@ -319,10 +319,10 @@ FileEncryptorCLI -bd ./encrypted_dir -o ./decrypted
 
 这两个动作是纯本地计算（Argon2id + X25519 + Bech32），不依赖非对称加密是否启用。
 
-- **`-G` 口令派生**：`Argon2id(口令, 盐) → 32 字节 → X25519 钳位 → 密钥对`。
+- **`-G` 密码派生**：`Argon2id(密码, 盐) → 32 字节 → X25519 钳位 → 密钥对`。
   输出与 `-g` 一致（公钥到 stdout、私钥到 `<dir>/rage_private.txt`），额外写出 **`<dir>/rage_derive_salt.txt`**（16 字节随机盐的 hex）。
-  **同一口令 + 同一盐永远得到同一对密钥**，所以记住口令即可代替保存私钥文件；但**盐必须一并保存**，否则无法再次派生。
-  用 `--salt <hex|file>` 传入已保存的盐即可复现；口令可来自 `--key-stdin`（推荐，GUI 走此通道）、`-k <文件>`、`ENCRYPTOR_KEY` 或交互输入（≥6 字符）。
+  **同一密码 + 同一盐永远得到同一对密钥**，所以记住密码即可代替保存私钥文件；但**盐必须一并保存**，否则无法再次派生。
+  用 `--salt <hex|file>` 传入已保存的盐即可复现；密码可来自 `--key-stdin`（推荐，GUI 走此通道）、`-k <文件>`、`ENCRYPTOR_KEY` 或交互输入（≥6 字符）。
   已存在同名密钥文件时拒绝覆盖，除非带 `-y`。
 - **`-Y` 公钥导出**：读取 `-k <私钥文件>` 中的 `AGE-SECRET-KEY-...`，反推出 `age1...` 公钥并打印到 stdout。用于私钥还在、公钥丢失的场景。
 - **Bech32 实现注意事项**：age 的身份私钥串是 `bech32_encode(HRP="AGE-SECRET-KEY-")` 之后整体大写，其**校验和按小写 HRP 展开计算**。若按大写 HRP 展开，age 会拒绝该串（`invalid Bech32 encoding`）。
@@ -372,7 +372,7 @@ FileEncryptorCLI -g --no-pqc -o ./keys > pubkey.txt
 - **写在尾部而非头部**：不改动 256 字节固定头，`header_hmac` 覆盖范围不变；`peek_name_footer_len` 会把长度字段计入尾部总长，因此带水印的文件解密、`-H` 查看、`-V` 校验均与不带水印时一致。**水印不参与载荷认证**，删掉水印区不会影响文件解密（防篡改靠签名，不靠完整性校验）。
 - **机器指纹**：`网卡 MAC` + `主板序列号` 拼接后取 Blake2b 前 16 字节（hex 32 位）。Windows 主板串取 WMI `Win32_BaseBoard.SerialNumber`，失败回退 SMBIOS 注册表键；Linux 读 `/sys/class/dmi/id/*`。任一来源缺失只丢弃该项（flags 标位记录 MAC / 主板是否命中），指纹仍可生成。指纹不含任何可复原的明文主机标识。
 - **签名（`--wm-sign <ML-DSA-65 私钥.pem>`）**：默认 ML-DSA-65，加 `--no-pqc` 回到 RSA-3072（PKCS#1 v1.5 + SHA-256）；签名对象为 48 字节水印记录的 SHA-256 摘要（含签名长度字段，故改一个字节的指纹 / 时间戳 / 签名长度都会验签失败）。**私钥由调用方显式传入**（密钥对可长期复用、可用 HSM / KMS 托管，首次自动生成落盘不在本工具职责内）。**不给私钥时只写未签名记录，加密不会失败**。
-- **查看与验签**：`--watermark-extract <file>` 只读尾部，不需口令；加 `--wm-verify <公钥.pem>` 时验签（通过退出码 0，验签失败 / 无水印均为 1）。不给公钥则只展示内容（`signature: not checked`）。验签端按公钥实际类型选择算法，用 ML-DSA 公钥验 `--no-pqc` 签的文件同样成立。
+- **查看与验签**：`--watermark-extract <file>` 只读尾部，不需密码；加 `--wm-verify <公钥.pem>` 时验签（通过退出码 0，验签失败 / 无水印均为 1）。不给公钥则只展示内容（`signature: not checked`）。验签端按公钥实际类型选择算法，用 ML-DSA 公钥验 `--no-pqc` 签的文件同样成立。
 
 ```bash
 # 生成签名密钥对（一次）

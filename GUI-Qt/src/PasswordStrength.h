@@ -21,7 +21,7 @@ class PasswordStrength {
 public:
     static StrengthResult evaluate(const QString& password);
 
-    // 口令策略校验
+    // 密码策略校验
     static const int kMinPasswordLength = 8;
     static bool meetsPolicy(const QString& password, QString& reason);
 };

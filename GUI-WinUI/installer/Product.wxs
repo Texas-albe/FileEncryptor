@@ -5,11 +5,11 @@
 
     <Package Name="FileEncryptor GUI (WinUI)"
            Manufacturer="FileEncryptor"
-           Version="$(var.Version)"
+           Version="$(var.ProductVersion)"
            UpgradeCode="12345678-1234-1234-1234-1234567890AB"
            Language="1033" Codepage="utf-8">
 
-    <MajorUpgrade DowngradeErrorMessage="A newer version of FileEncryptor GUI is already installed." />
+    <MajorUpgrade AllowSameVersionUpgrades="yes" DowngradeErrorMessage="A newer version of FileEncryptor GUI is already installed." />
 
     <!-- Close running GUI before install/uninstall to avoid file-in-use errors -->
     <util:CloseApplication Id="CloseGui" Target="FileEncryptorGUI.WinUI3.exe" Description="FileEncryptor GUI is running. Close it to continue." RebootPrompt="no" />
@@ -47,8 +47,18 @@
       <ComponentGroupRef Id="AppFiles" />
       <ComponentRef Id="MainExe" />
       <ComponentRef Id="UpdaterExe" />
+      <ComponentRef Id="CliExe" />
       <ComponentRef Id="StartMenuShortcut" />
       <ComponentRef Id="DesktopShortcut" />
+      <!-- 加密盘挂载组件：与 vdisk.dll 捆绑（FE-Mounter 必须 dlopen 它，两者同装同卸）。
+           CLI 本身不依赖 vdisk.dll，不选只影响盘符挂载，GUI 会自动隐藏加密盘入口。 -->
+      <Feature Id="VaultFeature" Title="Encrypted vault mounting (FE-Mounter)" Level="1"
+               Description="Installs FE-Mounter.exe, vdisk.dll and the WinFSP runtime for mounting encrypted vaults as drive letters. The command-line tool works without this; only drive mounting is unavailable.">
+        <ComponentRef Id="VdiskDll" />
+        <ComponentRef Id="FeMounterExe" />
+        <ComponentRef Id="WinFspDll" />
+        <ComponentRef Id="WinFspLauncher" />
+      </Feature>
     </Feature>
 
     <!-- Windows Terminal integration: optional -->
@@ -91,6 +101,35 @@
     <!-- Auto-update helper: needed by the GUI to check and apply updates -->
     <Component Id="UpdaterExe" Directory="INSTALLFOLDER">
       <File Id="UpdaterExeFile" Source="$(var.PublishDir)\Updater.exe" KeyPath="yes" />
+    </Component>
+
+    <!-- CLI 命令行工具：随 GUI 一并安装，提供脚本化/加密盘挂载能力 -->
+    <Component Id="CliExe" Directory="INSTALLFOLDER">
+      <File Id="CliExeFile" Source="$(var.PublishDir)\FileEncryptorCLI.exe" KeyPath="yes" />
+    </Component>
+
+    <!-- 加密盘虚拟磁盘共享库（libvdisk 实现）。属可选功能 VaultFeature：CLI 不依赖它，
+         但 FE-Mounter 必须 dlopen，故与 FeMounterExe 同装同卸。 -->
+    <Component Id="VdiskDll" Directory="INSTALLFOLDER">
+      <File Id="VdiskDllFile" Source="$(var.PublishDir)\vdisk.dll" KeyPath="yes" />
+    </Component>
+
+    <!-- FE-Mounter holder 进程：挂载/可写挂载 Windows 盘符。属可选功能 VaultFeature -->
+    <Component Id="FeMounterExe" Directory="INSTALLFOLDER">
+      <File Id="FeMounterExeFile" Source="$(var.PublishDir)\FE-Mounter.exe" KeyPath="yes" />
+    </Component>
+
+    <!-- WinFSP 用户态运行时。FE-Mounter 静态导入 winfsp-x64.dll：缺它进程加载即失败，
+         盘符挂载整个用不了（且没有任何报错）。launcher 是 WinFSP 服务启动器，
+         目标机未预装 WinFSP 时由 winfsp-x64.dll 拉起它。二者必须与 FE-Mounter.exe 同目录。
+         拆成两个单文件组件：多文件组件用自动 GUID(*) 要求非 keypath 文件不带版本，
+         而 dll/exe 都带版本，会触发 WIX0368，故各自独立组件。 -->
+    <Component Id="WinFspDll" Directory="INSTALLFOLDER">
+      <File Id="WinFspDllFile" Source="$(var.PublishDir)\winfsp-x64.dll" KeyPath="yes" />
+    </Component>
+
+    <Component Id="WinFspLauncher" Directory="INSTALLFOLDER">
+      <File Id="WinFspLauncherFile" Source="$(var.PublishDir)\launcher-x64.exe" KeyPath="yes" />
     </Component>
 
     <Component Id="StartMenuShortcut" Directory="ProgramMenuDir">

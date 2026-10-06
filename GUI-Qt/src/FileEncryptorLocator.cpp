@@ -51,16 +51,16 @@ QString FileEncryptorLocator::locate() {
 
 // 配套 CLI 版本
 QString FileEncryptorLocator::version() {
-    return QStringLiteral("2.9.0");
+    return QStringLiteral("3.0.0");
 }
 
 // GUI 自身版本
 QString FileEncryptorLocator::guiVersion() {
-    return QStringLiteral("2.1.3");
+    return QStringLiteral("3.0.0");
 }
 
 QString FileEncryptorLocator::cliDownloadUrl() {
-    return QStringLiteral("https://github.com/Texas-albe/FileEncryptor/releases/tag/GUI2.1.3_CLI2.9.0");
+    return QStringLiteral("https://github.com/Texas-albe/FileEncryptor/releases/tag/GUI3.0.0_CLI3.0.0");
 }
 
 QStringList FileEncryptorLocator::getExpectedNames() {
@@ -68,6 +68,9 @@ QStringList FileEncryptorLocator::getExpectedNames() {
 #ifdef Q_OS_WIN
     return {
         QStringLiteral("FileEncryptorCLI-%1-cmd-Windows.exe").arg(ver),
+        // 预发布后缀：CMake project(VERSION) 只支持数值版，产物名无 -alpha.N，
+        // 但 CLI 自报版本带后缀，故两个名字都试。
+        QStringLiteral("FileEncryptorCLI-3.0.0-cmd-Windows.exe"),
         QStringLiteral("FileEncryptorCLI.exe"),
         QStringLiteral("FileEncryptor.exe"),
         QStringLiteral("file-encryptor-cli.exe"),
@@ -82,6 +85,34 @@ QStringList FileEncryptorLocator::getExpectedNames() {
         QStringLiteral("fe"),
     };
 #endif
+}
+
+// 加密盘挂载持有进程：与 CLI 分离的可选组件（MSI 的 VaultFeature 才装）
+QStringList FileEncryptorLocator::getMounterExpectedNames() {
+#ifdef Q_OS_WIN
+    return { QStringLiteral("FE-Mounter.exe"), QStringLiteral("fe-mounter.exe") };
+#else
+    return { QStringLiteral("FE-Mounter"), QStringLiteral("fe-mounter") };
+#endif
+}
+
+// 按指定候选名探测目录（先于 locateMounter 使用，故前置声明）
+static QString findInDirWithNames(const QString& dir,const QStringList& names);
+
+QString FileEncryptorLocator::locateMounter() {
+    // 1) 环境变量
+    const QString envPath=qEnvironmentVariable("FE_MOUNTER_EXE");
+    if(!envPath.isEmpty()&&isExecutable(envPath)) return envPath;
+    // 2) 同目录（GUI 与 FE-Mounter 同装同卸）
+    QString found=findInDirWithNames(selfDir(),getMounterExpectedNames());
+    if(!found.isEmpty()) return found;
+    // 3) PATH
+    const QProcessEnvironment env=QProcessEnvironment::systemEnvironment();
+    for(const QString& p:env.value("PATH").split(QDir::listSeparator(),Qt::SkipEmptyParts)) {
+        found=findInDirWithNames(p,getMounterExpectedNames());
+        if(!found.isEmpty()) return found;
+    }
+    return {};
 }
 
 static QString findInDirWithNames(const QString& dir,const QStringList& names) {

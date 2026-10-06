@@ -1,4 +1,4 @@
-using System.Text;
+﻿using System.Text;
 using System.Linq;
 using FileEncryptorGUI.Models;
 
@@ -13,6 +13,12 @@ public static class CliArgBuilder
 
     public static bool IsPrivateKeyMaterial(string? v)
         => !string.IsNullOrEmpty(v) && v.Contains("PRIVATE KEY", StringComparison.Ordinal);
+
+    // 入盘目标原样下发：盘符支持已移除，CLI 会拒盘符根，用户须填真实存储目录
+    private static string ResolveVaultTarget(string target)
+    {
+        return (target ?? "").Trim();
+    }
 
     // 私钥明文只落在这一个任务自己的临时文件里（路径挂在 ShellOptions 上）。
     // 原来用静态字段存路径：单任务串行没事，一旦并发任务，后一个会覆盖前一个的路径，
@@ -69,7 +75,7 @@ public static class CliArgBuilder
         var args = new List<string>();
 
         // 密钥包装：与加解密流程完全独立，只有 --wrap-key / --unwrap-key 一组参数。
-        // 口令 / 私钥不落 argv：统一走 --key-stdin 或 -k <file>，理由同水印私钥。
+        // 密码 / 私钥不落 argv：统一走 --key-stdin 或 -k <file>，理由同水印私钥。
         if (options.Action == CryptoAction.WrapKey) return BuildWrapArgs(options);
         if (options.Action == CryptoAction.UnwrapKey) return BuildUnwrapArgs(options);
 
@@ -101,6 +107,17 @@ public static class CliArgBuilder
 
         // 生成密钥对的曲线选择（默认 X25519）
         if (options.Action == CryptoAction.KeyGen && options.UseX448) args.Add("-x448");
+
+        // 加密盘入盘（M1/M4）：产物入索引；与 -o 互斥（由界面保证）。必须在 -o 之前。
+        bool isVaultIngest = options.Action is CryptoAction.Encrypt or CryptoAction.BatchEncrypt
+                             && !string.IsNullOrEmpty(options.IntoVault);
+        if (isVaultIngest)
+        {
+            // 填的是盘符（如 Z:）则解析回本程序挂载过的存储目录；解析不到原样下发，
+            // 由 CLI 守卫给出「看起来是盘符」的明确报错，避免把文件双重加密污染索引。
+            var target = ResolveVaultTarget(options.IntoVault!);
+            args.Add("--into-vault"); args.Add(target);
+        }
 
         // 输出目录
         if (!string.IsNullOrEmpty(options.OutputDir)) { args.Add("-o"); args.Add(options.OutputDir); }
@@ -236,7 +253,7 @@ public static class CliArgBuilder
     private static List<string> BuildUnwrapArgs(ShellOptions o)
     {
         var args = new List<string> { "--unwrap-key", o.WrapInput };
-        // 解包时算法写在 blob 头里，但界面上的选择用于决定「口令还是私钥」
+        // 解包时算法写在 blob 头里，但界面上的选择用于决定「密码还是私钥」
         if (o.WrapAlg != WrapAlg.Pubkey)
         {
             if (!string.IsNullOrEmpty(o.KeyfilePath)) { args.Add("-k"); args.Add(o.KeyfilePath); }
@@ -309,12 +326,12 @@ public static class CliArgBuilder
         {
             sb.Append(L10n.T("  # 密钥经 stdin 管道注入"));
         }
-        // 包装动作：口令路线走 stdin，公钥路线靠收件人密钥材料
+        // 包装动作：密码路线走 stdin，公钥路线靠收件人密钥材料
         if (options.Action is CryptoAction.WrapKey or CryptoAction.UnwrapKey)
         {
             if (options.WrapAlg == WrapAlg.Pubkey) sb.Append(L10n.T("  # 使用收件人密钥材料"));
-            else if (!string.IsNullOrEmpty(options.KeyfilePath)) sb.Append(L10n.T("  # 口令来自 -k 文件"));
-            else sb.Append(L10n.T("  # 口令经 stdin 管道注入"));
+            else if (!string.IsNullOrEmpty(options.KeyfilePath)) sb.Append(L10n.T("  # 密码来自 -k 文件"));
+            else sb.Append(L10n.T("  # 密码经 stdin 管道注入"));
         }
         // 预览只拼字符串、不真正跑 CLI，临时私钥用完即删
         CleanupWatermarkTemp(options);

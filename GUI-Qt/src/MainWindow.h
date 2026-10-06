@@ -90,6 +90,16 @@ private slots:
     void onRetryCliDetection();
     void onOpenTaskHistory();
     void onCheckForUpdate();
+    // 加密盘库管理（M4）：每个菜单项拼一组 --vault-* 参数后统一走 m_executor
+    void onVaultInit();
+    void onVaultList();
+    void onVaultRecoveryCreate();
+    void onVaultRecoveryOpen();
+    void onVaultRekey();
+    // 加密盘控制端（M3/M4 未完项）：挂载/锁定/解锁走 FE-Mounter，不由 CLI 持有
+    void onVaultMount();
+    void onVaultLock();
+    void onVaultUnlock();
     void startPendingScan();
     void onPendingScanFinished();
     void flushPendingFrame();
@@ -121,6 +131,22 @@ private:
     void rescanCli();
     void probeZstdSupport();
     void onProbeFinished(int exitCode, QProcess::ExitStatus status);
+    // 加密盘：目录插在 head 与 tail 之间（--vault-recovery <dir> --recovery-arg X 的顺序不能乱）；
+    // needPw 时弹密码框走 --key-stdin
+    void runVaultAction(const QString& title,const QStringList& head,
+                        const QStringList& tail,bool needPw,bool requireVault=true);
+    // 选加密盘目录：默认从上次用的目录开始；requireVault 为真时校验 vault.meta（不是盘则拒绝）
+    QString pickVaultDir(const QString& title,bool requireVault);
+    // 上次用的盘符/目录（QSettings 记忆）：盘符空则回落 Z:，目录空则不预设起点
+    QString lastMountPoint() const;
+    QString lastVaultDir() const;
+    void rememberVault(const QString& dir,const QString& point);
+    // 定位 FE-Mounter（缓存到 m_mounterPath）
+    bool locateMounter();
+    // detached 启动 FE-Mounter：pass 非空时落临时密码文件走 --pass-file，启动后延时删除
+    void launchMounterDetached(const QStringList& args,const QByteArray& pass);
+    // 挂载点对话框：盘符/目录（默认填上次用的）+ （可写时）可写勾选；返回是否确认且盘符非空
+    bool promptMountPoint(QString& point,bool& rw);
 
     ShellOptions collectOptions() const;
     // 包装算法下拉的当前值；控件未建时回落到默认 KWP
@@ -197,6 +223,10 @@ private:
     QLabel*   m_compressTitle=nullptr;
     QCheckBox* m_chkPqc=nullptr;
     QCheckBox* m_chkWatermark=nullptr;
+    // 加密盘（M1/M4）：入盘勾选 + 库目录；能力位来自 CLI --features 的 vault=1
+    QCheckBox* m_chkIntoVault=nullptr;
+    QLineEdit* m_vaultDirEdit=nullptr;
+    QPushButton* m_btnVaultBrowse=nullptr;
     QWidget*   m_wmKeyRow=nullptr;
     QLineEdit* m_wmKeyEdit=nullptr;
     QPushButton* m_btnWmKeyBrowse=nullptr;
@@ -208,6 +238,12 @@ private:
     bool      m_pqcAvailable=false;
     // 同理：--pack 是 2.8.0 才有的开关，旧 CLI 不认 -p，下发后整个任务被拒
     bool      m_packAvailable=false;
+    // 加密盘能力（--features 的 vault=1）：不支持时隐藏入盘控件
+    bool      m_vaultAvailable=false;
+    // 可写挂载能力（--features 的 vault_rw=1）：挂载对话框里才出现「可写挂载」
+    bool      m_vaultRwAvailable=false;
+    // FE-Mounter 挂载持有进程路径（detached 常驻挂载 / IPC 锁定解锁）
+    QString   m_mounterPath;
     // 密钥包装层要 OpenSSL：--features 里 keywrap 字段缺失即视为不支持
     bool      m_keywrapAvailable=false;
     // 输出目录行：标签单独留指针，包装动作整行隐藏时不留孤零零的「输出目录」
@@ -249,6 +285,7 @@ private:
     QPushButton* m_btnRun=nullptr;
     QPushButton* m_btnCancel=nullptr;
     QPushButton* m_btnRewrap=nullptr;
+    QMenu* m_vaultMenu=nullptr;         // 加密盘库管理菜单；CLI 不支持时整体禁用
     QString m_rewrapTempKey;
     QLabel* m_statusLabel=nullptr;
 

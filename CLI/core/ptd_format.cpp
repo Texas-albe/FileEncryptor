@@ -2,7 +2,7 @@
 
 const unsigned char MAGIC[4]={'F','E','N','C'};
 
-// v6 DEK 包裹明文的固定标记：解裹时以恒定时间比较，兼作口令正确性校验
+// v6 DEK 包裹明文的固定标记：解裹时以恒定时间比较，兼作密码正确性校验
 static const unsigned char DEK_MARKER[16] = {
     'F','E','D','E','K','W','R','A','P','0','0','0','0','0','1','\0' };
 
