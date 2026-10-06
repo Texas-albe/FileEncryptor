@@ -111,8 +111,8 @@ public static class L10n
         ["该文件夹尚未成为加密盘：{0}\n请先用「加密盘 → 新建加密盘」创建，或取消「入加密盘」改用普通加密。"] = "This folder is not a vault yet: {0}\nCreate it first via \"Vault > Create a vault\", or uncheck \"Put into vault\" to use normal encryption.",
         ["[加密盘] 错误: {0}"] = "[Vault] error: {0}",
         ["不支持填盘符"] = "Drive letters are not supported",
-        ["「入加密盘」需要填写加密盘的存储目录，而不是挂载盘符。\n\n盘符（如 Z:）只是加密盘挂载后的访问视图，数据并不存放在那里。请填写数据实际所在的目录，例如 E:\\Disks。"] =
-            "For \"Put into vault\", enter the vault's storage folder, not a mounted drive letter.\n\nA drive letter (such as Z:) is only a view of the mounted vault — the data is not stored there. Enter the folder that actually holds the data, for example E:\\Disks.",
+        ["「入加密盘」需要填写加密盘的存储目录，而不是挂载盘符。\n\n盘符（如 Z:）只是加密盘挂载后的访问视图，数据并不存放在那里。请填写数据实际所在的目录，例如 D:\\Vault。"] =
+            "For \"Put into vault\", enter the vault's storage folder, not a mounted drive letter.\n\nA drive letter (such as Z:) is only a view of the mounted vault — the data is not stored there. Enter the folder that actually holds the data, for example D:\\Vault.",
         // 加密盘菜单（库管理 + 挂载控制端）
         ["新建加密盘..."] = "Create a vault...",
         ["新建加密盘"] = "Create a vault",
@@ -503,8 +503,8 @@ public static class L10n
         ["该文件夹尚未成为加密盘：{0}\n请先用「加密盘 → 新建加密盘」创建，或取消「入加密盘」改用普通加密。"] = "Эта папка пока не хранилище: {0}\nСначала создайте его через «Хранилище → Создать хранилище» или снимите «Поместить в хранилище».",
         ["[加密盘] 错误: {0}"] = "[Хранилище] ошибка: {0}",
         ["不支持填盘符"] = "Буквы дисков не поддерживаются",
-        ["「入加密盘」需要填写加密盘的存储目录，而不是挂载盘符。\n\n盘符（如 Z:）只是加密盘挂载后的访问视图，数据并不存放在那里。请填写数据实际所在的目录，例如 E:\\Disks。"] =
-            "Для «Поместить в хранилище» укажите папку хранения хранилища, а не букву подключённого диска.\n\nБуква диска (например, Z:) — лишь представление подключённого хранилища; данные там не хранятся. Укажите папку, где данные находятся на самом деле, например E:\\Disks.",
+        ["「入加密盘」需要填写加密盘的存储目录，而不是挂载盘符。\n\n盘符（如 Z:）只是加密盘挂载后的访问视图，数据并不存放在那里。请填写数据实际所在的目录，例如 D:\\Vault。"] =
+            "Для «Поместить в хранилище» укажите папку хранения хранилища, а не букву подключённого диска.\n\nБуква диска (например, Z:) — лишь представление подключённого хранилища; данные там не хранятся. Укажите папку, где данные находятся на самом деле, например D:\\Vault.",
         // 加密盘菜单（库管理 + 挂载控制端）
         ["新建加密盘..."] = "Создать хранилище…",
         ["新建加密盘"] = "Создать хранилище",

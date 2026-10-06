@@ -140,8 +140,8 @@ static NTSTATUS wf_GetVolumeInfo(FSP_FILE_SYSTEM*, FSP_FSCTL_VOLUME_INFO* Volume
     }
     VolumeInfo->TotalSize = total;
     VolumeInfo->FreeSize  = (total > used) ? (total - used) : 0;
-    VolumeInfo->VolumeLabelLength = (UINT16)wcslen(L"FE-Vault");
-    wcscpy_s(VolumeInfo->VolumeLabel, sizeof VolumeInfo->VolumeLabel / sizeof(WCHAR), L"FE-Vault");
+    VolumeInfo->VolumeLabelLength = (UINT16)wcslen(L"加密盘");
+    wcscpy_s(VolumeInfo->VolumeLabel, sizeof VolumeInfo->VolumeLabel / sizeof(WCHAR), L"加密盘");
     return STATUS_SUCCESS;
 }
 static NTSTATUS wf_GetSecurityByName(FSP_FILE_SYSTEM*, PWSTR FileName, PUINT32 PFileAttributes,
@@ -415,7 +415,7 @@ static NTSTATUS wf_SvcStart(FSP_SERVICE* Service, ULONG, PWSTR*) {
     // FspCleanupDelete 并执行删除。缺此项则 del 静默不生效。
     vol.PostDispositionWhenNecessaryOnly = 1;
     if (!g_svc_rw) vol.ReadOnlyVolume = 1;
-    wcscpy_s(vol.FileSystemName, sizeof vol.FileSystemName / sizeof(WCHAR), L"FE-Vault");
+    wcscpy_s(vol.FileSystemName, sizeof vol.FileSystemName / sizeof(WCHAR), L"加密盘");
     FSP_FILE_SYSTEM* fs = nullptr;
     // 显式转 PWSTR：DeviceName 形参非 const，/Zc:strictStrings 下字面量是 const
     NTSTATUS st = FspFileSystemCreate(const_cast<PWSTR>(L"" FSP_FSCTL_DISK_DEVICE_NAME),

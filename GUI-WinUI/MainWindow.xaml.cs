@@ -1591,19 +1591,19 @@ public sealed partial class MainWindow : Window
             var vd = (ViewModel.IntoVault ?? "").Trim();
             if (vd.Length == 0)
             {
-                await ShowMessageAsync(L10n.T("缺少加密盘目录"), L10n.T("勾选「入加密盘」后请选择加密盘的存储目录，例如 E:\\Disks。"));
+                await ShowMessageAsync(L10n.T("缺少加密盘目录"), L10n.T("勾选「入加密盘」后请选择加密盘的存储目录，例如 D:\\Vault。"));
                 VaultDirEdit.Focus(FocusState.Programmatic);
                 return;
             }
             // 盘符根（Z / Z: / Z:\）已移除支持：CLI 会拒盘符根，这里提前拦并说清要填什么。
-            // 仅「去掉尾部斜杠后长度为 1 或 2 的 X / X:」算盘符根；E:\Disks 这类真实目录不能误判。
+            // 仅「去掉尾部斜杠后长度为 1 或 2 的 X / X:」算盘符根；D:\Vault 这类真实目录不能误判。
             string vdNoSlash = vd.TrimEnd('\\', '/');
             bool isDrive = vdNoSlash.Length >= 1 && char.IsLetter(vdNoSlash[0])
                 && (vdNoSlash.Length == 1 || (vdNoSlash.Length == 2 && vdNoSlash[1] == ':'));
             if (isDrive)
             {
                 await ShowMessageAsync(L10n.T("不支持填盘符"),
-                    L10n.T("「入加密盘」需要填写加密盘的存储目录，而不是挂载盘符。\n\n盘符（如 Z:）只是加密盘挂载后的访问视图，数据并不存放在那里。请填写数据实际所在的目录，例如 E:\\Disks。"));
+                    L10n.T("「入加密盘」需要填写加密盘的存储目录，而不是挂载盘符。\n\n盘符（如 Z:）只是加密盘挂载后的访问视图，数据并不存放在那里。请填写数据实际所在的目录，例如 D:\\Vault。"));
                 VaultDirEdit.Focus(FocusState.Programmatic);
                 return;
             }

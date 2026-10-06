@@ -1434,7 +1434,7 @@ QWidget* MainWindow::buildCenterPanel() {
     m_chkIntoVault=new QCheckBox(tr("入加密盘"));
     m_chkIntoVault->setToolTip(tr("勾选后产物写入加密盘目录并登记进加密索引；不勾选则为普通加密"));
     m_vaultDirEdit=new QLineEdit(this);
-    m_vaultDirEdit->setPlaceholderText(tr("加密盘存储目录（如 E:\\Disks）；也可填本程序挂载过的盘符（如 Z:）"));
+    m_vaultDirEdit->setPlaceholderText(tr("加密盘存储目录（如 D:\\Vault）"));
     m_vaultDirEdit->setEnabled(false);
     m_btnVaultBrowse=new QPushButton(tr("选择…"),this);
     m_btnVaultBrowse->setEnabled(false);
@@ -2144,7 +2144,7 @@ void MainWindow::onRunClicked() {
     if(isEnc && m_chkIntoVault && m_chkIntoVault->isChecked()) {
         QString vd=o.intoVault.trimmed();
         // 盘符根（Z / Z: / Z:\）已移除支持：CLI 会拒盘符根，这里提前拦并说清要填什么。
-        // 仅「去掉尾部斜杠后长度为 1 或 2 的 X / X:」算盘符根；E:\Disks 这类真实目录不能误判。
+        // 仅「去掉尾部斜杠后长度为 1 或 2 的 X / X:」算盘符根；D:\Vault 这类真实目录不能误判。
         {
             QString n=vd;
             while(n.endsWith(QLatin1Char('\\'))||n.endsWith(QLatin1Char('/'))) n.chop(1);
@@ -2153,7 +2153,7 @@ void MainWindow::onRunClicked() {
                 MsgBox::warn(this,tr("不支持填盘符"),
                     tr("「入加密盘」需要填写加密盘的存储目录，而不是挂载盘符。\n\n"
                        "盘符（如 Z:）只是加密盘挂载后的访问视图，数据并不存放在那里。"
-                       "请填写数据实际所在的目录，例如 E:\\Disks。"));
+                       "请填写数据实际所在的目录，例如 D:\\Vault。"));
                 if(m_vaultDirEdit) m_vaultDirEdit->setFocus();
                 return;
             }
@@ -2161,7 +2161,7 @@ void MainWindow::onRunClicked() {
         o.intoVault=vd;
         if(m_vaultDirEdit) m_vaultDirEdit->setText(vd);
         if(vd.isEmpty()) {
-            MsgBox::warn(this,tr("缺少加密盘目录"),tr("勾选「入加密盘」后请选择加密盘的存储目录，例如 E:\\Disks。"));
+            MsgBox::warn(this,tr("缺少加密盘目录"),tr("勾选「入加密盘」后请选择加密盘的存储目录，例如 D:\\Vault。"));
             if(m_vaultDirEdit) m_vaultDirEdit->setFocus();
             return;
         }

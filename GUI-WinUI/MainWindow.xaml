@@ -241,7 +241,7 @@
                             <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
                                 <CheckBox x:Name="ChkIntoVault" Content="入加密盘" Checked="OnIntoVaultChanged" Unchecked="OnIntoVaultChanged"
                                           VerticalAlignment="Center" ToolTipService.ToolTip="勾选后产物写入加密盘目录并登记进加密索引；不勾选则为普通加密" />
-                                <TextBox x:Name="VaultDirEdit" PlaceholderText="加密盘目录或盘符（如 Z:）" Width="240" IsEnabled="False" TextChanged="OnVaultDirChanged" />
+                                <TextBox x:Name="VaultDirEdit" PlaceholderText="加密盘存储目录（如 D:\Vault）" Width="240" IsEnabled="False" TextChanged="OnVaultDirChanged" />
                                 <Button x:Name="BtnVaultBrowse" Content="浏览..." Click="OnBrowseVaultDir" IsEnabled="False" />
                             </StackPanel>
                         </Grid>

@@ -2743,7 +2743,7 @@ if(wrap_mode || unwrap_mode) {
         bool is_drive_root = (g_path.size()==2 && g_path[1]==':' && isalpha((unsigned char)g_path[0]));
         if (is_drive_root) {
             std::cerr<<"vault error: '"<<into_vault_dir<<"' 看起来是盘符（挂载后的解密视图）。\n"
-                     <<"请指定加密盘的存储目录（例如 E:\\Disks），不要指定挂载盘符。\n";
+                     <<"请指定加密盘的存储目录（例如 D:\\Vault），不要指定挂载盘符。\n";
             return 1;
         }
         VaultMeta meta; std::string err;
