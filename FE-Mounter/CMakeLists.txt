@@ -13,7 +13,7 @@
 #   cmake -S FE-Mounter -B out -DFE_MOUNT_CLI_DIR=/path/to/FileEncryptor/CLI
 #   cmake -S FE-Mounter -B out -DFE_MOUNT_CLI_INCLUDE=/path/to/vdisk.h
 cmake_minimum_required(VERSION 3.15)
-project(FileEncryptorMounter VERSION 3.0.0 LANGUAGES CXX)
+project(FileEncryptorMounter VERSION 3.0.1 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -84,6 +84,52 @@ target_include_directories(FE-Mounter PRIVATE "${_fe_mount_inc}")
 message(STATUS "vdisk.h 目录: ${_fe_mount_inc}")
 message(STATUS "产物目录: ${FE_MOUNT_BIN_OUT}")
 
+# libsodium：secure_zero(sodium_memzero)、crypto_generichash 需 <sodium.h> 与（Windows）静态链接。
+# 与 CLI 同源 third_party/libsodium，保证 FE-Mounter 与 vdisk.dll 用同一套清零/哈希原语（#6 统一）。
+set(_sodium_root "${SODIUM_ROOT}")
+if(NOT _sodium_root)
+  set(_sodium_root "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/libsodium")
+endif()
+if(NOT EXISTS "${_sodium_root}")
+  set(_sodium_root "$ENV{ProgramFiles}/libsodium")
+endif()
+set(_sodium_inc "${_sodium_root}/include")
+if(EXISTS "${_sodium_inc}")
+  target_include_directories(FE-Mounter PRIVATE "${_sodium_inc}")
+  if(WIN32)
+    if(CMAKE_SIZEOF_VOID_P EQUAL 8)
+      set(_sa "x64")
+    else()
+      set(_sa "Win32")
+    endif()
+    set(_sodium_lib "")
+    foreach(_ts v143 v142 v141 v140)
+      set(_cand "${_sodium_root}/${_sa}/Release/${_ts}/static/libsodium.lib")
+      if(EXISTS "${_cand}")
+        set(_sodium_lib "${_cand}")
+        break()
+      endif()
+    endforeach()
+    if(_sodium_lib)
+      target_link_libraries(FE-Mounter PRIVATE "${_sodium_lib}")
+      target_compile_definitions(FE-Mounter PRIVATE SODIUM_STATIC=1)
+      message(STATUS "libsodium 静态库: ${_sodium_lib}")
+    else()
+      message(WARNING "未找到 libsodium 静态库（${_sodium_root}/${_sa}/Release/*/static）")
+    endif()
+  else()
+    find_library(_sodium_lib NAMES sodium libsodium HINTS "${_sodium_root}" /usr/local /usr PATH_SUFFIXES lib lib64)
+    if(_sodium_lib)
+      target_link_libraries(FE-Mounter PRIVATE "${_sodium_lib}")
+      message(STATUS "libsodium: ${_sodium_lib}")
+    else()
+      message(WARNING "未找到 libsodium 库（需 sodium_memzero/crypto_generichash）")
+    endif()
+  endif()
+else()
+  message(WARNING "未找到 libsodium 头目录（${_sodium_inc}），FE-Mounter 编译将失败")
+endif()
+
 # 所有配置都指向同一目录（VS 的 <CONFIG> 已是 Release/Debug；单配置已固定）
 set_target_properties(FE-Mounter PROPERTIES
   RUNTIME_OUTPUT_DIRECTORY "${FE_MOUNT_BIN_OUT}"
@@ -147,9 +193,35 @@ if(WIN32)
       # 缺失则进程加载即 0xC0000135（SDK 装在 Program Files 不在默认搜索路径）。
       # launcher-x64.exe 是 WinFSP 服务启动器（服务未运行时由 winfsp-x64.dll 拉起），
       # 同样随包分发，否则目标机没预装 WinFSP 时挂载直接失败。
+      # winfsp.sys 是内核驱动：与 winfsp-x64.dll 同目录时，FE-Mounter 以管理员身份首次挂载
+      # 会由 DLL 嵌入式自安装并启动内核驱动（WinFsp.Fsd）与 Launcher 服务，从而让未预装
+      # WinFSP 的干净机（如样机 Win11 22H2）也能盘符挂载。缺它则干净机挂载无效。
       add_custom_command(TARGET FE-Mounter POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
                 "${_winfsp_root}/bin/winfsp-x64.dll" "$<TARGET_FILE_DIR:FE-Mounter>/")
+      # winfsp-x64.sys 是内核驱动（SDK bin\ 里按架构命名；System32\drivers\ 里是 winfsp.sys）。
+      # 与 winfsp-x64.dll 同目录时，FE-Mounter 以管理员身份首次挂载会由 DLL 嵌入式自安装并启动
+      # 内核驱动（WinFsp.Fsd）与 Launcher 服务，使未预装 WinFSP 的干净机（如样机 Win11 22H2）
+      # 也能盘符挂载。目标名固定 winfsp-x64.sys（DLL 按架构找该名），故拷贝时改名。
+      set(_winfsp_sys_candidates
+          "${_winfsp_root}/bin/winfsp-x64.sys"
+          "${_winfsp_root}/bin/winfsp.sys"
+          "C:/Windows/System32/drivers/winfsp.sys"
+          "${CMAKE_SOURCE_DIR}/../third_party/winfsp/winfsp-x64.sys")
+      set(_winfsp_sys_found "")
+      foreach(_cand ${_winfsp_sys_candidates})
+        if(EXISTS "${_cand}")
+          set(_winfsp_sys_found "${_cand}")
+          break()
+        endif()
+      endforeach()
+      if(_winfsp_sys_found)
+        add_custom_command(TARGET FE-Mounter POST_BUILD
+          COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                  "${_winfsp_sys_found}" "$<TARGET_FILE_DIR:FE-Mounter>/winfsp-x64.sys")
+      else()
+        message(WARNING "未找到 winfsp-x64.sys（已查 ${_winfsp_sys_candidates}）；干净机将无法自安装内核驱动，盘符挂载会失效。请确认 WinFSP SDK 完整（含 bin\\winfsp-x64.sys），或将正版 winfsp-x64.sys 放入 third_party/winfsp/。")
+      endif()
       foreach(_extra launcher-x64.exe fsptool-x64.exe)
         if(EXISTS "${_winfsp_root}/bin/${_extra}")
           add_custom_command(TARGET FE-Mounter POST_BUILD

@@ -244,7 +244,7 @@
     </message>
     <message>
         <location filename="../src/MainWindow.cpp" line="1418"/>
-        <source>把整个目录树或多个文件打成单个 .ptd 容器，不删除源文件</source>
+        <source>将整个目录树或多个文件打包为单个 .ptd 容器，不删除源文件</source>
         <translation>Pack a whole folder tree or several files into a single .ptd container; source files are kept</translation>
     </message>
     <message>
@@ -300,14 +300,14 @@
     </message>
     <message>
         <location filename="../src/MainWindow.cpp" line="2987"/>
-        <source>当前: %1 | 完成 %2/%3 | 跳过 %4 | 失败 %5</source>
+        <source>当前：%1 | 完成 %2/%3 | 跳过 %4 | 失败 %5</source>
         <translation>Current: %1 | Done %2/%3 | Skipped %4 | Failed %5</translation>
     </message>
     <message>
         <location filename="../src/MainWindow.cpp" line="3074"/>
         <location filename="../src/MainWindow.cpp" line="3082"/>
-        <source>任务完成</source>
-        <translation>Task complete</translation>
+        <source>操作完成</source>
+        <translation>Operation complete</translation>
     </message>
     <message>
         <location filename="../src/MainWindow.cpp" line="2105"/>
@@ -456,7 +456,7 @@
     </message>
     <message>
         <location filename="../src/MainWindow.cpp" line="1400"/>
-        <source>留空 = 运行弹窗输入（经 stdin 注入）</source>
+        <source>留空 = 运行时弹窗输入（经 stdin 注入）</source>
         <translation>Leave empty = enter it in the run dialog (injected via stdin)</translation>
     </message>
     <message>
@@ -540,7 +540,7 @@ Raw output: %2</translation>
     </message>
     <message>
         <location filename="../src/MainWindow.cpp" line="2992"/>
-        <source>待处理: %1 个文件 / %2</source>
+        <source>待处理：%1 个文件 / %2</source>
         <translation>Pending: %1 file(s) / %2</translation>
     </message>
     <message>
@@ -604,8 +604,8 @@ Raw output: %2</translation>
     </message>
     <message>
         <location filename="../src/MainWindow.cpp" line="443"/>
-        <source>是否现在下载并安装？</source>
-        <translation>Download and install now?</translation>
+        <source>请确认是否现在下载并安装。</source>
+        <translation>Confirm whether to download and install now.</translation>
     </message>
     <message>
         <location filename="../src/MainWindow.cpp" line="469"/>
@@ -683,7 +683,7 @@ Raw output: %2</translation>
     </message>
     <message>
         <location filename="../src/MainWindow.cpp" line="2518"/>
-        <source>请输入此前抄录的 48 位恢复码（仅限数字）：</source>
+        <source>请输入此前记录的 48 位恢复码（仅限数字）：</source>
         <translation>Type the 48-digit recovery code you wrote down (digits only):</translation>
     </message>
     <message>
@@ -1085,7 +1085,7 @@ It locks itself after 1 minute of inactivity.</translation>
     <message>
         <location filename="../src/MainWindow.cpp" line="1169"/>
         <location filename="../src/MainWindow.cpp" line="1836"/>
-        <source>解开密钥</source>
+        <source>解包密钥</source>
         <translation>Unwrap key</translation>
     </message>
     <message>
@@ -1269,7 +1269,7 @@ It locks itself after 1 minute of inactivity.</translation>
     </message>
     <message>
         <location filename="../src/MainWindow.cpp" line="1659"/>
-        <source>选择要解开的包装文件</source>
+        <source>选择要解包的包装文件</source>
         <translation>Select the blob to unwrap</translation>
     </message>
     <message>
@@ -1299,7 +1299,7 @@ It locks itself after 1 minute of inactivity.</translation>
     </message>
     <message>
         <location filename="../src/MainWindow.cpp" line="1699"/>
-        <source>配套的命令行程序没有密钥包装能力，请更换带 OpenSSL 的 CLI</source>
+        <source>当前 CLI 不支持密钥包装，请使用带 OpenSSL 的 CLI</source>
         <translation>The bundled command-line program cannot wrap keys; please use a CLI built with OpenSSL</translation>
     </message>
     <message>
@@ -1334,7 +1334,7 @@ It locks itself after 1 minute of inactivity.</translation>
     </message>
     <message>
         <location filename="../src/MainWindow.cpp" line="1840"/>
-        <source>要解开的 .fekw 包装文件</source>
+        <source>要解包的 .fekw 包装文件</source>
         <translation>The .fekw blob to unwrap</translation>
     </message>
     <message>
@@ -1408,7 +1408,7 @@ Please use XChaCha20-Poly1305 (the default) instead.</translation>
     </message>
     <message>
         <location filename="../src/MainWindow.cpp" line="2120"/>
-        <source>配套的命令行程序没有密钥包装能力，无法包装或解开密钥。
+        <source>当前 CLI 不支持密钥包装，无法包装或解包密钥。
 请更换带 OpenSSL 的 CLI。</source>
         <translation>The bundled command-line program cannot wrap keys, so wrapping and unwrapping are unavailable.
 Please use a CLI built with OpenSSL.</translation>
@@ -1459,7 +1459,7 @@ Initialize it first, or uncheck &quot;Put into vault&quot; to use normal encrypt
     </message>
     <message>
         <location filename="../src/MainWindow.cpp" line="2165"/>
-        <source>请先选择要解开的 .fekw 包装文件。</source>
+        <source>请先选择要解包的 .fekw 包装文件。</source>
         <translation>Pick the .fekw blob to unwrap.</translation>
     </message>
     <message>
@@ -1786,8 +1786,8 @@ Please use XChaCha20-Poly1305 (the default mode) instead.</translation>
     </message>
     <message>
         <location filename="../src/MainWindow.cpp" line="203"/>
-        <source>有命令正在运行，退出将终止它。确定退出？</source>
-        <translation>A command is still running and will be terminated on exit. Quit anyway?</translation>
+        <source>有命令正在运行，退出将终止它。请确认是否退出。</source>
+        <translation>A command is still running and will be terminated on exit. Quit anyway.</translation>
     </message>
     <message>
         <location filename="../src/MainWindow.cpp" line="2176"/>
@@ -1878,10 +1878,10 @@ Current program directory:/n  %1
     <message>
         <location filename="../src/MainWindow.cpp" line="2259"/>
         <source>批量解密将对每个文件执行昂贵的密钥派生（KDF）以还原完整原始文件名，可能很慢。
-是否启用「完整文件名还原」？
+请确认是否启用「完整文件名还原」。
 （无论是否启用，输出文件的扩展名都会保留。）</source>
         <translation>Batch decryption runs an expensive key derivation (KDF) per file to restore full original file names, which can be slow.
-Enable full file name restoration?
+Enable full file name restoration.
 (Either way, the output file extension is preserved.)</translation>
     </message>
     <message>
@@ -2118,7 +2118,7 @@ Enable full file name restoration?
     </message>
     <message>
         <location filename="../src/PreviewDialog.cpp" line="161"/>
-        <source>预览完成。预览不会写出解密文件。</source>
+        <source>预览完成，未写出任何解密文件。</source>
         <translation>Preview complete, content shown above. No decrypted file was written.</translation>
     </message>
     <message>
@@ -2307,10 +2307,10 @@ Enable full file name restoration?
     </message>
     <message>
         <location filename="../src/TaskHistoryDialog.cpp" line="166"/>
-        <source>确定删除这条历史记录？
+        <source>请确认是否删除这条历史记录。
 
 %1  %2</source>
-        <translation>Delete this history record?
+        <translation>Confirm deletion of this history record.
 
 %1  %2</translation>
     </message>
@@ -2361,8 +2361,8 @@ Enable full file name restoration?
     </message>
     <message>
         <location filename="../src/TaskHistoryDialog.cpp" line="181"/>
-        <source>删除此条</source>
-        <translation>Delete this entry</translation>
+        <source>删除该记录</source>
+        <translation>Delete this record</translation>
     </message>
     <message>
         <location filename="../src/TaskHistoryDialog.cpp" line="54"/>
@@ -2373,10 +2373,10 @@ Enable full file name restoration?
         <location filename="../src/TaskHistoryDialog.cpp" line="148"/>
         <source>将删除全部 %1 条任务历史记录（仅影响本面板，不影响任何加密文件与密钥库）。
 
-确定继续？</source>
+请确认是否继续。</source>
         <translation>This deletes all %1 task history records (affects only this panel; no encrypted files or key libraries are touched).
 
-Continue?</translation>
+Confirm whether to continue.</translation>
     </message>
     <message>
         <location filename="../src/TaskHistoryDialog.cpp" line="75"/>
@@ -2453,8 +2453,8 @@ Continue?</translation>
     <name>TaskSummaryDialog</name>
     <message>
         <location filename="../src/TaskSummaryDialog.cpp" line="13"/>
-        <source>任务完成</source>
-        <translation>Task complete</translation>
+        <source>操作完成</source>
+        <translation>Operation complete</translation>
     </message>
     <message>
         <location filename="../src/TaskSummaryDialog.cpp" line="38"/>
@@ -2534,6 +2534,54 @@ Continue?</translation>
         <location filename="../src/ViewSettingsDialog.cpp" line="37"/>
         <source>清除背景</source>
         <translation>Clear background</translation>
+    </message>
+    <message>
+        <location filename="../src/MainWindow.cpp" line="287"/>
+        <source>卸载磁盘...</source>
+        <translation>Unmount the drive...</translation>
+    </message>
+    <message>
+        <location filename="../src/MainWindow.cpp" line="287"/>
+        <source>卸载已挂载的加密盘，盘符随之消失</source>
+        <translation>Unmount the mounted vault; its drive letter disappears</translation>
+    </message>
+    <message>
+        <location filename="../src/MainWindow.cpp" line="287"/>
+        <source>格式化加密盘...</source>
+        <translation>Format the vault...</translation>
+    </message>
+    <message>
+        <location filename="../src/MainWindow.cpp" line="287"/>
+        <source>清空盘内全部文件，保留盘身份与密码；不可撤销</source>
+        <translation>Erase every file in the vault, keeping its identity and password; irreversible</translation>
+    </message>
+    <message>
+        <location filename="../src/MainWindow.cpp" line="287"/>
+        <source>卸载磁盘</source>
+        <translation>Unmount the drive</translation>
+    </message>
+    <message>
+        <location filename="../src/MainWindow.cpp" line="287"/>
+        <source>--- 卸载磁盘（盘符随之释放） ---</source>
+        <translation>--- Unmount the drive (drive letter released) ---</translation>
+    </message>
+    <message>
+        <location filename="../src/MainWindow.cpp" line="287"/>
+        <source>将卸载该加密盘的挂载，盘符会随之消失。盘内文件不会被删除。</source>
+        <translation>The vault mount will be removed and its drive letter will disappear. Files inside are not deleted.</translation>
+    </message>
+    <message>
+        <location filename="../src/MainWindow.cpp" line="287"/>
+        <source>将清空所选加密盘内的全部文件。
+
+盘的身份与密码保留，格式化后仍可用原密码继续入盘；但盘内原有文件无法恢复。
+
+若该盘正被挂载，请先执行「卸载磁盘」。</source>
+        <translation>Every file in the selected vault will be erased.
+
+The vault identity and password are kept, so you can keep using the same password afterwards — but the erased files cannot be recovered.
+
+If the vault is currently mounted, unmount it first.</translation>
     </message>
 </context>
 </TS>

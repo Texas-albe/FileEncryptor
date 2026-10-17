@@ -257,17 +257,49 @@ bool write_file_atomic(const std::string& p, const std::string& data, std::strin
     return true;
 }
 
+// ---- base64（libsodium，无 OpenSSL 依赖）----
+static std::string to_b64(const std::vector<unsigned char>& b) {
+    if (b.empty()) return std::string();
+    size_t need = sodium_base64_ENCODED_LEN(b.size(), sodium_base64_VARIANT_ORIGINAL);
+    std::string out(need - 1, '\0');   // ENCODED_LEN 含结尾 NUL
+    sodium_bin2base64(out.data(), need, b.data(), b.size(), sodium_base64_VARIANT_ORIGINAL);
+    return out;
+}
+static std::vector<unsigned char> from_b64(const std::string& s) {
+    std::vector<unsigned char> out;
+    if (s.empty()) return out;
+    out.resize(s.size());
+    size_t outlen = 0;
+    if (sodium_base642bin(out.data(), out.size(), s.data(), s.size(), nullptr, &outlen, nullptr,
+                          sodium_base64_VARIANT_ORIGINAL) != 0)
+        return std::vector<unsigned char>();
+    out.resize(outlen);
+    return out;
+}
+
 // ---- 序列化 ----
 std::string meta_to_json(const VaultMeta& m) {
     std::ostringstream o;
-    o << "{\"format\":" << m.format
+    if (!m.encrypted) {
+        // 旧明文格式：root/created 明文
+        o << "{\"format\":1"
+          << ",\"salt\":\"" << to_hex(m.salt) << "\""
+          << ",\"root\":" << jstrlit(m.root)
+          << ",\"created\":" << m.created
+          << ",\"opslimit\":" << m.opslimit
+          << ",\"memlimit_kb\":" << m.memlimit_kb;
+        if (!m.mount_point.empty()) o << ",\"mount_point\":" << jstrlit(m.mount_point);
+        o << "}";
+        return o.str();
+    }
+    // format==2：root/created 移入密文，明文只留盐/KDF/mount_point/密文段
+    o << "{\"format\":2"
       << ",\"salt\":\"" << to_hex(m.salt) << "\""
-      << ",\"root\":" << jstrlit(m.root)
-      << ",\"created\":" << m.created
       << ",\"opslimit\":" << m.opslimit
       << ",\"memlimit_kb\":" << m.memlimit_kb;
     if (!m.mount_point.empty()) o << ",\"mount_point\":" << jstrlit(m.mount_point);
-    o << "}";
+    o << ",\"meta_nonce\":\"" << to_hex(m.meta_nonce) << "\""
+      << ",\"meta_enc\":\"" << to_b64(m.meta_enc) << "\"}";
     return o.str();
 }
 
@@ -281,7 +313,9 @@ std::string entry_to_json(const VaultEntry& e) {
       << ",\"mtime\":" << e.mtime
       << ",\"enc_ts\":" << e.enc_ts
       << ",\"algo\":" << jstrlit(e.algo)
-      << ",\"kdf\":" << jstrlit(e.kdf) << "}";
+      << ",\"kdf\":" << jstrlit(e.kdf);
+    if (e.is_dir) o << ",\"is_dir\":1";   // 目录条目：true 时写出，旧盘缺省=文件
+    o << "}";
     return o.str();
 }
 
@@ -375,6 +409,8 @@ std::string vault_random_store_name() {
 }
 
 std::string vault_ptd_path(const std::string& dir, const std::string& rel, const std::string& store) {
+    // 防御：rel 含 ".." 可借 subdir 逃逸 dir；正常不会，但兜底拒绝（返回空路径→调用方打不开该文件，安全失败）
+    if (rel.find("..") != std::string::npos) return std::string();
     std::string subdir, base;
     size_t pos = rel.find_last_of('/');
     if (pos == std::string::npos) { base = rel; }
@@ -423,20 +459,30 @@ bool vault_meta_init(const std::string& dir, const std::string& root,
 bool vault_meta_load(const std::string& dir, VaultMeta& out, std::string& err) {
     std::string mp = dir + "/vault.meta";
     std::string s;
-    if (!read_file(mp, s)) { err = "vault.meta not found (not a vault?)"; return false; }
+    if (!read_file(mp, s)) { err = "vault.meta not found (not a vault)"; return false; }
     JVal v; size_t i = 0;
     if (!jval(s, v, err, i)) return false;
     if (v.t != JVal::OB) { err = "bad vault.meta"; return false; }
     const JVal* f = v.at("format"); if (!f) { err = "missing format"; return false; }
     const JVal* sl = v.at("salt"); if (!sl) { err = "missing salt"; return false; }
-    const JVal* rt = v.at("root"); if (!rt) { err = "missing root"; return false; }
     out.format = (uint32_t)f->n;
     out.salt = from_hex(sl->s);
-    out.root = rt->s;
-if (auto* p = v.at("created")) out.created = as_u64(p);
-if (auto* p = v.at("opslimit")) out.opslimit = (unsigned int)as_u64(p);
-if (auto* p = v.at("memlimit_kb")) out.memlimit_kb = (uint32_t)as_u64(p);
+    if (auto* p = v.at("opslimit")) out.opslimit = (unsigned int)as_u64(p);
+    if (auto* p = v.at("memlimit_kb")) out.memlimit_kb = (uint32_t)as_u64(p);
     if (auto* p = v.at("mount_point")) out.mount_point = p->s;   // 旧库无此字段→留空
+    // format==2：root/created 在密文内，留待 vault_meta_decrypt 用密码补全
+    const JVal* enc = v.at("meta_enc");
+    const JVal* nonce = v.at("meta_nonce");
+    if (out.format == 2 && enc && nonce) {
+        out.encrypted = true;
+        out.meta_nonce = from_hex(nonce->s);
+        out.meta_enc = from_b64(enc->s);
+        return true;
+    }
+    // 旧明文格式：要求明文 root
+    const JVal* rt = v.at("root"); if (!rt) { err = "missing root"; return false; }
+    out.root = rt->s;
+    if (auto* p = v.at("created")) out.created = as_u64(p);
     return true;
 }
 
@@ -444,9 +490,74 @@ bool vault_meta_save(const std::string& dir, const VaultMeta& m, std::string& er
     return write_file_atomic(dir + "/vault.meta", meta_to_json(m), err);
 }
 
+// 用索引密钥（KEK）把 root/created 加密后回写（升到 format==2）。旧盘首次解锁即透明升级。
+bool vault_meta_save_encrypted(const std::string& dir, const VaultMeta& m,
+                               const std::vector<unsigned char>& kek, std::string& err) {
+    if (sodium_init() < 0) { err = "libsodium init failed"; return false; }
+    if (kek.size() < crypto_secretbox_KEYBYTES) { err = "bad KEK"; return false; }
+    VaultMeta e = m;
+    e.encrypted = true;
+    e.meta_nonce.resize(crypto_secretbox_NONCEBYTES);
+    randombytes_buf(e.meta_nonce.data(), e.meta_nonce.size());
+    // 明文载荷仅含隐私字段 root/created（salt/ops/mem/mount_point 本就明文）
+    std::string pt = std::string("{\"root\":") + jstrlit(m.root)
+                   + ",\"created\":" + std::to_string(m.created) + "}";
+    std::vector<unsigned char> ct(crypto_secretbox_MACBYTES + pt.size());
+    if (crypto_secretbox_easy(ct.data(), (const unsigned char*)pt.data(), pt.size(),
+                              e.meta_nonce.data(), kek.data()) != 0) {
+        err = "meta encrypt failed"; return false;
+    }
+    e.meta_enc = std::move(ct);
+    return write_file_atomic(dir + "/vault.meta", meta_to_json(e), err);
+}
+
+// 用密码解密 format==2 的 root/created 回填到 meta（open 之后、有密码时调用）。
+bool vault_meta_decrypt(VaultMeta& m, const SecureBuffer& password, std::string& err) {
+    if (!m.encrypted) return true;   // 明文无需解密
+    if (m.meta_enc.size() < crypto_secretbox_MACBYTES ||
+        m.meta_nonce.size() != crypto_secretbox_NONCEBYTES) {
+        err = "bad encrypted meta"; return false;
+    }
+    std::vector<unsigned char> kek;
+    if (!derive_index_key(password, m, kek, err)) return false;
+    std::vector<unsigned char> pt(m.meta_enc.size() - crypto_secretbox_MACBYTES);
+    bool ok = (crypto_secretbox_open_easy(pt.data(), m.meta_enc.data(), m.meta_enc.size(),
+                                         m.meta_nonce.data(), kek.data()) == 0);
+    sodium_memzero(kek.data(), kek.size());
+    if (!ok) { err = "wrong password (meta)"; return false; }
+    std::string s((const char*)pt.data(), pt.size());
+    JVal v; size_t i = 0; std::string jerr;
+    if (!jval(s, v, jerr, i) || v.t != JVal::OB) { err = "bad meta payload"; return false; }
+    if (auto* p = v.at("root")) m.root = p->s;
+    if (auto* p = v.at("created")) m.created = as_u64(p);
+    return true;
+}
+
 bool vault_derive_key(const SecureBuffer& password, const VaultMeta& meta,
                       std::vector<unsigned char>& key32, std::string& err) {
     return derive_index_key(password, meta, key32, err);
+}
+
+// 防御：rel_path 必须相对、无 ".." 分量、不含绝对/盘符前缀。否则可借 vault_ptd_path
+// 逃逸库目录去读写库外的 .ptd。正常由 CLI 从卷根生成绝不会出现；索引本身 AEAD 保护（无密钥
+// 不可篡改），此处做纵深防御。
+static bool rel_path_safe(const std::string& rel) {
+    if (rel.empty()) return true;                 // 空 rel 由调用方单独处理
+    if (rel[0] == '/') return false;              // 绝对路径
+#ifdef _WIN32
+    if (rel.size() >= 2 &&
+        ((rel[0] >= 'A' && rel[0] <= 'Z') || (rel[0] >= 'a' && rel[0] <= 'z')) && rel[1] == ':')
+        return false;                             // 盘符绝对路径
+#endif
+    size_t start = 0;
+    while (start < rel.size()) {
+        size_t slash = rel.find('/', start);
+        size_t end = (slash == std::string::npos) ? rel.size() : slash;
+        std::string comp = rel.substr(start, end - start);
+        if (comp.empty() || comp == ".." || comp == ".") return false;  // 空段 / 上溯段一律拒绝
+        start = (slash == std::string::npos) ? rel.size() : slash + 1;
+    }
+    return true;
 }
 
 // 解析索引 JSON 文本（供读盘与内存镜像共用）
@@ -466,6 +577,8 @@ static bool parse_index_text(const std::string& text, std::vector<VaultEntry>& o
     if (auto* p = el.at("enc_ts")) e.enc_ts = as_u64(p);
         if (auto* p = el.at("algo")) e.algo = p->s;
         if (auto* p = el.at("kdf")) e.kdf = p->s;
+        if (auto* p = el.at("is_dir")) e.is_dir = (p->t == JVal::BL) ? p->b : (as_u64(p) != 0);
+        if (!rel_path_safe(e.rel_path)) continue;   // 畸形/被投毒的 rel_path 直接丢弃该条目
         out.push_back(std::move(e));
     }
     return true;
@@ -554,19 +667,21 @@ static bool mirror_touch_locked(const std::string& dir, const VaultMeta& meta,
 
 bool vault_append_entry(const std::string& dir, const VaultMeta& meta,
                         const SecureBuffer& password, const VaultEntry& e,
-                        std::string& err) {
+                        std::string& err, bool flush) {
     std::lock_guard<std::mutex> lk(g_mtx);
     if (!mirror_load_locked(dir, meta, password, err)) return false;
-    std::string& existing = g_mir_text;
     std::string obj = entry_to_json(e);
-    std::string next;
-    if (existing == "[]" || existing.empty()) next = "[" + obj + "]";
+    std::string& existing = g_mir_text;
+    // O(1) 摊销追加：resize 截断收尾 ']'，再 append 新条目+']'，避免每次拷贝整条索引（原 substr 拼接=O(N)）
+    if (existing == "[]" || existing.empty()) existing = "[" + obj + "]";
     else {
         size_t last = existing.rfind(']');
         if (last == std::string::npos) { err = "corrupt index text"; return false; }
-        next = existing.substr(0, last) + "," + obj + "]";
+        existing.resize(last);
+        existing += "," + obj + "]";
     }
-    g_mir_text = next;
+    g_mir_dirty = true;
+    if (!flush) return true;   // 批量入盘热循环：只更新内存镜像，末尾 vault_flush_index 一次性整体落盘
     return mirror_touch_locked(dir, meta, password, err);
 }
 
@@ -615,6 +730,7 @@ bool vault_reindex(const std::string& dir, const VaultMeta& meta,
             ve.size = m.orig_size;
             ve.algo = vault_mode_str(m.mode);
             ve.kdf = "argon2id";
+            if (!rel_path_safe(ve.rel_path)) continue;   // 防御：被投毒的 .ptd 内嵌异常原名/目录
             entries.push_back(std::move(ve));
         }
     }

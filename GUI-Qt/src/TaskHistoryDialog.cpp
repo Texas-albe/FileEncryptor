@@ -145,7 +145,7 @@ void TaskHistoryDialog::onClear() {
         return;
     }
     if(!MsgBox::confirm(this,tr("清空历史"),
-        tr("将删除全部 %1 条任务历史记录（仅影响本面板，不影响任何加密文件与密钥库）。\n\n确定继续？")
+        tr("将删除全部 %1 条任务历史记录（仅影响本面板，不影响任何加密文件与密钥库）。\n\n请确认是否继续。")
             .arg(m_records.size()))) return;
     QString err;
     if(!TaskHistory::clear(err)) {
@@ -163,7 +163,7 @@ void TaskHistoryDialog::onDeleteSelected() {
     }
     const TaskRecord& r=m_records[row];
     if(!MsgBox::confirm(this,tr("删除记录"),
-        tr("确定删除这条历史记录？\n\n%1  %2").arg(r.startedAt).arg(r.actionLabel))) return;
+        tr("请确认是否删除这条历史记录。\n\n%1  %2").arg(r.startedAt).arg(r.actionLabel))) return;
     m_records.removeAt(row);
     QString err;
     if(!TaskHistory::save(m_records,err)) {
@@ -178,6 +178,6 @@ void TaskHistoryDialog::onTableContextMenu(const QPoint& pos) {
     if(row<0) return;
     m_table->selectRow(row);
     QMenu menu(this);
-    menu.addAction(tr("删除此条"),this,&TaskHistoryDialog::onDeleteSelected);
+    menu.addAction(tr("删除该记录"),this,&TaskHistoryDialog::onDeleteSelected);
     menu.exec(m_table->viewport()->mapToGlobal(pos));
 }

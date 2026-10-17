@@ -8,6 +8,7 @@
 #include <vector>
 #include <list>
 #include <unordered_map>
+#include <unordered_set>
 #include <chrono>
 #include <new>
 #include <cstring>
@@ -18,6 +19,12 @@
 #include <filesystem>
 #ifdef _WIN32
 #  include <windows.h>
+#else
+#  include <fcntl.h>
+#  include <unistd.h>
+#  include <sys/types.h>
+#  include <sys/stat.h>
+#  include <sys/statvfs.h>   // statvfs：POSIX 卷容量查询（host_free_bytes）
 #endif
 
 namespace fs = std::filesystem;
@@ -25,13 +32,20 @@ namespace fs = std::filesystem;
 // §4.1 KEK LRU：活跃 KEK 硬上限 64 个（各 32B），5 分钟无访问淘汰；锁定/休眠全清。
 // 缓存的是每文件的 Argon2 输出（v6 作 KEK 解裹 DEK，v3–v5 直接作主密钥）。
 namespace {
-constexpr size_t   LRU_MAX = 64;
+constexpr size_t   LRU_MAX = 2048;   // 活跃 KEK 上限；多文件场景(数千张图)避免反复派生 Argon2
 constexpr uint64_t LRU_TTL_MS = 5ull * 60 * 1000;   // 5 分钟
 }
 
 struct KekEntry {
     SecureBuffer kek;          // 32B Argon2id(密码, 文件盐)
     uint64_t last_used_ms = 0;
+};
+
+// 目录枚举的「直接子项」（readdir 一次性取用，避免每次全索引扫描 + 嵌套去重）
+struct DirChild {
+    std::string name;
+    uint64_t size = 0;
+    uint64_t mtime = 0;
 };
 
 // 库内部状态：句柄在 holder（FE-Mounter）进程内持有，锁定/休眠全清密钥。
@@ -42,6 +56,14 @@ struct VDiskHandle {
     SecureBuffer passphrase;                 // 逐文件随机读用；lock 时 memzero 释放
     std::vector<VaultEntry> index;           // 解密后的索引常驻（不含任何 KEK）
     std::vector<std::string> name_scratch;   // readdir name 存储，生命周期到下次 readdir/lock
+    // 索引派生缓存：仅在索引重载时重建一次（O(N)），热点路径据此降到 O(1)/O(子项)。
+    // 此前 readdir/getattr/stat_space 每次都对整个索引做线性扫描（甚至嵌套去重 O(N²)），
+    // 文件数大 + Explorer 滚动反复调用时直接卡成 PPT。
+    std::unordered_map<std::string, size_t> index_map;          // rel_path → h->index 下标
+    std::unordered_map<std::string, std::vector<DirChild>> dir_children; // 父目录(""=根) → 直接子项
+    std::unordered_set<std::string> dir_set;                   // 所有目录 rel（含根 ""）
+    uint64_t index_used_bytes = 0;                             // 索引内文件明文总大小（stat_space 缓存）
+    uint64_t feindex_stamp_ms = 0;                             // .feindex mtime/size 轮询节流时间戳
     std::unordered_map<std::string, KekEntry> kek_cache;
     std::list<std::string> kek_lru;          // front = 最近使用
     std::string mount_point;
@@ -55,6 +77,9 @@ struct VDiskHandle {
     // M5 空闲超时自动锁
     uint64_t last_activity_ms = 0;
     uint32_t idle_timeout_s = 0;
+    // .feindex 变更标记（mtime+size）：挂载期间库外新增文件时据此重载索引
+    uint64_t feindex_mtime = 0;
+    uint64_t feindex_size = 0;
     // M5 预读缓存（64KB 段，明文只在内存，lock 即清）
     bool     cache_on = false;
     uint64_t cache_cap_bytes = 0;
@@ -87,9 +112,10 @@ const VaultEntry* find_entry(const std::vector<VaultEntry>& idx, const std::stri
 
 bool is_dir(const std::vector<VaultEntry>& idx, const std::string& rel) {
     if (rel.empty()) return true;
-    if (find_entry(idx, rel)) return false;
+    const VaultEntry* e = find_entry(idx, rel);
+    if (e) return e->is_dir;   // 显式条目：以自身标志为准（目录/文件）
     std::string pfx = rel + "/";
-    for (const auto& e : idx) if (e.rel_path.size() > pfx.size() && e.rel_path.compare(0, pfx.size(), pfx) == 0) return true;
+    for (const auto& x : idx) if (x.rel_path.size() > pfx.size() && x.rel_path.compare(0, pfx.size(), pfx) == 0) return true;
     return false;
 }
 
@@ -263,6 +289,7 @@ const std::vector<unsigned char>* seg_get(VDiskHandle* h, const std::string& key
 static void cleanup_vault_temp_files(const std::string& dir);
 
 // 安全擦除并删除（UTF-8 路径安全；.plain.tmp 含明文必须擦除，不能只删）。
+// 跨平台一致：先零填充整个文件再删除，并强制落盘，使明文不在空闲空间/日志中残留。
 static void secure_wipe_remove(const std::string& p) {
 #ifdef _WIN32
     HANDLE h = CreateFileW(utf8_to_wstring(p).c_str(), GENERIC_WRITE, 0, nullptr,
@@ -280,12 +307,30 @@ static void secure_wipe_remove(const std::string& p) {
                 left -= written;
             }
         }
+        FlushFileBuffers(h);   // 强制落盘，确保零填充已写入介质
         CloseHandle(h);
     }
     DeleteFileW(utf8_to_wstring(p).c_str());
 #else
-    { std::ofstream f(p, std::ios::binary); }   // 截断即擦除明文（POSIX 窄串即 UTF-8）
-    std::remove(p.c_str());
+    // POSIX：以 O_WRONLY 逐块零填充 + fsync，截断本身不保证介质擦除（日志/COW 会留明文）。
+    int fd = open(p.c_str(), O_WRONLY | O_NONBLOCK);
+    if (fd >= 0) {
+        struct stat st;
+        if (fstat(fd, &st) == 0 && st.st_size > 0) {
+            const size_t chunk = 64 * 1024;
+            std::vector<unsigned char> buf(chunk, 0);
+            off_t left = st.st_size;
+            while (left > 0) {
+                size_t n = (left > (off_t)chunk) ? chunk : (size_t)left;
+                ssize_t w = write(fd, buf.data(), n);
+                if (w <= 0) break;
+                left -= w;
+            }
+        }
+        fsync(fd);
+        close(fd);
+    }
+    unlink(p.c_str());
 #endif
 }
 
@@ -348,6 +393,90 @@ static inline void m7_release_all(VDiskHandle*) {}
 static inline void m7_refresh(VDiskHandle*) {}
 #endif
 
+// ---- 索引新鲜度（挂载期间库外新增文件可见性）----
+// 索引只在 vdisk_unlock 时解一次密进内存。挂载着的时候，另一个进程（GUI/CLI 的
+// --into-vault）往库里加文件，本进程毫不知情 → 「已入盘的文件在挂载盘里看不见」。
+// 这里按 .feindex 的 mtime+size 判变化，变了就重载一次（索引密钥有进程内缓存，
+// 重载只是一次 secretbox 解密，不重跑 Argon2id）。
+// 注意：路径必须走 u8path —— MSVC 的 std::filesystem 按 ACP 解释窄串，中文目录会失配。
+static void feindex_stamp(const std::string& dir, uint64_t& mtime, uint64_t& size) {
+    std::error_code ec;
+    fs::path p = fs::u8path(dir + "/.feindex");
+    auto t = fs::last_write_time(p, ec);
+    if (ec) { mtime = 0; size = 0; return; }
+    mtime = (uint64_t)t.time_since_epoch().count();
+    auto s = fs::file_size(p, ec);
+    size = ec ? 0 : (uint64_t)s;
+}
+
+// caller 持有 h->mtx。索引重载后调用一次：构建 rel→条目、父目录→子项、目录集合、已用字节。
+// 替代原先每次 readdir/getattr 对整份索引的线性扫描（readdir 还嵌套去重 → O(N²)），
+// 文件数大 + Explorer 滚动反复调用时直接卡成 PPT。
+static void rebuild_index_caches(VDiskHandle* h) {
+    h->index_map.clear();
+    h->dir_children.clear();
+    h->dir_set.clear();
+    h->dir_set.insert("");   // 根永远是一个目录
+    std::unordered_set<std::string> seen_child;   // 子项去重（parent+"/"+name），防畸形索引重复 rel
+    uint64_t used = 0;
+    for (size_t i = 0; i < h->index.size(); ++i) {
+        const VaultEntry& e = h->index[i];
+        const std::string& rel = e.rel_path;
+        if (rel.empty()) continue;                 // 防御：空 rel 不进索引
+        h->index_map[rel] = i;
+        if (!e.is_dir) used += (e.size > 0) ? (uint64_t)e.size : 0;
+        // 拆分层级组件（rel 已被 rel_path_safe 校验：无空段 / ./.. ，分隔符统一为 '/'）
+        // rel = "perf_src/sub1/file.txt" → comp = ["perf_src","sub1","file.txt"]
+        std::vector<std::string> comp;
+        std::string cur;
+        for (char c : rel) {
+            if (c == '/') { if (!cur.empty()) comp.push_back(cur); cur.clear(); }
+            else cur += c;
+        }
+        if (!cur.empty()) comp.push_back(cur);
+        if (comp.empty()) continue;
+        // 末层组件：目录条目本身也是目录，故目录循环覆盖全部组件；文件条目末层是文件。
+        size_t last_component = e.is_dir ? comp.size() : comp.size() - 1;
+        // 逐层目录：父目录用累积字符串 dparent 跟踪，避免把深层目录错当成顶级
+        std::string dparent;
+        for (size_t k = 0; k < last_component; ++k) {
+            std::string dir = dparent.empty() ? comp[k] : (dparent + "/" + comp[k]);
+            h->dir_set.insert(dir);
+            std::string dkey = dparent.empty() ? comp[k] : (dparent + "/" + comp[k]);
+            if (seen_child.insert(dkey).second) h->dir_children[dparent].push_back({ comp[k], 0, 0 });  // 目录：size/mtime 占位 0
+            dparent = dir;
+        }
+        // 末层：目录条目→按目录登记；文件条目→按文件登记
+        std::string leaf = comp.back();
+        std::string lkey = dparent.empty() ? leaf : (dparent + "/" + leaf);
+        if (seen_child.insert(lkey).second) {
+            if (e.is_dir) h->dir_children[dparent].push_back({ leaf, 0, 0 });
+            else h->dir_children[dparent].push_back({ leaf, (uint64_t)e.size, (uint64_t)e.mtime });
+        }
+        if (e.is_dir) h->dir_set.insert(rel);
+    }
+    h->index_used_bytes = used;
+}
+
+// caller 持有 h->mtx。读失败保留旧索引（宁可稍后重试，也不要把正在用的索引清空）
+static void refresh_index_locked(VDiskHandle* h) {
+    if (!h->unlocked) return;
+    // 轮询节流：Explorer 滚动会高频调用 readdir/getattr，每次都 stat .feindex 纯属浪费。
+    // 200ms 内直接信任上次结果；超时才重新比对 mtime/size。库外新入盘文件 200ms 内即见，无感。
+    uint64_t now = now_ms();
+    if (h->feindex_stamp_ms != 0 && now - h->feindex_stamp_ms < 200) return;
+    h->feindex_stamp_ms = now;
+    uint64_t mt = 0, sz = 0;
+    feindex_stamp(h->library_dir, mt, sz);
+    if (mt == h->feindex_mtime && sz == h->feindex_size) return;
+    h->feindex_mtime = mt; h->feindex_size = sz;
+    std::vector<VaultEntry> entries; std::string err;
+    if (!vault_read_index(h->library_dir, h->meta, h->passphrase, entries, err)) return;
+    h->index = std::move(entries);
+    rebuild_index_caches(h);
+    m7_refresh(h);          // 条目变了，占用集跟着重算（仅挂载态实际占用）
+}
+
 VDISK_API VDiskHandle* vdisk_open(const char* library_dir) {
     if (!library_dir || !*library_dir) return nullptr;   // 句柄尚未创建，无从加锁
     VDiskHandle* h = new (std::nothrow) VDiskHandle();
@@ -387,8 +516,26 @@ VDISK_API VDiskStatus vdisk_unlock(VDiskHandle* h, const char* passphrase, int u
     }
     h->passphrase = std::move(pw);
     h->index = std::move(entries);
+    rebuild_index_caches(h);   // 解锁即构建派生缓存，首个 readdir 不必再全索引扫描
+    feindex_stamp(h->library_dir, h->feindex_mtime, h->feindex_size);   // 记下当前版本，便于后续判变更
     h->last_activity_ms = now_ms();   // M5 空闲计时起点
     h->unlocked = true;
+    if (h->meta.encrypted) {
+        // format==2：root/created 封在密文里，vault_meta_load 只留盐/KDF 明文。
+        // 解锁拿到密码后必须解密回填，否则这两个字段在整个会话里恒为空。
+        std::string derr;
+        vault_meta_decrypt(h->meta, h->passphrase, derr);
+    } else {
+        // 旧明文盘首次解锁：把隐私字段（root/created）加密存回，透明升到 format==2。
+        // 此后 open 仍无需密码即可读盐/KDF/mount_point，root/created 需密码解密。
+        std::vector<unsigned char> kek;
+        std::string kerr;
+        if (derive_index_key(h->passphrase, h->meta, kek, kerr) && !kek.empty()) {
+            if (vault_meta_save_encrypted(h->library_dir, h->meta, kek, kerr))
+                h->meta.encrypted = true;   // 与落盘格式保持一致，避免下次重复升级
+        }
+        if (!kek.empty()) sodium_memzero(kek.data(), kek.size());
+    }
     return VDISK_OK;
 }
 
@@ -411,6 +558,7 @@ VDISK_API VDiskStatus vdisk_reindex(VDiskHandle* h, const char* root) {
     std::vector<VaultEntry> entries;
     if (!vault_read_index(r, h->meta, h->passphrase, entries, err)) return VDISK_E_IO;
     h->index = std::move(entries);
+    feindex_stamp(h->library_dir, h->feindex_mtime, h->feindex_size);
     m7_refresh(h);          // M7：索引变化后重算 .ptd 占用集（仅挂载态实际占用）
     return VDISK_OK;
 }
@@ -441,27 +589,20 @@ VDISK_API VDiskStatus vdisk_readdir(VDiskHandle* h, const char* vpath,
     if (!h || !out_count) return VDISK_E_BADARG;
     if (!h->unlocked) return VDISK_E_LOCKED;
     if (!check_idle_only(h)) return VDISK_E_LOCKED;   // M5 只判超时，不刷新计时（Explorer 会持续轮询目录）
+    refresh_index_locked(h);   // 库外刚入盘的文件立刻可见（节流后几乎零成本）
     std::string rel = vpath_to_rel(vpath);
-    if (!rel.empty() && !is_dir(h->index, rel) && !find_entry(h->index, rel)) return VDISK_E_NOTFOUND;
-
-    struct Item { std::string name; bool dir; uint64_t size; uint64_t mtime; };
-    std::vector<Item> items;
-    std::string pfx = rel.empty() ? std::string() : rel + "/";
-    for (const auto& e : h->index) {
-        if (!pfx.empty()) {
-            if (e.rel_path.size() <= pfx.size()) continue;
-            if (e.rel_path.compare(0, pfx.size(), pfx) != 0) continue;
-        }
-        std::string rest = pfx.empty() ? e.rel_path : e.rel_path.substr(pfx.size());
-        size_t slash = rest.find('/');
-        std::string first = (slash == std::string::npos) ? rest : rest.substr(0, slash);
-        bool dir = (slash != std::string::npos);
-        bool dup = false;
-        for (const auto& it : items) if (it.name == first) { dup = true; break; }
-        if (!dup) items.push_back({ first, dir, dir ? 0 : e.size, dir ? 0 : (uint64_t)e.mtime });
+    uint64_t n = 0;
+    const std::vector<DirChild>* kids = nullptr;
+    if (rel.empty()) {
+        auto it = h->dir_children.find(std::string());
+        if (it != h->dir_children.end()) kids = &it->second;
+    } else {
+        auto dit = h->dir_children.find(rel);
+        if (dit != h->dir_children.end()) kids = &dit->second;
+        else if (h->index_map.find(rel) == h->index_map.end()) return VDISK_E_NOTFOUND;  // 既非目录也非文件
     }
+    if (kids) n = kids->size();
 
-    uint64_t n = items.size();
     uint64_t cap = out_entries ? *out_count : 0;
     *out_count = n;
     if (!out_entries) return VDISK_OK;        // 第一段：查询数量
@@ -469,12 +610,15 @@ VDISK_API VDiskStatus vdisk_readdir(VDiskHandle* h, const char* vpath,
 
     h->name_scratch.clear();
     h->name_scratch.reserve(n);
-    for (const auto& it : items) h->name_scratch.push_back(it.name);
+    for (const auto& c : *kids) h->name_scratch.push_back(c.name);
     for (uint64_t i = 0; i < n; i++) {
+        const DirChild& c = (*kids)[i];
+        // 目录判定以 dir_set 为准（与 vdisk_getattr 的 is_dir 语义一致）
+        bool d = h->dir_set.count(rel.empty() ? c.name : rel + "/" + c.name) != 0;
         (*out_entries)[i].name = h->name_scratch[i].c_str();
-        (*out_entries)[i].is_dir = items[i].dir ? 1 : 0;
-        (*out_entries)[i].size = items[i].size;
-        (*out_entries)[i].mtime = items[i].mtime;
+        (*out_entries)[i].is_dir = d ? 1 : 0;
+        (*out_entries)[i].size = d ? 0 : c.size;
+        (*out_entries)[i].mtime = d ? 0 : c.mtime;
     }
     return VDISK_OK;
 }
@@ -485,6 +629,7 @@ VDISK_API VDiskStatus vdisk_getattr(VDiskHandle* h, const char* vpath,
     if (!h) return VDISK_E_BADARG;
     if (!h->unlocked) return VDISK_E_LOCKED;
     if (!check_idle_only(h)) return VDISK_E_LOCKED;   // M5 只判超时，不刷新计时（同上，属性查询属后台轮询）
+    refresh_index_locked(h);   // 同 readdir：新入盘文件立即可打开（节流后几乎零成本）
     std::string rel = vpath_to_rel(vpath);
     uint64_t now = (uint64_t)time(nullptr);
     if (rel.empty()) {
@@ -493,13 +638,21 @@ VDISK_API VDiskStatus vdisk_getattr(VDiskHandle* h, const char* vpath,
         if (out_is_dir) *out_is_dir = 1;
         return VDISK_OK;
     }
-    if (const VaultEntry* e = find_entry(h->index, rel)) {
-        if (out_size) *out_size = e->size;
-        if (out_mtime) *out_mtime = (uint64_t)e->mtime;
+    auto it = h->index_map.find(rel);   // O(1)：文件查表
+    if (it != h->index_map.end()) {
+        const VaultEntry& e = h->index[it->second];
+        if (e.is_dir) {   // 显式目录条目（挂载盘 mkdir / 拷贝文件夹）
+            if (out_size) *out_size = 0;
+            if (out_mtime) *out_mtime = (uint64_t)e.mtime;
+            if (out_is_dir) *out_is_dir = 1;
+            return VDISK_OK;
+        }
+        if (out_size) *out_size = e.size;
+        if (out_mtime) *out_mtime = (uint64_t)e.mtime;
         if (out_is_dir) *out_is_dir = 0;
         return VDISK_OK;
     }
-    if (is_dir(h->index, rel)) {
+    if (h->dir_set.count(rel)) {   // O(1)：目录查集合（含派生目录）
         if (out_size) *out_size = 0;
         if (out_mtime) *out_mtime = now;
         if (out_is_dir) *out_is_dir = 1;
@@ -702,22 +855,37 @@ VDISK_API VDiskStatus vdisk_write_file(VDiskHandle* h, const char* vpath,
     return VDISK_OK;
 }
 
-VDISK_API VDiskStatus vdisk_create_file(VDiskHandle* h, const char* vpath) {
+VDISK_API VDiskStatus vdisk_create_file_ex(VDiskHandle* h, const char* vpath, int is_dir_flag) {
     std::lock_guard<std::recursive_mutex> _lk(h->mtx);
     if (!h || !vpath) return VDISK_E_BADARG;
     if (!h->unlocked) return VDISK_E_LOCKED;
     if (!h->rw) return VDISK_E_RO;                   // 只读挂载拒绝写
     if (!touch_activity(h)) return VDISK_E_LOCKED;
     std::string rel = vpath_to_rel(vpath);
+    if (rel.empty()) return VDISK_E_BADARG;          // 不允许在库根建
+    if (rel.find("..") != std::string::npos) return VDISK_E_BADARG;  // 纵深防御：拒绝穿越
     if (find_mut(h, rel)) return VDISK_E_BADARG;   // 已存在则拒绝（避免覆盖）
-    // 挂载新建同样用随机存储名，与入盘保持一致的命名策略
+    bool is_dir = is_dir_flag != 0;
+    if (is_dir) {
+        // 目录：不建 .ptd（无内容），只登记目录条目并建磁盘父目录（供后续文件落盘）
+        create_directory_recursive(h->library_dir + "/" + rel);
+        VaultEntry e;
+        e.rel_path = rel; e.store = ""; e.is_dir = true;
+        e.size = 0; e.mtime = (int64_t)time(nullptr);
+        std::string err;
+        if (!vault_upsert_entry(h->library_dir, h->meta, h->passphrase, e, err)) return VDISK_E_IO;
+        h->index.push_back(e);
+        rebuild_index_caches(h);   // 立即可见：挂载盘 mkdir 后需立刻可进入
+        return VDISK_OK;
+    }
+    // 文件：挂载新建同样用随机存储名，与入盘保持一致的命名策略
     VaultEntry e;
     e.rel_path = rel;
     e.store    = random_store_name();
     e.size = 0; e.mtime = (int64_t)time(nullptr);
     e.algo = "XChaCha20"; e.kdf = "argon2id";
     std::string ptd = ptd_path_for(h->library_dir, rel, e.store);
-    if (file_exists(ptd)) return VDISK_E_BADARG;
+    if (ptd.empty() || file_exists(ptd)) return VDISK_E_BADARG;
     {   // 目录结构沿用 rel，需先建父目录
         size_t pp = ptd.find_last_of('/');
         if (pp != std::string::npos) create_directory_recursive(ptd.substr(0, pp));
@@ -729,7 +897,12 @@ VDISK_API VDiskStatus vdisk_create_file(VDiskHandle* h, const char* vpath) {
     std::string err;
     if (!vault_upsert_entry(h->library_dir, h->meta, h->passphrase, e, err)) return VDISK_E_IO;
     h->index.push_back(e);
+    rebuild_index_caches(h);   // 立即可见
     return VDISK_OK;
+}
+
+VDISK_API VDiskStatus vdisk_create_file(VDiskHandle* h, const char* vpath) {
+    return vdisk_create_file_ex(h, vpath, 0);   // 旧签名：一律按文件创建（兼容既有调用方）
 }
 
 VDISK_API VDiskStatus vdisk_delete_file(VDiskHandle* h, const char* vpath) {
@@ -757,6 +930,15 @@ VDISK_API VDiskStatus vdisk_delete_file(VDiskHandle* h, const char* vpath) {
         if (!vault_remove_entry(h->library_dir, h->meta, h->passphrase, k, e2)) return VDISK_E_IO;
         for (auto it = h->index.begin(); it != h->index.end(); ++it)
             if (it->rel_path == k) { h->index.erase(it); break; }
+    }
+    // 删除显式目录条目（mkdir 产生的 is_dir 条目），避免残留空目录条目
+    if (const VaultEntry* de = find_entry(h->index, rel)) {
+        if (de->is_dir) {
+            std::string e2;
+            if (!vault_remove_entry(h->library_dir, h->meta, h->passphrase, rel, e2)) return VDISK_E_IO;
+            for (auto it = h->index.begin(); it != h->index.end(); ++it)
+                if (it->rel_path == rel) { h->index.erase(it); break; }
+        }
     }
     if (kids.empty()) {   // 普通文件
         const VaultEntry* fe = find_entry(h->index, rel);
@@ -803,6 +985,61 @@ VDISK_API VDiskStatus vdisk_truncate_file(VDiskHandle* h, const char* vpath, uin
     return VDISK_OK;
 }
 
+// 重命名 / 移动：文件改名、目录改名（含递归子项批量改 rel + 搬 .ptd）。
+// 受影响条目一次性重写索引，避免 N 次 upsert 的 O(N^2) 重加密。
+VDISK_API VDiskStatus vdisk_rename(VDiskHandle* h, const char* old_vpath, const char* new_vpath) {
+    if (!h || !old_vpath || !new_vpath) return VDISK_E_BADARG;
+    std::lock_guard<std::recursive_mutex> _lk(h->mtx);
+    if (!h->unlocked) return VDISK_E_LOCKED;
+    if (!h->rw) return VDISK_E_RO;                   // 只读挂载拒绝写
+    if (!touch_activity(h)) return VDISK_E_LOCKED;
+    std::string old_rel = vpath_to_rel(old_vpath);
+    std::string new_rel = vpath_to_rel(new_vpath);
+    if (old_rel.empty() || new_rel.empty()) return VDISK_E_BADARG;          // 不动库根
+    if (old_rel.find("..") != std::string::npos || new_rel.find("..") != std::string::npos) return VDISK_E_BADARG;  // 防穿越
+    if (old_rel == new_rel) return VDISK_OK;
+    if (find_mut(h, new_rel) || is_dir(h->index, new_rel)) return VDISK_E_EXIST;   // 目标已存在→冲突
+
+    // 收集受影响条目：显式 old_rel 目录条目 + old_rel/ 前缀的所有条目
+    std::string pfx = old_rel + "/";
+    std::vector<size_t> affected;
+    for (size_t i = 0; i < h->index.size(); ++i) {
+        const std::string& r = h->index[i].rel_path;
+        if (r == old_rel || r.compare(0, pfx.size(), pfx) == 0) affected.push_back(i);
+    }
+    if (affected.empty()) return VDISK_E_NOTFOUND;   // 源不存在
+
+    // 逐个：算新 rel、搬物理 .ptd（目录条目 store 空跳过）、更新内存
+    for (size_t idx : affected) {
+        VaultEntry& e = h->index[idx];
+        std::string suffix = (e.rel_path == old_rel) ? std::string() : e.rel_path.substr(old_rel.size());
+        std::string nrel = new_rel + suffix;
+        if (!e.is_dir && !e.store.empty()) {   // 文件：搬 .ptd（store 不变，目录结构随 rel 重组）
+            std::string old_ptd = ptd_path_for(h->library_dir, e.rel_path, e.store);
+            std::string new_ptd = ptd_path_for(h->library_dir, nrel, e.store);
+            if (old_ptd != new_ptd && !old_ptd.empty() && !new_ptd.empty()) {
+                size_t np = new_ptd.find_last_of('/');
+                if (np != std::string::npos) create_directory_recursive(new_ptd.substr(0, np));
+                m7_release(h, old_ptd);        // M7：搬前释放占用，否则 rename 被占用挡住
+                if (std::rename(old_ptd.c_str(), new_ptd.c_str()) != 0) {
+                    wipe_remove(new_ptd);      // 同盘 rename 偶发目标残留→清掉再试
+                    if (std::rename(old_ptd.c_str(), new_ptd.c_str()) != 0) return VDISK_E_IO;
+                }
+                invalidate_ptd_caches(h, e.rel_path, old_ptd);   // 旧 rel 缓存失效（在改 rel 前）
+            }
+        }
+        e.rel_path = nrel;
+    }
+
+    // 一次性重写索引（内存 h->index 已是新状态）
+    std::string js = vault_entries_to_json(h->index);
+    std::string err;
+    if (!vault_write_index(h->library_dir, h->meta, h->passphrase, js, err)) return VDISK_E_IO;
+    rebuild_index_caches(h);
+    m7_refresh(h);          // M7：占用集按新路径重算（仅挂载态实际占用）
+    return VDISK_OK;
+}
+
 VDISK_API VDiskStatus vdisk_mount_rw(VDiskHandle* h, const char* mount_point) {
     std::lock_guard<std::recursive_mutex> _lk(h->mtx);
     if (!h || !mount_point) return VDISK_E_BADARG;
@@ -826,6 +1063,7 @@ VDISK_API const char* vdisk_strerror(VDiskStatus s) {
         case VDISK_E_NOTIMPL: return "not implemented";
         case VDISK_E_NOTFOUND: return "not found";
         case VDISK_E_RO: return "read-only volume (mount with --rw to write)";
+        case VDISK_E_EXIST: return "target already exists (rename/move conflict)";
         case VDISK_E_INTERNAL: return "internal error";
     }
     return "unknown error";
@@ -890,17 +1128,49 @@ VDISK_API uint32_t vdisk_idle_remaining(VDiskHandle* h) {
     return h->idle_timeout_s - (uint32_t)elapsed;
 }
 
+// 取路径所在卷的可用空间（字节）；成功返回 true 并写入 out_free。
+// Windows 用 GetVolumePathNameW 解析盘符/挂载点根再查；POSIX 用 statvfs。
+static bool host_free_bytes(const std::string& path, uint64_t& out_free) {
+#ifdef _WIN32
+    std::wstring wp = utf8_to_wstring(path);
+    WCHAR vol[MAX_PATH] = {0};
+    if (GetVolumePathNameW(wp.c_str(), vol, MAX_PATH)) {
+        ULARGE_INTEGER fab = {0}, tb = {0}, tfb = {0};
+        if (GetDiskFreeSpaceExW(vol, &fab, &tb, &tfb)) {
+            out_free = (uint64_t)fab.QuadPart;
+            return true;
+        }
+    }
+    return false;
+#else
+    struct statvfs st;
+    if (statvfs(path.c_str(), &st) != 0) return false;
+    out_free = (uint64_t)st.f_bavail * (uint64_t)st.f_frsize;
+    return true;
+#endif
+}
+
 VDISK_API VDiskStatus vdisk_stat_space(VDiskHandle* h, uint64_t* out_used, uint64_t* out_total) {
     std::lock_guard<std::recursive_mutex> _lk(h->mtx);
     if (!h) return VDISK_E_BADARG;
-    // 容量随内容动态扩展：下限 64MiB，按已用量的 2 倍留增长余量，最小增量 64MiB。
-    // 固定值（如 1TiB）会让 explorer/磁盘管理显示与实际占用严重脱节。
-    const uint64_t kMin = 64ull << 20, kStep = 64ull << 20;
-    uint64_t used = 0;
-    for (const auto& e : h->index) used += (e.size > 0) ? (uint64_t)e.size : 0;   // 索引内均为文件条目
-    uint64_t total = used ? used * 2 : kMin;
-    if (total < kMin) total = kMin;
-    if (total < used + kStep) total = used + kStep;   // 至少留一档余量
+    // 容量上限 = 加密盘所在盘符可用空间 - 2GB：预留 2GB 给宿主系统，避免写满宿主盘。
+    // 卷总容量 = 已存数据 + 可继续写入空间（≈ 宿主可用空间 - 2GB，写入时稳定）；
+    // 报告可用 = 宿主可用空间 - 2GB，随写入自然下降，到 0 即触及预留线。
+    // 取不到宿主盘可用空间时回落旧「已用量 2 倍」口径，保证不崩。
+    const uint64_t kReserve = 2ull * 1024 * 1024 * 1024;   // 预留 2GiB
+    const uint64_t kMin = 64ull << 20;
+    refresh_index_locked(h);   // 库外新入盘 → 容量跟着涨（节流后几乎零成本）
+    uint64_t used = h->index_used_bytes;   // 库内文件明文总大小（缓存）
+    uint64_t host_free = 0;
+    uint64_t total;
+    if (host_free_bytes(h->library_dir, host_free)) {
+        uint64_t free_for_vault = (host_free > kReserve) ? (host_free - kReserve) : 0;
+        total = used + free_for_vault;
+        if (total < kMin) total = kMin;
+    } else {
+        total = used ? used * 2 : kMin;
+        if (total < used + kMin) total = used + kMin;
+    }
     if (out_used)  *out_used = used;
     if (out_total) *out_total = total;
     return VDISK_OK;

@@ -1,7 +1,6 @@
 cmake_minimum_required(VERSION 3.15)
 
-# 必须在 project() 之前钉住链接器：project() 内部会搜 CMAKE_LINKER，若 PATH 里
-# 混着 MinGW/Strawberry 的 ld.exe，CMake 会拿 MSVC 的 /nologo 去问 GNU ld，直接 configure 失败。
+# project() 前固定 CMAKE_LINKER 为 link.exe，防止 MinGW ld 污染 configure
 if(WIN32)
   find_program(FE_CL_EXECUTABLE NAMES cl.exe
                HINTS "$ENV{VCToolsInstallDir}/bin/Hostx64/x64"
@@ -12,26 +11,23 @@ if(WIN32)
   endif()
 endif()
 
-project(FileEncryptorCLI VERSION 3.0.0 LANGUAGES CXX)
+project(FileEncryptorCLI VERSION 3.0.1 LANGUAGES CXX)
 
-# FileEncryptor CLI - 命令行加密工具（独立项目），产出 FileEncryptorCLI(.exe)，GUI 经 QProcess 调用。
-# 静态链接 libsodium + yaml-cpp，二进制零外部依赖，可直接打包 DEB/RPM。
+# CLI 命令行加密工具（独立工程），静态链接零外部依赖，GUI 经 QProcess 调用。
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-# 全程序优化（LTO）：Release 构建启用 /GL + /LTCG，提升跨 TU 热点（KDF 调用、AEAD 循环）性能。
-# 仅作用于 Release 配置，不影响 Debug。
+# Release 启用 LTO（/GL + /LTCG），提升 KDF/AEAD 热点性能
 set(CMAKE_INTERPROCEDURAL_OPTIMIZATION_RELEASE ON)
 
-# 源码含 UTF-8 中文注释（无 BOM），MSVC 默认按系统代码页解析会触发 C4819 并吞掉代码，
-# 故强制以 UTF-8 读取源文件。
+# 源码含 UTF-8 中文注释，强制 /utf-8 避免 C4819
 if(MSVC)
   add_compile_options(/utf-8)
 endif()
 
-# ---------- Android 适配 ----------
+# Android 适配
 # 源码层已用 __ANDROID__ 分支处理平台差异（无交互终端、无 dmi/MAC、无 HOME）；
 # 这里只做构建侧裁剪与前提校验。NDK 工具链用法：
 #   cmake -G Ninja -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK/build/cmake/android.toolchain.cmake \
@@ -48,7 +44,7 @@ if(ANDROID)
   add_compile_definitions(FE_PLATFORM_ANDROID=1)
 endif()
 
-# ---------- 工程化开关 ----------
+# 工程化开关
 # FE_ENABLE_ASAN：AddressSanitizer 构建（CI Linux 常态化跑往返）。
 #   GCC/Clang：-fsanitize=address；MSVC：/fsanitize=address。
 #   注意：MSVC 的 ASan 与静态 CRT (/MT) 不兼容，且本工程静态链接 libsodium(/MT)，
@@ -75,7 +71,7 @@ endif()
 # 打出的 DEB/RPM 安装包也就无需在安装时再下载 libsodium 等依赖库。
 option(SODIUM_STATIC "Statically link libsodium (recommended for self-contained packages)" ON)
 
-# ---------- 查找 libsodium（跨平台） ----------
+# 查找 libsodium（跨平台）
 # 查找优先级：CMake 配置包(vcpkg) > 手动 find_path/find_library（SODIUM_ROOT，/usr/local 优先）
 # > pkg-config 兜底（可能指向系统旧版）。
 set(SODIUM_TARGET "")
@@ -97,7 +93,7 @@ endif()
 # 2) 手动查找（优先于 pkg-config，避免多版本选错）：Linux 默认 /usr/local 先于 /usr；
 #    Windows 预编译包库在 <arch>/<cfg>/<toolset>/<static|dynamic|ltcg> 子目录，按架构自动选取。
 if(NOT SODIUM_FOUND AND NOT SODIUM_TARGET)
-  # ---- Windows 专用：构造预编译包的候选库目录 ----
+  # Windows 专用：构造预编译包的候选库目录
   set(_sodium_win_hints "")
   if(WIN32)
     # 预编译包根目录：SODIUM_ROOT > 仓库 third_party/libsodium > $ProgramFiles/libsodium。
@@ -166,7 +162,7 @@ if(NOT SODIUM_FOUND AND NOT SODIUM_TARGET)
   endif()
 endif()
 
-# ---------- 校验 libsodium 是否支持 AEGIS-256 ----------
+# 校验 libsodium 是否支持 AEGIS-256
 # AEGIS-256 自 1.0.19 起提供。编译期版本校验，链接 1.0.18 及更早直接 FATAL_ERROR。
 # 版本来源：sodium_VERSION > version.h 解析 SODIUM_VERSION_STRING > 头文件存在性探测。
 set(SODIUM_DETECTED_VERSION "")
@@ -207,7 +203,7 @@ if(SODIUM_FOUND AND NOT SODIUM_TARGET)
   endif()
 endif()
 
-# ---------- 决定最终链接方式与运行时依赖 ----------
+# 决定最终链接方式与运行时依赖
 # SODIUM_STATIC(默认 ON) 优先静态库生成自包含可执行文件：Windows hints 已把 static 排前
 # （Release 静态库在 Debug 前，任意配置都链接 /MT 版，避免 LNK2038）；Linux 找 .a。
 set(SODIUM_LINK_LIBRARY "")
@@ -270,7 +266,7 @@ if(SODIUM_STATIC AND NOT SODIUM_IS_STATIC)
     "    Fedora : sudo dnf install libsodium-static")
 endif()
 
-# ---------- 校验选中的库确实包含 AEGIS-256 符号（Linux/macOS） ----------
+# 校验选中的库确实包含 AEGIS-256 符号（Linux/macOS）
 # 防止"头文件来自 /usr/local、链接库却来自 apt 旧版"的头库不一致（链接期 undefined reference）。
 # 用 nm 直接检查选中库；SODIUM_TARGET(vcpkg IMPORTED 目标) 无法 nm 检查，跳过。
 if(UNIX AND NOT SODIUM_TARGET)
@@ -309,7 +305,7 @@ if(NOT SODIUM_FOUND AND NOT SODIUM_TARGET)
     "  或解压预编译包后设置环境变量 SODIUM_ROOT 指向其根目录。")
 endif()
 
-# ---------- 源文件 ----------
+# 源文件
 # CLI 独立项目：core/（加密核心）+ cli/（命令行入口），GUI 通过 QProcess 调用本程序。
 set(SOURCES
   core/FileEncryptor.cpp
@@ -328,6 +324,13 @@ set(SOURCES
   core/split_volumes.cpp
   core/archive.cpp
   core/keywrap.cpp
+  core/rate_limit.cpp
+  core/fileio_util.cpp
+  core/resume.cpp
+  core/output_lock.cpp
+  core/name_obfuscate.cpp
+  core/ptd_meta.cpp
+  core/batch.cpp
   core/vault_index.cpp
   cli/main.cpp)
 
@@ -346,7 +349,7 @@ if(MSVC)
     target_link_options(FileEncryptor PRIVATE /guard:cf)
 endif()
 
-# ---------- 查找 yaml-cpp（YAML 配置解析，v1.7.2 起依赖） ----------
+# 查找 yaml-cpp（YAML 配置解析，v1.7.2 起依赖）
 # 优先 CMake 配置包命中；无配置时按头文件与静态库手动查找（YAMLCPP_ROOT 可显式指定）。
 find_package(Threads REQUIRED)
 set(YAMLCPP_TARGET "")
@@ -405,7 +408,7 @@ if(NOT YAMLCPP_TARGET)
     "                          或设置 YAMLCPP_ROOT 指向其根目录（相对路径亦可）。")
 endif()
 
-# ---------- 链接 libsodium ----------
+# 链接 libsodium
 if(SODIUM_TARGET)
   target_link_libraries(FileEncryptor PRIVATE ${SODIUM_TARGET})
 else()
@@ -443,7 +446,7 @@ else()
   endif()
 endif()
 
-# ---------- 链接 yaml-cpp + Threads ----------
+# 链接 yaml-cpp + Threads
 # 静态链接 yaml-cpp 必须定义 YAML_CPP_STATIC_DEFINE（否则符号声明为 dllimport，LNK2019），
 # 与 SODIUM_STATIC 同理；动态构建时不能定义。
 if(YAMLCPP_IS_STATIC)
@@ -451,7 +454,7 @@ if(YAMLCPP_IS_STATIC)
 endif()
 target_link_libraries(FileEncryptor PRIVATE ${YAMLCPP_TARGET} Threads::Threads)
 
-# ---------- 平台相关的链接善后 ----------
+# 平台相关的链接善后
 # std::filesystem：GCC 9 之前（Ubuntu 18.04 等）需显式链接 libstdc++fs，否则 undefined reference。
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS 9.0)
   target_link_libraries(FileEncryptor PRIVATE stdc++fs)
@@ -462,7 +465,7 @@ if(UNIX)
   target_link_libraries(FileEncryptor PRIVATE ${CMAKE_DL_LIBS})
 endif()
 
-# ---------- OpenSSL（SM4 分块密码 + X25519/X448 非对称，静态链接保持自包含） ----------
+# OpenSSL（SM4 分块密码 + X25519/X448 非对称，静态链接保持自包含）
 # 优先复用仓库共享的静态 OpenSSL（Updater 已构建到 <repo>/Updater/out/openssl，
 # libcrypto.lib + include/openssl）；其次 find_package(OpenSSL) 静态；均不可得则 WARNING
 # 并回退为不含 SM4/非对称能力（相关调用返回明确错误，不中断构建）。
@@ -522,7 +525,7 @@ if(WITH_OPENSSL)
   endif()
 endif()
 
-# ---------- zstd 压缩支持 ----------
+# zstd 压缩支持
 # 查找顺序按平台分开：Linux/macOS 先找系统静态库（省去编译整棵源码树、也是包管理器的
 # 常规安装方式），再回退源码编译；Windows 先源码编译（与 MSVC 工具链 / /MT 一致），
 # 再回退 third_party 预编译库。
@@ -554,7 +557,7 @@ if(WITH_ZSTD)
     message(STATUS "zstd: 静态链接预编译库 (${_lib})")
   endfunction()
 
-  # ---- 1) Linux/macOS：系统 / 仓库预编译静态库（libzstd.a）----
+  # 1) Linux/macOS：系统 / 仓库预编译静态库（libzstd.a）
   # 后缀锁死为 .a，否则 find_library 会先命中 libzstd.so 把动态依赖带进来。
   if(NOT WIN32 AND ZSTD_STATIC)
     set(_zstd_saved_suffixes ${CMAKE_FIND_LIBRARY_SUFFIXES})
@@ -574,7 +577,7 @@ if(WITH_ZSTD)
     endif()
   endif()
 
-  # ---- 2) 回退：从源码编译静态库（与本工程同工具链 / 同 /MT 运行时）----
+  # 2) 回退：从源码编译静态库（与本工程同工具链 / 同 /MT 运行时）
   # Windows 上这是首选路径；源文件缺失时才落到下一步的预编译库
   if(NOT FE_ZSTD_FOUND AND EXISTS "${_zstd_src}/zstd.h")
     set(FE_ZSTD_FOUND TRUE)
@@ -604,7 +607,7 @@ if(WITH_ZSTD)
     message(STATUS "zstd: 已从源码编译集成 (${_zstd_src})")
   endif()
 
-  # ---- 3) Windows 兜底：third_party 预编译静态库（.lib）----
+  # 3) Windows 兜底：third_party 预编译静态库（.lib）
   # 该库由 MinGW 构建，仅当源码树缺失、且链接器不报错时才可用；MSVC 下若报
   # ___chkstk_ms unresolved 说明工具链不匹配，请保留 third_party/zstd/src/lib。
   if(NOT FE_ZSTD_FOUND AND WIN32 AND ZSTD_STATIC)
@@ -617,7 +620,7 @@ if(WITH_ZSTD)
     endif()
   endif()
 
-  # ---- 4) 都不可用 ----
+  # 4) 都不可用
   if(NOT FE_ZSTD_FOUND)
     if(ZSTD_STATIC)
       # 默认不允许动态链接：只会产出带 libzstd.so 依赖的包，静默通过会掩盖问题
@@ -641,7 +644,7 @@ if(NOT FE_ZSTD_FOUND)
   target_compile_definitions(FileEncryptor PRIVATE FE_WITHOUT_ZSTD)
 endif()
 
-# ============ libvdisk（加密盘共享库：Windows=vdisk.dll / Linux=libvdisk.so）+ FE-Mounter ============
+# libvdisk（加密盘共享库：Windows=vdisk.dll / Linux=libvdisk.so）+ FE-Mounter
 # 加密盘引擎以共享库产出，对外只暴露设计文档 §5.2 的 C ABI（符号最小化，§5.1#7）；
 # FE-Mounter 进程用绝对路径动态加载它并持有挂载（§5.1#3）。
 # 依赖（libsodium/zstd/OpenSSL/yaml-cpp）直接复用已装配好的 FileEncryptor 目标：
@@ -651,7 +654,7 @@ set(VDISK_CORE_SOURCES
   core/source_handling.cpp core/config.cpp core/keylib.cpp core/progress_frame.cpp
   core/asym_crypto.cpp core/mapped_file.cpp core/password_policy.cpp
   core/machine_id.cpp core/watermark.cpp core/split_volumes.cpp core/archive.cpp
-  core/keywrap.cpp core/vault_index.cpp core/vdisk_abi.cpp)
+  core/keywrap.cpp core/vault_index.cpp core/vdisk_abi.cpp core/rate_limit.cpp core/fileio_util.cpp core/resume.cpp core/output_lock.cpp core/name_obfuscate.cpp core/ptd_meta.cpp core/batch.cpp)
 
 add_library(vdisk SHARED ${VDISK_CORE_SOURCES})
 add_library(FileEncryptor::vdisk ALIAS vdisk)
@@ -725,7 +728,7 @@ if(MSVC)
   target_link_options(vdisk PRIVATE /guard:cf)
 endif()
 
-# ---- FE-Mounter：加载 libvdisk 的 holder 进程（不链接核心，运行时 dlopen/LoadLibrary）----
+# FE-Mounter：加载 libvdisk 的 holder 进程（不链接核心，运行时 dlopen/LoadLibrary）
 # 独立可执行文件，不属于 CLI 本体：CLI 只做文件加密/解密，加密盘挂载是可选能力
 # （GUI MSI 里作为可勾选的 VaultFeature）。默认不随 CLI 构建，需要时：
 #   -D FE_BUILD_MOUNT=ON（与 CLI 一起构建）
@@ -756,7 +759,7 @@ if(UNIX)
   target_link_libraries(FE-Mounter PRIVATE ${CMAKE_DL_LIBS})   # dlopen
 endif()
 
-# ---- fuse3（Linux 只读挂载，M2）----
+# fuse3（Linux 只读挂载，M2）
 # pkg-config 探测；未装 libfuse3-dev 时 FE-Mounter 仍可构建（selftest/cat/bench/
 # lifecycle/ipc 全部可用，仅缺 mount 子命令），不硬失败。
 if(UNIX AND NOT APPLE)
@@ -779,7 +782,7 @@ if(UNIX AND NOT APPLE)
   endif()
 endif()
 
-# ---- WinFSP（Windows 原生只读挂载，M3）----
+# WinFSP（Windows 原生只读挂载，M3）
 # 可选 SDK：环境变量 FEWIN_FSP_ROOT 或默认安装位置；找到才定义 FE_HAVE_WINFSP，
 # 未装则 FE-Mounter 仅提供 selftest/cat/bench/lifecycle（挂载能力缺席，不报错）。
 if(WIN32)
@@ -861,7 +864,7 @@ set_target_properties(FileEncryptor PROPERTIES
   RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
   INSTALL_RPATH_USE_LINK_PATH TRUE)
 
-# ---------- PGO（MSVC 两阶段构建，在 LTO 基础上） ----------
+# PGO（MSVC 两阶段构建，在 LTO 基础上）
 # Phase 1 插桩: cmake -B build -DFE_PGO=INSTRUMENT && cmake --build build，运行训练负载生成 .pgc；
 # Phase 2 优化: 同目录重配 -DFE_PGO=OPTIMIZE 再 build（/LTCG:PGOPTIMIZE 合并 .pgc）。非 MSVC 不支持。
 set(FE_PGO "" CACHE STRING "MSVC PGO 阶段：INSTRUMENT（插桩）/ OPTIMIZE（优化）；留空=关闭")
@@ -892,7 +895,7 @@ if(FE_PGO)
   endif()
 endif()
 
-# ---------- 安装与打包（DEB / RPM） ----------
+# 安装与打包（DEB / RPM）
 # 构建即产出规范命名 <名>-<版本>-<平台>（如 FileEncryptorCLI-2.4.2-cmd-Linux），版本取 PROJECT_VERSION。
 get_target_property(FE_OUTPUT_NAME_BASE FileEncryptor OUTPUT_NAME)
 if(NOT FE_OUTPUT_NAME_BASE)
@@ -961,7 +964,7 @@ else()
                  "先构建 Updater 再打包即可得到它。")
 endif()
 
-# ---- Linux：加密盘挂载组件（FE-Mounter + libvdisk.so）----
+# Linux：加密盘挂载组件（FE-Mounter + libvdisk.so）
 # 与 Windows MSI 的 VaultFeature 对位：不选/不装也不影响 CLI 本体（文件加密解密照常），
 # 只是不能把加密盘挂成目录。FE-Mounter 是独立工程，产物由它自己的构建树产出，
 # 这里按若干候选路径取现成二进制（同 Updater 的做法，不在本工程里重编一遍）。
@@ -1035,7 +1038,7 @@ set(CPACK_RPM_PACKAGE_REQUIRES "libsodium, zlib")
 # 与 DEB 的 Suggests 对位：libfuse3 只是挂载加密盘时需要
 set(CPACK_RPM_PACKAGE_RECOMMENDS "libfuse3")
 
-# ---------- 模糊测试 harness（可选） ----------
+# 模糊测试 harness（可选）
 # FE_BUILD_FUZZ=ON 构建 FileEncryptorFuzz：驱动 CLI/fuzz/fuzz_ptd_header.cpp。
 #   clang：直接加 -fsanitize=fuzzer,address，产出可喂给 libFuzzer 的二进制；
 #   其他编译器：编译出"读文件当输入"的独立驱动，可手工喂样本回归。

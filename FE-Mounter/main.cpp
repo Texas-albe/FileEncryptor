@@ -100,7 +100,7 @@ static void usage() {
         "  bench     --vault <d> --pass-file <f> [--iters N] [--relock]  LRU warm/cold\n"
         "  m5test    --vault <d> --pass-file <f> [--path <v>] verify idle-timeout lock + read-ahead cache\n"
         "  m6test    --vault <d> --pass-file <f> [--path <v>] verify vault write (create/write/truncate/delete)\n"
-        "  ipc-call  --vault <d> (status|unlock --pass-file <f>|unlockr <code>|lock|reindex|idle N|cache BYTES AHEAD)\n"
+        "  ipc-call  --vault <d> (status|unlock --pass-file <f>|unlockr <code>|lock|reindex|idle N|cache BYTES AHEAD|eject)\n"
         "  vaults    list|add <dir>|remove <dir>             M5 multi-vault registry\n"
         "  recovery  --vault <d> (gen|create|open <code>|remove)  M4 recovery key (sec 4.4)\n"
         "  winmount  <drive> --vault <d> [--pass-file <f>] [--rw] [--idle-timeout SEC]\n"
@@ -123,7 +123,7 @@ int main(int argc, char** argv) {
     bool relock_flag = false;
     int bench_iters = 10;
     uint32_t idle_timeout = 0;                 // M5 空闲超时自动锁（秒，0=关闭）
-    uint64_t cache_bytes = 0;                  // M5 预读缓存容量（0=关闭）
+    uint64_t cache_bytes = 256ull << 20;      // M5 预读缓存容量（默认 256MiB；0=关闭）
     uint32_t cache_ahead = 4;                  // M5 预读段数
     bool rw_flag = false;                      // M6 可写挂载开关（--rw）
     std::vector<char*> fuse_args;
@@ -174,7 +174,7 @@ int main(int argc, char** argv) {
 
     // IPC 客户端（纯管道，不需本地加载/解锁 vdisk）
     if (mode == "ipc-call") {
-        if (fuse_args.empty()) { fprintf(stderr, "ipc-call needs a command (status|unlock|lock|reindex)\n"); return 1; }
+        if (fuse_args.empty()) { fprintf(stderr, "ipc-call needs a command (status|unlock|lock|reindex|eject)\n"); return 1; }
         std::string cmd = fuse_args[0];
         std::string req = cmd;
         if (cmd == "unlock") {
@@ -462,6 +462,8 @@ int main(int argc, char** argv) {
             // §5.1 控制面：FUSE 常驻期间供 ipc-call 做 lock/unlock/reindex
             g_ipc_v = &v; g_ipc_h = &g_h; g_ipc_unlocked = true; g_ipc_stop = false;
             std::thread(ipc_server_thread).detach();
+            // 卸载：进程退出即卸载 FUSE 挂载点（响应已先写回客户端）
+            g_ipc_eject_hook = []() { _exit(0); };
             // 挂载点位置参数已在解析时取出，按 fuse 约定放于所有选项之后；
             // 其余 -f/-o 等原样转发给 fuse 解析。
             std::vector<char*> raw;

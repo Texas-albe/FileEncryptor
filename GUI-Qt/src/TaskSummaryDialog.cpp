@@ -10,7 +10,7 @@ TaskSummaryDialog::TaskSummaryDialog(const QString& title, const QString& durati
                                      int done, int skip, int fail, QWidget* parent)
     : QDialog(parent)
 {
-    setWindowTitle(tr("任务完成"));
+    setWindowTitle(tr("操作完成"));
     resize(360, 220);
 
     auto* lay=new QVBoxLayout(this);

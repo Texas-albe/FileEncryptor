@@ -9,6 +9,11 @@
 #include "secure_buffer.hpp"
 #include "source_handling.hpp"
 #include "watermark.hpp"
+#include "rate_limit.hpp"
+#include "fileio_util.hpp"
+#include "resume.hpp"
+#include "output_lock.hpp"
+#include "name_obfuscate.hpp"
 
 #ifdef _WIN32
 #include <windows.h>
@@ -16,8 +21,8 @@
 
 #define FE_VERSION_MAJOR 3
 #define FE_VERSION_MINOR 0
-#define FE_VERSION_PATCH 0
-#define FE_VERSION_STRING "3.0.0"
+#define FE_VERSION_PATCH 1
+#define FE_VERSION_STRING "3.0.1"
 
 // --force-decrypt：解密时容忍块校验失败与明文哈希不匹配（强制恢复损坏数据）
 extern bool g_force_decrypt;
@@ -31,24 +36,18 @@ enum class CryptoMode: unsigned char {
 
 // 进程级限速器（v1.7.2）
 // 用 YAML max_speed（字节/秒，支持 KB/MB/GB）初始化，0=不限速；主循环按字节记账超限休眠。
-void init_rate_limiter(uint64_t max_bytes_per_sec);
 
 // 生成 "<16 位十六进制>.<混淆扩展名>" 基名（不含 .ptd），由密码与输入路径确定性派生，
 // 故续传仍能命中原输出文件
 std::string make_obfuscated_basename(const std::string& in_path,const SecureBuffer& password);
 
-// 从密文末尾加密信封恢复原始文件名（需密码派生密钥）；无尾部/密钥错返回 false。
-// pre_kek：外部已派生 KEK 时传入跳过内部 KDF（批量复用）；out_kek 非空时拷回供缓存。
-bool read_original_name(const std::string& ptd_path,std::string& out_name,const SecureBuffer& password,
-    const unsigned char* pre_kek = nullptr, size_t pre_kek_len = 0,
-    std::vector<unsigned char>* out_kek = nullptr,
-    const std::string& asym_identity = std::string());  // 非对称容器用身份私钥恢复 DEK
+// read_original_name / read_ptd_metadata / verify_ptd / read_watermark / rewrap_* ：
+// 声明见 ptd_meta.hpp
 
 // 把路径的最后一段替换为 newbase（保留目录部分）
 std::string replace_basename(const std::string& path,const std::string& newbase);
 
 // 递归创建目录
-bool create_directory_recursive(const std::string& path);
 
 // 非帧模式的单行 \r 进度条（批量与入盘共用同一观感）；finish=true 时收尾换行。
 void print_progress(size_t processed,size_t total,
@@ -152,7 +151,9 @@ struct PtdMeta {
     bool          dek_wrapped=false; // v6+：DEK 由 KEK 包裹（可密钥轮换）
     uint32_t      key_version=0;    // v6+：密钥版本（轮换自增，大端解析）
 };
-bool read_ptd_metadata(const std::string& ptd_path, PtdMeta& meta);
+
+// 元数据 / 改密 / 水印读取等声明见 ptd_meta.hpp
+#include "ptd_meta.hpp"
 
 // 随机读（M0 验证）：从 .ptd 非压缩块按 offset/len 提取明文片段，不整文件解密。
 // 压缩文件无法 O(1) 定位，返回 false 且 *out_compressed=true；非对称容器暂不支持。
@@ -172,14 +173,7 @@ bool fe_ptd_argon2_key(const std::string& ptd_path,
     const SecureBuffer& password,
     unsigned char out[32]);
 
-// 完整性校验（功能3：只验不解）：解密到临时文件比对明文 Blake2b，不落盘最终明文。
-// 成功（密钥正确且内容完整）返回 true；密钥错/损坏/失败返回 false。
-bool verify_ptd(const std::string& ptd_path, const SecureBuffer& password,
-                const std::string& asym_identity=std::string());
-
-// 读取尾部水印记录（无需密码）。pub_pem 非空时按 pqc 指定的算法验签；无水印返回 false。
-bool read_watermark(const std::string& ptd_path, WatermarkInfo& out, const std::string& pub_pem,
-                    bool pqc=true);
+// 完整性校验（功能3：只验不解）：声明见 ptd_meta.hpp
 
 // SHA-256 校验单（功能10）：启用后加密成功生成 <out>.ptd.sha256。
 void set_write_sha256(bool b);
@@ -215,7 +209,16 @@ bool aegis256_supported();
 bool sm4_supported();
 
 // 运行时探测 AES-256-GCM 是否可用（缺 AES-NI 的 CPU 上不可用）
+// 数据块大小：默认 1 MiB，头部可覆盖（合法区间见 MIN/MAX）
+static constexpr size_t   CHUNK_SIZE     = 1 * 1024 * 1024;
+static constexpr uint32_t MIN_CHUNK_SIZE = 4096;
+static constexpr uint32_t MAX_CHUNK_SIZE = CHUNK_SIZE;
+
+// 各加密模式的认证标签长度（AES-GCM 16 / 其余 16，按需扩展）
+size_t tag_size_for_mode(CryptoMode m);
+
 bool aes_gcm_supported();
+// 探测密文尾部加密名/水印区总长：声明见 name_obfuscate.hpp
 
 // 运行时探测后量子密码是否可用（ML-KEM-768 封装 / ML-DSA-65 签名，依赖 OpenSSL）
 bool pqc_supported();
@@ -229,18 +232,7 @@ bool stdin_is_interactive();
 CryptoMode resolve_encrypt_mode(CryptoMode requested, bool interactive,
     bool& refuse, std::string& message);
 
-// 用 old_password 解开 v6 的 wrapped DEK，再以 new_password 派生的新 KEK 重新包裹
-// （key_version 自增），重写容器区与 header_hmac；载荷密文不变。旧格式返回 false。
-bool rewrap_file(const std::string& ptd_path,
-    const SecureBuffer& old_password,
-    const std::string& new_key_path,
-    bool new_key_from_stdin);
-
-// 同上，但新密码已在内存中（库改密用；避免把新密码落临时文件）
-bool rewrap_file_with(const std::string& ptd_path,
-    const SecureBuffer& old_password,
-    const SecureBuffer& new_pw,
-    bool quiet=false);
+// rewrap_file / rewrap_file_with ：声明见 ptd_meta.hpp
 
 // 跨平台路径打开辅助
 #ifdef _WIN32
@@ -272,11 +264,5 @@ static inline bool open_stream(T& stream,const std::string& path,std::ios::openm
 #endif
 }
 
-// UTF-8 安全的文件删除
-static inline bool remove_file_utf8(const std::string& path) {
-#ifdef _WIN32
-    return _wremove(utf8_to_wstring(path).c_str())==0;
-#else
-    return std::remove(path.c_str())==0;
-#endif
-}
+// UTF-8 安全的文件删除：声明与定义已迁到 core/output_lock.hpp / output_lock.cpp
+// （原 static inline 定义与此处的 extern 前向声明链接属性冲突，Linux GCC 直接报错）

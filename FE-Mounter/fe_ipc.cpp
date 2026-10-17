@@ -3,6 +3,9 @@
 #include "fe_common.h"
 #include <cstdio>
 #include <cstring>
+#include <thread>
+#include <chrono>
+#include <sodium.h>
 #ifdef _WIN32
 #  include <windows.h>
 #  include <sddl.h>
@@ -15,11 +18,18 @@ VDiskApi*     g_ipc_v = nullptr;
 VDiskHandle** g_ipc_h = nullptr;
 std::atomic<bool> g_ipc_unlocked{false};
 std::atomic<bool> g_ipc_stop{false};
+std::atomic<uint64_t> g_last_fg_activity_ms{0};   // M5 前台活动自动锁：最近一次前台访问时刻
+void        (*g_ipc_eject_hook)() = nullptr;
 
+// 管道名派生：用 blake2b（crypto_generichash）替代非密码学 FNV-1a，避免同机可控
+// vault 路径构造哈希碰撞、跨 vault 命中管道（§5.1 标识符强度）。
 std::string ipc_pipe_name(const std::string& vault) {
-    uint64_t h = 0xcbf29ce484222325ULL;
-    for (char c : vault) { h ^= (unsigned char)c; h *= 0x100000001b3ULL; }
-    char buf[32]; snprintf(buf, sizeof buf, "%016llx", (unsigned long long)h);
+    unsigned char h[crypto_generichash_BYTES_MIN];   // 16 字节（128 位）
+    crypto_generichash(h, sizeof h, (const unsigned char*)vault.data(), vault.size(), nullptr, 0);
+    char buf[64]; static const char* t = "0123456789abcdef";
+    size_t hi = 0;
+    for (unsigned char c : h) { buf[hi++] = t[c >> 4]; buf[hi++] = t[c & 0xF]; }
+    buf[hi] = 0;
 #ifdef _WIN32
     return std::string("\\\\.\\pipe\\fe-") + buf;
 #else
@@ -44,6 +54,48 @@ std::string hex_decode(const std::string& s) {
     return o;
 }
 
+// 解锁防暴破：连续失败达阈值后锁定一段时间，阻止同用户在线爆破 vault 密码（§5.1）。
+// 单 mounter 进程只服务一个 vault，全局计数即可。
+static constexpr int    kUnlockMaxFails = 5;
+static constexpr uint64_t kUnlockLockMs = 30000;   // 锁定 30s
+static std::atomic<int>      g_unlock_fails{0};
+static std::atomic<uint64_t> g_unlock_lock_until{0};
+
+static uint64_t now_ms() {
+    using namespace std::chrono;
+    return (uint64_t)duration_cast<milliseconds>(steady_clock::now().time_since_epoch()).count();
+}
+
+// 是否处于暴破锁定中（到期自动复位计数）
+static bool unlock_blocked() {
+    uint64_t until = g_unlock_lock_until.load();
+    if (!until) return false;
+    if (now_ms() < until) return true;
+    g_unlock_lock_until.store(0);
+    g_unlock_fails.store(0);
+    return false;
+}
+
+static std::string do_unlock(const std::string& arg, int flags) {
+    if (unlock_blocked()) return "ERR locked";   // 暴破锁定，直接拒绝
+    if (!g_ipc_v || !g_ipc_h || !*g_ipc_h) return "ERR nostate";
+    std::string pass = hex_decode(arg);
+    if (pass.empty()) return "ERR badpass";
+    VDiskStatus st = g_ipc_v->unlock(*g_ipc_h, pass.c_str(), flags);
+    sodium_memzero(pass.data(), pass.size());   // 用后即清
+    if (st == VDISK_OK) {
+        g_ipc_unlocked = true;
+        g_last_fg_activity_ms.store(now_ms(), std::memory_order_relaxed);   // 解锁即起算一个完整自动锁窗口
+        g_unlock_fails.store(0);
+        g_unlock_lock_until.store(0);
+        return "OK";
+    }
+    if (++g_unlock_fails >= kUnlockMaxFails)
+        g_unlock_lock_until.store(now_ms() + kUnlockLockMs);   // 触发锁定窗口
+    if (st == VDISK_E_AUTH) return "ERR auth";
+    return "ERR io";
+}
+
 static std::string ipc_dispatch(const std::string& req) {
     size_t sp = req.find(' ');
     std::string cmd = (sp == std::string::npos) ? req : req.substr(0, sp);
@@ -59,16 +111,11 @@ static std::string ipc_dispatch(const std::string& req) {
     if (cmd == "lock") {
         if (g_ipc_h && *g_ipc_h) v.lock(*g_ipc_h);
         g_ipc_unlocked = false;
+        g_last_fg_activity_ms.store(0, std::memory_order_relaxed);   // 锁态不计时，下次解锁重新起算
         return "OK";
     }
     if (cmd == "unlock") {
-        std::string pass = hex_decode(arg);
-        if (pass.empty()) return "ERR badpass";
-        VDiskStatus st = v.unlock(*g_ipc_h, pass.c_str(), 0);
-        secure_zero(pass.data(), pass.size());   // 用后即清
-        if (st == VDISK_OK) { g_ipc_unlocked = true; return "OK"; }
-        if (st == VDISK_E_AUTH) return "ERR auth";
-        return "ERR io";
+        return do_unlock(arg, 0);
     }
     if (cmd == "reindex") {
         VDiskStatus st = v.reindex(*g_ipc_h, nullptr);
@@ -76,19 +123,19 @@ static std::string ipc_dispatch(const std::string& req) {
     }
     // M4：用恢复密钥解锁（等价解锁凭证，§4.4）
     if (cmd == "unlockr") {
-        std::string code = hex_decode(arg);
-        if (code.empty()) return "ERR badcode";
-        VDiskStatus st = v.unlock(*g_ipc_h, code.c_str(), 1);
-        secure_zero(code.data(), code.size());
-        if (st == VDISK_OK) { g_ipc_unlocked = true; return "OK"; }
-        if (st == VDISK_E_AUTH) return "ERR auth";
-        return "ERR io";
+        return do_unlock(arg, 1);
     }
     // M5：空闲超时自动锁（秒，0=关闭）
     if (cmd == "idle") {
         if (!v.set_idle_timeout) return "ERR unsupported";
         uint32_t sec = (uint32_t)strtoul(arg.c_str(), nullptr, 10);
-        return (v.set_idle_timeout(*g_ipc_h, sec) == VDISK_OK) ? "OK" : "ERR io";
+        if (v.set_idle_timeout(*g_ipc_h, sec) != VDISK_OK) return "ERR io";
+#if defined(_WIN32) && FE_HAVE_WINFSP
+        extern uint32_t g_svc_idle;   // 与库侧超时同步：watchdog 据此判断自动锁是否启用（0=关）
+        g_svc_idle = sec;
+        g_last_fg_activity_ms.store(now_ms(), std::memory_order_relaxed);   // 改超时即重新起算窗口
+#endif
+        return "OK";
     }
     // M5：预读缓存 cap_bytes ahead_segments
     if (cmd == "cache") {
@@ -98,6 +145,17 @@ static std::string ipc_dispatch(const std::string& req) {
         uint32_t ahead = (sp2 == std::string::npos) ? 4
                        : (uint32_t)strtoul(arg.c_str() + sp2 + 1, nullptr, 10);
         return (v.set_read_cache(*g_ipc_h, cap, ahead) == VDISK_OK) ? "OK" : "ERR io";
+    }
+    // 卸载磁盘：回 OK 后再收尾，否则客户端先读到断管
+    if (cmd == "eject") {
+        g_ipc_stop = true;
+        if (g_ipc_eject_hook) {
+            std::thread([] {
+                std::this_thread::sleep_for(std::chrono::milliseconds(300));  // 等响应写回
+                if (g_ipc_eject_hook) g_ipc_eject_hook();
+            }).detach();
+        }
+        return "OK";
     }
     return "ERR unknown";
 }
@@ -139,6 +197,17 @@ static PSECURITY_DESCRIPTOR ipc_pipe_sd() {
 // 客户端身份校验：管道名可被同机任何人猜到，必须确认对端身份。
 // 规则：同进程用户 或 SYSTEM/Administrators 才放行（LocalSystem 服务的客户端常是管理员 GUI）。
 // 拿不到客户端 token 时保守拒绝——宁可不服务，也不给未验证方开解锁口。
+// 校验 token 是否隶属于某已知别名组（如 Administrators），用于放行服务场景下的管理员 GUI 客户端。
+static bool token_in_group(HANDLE tok, const wchar_t* groupSidStr) {
+    if (!tok) return false;
+    PSID gsid = nullptr;
+    if (!ConvertStringSidToSidW(groupSidStr, &gsid)) return false;
+    BOOL member = FALSE;
+    CheckTokenMembership(tok, gsid, &member);
+    LocalFree(gsid);
+    return member != FALSE;
+}
+
 static bool ipc_client_allowed(HANDLE pipe) {
     DWORD pid = 0;
     if (!GetNamedPipeClientProcessId(pipe, &pid) || pid == 0) return false;
@@ -167,11 +236,12 @@ static bool ipc_client_allowed(HANDLE pipe) {
                     }
                     CloseHandle(mytok);
                 }
-                // SYSTEM(S-1-5-18) / Administrators(S-1-5-32-544)
+                // SYSTEM(S-1-5-18) 账户，或 Administrators(S-1-5-32-544) 组成员放行
                 if (!ok && sid) {
                     wchar_t* s = nullptr;
                     if (ConvertSidToStringSidW(sid, &s)) {
-                        ok = (wcscmp(s, L"S-1-5-18") == 0 || wcscmp(s, L"S-1-5-32-544") == 0);
+                        if (wcscmp(s, L"S-1-5-18") == 0) ok = true;
+                        else if (tok && token_in_group(tok, L"S-1-5-32-544")) ok = true;   // 组隶属，非用户 SID 比较
                         LocalFree(s);
                     }
                 }

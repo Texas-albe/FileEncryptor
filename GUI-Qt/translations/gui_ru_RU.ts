@@ -244,7 +244,7 @@
     </message>
     <message>
         <location filename="../src/MainWindow.cpp" line="1418"/>
-        <source>把整个目录树或多个文件打成单个 .ptd 容器，不删除源文件</source>
+        <source>将整个目录树或多个文件打包为单个 .ptd 容器，不删除源文件</source>
         <translation>Упаковать всё дерево папок или несколько файлов в один контейнер .ptd; исходные файлы сохраняются</translation>
     </message>
     <message>
@@ -300,14 +300,14 @@
     </message>
     <message>
         <location filename="../src/MainWindow.cpp" line="2987"/>
-        <source>当前: %1 | 完成 %2/%3 | 跳过 %4 | 失败 %5</source>
+        <source>当前：%1 | 完成 %2/%3 | 跳过 %4 | 失败 %5</source>
         <translation>Текущий: %1 | Готово %2/%3 | Пропущено %4 | Ошибок %5</translation>
     </message>
     <message>
         <location filename="../src/MainWindow.cpp" line="3074"/>
         <location filename="../src/MainWindow.cpp" line="3082"/>
-        <source>任务完成</source>
-        <translation>Задача выполнена</translation>
+        <source>操作完成</source>
+        <translation>Операция выполнена</translation>
     </message>
     <message>
         <location filename="../src/MainWindow.cpp" line="2105"/>
@@ -461,7 +461,7 @@
     </message>
     <message>
         <location filename="../src/MainWindow.cpp" line="1400"/>
-        <source>留空 = 运行弹窗输入（经 stdin 注入）</source>
+        <source>留空 = 运行时弹窗输入（经 stdin 注入）</source>
         <translation>Пусто = ввод в диалоге при запуске (через stdin)</translation>
     </message>
     <message>
@@ -545,7 +545,7 @@
     </message>
     <message>
         <location filename="../src/MainWindow.cpp" line="2992"/>
-        <source>待处理: %1 个文件 / %2</source>
+        <source>待处理：%1 个文件 / %2</source>
         <translation>В очереди: %1 файл(ов) / %2</translation>
     </message>
     <message>
@@ -609,8 +609,8 @@
     </message>
     <message>
         <location filename="../src/MainWindow.cpp" line="443"/>
-        <source>是否现在下载并安装？</source>
-        <translation>Загрузить и установить сейчас?</translation>
+        <source>请确认是否现在下载并安装。</source>
+        <translation>Подтвердите загрузку и установку сейчас.</translation>
     </message>
     <message>
         <location filename="../src/MainWindow.cpp" line="469"/>
@@ -688,7 +688,7 @@
     </message>
     <message>
         <location filename="../src/MainWindow.cpp" line="2518"/>
-        <source>请输入此前抄录的 48 位恢复码（仅限数字）：</source>
+        <source>请输入此前记录的 48 位恢复码（仅限数字）：</source>
         <translation>Введите записанный 48-значный код восстановления (только цифры):</translation>
     </message>
     <message>
@@ -1091,7 +1091,7 @@
     <message>
         <location filename="../src/MainWindow.cpp" line="1169"/>
         <location filename="../src/MainWindow.cpp" line="1836"/>
-        <source>解开密钥</source>
+        <source>解包密钥</source>
         <translation>Распаковать ключ</translation>
     </message>
     <message>
@@ -1276,7 +1276,7 @@
     </message>
     <message>
         <location filename="../src/MainWindow.cpp" line="1659"/>
-        <source>选择要解开的包装文件</source>
+        <source>选择要解包的包装文件</source>
         <translation>Выбор блоба для распаковки</translation>
     </message>
     <message>
@@ -1306,7 +1306,7 @@
     </message>
     <message>
         <location filename="../src/MainWindow.cpp" line="1699"/>
-        <source>配套的命令行程序没有密钥包装能力，请更换带 OpenSSL 的 CLI</source>
+        <source>当前 CLI 不支持密钥包装，请使用带 OpenSSL 的 CLI</source>
         <translation>В комплектной программе нет упаковки ключей; нужен CLI со сборкой OpenSSL</translation>
     </message>
     <message>
@@ -1341,7 +1341,7 @@
     </message>
     <message>
         <location filename="../src/MainWindow.cpp" line="1840"/>
-        <source>要解开的 .fekw 包装文件</source>
+        <source>要解包的 .fekw 包装文件</source>
         <translation>Блоб .fekw для распаковки</translation>
     </message>
     <message>
@@ -1415,7 +1415,7 @@
     </message>
     <message>
         <location filename="../src/MainWindow.cpp" line="2120"/>
-        <source>配套的命令行程序没有密钥包装能力，无法包装或解开密钥。
+        <source>当前 CLI 不支持密钥包装，无法包装或解包密钥。
 请更换带 OpenSSL 的 CLI。</source>
         <translation>В комплектной программе нет упаковки ключей, упаковка и распаковка невозможны.
 Нужен CLI со сборкой OpenSSL.</translation>
@@ -1466,7 +1466,7 @@
     </message>
     <message>
         <location filename="../src/MainWindow.cpp" line="2165"/>
-        <source>请先选择要解开的 .fekw 包装文件。</source>
+        <source>请先选择要解包的 .fekw 包装文件。</source>
         <translation>Выберите блоб .fekw для распаковки.</translation>
     </message>
     <message>
@@ -1793,8 +1793,8 @@
     </message>
     <message>
         <location filename="../src/MainWindow.cpp" line="203"/>
-        <source>有命令正在运行，退出将终止它。确定退出？</source>
-        <translation>Команда выполняется; выход прерёт её. Выйти?</translation>
+        <source>有命令正在运行，退出将终止它。请确认是否退出。</source>
+        <translation>Команда выполняется; выход прерёт её. Подтвердите выход.</translation>
     </message>
     <message>
         <location filename="../src/MainWindow.cpp" line="2176"/>
@@ -1886,10 +1886,10 @@
     <message>
         <location filename="../src/MainWindow.cpp" line="2259"/>
         <source>批量解密将对每个文件执行昂贵的密钥派生（KDF）以还原完整原始文件名，可能很慢。
-是否启用「完整文件名还原」？
+请确认是否启用「完整文件名还原」。
 （无论是否启用，输出文件的扩展名都会保留。）</source>
         <translation>Пакетная расшифровка выполнит для каждого файла затратный вывод ключа (KDF) для восстановления полного исходного имени файла; это может быть медленно.
-Включить «полное восстановление имени файла»?
+Включить «полное восстановление имени файла».
 (независимо от выбора расширение выходного файла сохраняется.)</translation>
     </message>
     <message>
@@ -2126,7 +2126,7 @@
     </message>
     <message>
         <location filename="../src/PreviewDialog.cpp" line="161"/>
-        <source>预览完成。预览不会写出解密文件。</source>
+        <source>预览完成，未写出任何解密文件。</source>
         <translation>Предпросмотр завершён, содержимое выше. Файл расшифровки не записывался.</translation>
     </message>
     <message>
@@ -2315,10 +2315,10 @@
     </message>
     <message>
         <location filename="../src/TaskHistoryDialog.cpp" line="166"/>
-        <source>确定删除这条历史记录？
+        <source>请确认是否删除这条历史记录。
 
 %1  %2</source>
-        <translation>Удалить эту запись истории?
+        <translation>Подтвердите удаление этой записи истории.
 
 %1  %2</translation>
     </message>
@@ -2369,7 +2369,7 @@
     </message>
     <message>
         <location filename="../src/TaskHistoryDialog.cpp" line="181"/>
-        <source>删除此条</source>
+        <source>删除该记录</source>
         <translation>Удалить эту запись</translation>
     </message>
     <message>
@@ -2381,10 +2381,10 @@
         <location filename="../src/TaskHistoryDialog.cpp" line="148"/>
         <source>将删除全部 %1 条任务历史记录（仅影响本面板，不影响任何加密文件与密钥库）。
 
-确定继续？</source>
+请确认是否继续。</source>
         <translation>Будут удалены все %1 записей истории (затрагивает только эту панель, не влияет на файлы шифрования и хранилище ключей).
 
-Продолжить?</translation>
+Подтвердите продолжение.</translation>
     </message>
     <message>
         <location filename="../src/TaskHistoryDialog.cpp" line="75"/>
@@ -2461,8 +2461,8 @@
     <name>TaskSummaryDialog</name>
     <message>
         <location filename="../src/TaskSummaryDialog.cpp" line="13"/>
-        <source>任务完成</source>
-        <translation>Задача выполнена</translation>
+        <source>操作完成</source>
+        <translation>Операция выполнена</translation>
     </message>
     <message>
         <location filename="../src/TaskSummaryDialog.cpp" line="38"/>
@@ -2542,6 +2542,54 @@
         <location filename="../src/ViewSettingsDialog.cpp" line="37"/>
         <source>清除背景</source>
         <translation>Очистить фон</translation>
+    </message>
+    <message>
+        <location filename="../src/MainWindow.cpp" line="287"/>
+        <source>卸载磁盘...</source>
+        <translation>Размонтировать диск…</translation>
+    </message>
+    <message>
+        <location filename="../src/MainWindow.cpp" line="287"/>
+        <source>卸载已挂载的加密盘，盘符随之消失</source>
+        <translation>Размонтировать подключённое хранилище; буква диска исчезнет</translation>
+    </message>
+    <message>
+        <location filename="../src/MainWindow.cpp" line="287"/>
+        <source>格式化加密盘...</source>
+        <translation>Форматировать хранилище…</translation>
+    </message>
+    <message>
+        <location filename="../src/MainWindow.cpp" line="287"/>
+        <source>清空盘内全部文件，保留盘身份与密码；不可撤销</source>
+        <translation>Стереть все файлы хранилища, сохранив самство и пароль; необратимо</translation>
+    </message>
+    <message>
+        <location filename="../src/MainWindow.cpp" line="287"/>
+        <source>卸载磁盘</source>
+        <translation>Размонтировать диск</translation>
+    </message>
+    <message>
+        <location filename="../src/MainWindow.cpp" line="287"/>
+        <source>--- 卸载磁盘（盘符随之释放） ---</source>
+        <translation>--- Размонтирование диска (буква освобождается) ---</translation>
+    </message>
+    <message>
+        <location filename="../src/MainWindow.cpp" line="287"/>
+        <source>将卸载该加密盘的挂载，盘符会随之消失。盘内文件不会被删除。</source>
+        <translation>Монтирование хранилища будет снято, а буква диска исчезнет. Файлы внутри не удаляются.</translation>
+    </message>
+    <message>
+        <location filename="../src/MainWindow.cpp" line="287"/>
+        <source>将清空所选加密盘内的全部文件。
+
+盘的身份与密码保留，格式化后仍可用原密码继续入盘；但盘内原有文件无法恢复。
+
+若该盘正被挂载，请先执行「卸载磁盘」。</source>
+        <translation>Все файлы выбранного хранилища будут стёрты.
+
+Идентичность хранилища и пароль сохранятся, поэтому тем же паролем можно будет пользоваться дальше, но стёртые файлы восстановить нельзя.
+
+Если хранилище смонтировано, сначала размонтируйте его.</translation>
     </message>
 </context>
 </TS>

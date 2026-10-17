@@ -21,6 +21,8 @@
 #include <fstream>
 #include <chrono>
 #include <thread>
+#include <atomic>
+#include <mutex>
 #include <iterator>
 #include <filesystem>
 #include <system_error>
@@ -1251,7 +1253,7 @@ static bool run_pubkey(const SecureBuffer& identity) {
 static bool run_info(const std::string& path) {
     PtdMeta meta;
     if(!read_ptd_metadata(path, meta)) {
-        std::cerr<<"Cannot read header (not a FileEncryptor file?): "<<path<<"\n";
+        std::cerr<<"Cannot read header (not a FileEncryptor file): "<<path<<"\n";
         return false;
     }
     const char* mode_str = (meta.mode==CryptoMode::XCHACHA20)?"XChaCha20"
@@ -1656,7 +1658,7 @@ int main(int argc,char* argv[]) {
         ACTION_DERIVE,ACTION_PUBKEY,ACTION_INFO,ACTION_VERIFY,ACTION_RECOVER,
         ACTION_KEYLIB,ACTION_REWRAP,ACTION_WATERMARK,ACTION_WRAPKEY,ACTION_UNWRAPKEY,ACTION_RANDOM_READ,
         ACTION_VAULT_INIT,ACTION_VAULT_LIST,ACTION_VAULT_REINDEX,ACTION_VAULT_MOUNT,
-        ACTION_VAULT_RECOVERY,ACTION_VAULT_REKEY,ACTION_VAULT_RECRYPT
+        ACTION_VAULT_RECOVERY,ACTION_VAULT_REKEY,ACTION_VAULT_RECRYPT,ACTION_VAULT_FORMAT
     } action=ACTION_NONE;
 
     std::vector<std::string> input_paths;
@@ -1732,6 +1734,7 @@ int main(int argc,char* argv[]) {
     std::string vault_mount_dir, vault_mount_point;
     std::string vault_recovery_dir, vault_recovery_arg;
     std::string vault_rekey_dir, vault_recrypt_dir;
+    std::string vault_format_dir;
     std::string wm_extract_path;
     std::vector<std::string> explicit_inputs;
     bool src_del=false, src_wipe=false, src_recycle=false;
@@ -1825,6 +1828,8 @@ int main(int argc,char* argv[]) {
     // M4：改主密码（连带 rewrap 库内 .ptd）与库内重加密（1MiB 旧块 -> 64KB）
     app.add_option("--vault-rekey", vault_rekey_dir, "change vault passphrase: rewrap every .ptd + re-seal index (needs old+new key)");
     app.add_option("--vault-recrypt", vault_recrypt_dir, "re-encrypt vault contents to 64KB blocks (non-compressed), eliminating 1MiB legacy path");
+    // 格式化：清空盘内全部内容（索引置空 + 擦除所有 .ptd），保留库身份与密码
+    app.add_option("--vault-format", vault_format_dir, "format the vault at <dir>: wipe every stored file and reset the index (keeps vault.meta/password)");
 
     try {
         app.parse(argc, argv);
@@ -1852,7 +1857,7 @@ int main(int argc,char* argv[]) {
         std::cout<<"split=1\n";
         std::cout<<"pack=1\n";
         std::cout<<"confirm=1\n";
-        std::cout<<"vault=1\n";      // 加密盘能力（M1+：--into-vault / vault-init/list/reindex/recovery/rekey/recrypt）
+        std::cout<<"vault=1\n";      // 加密盘能力（M1+：--into-vault / vault-init/list/reindex/format/recovery/rekey/recrypt）
         std::cout<<"vault_rw=1\n";   // 加密盘可写挂载能力（M6：FE-Mounter --rw 提供可写挂载）
         return 0;
     }
@@ -1876,7 +1881,8 @@ int main(int argc,char* argv[]) {
             +(f_recover?1:0)+(f_keylib?1:0)+(f_rewrap?1:0)
             +(!vault_init_dir.empty()?1:0)+(!vault_list_dir.empty()?1:0)+(!vault_reindex_dir.empty()?1:0)
             +(!vault_mount_dir.empty()?1:0)+(!vault_recovery_dir.empty()?1:0)
-            +(!vault_rekey_dir.empty()?1:0)+(!vault_recrypt_dir.empty()?1:0);
+            +(!vault_rekey_dir.empty()?1:0)+(!vault_recrypt_dir.empty()?1:0)
+            +(!vault_format_dir.empty()?1:0);
         if(n_act>1) { std::cerr<<"Multiple modes specified.\n"; return 1; }
         if(f_encrypt) action=ACTION_ENCRYPT;
         else if(f_decrypt) action=ACTION_DECRYPT;
@@ -1898,6 +1904,7 @@ int main(int argc,char* argv[]) {
         else if(!vault_recovery_dir.empty()) action=ACTION_VAULT_RECOVERY;
         else if(!vault_rekey_dir.empty()) action=ACTION_VAULT_REKEY;
         else if(!vault_recrypt_dir.empty()) action=ACTION_VAULT_RECRYPT;
+        else if(!vault_format_dir.empty()) action=ACTION_VAULT_FORMAT;
     }
 
     // --watermark-extract: read-only tail watermark, not a regular action
@@ -2089,7 +2096,8 @@ if(wrap_mode || unwrap_mode) {
        &&action!=ACTION_WATERMARK
        &&action!=ACTION_VAULT_INIT&&action!=ACTION_VAULT_LIST&&action!=ACTION_VAULT_REINDEX
        &&action!=ACTION_VAULT_MOUNT&&action!=ACTION_VAULT_RECOVERY
-       &&action!=ACTION_VAULT_REKEY&&action!=ACTION_VAULT_RECRYPT) {
+       &&action!=ACTION_VAULT_REKEY&&action!=ACTION_VAULT_RECRYPT
+       &&action!=ACTION_VAULT_FORMAT) {
         std::cerr<<"No input paths specified.\n";
         print_usage();
         return 1;
@@ -2607,6 +2615,37 @@ if(wrap_mode || unwrap_mode) {
         std::cout<<"Vault reindexed.\n";
         return 0;
     }
+    // 格式化：清空盘内全部内容（删除所有 .ptd + 索引置空），保留库身份、密码与恢复码。
+    // 与「删库」不同：目录、vault.meta、.feindex 都保留，格式化后是个空盘，可继续用原密码入盘。
+    if(action==ACTION_VAULT_FORMAT) {
+        if(vault_format_dir.empty()) { std::cerr<<"--vault-format requires a directory.\n"; return 1; }
+        VaultMeta meta; std::string err;
+        if(!vault_meta_load(vault_format_dir, meta, err)) { std::cerr<<"vault-format failed: "<<err<<"\n"; return 1; }
+        if(!used_key_source) {
+            std::cout<<"Enter vault password: ";
+            std::vector<char> p=get_password();
+            if(p.empty()) { std::cerr<<"No password provided.\n"; return 1; }
+            password=SecureBuffer(p.data(),p.size());
+            sodium_memzero(p.data(),p.size()); p.clear();
+        }
+        std::vector<VaultEntry> entries;
+        if(!vault_read_index(vault_format_dir, meta, password, entries, err)) {
+            std::cerr<<"vault-format failed: "<<err<<"\n"; return 1;
+        }
+        size_t removed=0, failed_n=0;
+        for(const auto& e: entries) {
+            std::string ptd = vault_ptd_path(vault_format_dir, e.rel_path, e.store);
+            if(remove_file_utf8(ptd)) removed++;
+            else { failed_n++; std::cerr<<"Warning: cannot remove "<<ptd<<"\n"; }
+        }
+        if(!vault_write_index(vault_format_dir, meta, password, "[]", err)) {
+            std::cerr<<"vault-format failed: "<<err<<"\n"; return 1;
+        }
+        std::cout<<"Vault formatted: "<<removed<<" file(s) removed";
+        if(failed_n) std::cout<<", "<<failed_n<<" failed";
+        std::cout<<".\n";
+        return failed_n?1:0;
+    }
 
     // 因此必须在下面的“对称密码交互输入”之前拦截。
     if(action==ACTION_DERIVE||action==ACTION_PUBKEY||
@@ -2736,14 +2775,13 @@ if(wrap_mode || unwrap_mode) {
 
     // 加密盘入盘（M1）：逐文件加密进库，写 .ptd 并增量追加加密索引。
     if(!into_vault_dir.empty() && is_encrypt) {
-        // 入盘守卫：盘符根（如 Z:）是挂载后的解密视图，不是存储目录；直接写进去会双重加密并
-        // 污染索引。非空且无 vault.meta 的目录也拒绝，避免把普通文件夹误写成盘。
+        // 入盘守卫：盘符挂载点是解密视图，非存储目录；直接写入会二次加密并污染索引。
         std::string g_path = into_vault_dir;
         while (!g_path.empty() && (g_path.back()=='/' || g_path.back()=='\\')) g_path.pop_back();
         bool is_drive_root = (g_path.size()==2 && g_path[1]==':' && isalpha((unsigned char)g_path[0]));
         if (is_drive_root) {
-            std::cerr<<"vault error: '"<<into_vault_dir<<"' 看起来是盘符（挂载后的解密视图）。\n"
-                     <<"请指定加密盘的存储目录（例如 D:\\Vault），不要指定挂载盘符。\n";
+            std::cerr<<"加密盘错误：'"<<into_vault_dir<<"' 为盘符挂载点（解密视图），并非加密盘存储目录。\n"
+                     <<"请指定加密盘的存储目录（例如 D:\\Vault），而非已挂载的盘符。\n";
             return 1;
         }
         VaultMeta meta; std::string err;
@@ -2756,16 +2794,15 @@ if(wrap_mode || unwrap_mode) {
             for (auto it = std::filesystem::directory_iterator(std::filesystem::u8path(g_path), ec2);
                  it != std::filesystem::directory_iterator(); ++it) { dir_empty = false; break; }
             if (!dir_empty) {
-                std::cerr<<"vault error: '"<<into_vault_dir<<"' 不是加密盘（无 vault.meta）且非空，拒绝以免误写。\n"
-                         <<"若它是已挂载的加密盘，请改用其存储目录；若想新建加密盘，请给一个空目录。\n";
+                std::cerr<<"加密盘错误：'"<<into_vault_dir<<"' 不含 vault.meta 且非空，非合法加密盘，已拒绝写入以防误损数据。\n"
+                         <<"若该盘已挂载，请改用其存储目录；若需新建加密盘，请提供空目录。\n";
                 return 1;
             }
         }
         if(!vault_meta_init(into_vault_dir, into_vault_dir, meta, err)) {
-            std::cerr<<"vault init failed: "<<err<<"\n"; return 1;
+            std::cerr<<"加密盘初始化失败： "<<err<<"\n"; return 1;
         }
-        // MSVC 的 std::filesystem 按 ACP(如 GBK) 解释窄串路径：直接喂 UTF-8 中文路径
-        // 走 relative/目录迭代器会崩溃(0xC0000409)。统一 u8path 显式 UTF-8，取回用 u8string。
+        // MSVC 窄串按 ACP 解释，UTF-8 中文路径须走 u8path 避免迭代器崩溃。
         auto fs_p = [](const std::string& s){ return std::filesystem::u8path(s); };
         // 收集文件（支持目录递归）
         std::vector<std::string> files;
@@ -2779,11 +2816,11 @@ if(wrap_mode || unwrap_mode) {
                 files.push_back(p);
             }
         }
-        if(files.empty()) { std::cerr<<"No input files to vault.\n"; return 1; }
+        if(files.empty()) { std::cerr<<"未找到可入盘的源文件。\n"; return 1; }
         if(password.empty()) {
-            std::cout<<"Enter password: ";
+            std::cout<<"请输入密码：";
             std::vector<char> pw=get_password();
-            if(pw.empty()){ std::cerr<<"No password provided.\n"; return 1; }
+            if(pw.empty()){ std::cerr<<"未提供密码。\n"; return 1; }
             password=SecureBuffer(pw.data(),pw.size());
             sodium_memzero(pw.data(),pw.size()); pw.clear();
         }
@@ -2794,100 +2831,241 @@ if(wrap_mode || unwrap_mode) {
             return s;
 #endif
         };
-        // 帧式进度：入盘为单线程顺序处理，用单槽驱动，呈现与普通加密一致的分帧进度，
-        // 取代原先逐文件打印 "Vaulting: ..." 造成的刷屏与错位。
+        // 帧式进度：单线程驱动单槽，与普通加密视图一致。
         uint64_t total_bytes=0;
         for(const auto& s: files) {
             std::error_code sec;
             uintmax_t fs_sz=std::filesystem::file_size(fs_p(s), sec);
-            if(!sec && fs_sz!=(uintmax_t)-1) total_bytes += (uint64_t)fs_sz;   // 量不到就不计入总量
+            if(!sec && fs_sz!=(uintmax_t)-1) total_bytes += (uint64_t)fs_sz;   // 量不到则不计入
         }
+        // 并行：线程数=CPU 核数（受 max_open_files/3 封顶）；索引追加由 g_mtx 串行化。
+        int cfg_threads = global_config().worker_threads;
+        int nt = cfg_threads > 0 ? cfg_threads : 0;
+        if (nt <= 0) {
+            int hc = (int)std::thread::hardware_concurrency();
+            nt = hc > 0 ? hc : 4;
+        }
+        if (global_config().max_open_files > 0) {
+            int cap = (int)(global_config().max_open_files / 3);
+            if (nt > cap) nt = cap;
+        }
+        if ((size_t)nt > files.size()) nt = (int)files.size();
+        if (nt < 1) nt = 1;
+
+        // 整批共享一份随机盐、只派生一次 KEK：入盘原本每个文件各自跑一次 Argon2
+        // （128MB / 4 轮），上千小文件时几乎全部耗时都花在 KDF 上（零散小文件实测
+        // 仅 ~53MB/s，而大文件 345MB/s）。每文件 nonce 仍独立随机，AEAD 安全性不变；
+        // 挂载盘读取时 KEK 缓存也能整批命中，顺带加快盘内读取。
+        unsigned char shared_salt[crypto_pwhash_SALTBYTES];
+        unsigned char shared_kek[ARGON2_OUTPUT_LEN];
+        randombytes_buf(shared_salt, sizeof(shared_salt));
+        unsigned int vops = ARGON2_OPS_DEFAULT, vmem_kb = ARGON2_MEM_DEFAULT_KB;
+        kdf_preset_params(global_config().kdf_preset, vops, vmem_kb);
+        if (!derive_key((const unsigned char*)password.data(), password.size(),
+                        shared_salt, shared_kek, vops, (size_t)vmem_kb * 1024)) {
+            std::cerr << "密钥派生失败。\n";
+            return 1;
+        }
+
         feui::BatchProgress prog;
-        const bool use_frame = prog.begin(1, total_bytes);
+        const bool use_frame = prog.begin(nt, total_bytes);
         const size_t total_files = files.size();
-        size_t done=0;
-        uint64_t processed=0;      // 帧模式累计字节
-        uint64_t plain_done=0;     // 非帧模式累计字节
-        const auto vault_start=std::chrono::steady_clock::now();
-        for(const auto& src: files) {
-            // rel_path：源在库内则相对库根，否则用文件名
-            std::string rel;
-            try {
-                std::string r=norm(std::filesystem::relative(fs_p(src), fs_p(into_vault_dir)).u8string());
-                rel=(r.compare(0,2,"..")==0)? fs_p(src).filename().u8string() : r;
-            } catch(...) { rel=fs_p(src).filename().u8string(); }
-            // 存储名：目录结构沿用 rel，基名随机 16 位 hex（逻辑名 rel 存索引，实名不入盘面）
-            std::error_code ec;
-            std::string store=vault_random_store_name();
-            std::string target=vault_ptd_path(into_vault_dir, rel, store);
-            for(int guard=0; guard<8 && std::filesystem::exists(fs_p(target), ec); ++guard) {
-                store=vault_random_store_name();
-                target=vault_ptd_path(into_vault_dir, rel, store);
+        std::atomic<size_t> done{0}, failed{0}, processed_bytes{0}, next_idx{0};
+        std::atomic<bool> any_fail{false};
+        const auto vault_start = std::chrono::steady_clock::now();
+        std::atomic<bool> display_stop{false};
+        // worker 告警先入队，帧结束后再打印，避免打断光标定位。
+        std::mutex note_mtx;
+        std::vector<std::string> notes;
+        auto note = [&](const std::string& s) { std::lock_guard<std::mutex> lk(note_mtx); notes.push_back(s); };
+
+        // 显示线程：帧模式按帧节流绘制；非帧模式打印单行汇总
+        std::thread display_thread;
+        if (use_frame) {
+            display_thread = std::thread([&] {
+                while (!display_stop.load(std::memory_order_relaxed)) {
+                    prog.setProcessed(processed_bytes.load(std::memory_order_relaxed));
+                    prog.setFileStats(done.load(std::memory_order_relaxed),
+                                      failed.load(std::memory_order_relaxed), 0, total_files);
+                    prog.render(false);
+                    std::this_thread::sleep_for(std::chrono::milliseconds(40));
+                }
+            });
+        } else {
+            display_thread = std::thread([&] {
+                while (!display_stop.load(std::memory_order_relaxed)) {
+                    print_progress((size_t)processed_bytes.load(std::memory_order_relaxed),
+                                   (size_t)total_bytes, vault_start, false);
+                    std::this_thread::sleep_for(std::chrono::milliseconds(40));
+                }
+            });
+        }
+
+        auto worker = [&](int slot) {
+            while (true) {
+                size_t i = next_idx.fetch_add(1);
+                if (i >= files.size()) break;
+                const auto& src = files[i];
+                // rel_path：源在库内→相对库根保留内部结构；外部源→相对卷根保留完整目录树，不再拍平。
+                // 用 error_code 重载：relative() 跨盘时不抛异常而是置 ec，从而落到卷根分支，
+                // 避免被 catch 拍平成纯文件名（跨盘场景此前整棵目录树丢失、同名文件 rel_path 冲突导致读错）。
+                std::string rel;
+                {
+                    std::filesystem::path srcp = fs_p(src);
+                    // 词法相对库根：源已在库内（重加密/库内移动）→ 沿用相对库根路径，不重复盘符。
+                    // lexically_relative 纯词法、不碰 I/O，跨盘/路径不存在也不会抛或失败。
+                    std::filesystem::path r = srcp.lexically_relative(fs_p(into_vault_dir));
+                    if (!r.empty() && r.u8string().compare(0, 2, "..") != 0) {
+                        rel = norm(r.u8string());
+                    } else {
+                        // 外部源/跨盘：从卷根起保留整棵目录树，盘符作顶层目录
+                        // （D:\temp\aaa\x.txt → D/temp/aaa/x.txt，挂载盘里即 Z:\D\temp\aaa\x.txt）。
+                        // 带盘符才能区分不同盘的源：否则 D:\a\x.txt 与 E:\a\x.txt 会撞成同一 rel_path。
+                        std::filesystem::path r2 = srcp.lexically_relative(srcp.root_path());
+                        std::string tail = r2.empty() ? srcp.filename().u8string() : norm(r2.u8string());
+                        std::string rn = srcp.root_name().u8string();   // Windows: "D:"；UNC: "\\srv\share"
+                        while (!rn.empty() && (rn.back() == ':' || rn.back() == '/')) rn.pop_back();
+                        const size_t np = rn.find_first_not_of('/');    // UNC 去掉前导分隔符
+                        if (np == std::string::npos) rn.clear(); else if (np > 0) rn = rn.substr(np);
+                        rn = norm(rn);
+                        rel = (rn.empty() || tail.empty() || tail == ".") ? tail : norm(rn + "/" + tail);
+                    }
+                }
+                // 防御：解析为空时回退文件名，避免挂载盘出现不可访问的「无名」条目。
+                if (rel.empty()) rel = fs_p(src).filename().u8string();
+                // 存储名：目录结构沿用 rel，基名为随机 hex（逻辑名存索引，实名不入盘面）
+                std::error_code ec;
+                std::string store = vault_random_store_name();
+                std::string target = vault_ptd_path(into_vault_dir, rel, store);
+                for (int guard = 0; guard < 8 && std::filesystem::exists(fs_p(target), ec); ++guard) {
+                    store = vault_random_store_name();
+                    target = vault_ptd_path(into_vault_dir, rel, store);
+                }
+                std::filesystem::create_directories(fs_p(target).parent_path(), ec);
+                // 源元数据（擦除前抓取）
+                uint64_t src_size = 0; int64_t src_mtime = 0;
+                {
+                    std::error_code sec;
+                    uintmax_t fs_sz = std::filesystem::file_size(fs_p(src), sec);
+                    if (sec || fs_sz == (uintmax_t)-1) {
+                        note("警告：无法获取源文件大小：" + src);
+                        src_size = 0;
+                    } else src_size = (uint64_t)fs_sz;
+                    std::error_code mec;
+                    auto mt = std::filesystem::last_write_time(fs_p(src), mec);
+                    src_mtime = mec ? 0 :
+                        (int64_t)std::chrono::time_point_cast<std::chrono::seconds>(mt).time_since_epoch().count();
+                }
+                if (use_frame) prog.setSlot(slot, src, 0, src_size, true);
+                size_t last_pd = 0;
+                bool ok = false;
+                try {
+                    // 挂载读路径 random_read_ptd 不支持压缩分块，压缩文件在挂载盘里不可读。
+                    // 入盘写入一律不压缩，确保挂载可还原。
+                    ok = encrypt_file(src, target, password, mode,
+                        [&](size_t pd, size_t tt) {
+                            size_t inc = (pd > last_pd) ? pd - last_pd : 0;
+                            last_pd = pd;
+                            processed_bytes.fetch_add(inc, std::memory_order_relaxed);
+                            if (use_frame) prog.setSlot(slot, src, pd, tt, true);
+                        },
+                        true, 0, false, nullptr, wm_spec.enabled ? &wm_spec : nullptr,
+                        shared_salt, shared_kek);
+                } catch (const std::exception& e) {
+                    note(std::string("Error: ") + e.what()); ok = false;
+                }
+                if (!ok) {
+                    note("加密失败：" + src);
+                    failed.fetch_add(1, std::memory_order_relaxed);
+                    any_fail.store(true, std::memory_order_relaxed);
+                    if (use_frame) prog.setSlot(slot, std::string(), 0, 0, false);
+                    continue;
+                }
+                VaultEntry e;
+                e.rel_path = rel; e.store = store; e.orig_abs = src; e.size = src_size; e.mtime = src_mtime;
+                e.enc_ts = (uint64_t)time(nullptr); e.algo = vault_mode_str(mode); e.kdf = "argon2id";
+                std::string aerr;
+                // flush=false：只更新内存镜像，不每次重加密整份索引（消 O(N^2)），末尾统一落盘。
+                if (!vault_append_entry(into_vault_dir, meta, password, e, aerr, false)) {
+                    note("索引追加失败：" + aerr);
+                    failed.fetch_add(1, std::memory_order_relaxed);
+                    any_fail.store(true, std::memory_order_relaxed);
+                    if (use_frame) prog.setSlot(slot, std::string(), 0, 0, false);
+                    continue;
+                }
+                // 收尾对齐：回调未必命中末尾字节
+                processed_bytes.fetch_add((src_size > last_pd) ? (src_size - last_pd) : 0, std::memory_order_relaxed);
+                done.fetch_add(1, std::memory_order_relaxed);
+                if (use_frame) prog.setSlot(slot, src, src_size, src_size, false);
+                if (source_action != 0) {
+                    if (!secure_handle_source(src, static_cast<SourceDisposition>(source_action))) {
+                        note("警告：源文件处理失败：" + src);
+                    }
+                }
             }
-            std::filesystem::create_directories(fs_p(target).parent_path(), ec);
-            // 源元数据（擦除前抓取）
-            uint64_t src_size=0; int64_t src_mtime=0;
-            {
-                // file_size 失败返回 (uintmax_t)-1：直接落进索引会变成天文数字大小
-                std::error_code sec;
-                uintmax_t fs_sz=std::filesystem::file_size(fs_p(src), sec);
-                if(sec || fs_sz==(uintmax_t)-1) {
-                    std::cerr<<"Warning: cannot stat source size: "<<src<<"\n";
-                    src_size=0;
-                } else src_size=(uint64_t)fs_sz;
-                std::error_code mec;
-                auto mt=std::filesystem::last_write_time(fs_p(src), mec);
-                src_mtime=mec ? 0 :
-                    (int64_t)std::chrono::time_point_cast<std::chrono::seconds>(mt).time_since_epoch().count();
-            }
-            if(use_frame) { prog.setSlot(0, src, 0, src_size, true); prog.render(); }
-            const uint64_t base_done = plain_done;   // 本文件起始字节（非帧累计基准）
-            bool ok=false;
-            try {
-                ok=encrypt_file(src, target, password, mode,
-                    [&](size_t pd, size_t tt){
-                        if(use_frame) { prog.setSlot(0, src, pd, tt, true); prog.render(); }
-                        else {
-                            // 非帧回退：与批量加密同款单行 \r 进度条，不再逐文件刷屏
-                            plain_done = base_done + pd;
-                            print_progress((size_t)plain_done, (size_t)total_bytes, vault_start, false);
-                        }
-                    },
-                    true, compress_level, false, nullptr, wm_spec.enabled?&wm_spec:nullptr);
-            } catch(const std::exception& e) {
-                std::cerr<<"Error: "<<e.what()<<"\n"; ok=false;
-            }
-            if(!ok) { std::cerr<<"Failed to encrypt: "<<src<<"\n"; if(use_frame) prog.finish(); return 1; }
-            VaultEntry e;
-            e.rel_path=rel; e.store=store; e.orig_abs=src; e.size=src_size; e.mtime=src_mtime;
-            e.enc_ts=(uint64_t)time(nullptr); e.algo=vault_mode_str(mode); e.kdf="argon2id";
-            if(!vault_append_entry(into_vault_dir, meta, password, e, err)) {
-                std::cerr<<"index append failed: "<<err<<"\n"; if(use_frame) prog.finish(); return 1;
-            }
-            done++;
-            if(use_frame) {
-                processed += src_size;
-                prog.setFileStats(done, 0, 0, total_files);
-                prog.setProcessed(processed);
-                prog.setSlot(0, src, src_size, src_size, false);
-                prog.render();
+        };
+
+        std::vector<std::thread> workers;
+        for (int slot = 0; slot < nt; ++slot)
+            workers.emplace_back(worker, slot);
+        for (auto& w : workers) w.join();
+
+        display_stop.store(true, std::memory_order_relaxed);
+        if (display_thread.joinable()) display_thread.join();
+        if (use_frame) {
+            // 末帧用最终统计：显示线程已停，帧内计数会停在最后一拍，
+            // 直接以最终值刷新，避免收尾显示落后于实际完成数。
+            prog.setFileStats(done.load(std::memory_order_relaxed),
+                              failed.load(std::memory_order_relaxed), 0, total_files);
+            prog.render(true);   // 收尾强制再刷一帧：避免「看着没动其实已跑完」
+            prog.finish();
+        }
+        else if (total_bytes > 0) print_progress((size_t)total_bytes, (size_t)total_bytes, vault_start, true);
+        // 帧已收尾，此时再打印 worker 攒下的告警/错误
+        {
+            std::lock_guard<std::mutex> lk(note_mtx);
+            for (const auto& s : notes) std::cerr << s << "\n";
+        }
+
+        // 显式 flush 索引：即使镜像已改为立即落盘，仍在收尾兜一层
+        {
+            std::string ferr;
+            if (!vault_flush_index(into_vault_dir, meta, password, ferr))
+                std::cerr << "Warning: index flush failed: " << ferr << "\n";
+        }
+        const size_t n_done = done.load(), n_fail = failed.load();
+        // 写宿主（GUI）统计文件：入加密盘此前未写，导致 GUI 末态统计全为 0。
+        // 与 process_files 一致：经 FILEENCRYPTOR_STATS_FILE 环境变量指定路径，拒绝符号链接写穿。
+        if (const char* stats_path = std::getenv("FILEENCRYPTOR_STATS_FILE")) {
+            bool blocked = false;
+            { std::error_code sec; blocked = std::filesystem::is_symlink(stats_path, sec); }
+            if (blocked) {
+                std::cerr << "拒绝通过符号链接写入统计：" << stats_path << "\n";
             } else {
-                plain_done = base_done + src_size;      // 回调未必命中末尾，收尾对齐
-                print_progress((size_t)plain_done, (size_t)total_bytes, vault_start, false);
-            }
-            if(source_action!=0) {
-                if(!secure_handle_source(src, static_cast<SourceDisposition>(source_action))) {
-                    std::cerr<<"Warning: could not process source: "<<src<<"\n";
+                FILE* sf = fopen(stats_path, "wb");
+                if (sf) {
+                    fprintf(sf, "{\"total_bytes\":%llu,\"files_done\":%llu,\"files_failed\":%llu,"
+                              "\"files_skipped\":%llu,\"total_files\":%llu}\n",
+                        (unsigned long long)total_bytes,
+                        (unsigned long long)n_done,
+                        (unsigned long long)n_fail,
+                        (unsigned long long)0,
+                        (unsigned long long)total_files);
+                    fclose(sf);
                 }
             }
         }
-        if(use_frame) prog.finish();
-        else if(total_bytes>0) print_progress((size_t)total_bytes,(size_t)total_bytes,vault_start,true);
-        // 显式 flush 索引：即使镜像已改为立即落盘，仍在收尾兜一层，
-        // 避免将来引入节流/异步时又出现「改动丢在内存」
-        { std::string ferr; if(!vault_flush_index(into_vault_dir, meta, password, ferr))
-              std::cerr<<"Warning: index flush failed: "<<ferr<<"\n"; }
-        std::cout<<"Vaulted "<<done<<" file(s) into "<<into_vault_dir<<".\n";
+        // 退出码语义：仅当「未成功写入任何文件」才判失败；个别文件失败属部分成功，
+        // 视为任务完成（退出 0），失败明细在上方已逐条列出，便于排查。
+        if (n_done == 0 && n_fail > 0) {
+            std::cerr << "入盘失败：未写入任何文件，失败 " << n_fail << " 个（详见上方日志）。\n";
+            return 1;
+        }
+        // 收尾统计必显式打印一行：帧收尾后各槽位即使满格，用户也需要一个明确的数字结果，
+        // 仅靠帧内 FILES 行在管道/日志回放场景容易看不到。
+        std::cout << "入盘完成：" << n_done << "/" << total_files << " 个文件已写入 " << into_vault_dir;
+        if (n_fail > 0) std::cout << "（" << n_fail << " 个失败，详见上方日志）";
+        std::cout << "\n" << std::flush;
         all_ok=true;
     }
     else if(asym_mode) {

@@ -7,15 +7,24 @@
 #include "FileEncryptor.hpp"   // CryptoMode
 
 
-// 库元数据（明文存于 <vault>/vault.meta）：只含盐/版本/根路径，不含任何密钥。
+// 库元数据（存于 <vault>/vault.meta）。
+// 明文前导（任何时刻可读，无需密码）：format / salt / opslimit / memlimit_kb / mount_point。
+// 私钥派生（Argon2id）只依赖 salt+ops+mem，故这三者必明文；mount_point 是用户自选盘符，
+// 挂载命令需在无密码时改写，故也留明文。
+// 隐私字段 root/created 在 format==2 时移入 meta_enc（secretbox(索引密钥) 密文），
+// 解密需密码——满足「vault.meta 加密存储」诉求，同时不破坏「open 先于 unlock、无密码可读盐」的既有流程。
 struct VaultMeta {
     uint32_t format = 1;
     std::vector<unsigned char> salt;   // 16 字节（crypto_pwhash_SALTBYTES）
-    std::string root;                  // 库根绝对路径
-    uint64_t created = 0;              // 创建时间（unix 秒）
+    std::string root;                  // 库根绝对路径（format==2 时仅解密后存在）
+    uint64_t created = 0;              // 创建时间（unix 秒，format==2 时仅解密后存在）
     unsigned int opslimit = 4;         // Argon2id 参数（与索引密钥派生一致）
     uint32_t memlimit_kb = 65536;      // 64 MB
     std::string mount_point;           // 期望挂载点（盘符 "V:" 或 Linux 挂载目录）；空=未记录
+    // format==2 字段：root/created 的密文封装（解密需密码）
+    bool encrypted = false;                                  // 是否 format==2（加密元数据）
+    std::vector<unsigned char> meta_nonce;                   // crypto_secretbox_NONCEBYTES
+    std::vector<unsigned char> meta_enc;                     // secretbox 密文（含 MAC）
 };
 
 // 索引条目：设计文档 §5 的 rel_path/orig_abs/size/mtime/enc_ts/算法参数。
@@ -28,6 +37,7 @@ struct VaultEntry {
     uint64_t enc_ts = 0;    // 加密时间戳（预热排序用）
     std::string algo;       // 算法（XChaCha20 / AEGIS-256 / SM4-GCM ...）
     std::string kdf;        // 密钥派生（argon2id）
+    bool is_dir = false;    // 显式目录条目（挂载盘 mkdir/拷贝文件夹用）；false=文件。旧盘无此字段→默认文件
     VaultEntry() = default;
 };
 
@@ -58,11 +68,22 @@ void vault_drop_index_mirror();
 bool vault_meta_init(const std::string& dir, const std::string& root,
                      VaultMeta& out, std::string& err);
 
-// 仅载入已有 vault.meta（不存在返回 false）。
+// 仅载入已有 vault.meta（不存在返回 false）。format==2 时 root/created 留空，
+// 需 vault_meta_decrypt 用密码补全；salt/ops/mem/mount_point 始终明文可读。
 bool vault_meta_load(const std::string& dir, VaultMeta& out, std::string& err);
 
 // 回写 vault.meta（保留原有盐与 KDF 参数，仅更新挂载点等可变字段）。
+// 若 meta.encrypted 为 true（format==2），则原样保留 meta_nonce/meta_enc 段，
+// 仅更新明文可写字段（mount_point）——无需密码即可改写挂载点，不破坏已加密载荷。
 bool vault_meta_save(const std::string& dir, const VaultMeta& m, std::string& err);
+
+// 用索引密钥（KEK，由密码+盐派生，32 字节）将 root/created 加密后回写（升到 format==2）。
+// 仅在已持有密码的解锁/重加密路径调用；旧 format==1 盘首次解锁即透明升级。
+bool vault_meta_save_encrypted(const std::string& dir, const VaultMeta& m,
+                               const std::vector<unsigned char>& kek, std::string& err);
+
+// 用密码解密 format==2 的 root/created 回填到 meta（open 之后、有密码时调用）。
+bool vault_meta_decrypt(VaultMeta& m, const SecureBuffer& password, std::string& err);
 
 // 由密码 + 库盐派生 32 字节索引密钥（Argon2id）。
 bool vault_derive_key(const SecureBuffer& password, const VaultMeta& meta,
@@ -74,9 +95,10 @@ bool vault_read_index(const std::string& dir, const VaultMeta& meta,
                       std::string& err);
 
 // 增量追加一条索引条目（载入现有、压入、重加密、原子写回）。
+// flush=false 时只更新内存镜像、不整体重加密（批量入盘热循环用，末尾 vault_flush_index 一次性落盘）。
 bool vault_append_entry(const std::string& dir, const VaultMeta& meta,
                         const SecureBuffer& password, const VaultEntry& e,
-                        std::string& err);
+                        std::string& err, bool flush = true);
 
 // 重扫库目录：按 .ptd 头部重抽元数据重建索引（best-effort，覆盖式写入）。
 bool vault_reindex(const std::string& dir, const VaultMeta& meta,

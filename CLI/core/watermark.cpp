@@ -182,7 +182,7 @@ bool wm_sign_and_serialize(uint64_t timestamp,
     if (sig_len == 0 || sig_len > WM_MAX_SIG || sig_len > 0xffff) {
         EVP_PKEY_free(pkey);
         error = std::string("watermark: ")
-              + (pqc ? "ML-DSA-65" : "RSA") + " sign failed (unsupported key?)";
+              + (pqc ? "ML-DSA-65" : "RSA") + " sign failed (unsupported key)";
         return false;
     }
     put_be16(rec + 46, (uint16_t)sig_len);

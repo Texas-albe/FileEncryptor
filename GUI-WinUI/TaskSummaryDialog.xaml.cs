@@ -59,7 +59,7 @@ public sealed partial class TaskSummaryDialog : ContentDialog
         panel.Children.Add(grid);
 
         Content = panel;
-        Title = L10n.T("任务完成");
+        Title = L10n.T("操作完成");
         PrimaryButtonText = L10n.T("确定");
     }
 }

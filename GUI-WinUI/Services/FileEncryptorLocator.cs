@@ -7,12 +7,12 @@ namespace FileEncryptorGUI.Services;
 // 探测 CLI 路径
 public static class FileEncryptorLocator
 {
-    public const string GuiVersion = "3.0.0";
+    public const string GuiVersion = "3.0.1";
     public static string CliDownloadUrl =>
         $"https://github.com/Texas-albe/FileEncryptor/releases/tag/GUI{GuiVersion}_CLI{ExpectedCliVersion}";
 
     // 配套 CLI 版本
-    public static string ExpectedCliVersion => "3.0.0";
+    public static string ExpectedCliVersion => "3.0.1";
 
     public static string[] GetExpectedNames()
     {
@@ -21,7 +21,7 @@ public static class FileEncryptorLocator
         {
             $"FileEncryptorCLI-{ver}-cmd-Windows.exe",
             // 预发布后缀：CMake project(VERSION) 只支持数值版，产物名无 -alpha.N
-            "FileEncryptorCLI-3.0.0-cmd-Windows.exe",
+            "FileEncryptorCLI-3.0.1-cmd-Windows.exe",
             "FileEncryptorCLI.exe",
             "FileEncryptor.exe",
             "file-encryptor-cli.exe",

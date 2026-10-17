@@ -200,7 +200,7 @@ MainWindow::~MainWindow() {
 void MainWindow::closeEvent(QCloseEvent* e) {
     if(m_executor&&m_executor->isRunning()) {
         if(!MsgBox::confirm(this,tr("确认退出"),
-            tr("有命令正在运行，退出将终止它。确定退出？"))) {
+            tr("有命令正在运行，退出将终止它。请确认是否退出。"))) {
             e->ignore();
             return;
         }
@@ -284,6 +284,8 @@ void MainWindow::buildMenu() {
     m_vaultMenu->addSeparator();
     // M3/M4 控制端：挂载由 FE-Mounter 常驻持有，锁定/解锁经受限 IPC（CLI 不持有挂载）
     addVaultAct(tr("挂载为磁盘..."),tr("把加密盘挂成盘符，1 分钟不操作会自动锁定"),&MainWindow::onVaultMount);
+    addVaultAct(tr("卸载磁盘..."),tr("卸载已挂载的加密盘，盘符随之消失"),&MainWindow::onVaultUnmount);
+    addVaultAct(tr("格式化加密盘..."),tr("清空盘内全部文件，保留盘身份与密码；不可撤销"),&MainWindow::onVaultFormat);
     addVaultAct(tr("暂时锁定"),tr("立刻锁住已挂载的盘，清空内存里的密钥"),&MainWindow::onVaultLock);
     addVaultAct(tr("重新解锁..."),tr("用密码解锁已锁定的盘"),&MainWindow::onVaultUnlock);
 
@@ -440,7 +442,7 @@ void MainWindow::handleCheckResult(const QByteArray& out, const QString& updater
         box.setText(tr("发现新版本 %1。").arg(latest));
         box.setInformativeText(notes + QStringLiteral("\n\n") +
             tr("当前版本：%1").arg(curVer) + QStringLiteral("\n\n") +
-            tr("是否现在下载并安装？"));
+            tr("请确认是否现在下载并安装。"));
         box.setStandardButtons(QMessageBox::Yes | QMessageBox::No);
         box.setDefaultButton(QMessageBox::Yes);
         if (box.exec() == QMessageBox::Yes)
@@ -1057,7 +1059,7 @@ void MainWindow::onProbeFinished(int, QProcess::ExitStatus) {
     m_packAvailable=out.contains(QStringLiteral("pack=1"));
     // 包装层要 OpenSSL：字段缺失即视为不支持，否则会下发旧 CLI 不认的 --wrap-key
     m_keywrapAvailable=out.contains(QStringLiteral("keywrap=1"));
-    // 加密盘同理：vault=1 才有 --into-vault / vault-* 子命令（3.0.0+）
+    // 加密盘同理：vault=1 才有 --into-vault / vault-* 子命令（3.0.1+）
     m_vaultAvailable=out.contains(QStringLiteral("vault=1"));
     // 可写挂载能力：vault_rw=1 才允许「可写挂载」（M6）
     m_vaultRwAvailable=out.contains(QStringLiteral("vault_rw=1"));
@@ -1169,7 +1171,7 @@ QWidget* MainWindow::buildCenterPanel() {
     m_rbDerive=new QRadioButton(tr("密码派生密钥对"));
     m_rbPubKey=new QRadioButton(tr("导出公钥"));
     m_rbWrapKey=new QRadioButton(tr("包装密钥"));
-    m_rbUnwrapKey=new QRadioButton(tr("解开密钥"));
+    m_rbUnwrapKey=new QRadioButton(tr("解包密钥"));
     m_rbWrapKey->setToolTip(tr("把一份 32 字节的数据密钥单独包进 .fekw 文件，用密码或收件人公钥保护"));
     m_rbUnwrapKey->setToolTip(tr("把 .fekw 里的数据密钥还原成 32 字节文件"));
     m_actionGroup=new QButtonGroup(this);
@@ -1400,7 +1402,7 @@ QWidget* MainWindow::buildCenterPanel() {
     lay->addWidget(lblKey,row,0);
     auto* keyRow=new QHBoxLayout;
     m_keyfileEdit=new QLineEdit;
-    m_keyfileEdit->setPlaceholderText(tr("留空 = 运行弹窗输入（经 stdin 注入）"));
+    m_keyfileEdit->setPlaceholderText(tr("留空 = 运行时弹窗输入（经 stdin 注入）"));
     m_btnKeyfileBrowse=new QPushButton(tr("浏览..."));
     keyRow->addWidget(m_keyfileEdit);
     keyRow->addWidget(m_btnKeyfileBrowse);
@@ -1418,7 +1420,7 @@ QWidget* MainWindow::buildCenterPanel() {
     m_sourceCombo->setToolTip(tr("加密成功后对源文件的处理方式，仅加密动作生效"));
     m_chkForce=new QCheckBox(tr("覆盖已存在文件"));
     m_chkPack=new QCheckBox(tr("打包为单个容器"));
-    m_chkPack->setToolTip(tr("把整个目录树或多个文件打成单个 .ptd 容器，不删除源文件"));
+    m_chkPack->setToolTip(tr("将整个目录树或多个文件打包为单个 .ptd 容器，不删除源文件"));
     m_chkSha256=new QCheckBox(tr("生成校验单"));
     m_chkSha256->setToolTip(tr("额外生成 .sha256 校验单，便于校验传输完整性"));
     // 与「生成校验单」同排，样式统一
@@ -1659,7 +1661,7 @@ void MainWindow::connectSignals() {
     connect(m_btnWrapFileBrowse,&QPushButton::clicked,this,[this]{
         const bool wrap=m_actionGroup->checkedId()==static_cast<int>(CryptoAction::WrapKey);
         const QString f=QFileDialog::getOpenFileName(this,
-            wrap ? tr("选择要包装的 32 字节数据密钥") : tr("选择要解开的包装文件"),
+            wrap ? tr("选择要包装的 32 字节数据密钥") : tr("选择要解包的包装文件"),
             QString(), wrap ? tr("所有文件 (*)") : tr("包装文件 (*.fekw);;所有文件 (*)"));
         if(!f.isEmpty()) m_wrapFileEdit->setText(f);
         });
@@ -1699,7 +1701,7 @@ void MainWindow::updatePackVisibility() {
 void MainWindow::updateWrapKeyVisibility() {
     if(!m_rbWrapKey || !m_rbUnwrapKey) return;
     const QString tip=m_keywrapAvailable ? QString()
-        : tr("配套的命令行程序没有密钥包装能力，请更换带 OpenSSL 的 CLI");
+        : tr("当前 CLI 不支持密钥包装，请使用带 OpenSSL 的 CLI");
     for(QRadioButton* rb:{m_rbWrapKey, m_rbUnwrapKey}) {
         rb->setEnabled(m_keywrapAvailable);
         rb->setToolTip(tip);
@@ -1836,11 +1838,11 @@ void MainWindow::updateAsymVisibility() {
     if(m_outDirEdit) m_outDirEdit->setVisible(!isWrapAction);
     if(m_btnOutDirBrowse) m_btnOutDirBrowse->setVisible(!isWrapAction);
     if(isWrapAction) {
-        m_wrapWidget->setTitle(wrap ? tr("包装密钥") : tr("解开密钥"));
+        m_wrapWidget->setTitle(wrap ? tr("包装密钥") : tr("解包密钥"));
         m_wrapFileLabel->setText(wrap ? tr("32 字节密钥文件：") : tr("包装文件："));
         m_wrapFileEdit->setPlaceholderText(wrap
             ? tr("恰好 32 字节的数据密钥（DEK）文件")
-            : tr("要解开的 .fekw 包装文件"));
+            : tr("要解包的 .fekw 包装文件"));
         m_wrapOutRow->setVisible(true);
         m_wrapOutTitle->setText(wrap ? tr("包装输出：") : tr("解包输出："));
         m_wrapOutEdit->setPlaceholderText(wrap
@@ -2121,7 +2123,7 @@ void MainWindow::onRunClicked() {
 
     if(isWrapAct && !m_keywrapAvailable) {
         MsgBox::error(this, tr("密钥包装不可用"),
-            tr("配套的命令行程序没有密钥包装能力，无法包装或解开密钥。\n"
+            tr("当前 CLI 不支持密钥包装，无法包装或解包密钥。\n"
                "请更换带 OpenSSL 的 CLI。"));
         return;
     }
@@ -2150,7 +2152,7 @@ void MainWindow::onRunClicked() {
             while(n.endsWith(QLatin1Char('\\'))||n.endsWith(QLatin1Char('/'))) n.chop(1);
             if(n.size()>=1&&n.at(0).isLetter()&&
                (n.size()==1||(n.size()==2&&n.at(1)==QLatin1Char(':')))) {
-                MsgBox::warn(this,tr("不支持填盘符"),
+                MsgBox::warn(this,tr("不支持使用盘符"),
                     tr("「入加密盘」需要填写加密盘的存储目录，而不是挂载盘符。\n\n"
                        "盘符（如 Z:）只是加密盘挂载后的访问视图，数据并不存放在那里。"
                        "请填写数据实际所在的目录，例如 D:\\Vault。"));
@@ -2177,7 +2179,7 @@ void MainWindow::onRunClicked() {
            &&!QFileInfo::exists(vd+QStringLiteral("/vault.meta"))) {
             // 非空且不是盘：大概率选错了目录，问一句再自动初始化，避免误把普通文件夹变成盘
             if(!MsgBox::confirm(this,tr("初始化为新加密盘"),
-                tr("该目录不是已初始化的加密盘：%1\n是否把它初始化为新的加密盘并写入文件？").arg(vd))) {
+                tr("该目录不是已初始化的加密盘：%1\n请确认是否把它初始化为新的加密盘并写入文件。").arg(vd))) {
                 if(m_vaultDirEdit) m_vaultDirEdit->setFocus();
                 return;
             }
@@ -2188,7 +2190,7 @@ void MainWindow::onRunClicked() {
         if(o.wrapInput.isEmpty()) {
             MsgBox::warn(this, tr("缺少密钥文件"),
                 isWrap ? tr("请先选择要包装的 32 字节数据密钥文件。")
-                       : tr("请先选择要解开的 .fekw 包装文件。"));
+                       : tr("请先选择要解包的 .fekw 包装文件。"));
             if(m_wrapFileEdit) m_wrapFileEdit->setFocus();
             return;
         }
@@ -2283,7 +2285,7 @@ void MainWindow::onRunClicked() {
         if(o.action==CryptoAction::BatchDecrypt) {
             o.restoreName = MsgBox::confirm(this, tr("批量解密文件名"),
                 tr("批量解密将对每个文件执行昂贵的密钥派生（KDF）以还原完整原始文件名，可能很慢。\n"
-                   "是否启用「完整文件名还原」？\n（无论是否启用，输出文件的扩展名都会保留。）"));
+                   "请确认是否启用「完整文件名还原」。\n（无论是否启用，输出文件的扩展名都会保留。）"));
         }
         PasswordDialog dlg(this);
         dlg.setPurpose(isDerive ? tr("密码派生")
@@ -2541,7 +2543,7 @@ void MainWindow::onVaultRecoveryCreate() {
 void MainWindow::onVaultRecoveryOpen() {
     bool ok=false;
     const QString code=QInputDialog::getText(this,tr("用恢复码找回密码"),
-        tr("请输入此前抄录的 48 位恢复码（仅限数字）："),QLineEdit::Normal,QString(),&ok).trimmed();
+        tr("请输入此前记录的 48 位恢复码（仅限数字）："),QLineEdit::Normal,QString(),&ok).trimmed();
     if(!ok||code.isEmpty()) return;
     runVaultAction(tr("用恢复码找回密码"),{QStringLiteral("--vault-recovery")},
                    {QStringLiteral("--recovery-arg"),QStringLiteral("open ")+code},false);
@@ -2741,10 +2743,13 @@ void MainWindow::onVaultMount() {
     }
 #ifdef Q_OS_WIN
     // WinFSP 用户态 DLL 必须与 FE-Mounter 同目录（静态导入，缺了进程都起不来）。
-    // 先自查一遍，否则用户只看到「盘没挂上」，没有任何线索。
-    if(!QFile::exists(QFileInfo(m_mounterPath).absolutePath()+QStringLiteral("/winfsp-x64.dll"))) {
+    // 但 WinFSP 也可由安装包装到系统目录（C:\Program Files (x86)\WinFsp\bin），
+    // 此处两者任一存在即放行，避免「已装系统 WinFSP 却误报缺运行时」。
+    const QString localWfsp = QFileInfo(m_mounterPath).absolutePath()+QStringLiteral("/winfsp-x64.dll");
+    const QString sysWfsp = QStringLiteral("C:/Program Files (x86)/WinFsp/bin/winfsp-x64.dll");
+    if(!QFile::exists(localWfsp) && !QFile::exists(sysWfsp)) {
         MsgBox::error(this,tr("挂载为磁盘"),
-            tr("挂载组件缺少 WinFSP 运行时（winfsp-x64.dll），无法挂载。\n请重新安装本程序（安装时勾选「加密盘挂载」）。"));
+            tr("挂载组件缺少 WinFSP 运行时（winfsp-x64.dll），无法挂载。\n请重新安装本程序（安装时勾选「加密盘挂载」与「WinFSP 运行时」）。"));
         return;
     }
 #endif
@@ -2797,6 +2802,47 @@ void MainWindow::onVaultMount() {
     launchMounterDetached(args,passBytes);
     MsgBox::info(this,tr("挂载为磁盘"),
         tr("正在挂载，盘符由后台进程持有。稍等片刻，在「此电脑」里就能看到：%1\n1 分钟不操作会自动锁定。").arg(point));
+}
+
+// 卸载：FE-Mounter 的 ipc-call eject —— 持有进程停服务退出，盘符随之释放
+void MainWindow::onVaultUnmount() {
+    if(!m_vaultAvailable) return;
+    if(!locateMounter()) {
+        MsgBox::error(this,tr("卸载磁盘"),tr("没找到挂载组件 FE-Mounter.exe。"));
+        return;
+    }
+    if(m_executor&&m_executor->isRunning()) {
+        MsgBox::warn(this,tr("正在运行"),tr("请等待当前任务结束或先取消。"));
+        return;
+    }
+    const QString dir=pickVaultDir(tr("卸载磁盘"),true);
+    if(dir.isEmpty()) return;
+    if(!MsgBox::confirm(this,tr("卸载磁盘"),
+            tr("将卸载该加密盘的挂载，盘符会随之消失。盘内文件不会被删除。"),
+            QMessageBox::Yes|QMessageBox::No))
+        return;
+    CommandRequest req;
+    req.programPath=m_mounterPath;
+    req.arguments<<QStringLiteral("ipc-call")<<QStringLiteral("--vault")<<dir
+                <<QStringLiteral("eject");
+    m_outputView->clear();
+    appendOutput(QStringLiteral(">>> %1 ipc-call --vault \"%2\" eject\n").arg(m_mounterPath,dir),false);
+    appendOutput(tr("--- 卸载磁盘（盘符随之释放） ---")+QStringLiteral("\n"),false);
+    m_btnRun->setEnabled(false);
+    if(m_btnRewrap) m_btnRewrap->setEnabled(false);
+    m_btnCancel->setEnabled(true);
+    setStatus(tr("运行中..."));
+    m_executor->execute(req);
+}
+
+// 格式化：CLI --vault-format 清空盘内全部内容（删除所有 .ptd + 索引置空），保留盘身份与密码
+void MainWindow::onVaultFormat() {
+    if(!m_vaultAvailable) return;
+    if(!MsgBox::confirm(this,tr("格式化加密盘"),
+            tr("将清空所选加密盘内的全部文件。\n\n盘的身份与密码保留，格式化后仍可用原密码继续入盘；但盘内原有文件无法恢复。\n\n若该盘正被挂载，请先执行「卸载磁盘」。"),
+            QMessageBox::Yes|QMessageBox::No))
+        return;
+    runVaultAction(tr("格式化加密盘"),{QStringLiteral("--vault-format")},{},true,true);
 }
 
 // 锁定/解锁走 FE-Mounter 的 ipc-call（短命令，经 m_executor 回显输出）
@@ -3010,12 +3056,12 @@ void MainWindow::updateProgressLabel() {
     QString full;
     if(m_executor&&m_executor->isRunning()) {
         const QString cur=m_currentFile.isEmpty()?tr("—"):m_currentFile;
-        full=tr("当前: %1 | 完成 %2/%3 | 跳过 %4 | 失败 %5")
+        full=tr("当前：%1 | 完成 %2/%3 | 跳过 %4 | 失败 %5")
                 .arg(cur).arg(m_doneFiles).arg(m_totalFiles)
                 .arg(m_skipFiles).arg(m_failFiles);
     }
     else if(m_pendingFiles>0) {
-        full=tr("待处理: %1 个文件 / %2").arg(m_pendingFiles)
+        full=tr("待处理：%1 个文件 / %2").arg(m_pendingFiles)
                 .arg(EtaEstimator::formatBytes(m_pendingBytes));
     }
     else {
@@ -3097,7 +3143,7 @@ void MainWindow::onCommandFinished(const CommandResult& r) {
                       : encSize>=1048576?QStringLiteral("%1 MB").arg(encSize/1048576.0,0,'f',1)
                       : encSize>=1024?QStringLiteral("%1 KB").arg(encSize/1024.0,0,'f',0)
                       : QStringLiteral("%1 B").arg(encSize);
-        TaskSummaryDialog dlg(tr("任务完成"),durStr,speedStr,encStr,
+        TaskSummaryDialog dlg(tr("操作完成"),durStr,speedStr,encStr,
                               m_doneFiles,m_skipFiles,m_failFiles,this);
         dlg.exec();
         showedSummary=true;   // 已弹汇总框，不再重复弹消息框/托盘通知
@@ -3105,7 +3151,7 @@ void MainWindow::onCommandFinished(const CommandResult& r) {
 
     // 已弹汇总框时不再重复通知
     if(!showedSummary) {
-        const QString notifyTitle = tr("任务完成");
+        const QString notifyTitle = tr("操作完成");
         const QString notifyBody = summary.remove(QStringLiteral("---")).trimmed();
         if (isActiveWindow()) {
             QMessageBox::information(this, notifyTitle, notifyBody);
@@ -3420,7 +3466,7 @@ void MainWindow::refreshCommandPreview() {
     const ShellOptions o=collectOptions();
     const QString preview=CliArgBuilder::buildPreview(m_fileEncryptorPath,o);
     m_outputView->clear();
-    appendOutput(tr(">>> 命令预览: %1").arg(preview)+QStringLiteral("\n"),false);
+    appendOutput(tr(">>> 命令预览：%1").arg(preview)+QStringLiteral("\n"),false);
 }
 
 void MainWindow::setStatus(const QString& msg) {

@@ -64,8 +64,8 @@ public:
     // （已完成/非 .ptd），failed 为处理失败跳过的。宿主据此实时展示完成/跳过/失败。
     void setFileStats(uint64_t done,uint64_t failed,uint64_t skipped,uint64_t total);
 
-    // 渲染一帧（内部按 80ms 节流，避免高频回调刷爆终端）
-    void render();
+    // 渲染一帧（内部按 80ms 节流，避免高频回调刷爆终端；force=true 绕过节流强制刷新）
+    void render(bool force = false);
     // 渲染最后一帧并收尾（帧后补换行，保证后续输出另起一行）
     void finish();
 
@@ -85,6 +85,8 @@ private:
     bool                     m_enabled = false;
     bool                     m_tty = false;            // true=ANSI 原地重绘；false=哨兵整帧
     int                      m_written = 0;            // 已写出的帧行数（用于光标上移）
+    bool                     m_saved = false;          // 是否已保存帧首光标位置（\x1b[s）
+    std::vector<std::string> m_prev;                   // 上一帧各行内容（按行增量更新比对用）
     std::chrono::steady_clock::time_point m_started{};
     std::chrono::steady_clock::time_point m_last_render{};
     uint64_t                 m_last_proc = 0;          // 上次渲染时的已处理字节（无增量检测）

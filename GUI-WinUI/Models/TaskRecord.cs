@@ -42,4 +42,7 @@ public class TaskRecord
     // 打包为一个文件（--pack）与入加密盘（--into-vault）：任务还原时一并回填
     [JsonPropertyName("pack")] public bool Pack { get; set; }
     [JsonPropertyName("intoVault")] public string IntoVault { get; set; } = "";
+    // M18：为 true 表示本条落盘时已抹去完整路径（只留文件名），不可用于双击回放。
+    // 读取侧据此提示用户，而不是拿残缺路径去拼命令行。
+    [JsonPropertyName("pathsStripped")] public bool PathsStripped { get; set; }
 }

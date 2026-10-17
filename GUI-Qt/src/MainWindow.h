@@ -98,6 +98,8 @@ private slots:
     void onVaultRekey();
     // 加密盘控制端（M3/M4 未完项）：挂载/锁定/解锁走 FE-Mounter，不由 CLI 持有
     void onVaultMount();
+    void onVaultUnmount();
+    void onVaultFormat();
     void onVaultLock();
     void onVaultUnlock();
     void startPendingScan();

@@ -134,31 +134,31 @@ public class CliProcessService
 
         StartConfirmWatch(request.ConfirmFile);
 
-        // 控制台模式走 cmd.exe 执行临时 .cmd：cmd 按控制台代码页（中文 Windows = GBK/936）
-        // 解码批处理，UTF-8 写出的中文参数会被切成乱码（示例.ppt → 3 个乱码字符.ppt）。
-        // 只在参数能被控制台代码页无损表示时才走控制台，否则回退重定向模式（UTF-16 精确传参）。
-        if (request.ShowConsole && OperatingSystem.IsWindows()
-            && ConsoleEncodingFits(request))
+        // 控制台模式：直接拉起 CLI（控制台子系统进程由 OS 分配独立控制台窗口显示进度/密码）。
+        // 用 ArgumentList 传参（UTF-16 精确，免 cmd.exe 按 OEM 代码页解参导致中文乱码），
+        // 不再经 cmd.exe /c fe_run_xxx.cmd 包裹——这样 _process 直接是 CLI，取消时 Kill 能精准杀掉它。
+        if (request.ShowConsole && OperatingSystem.IsWindows())
             StartConsole(request);
         else
             StartRedirected(request);
     }
 
-    // 系统控制台模式：进度与密码交互都交给 cmd 窗口
+    // 系统控制台模式：直接拉起 CLI，由 OS 给控制台子系统进程分配独立窗口显示进度/密码。
+    // 密码仍走 stdin 管道（与 Qt 一致），控制台只负责显示输出。
     private void StartConsole(CommandRequest request)
     {
         var psi = new ProcessStartInfo
         {
-            FileName = "cmd.exe",
-            Arguments = BuildConsoleCommand(request),
+            FileName = request.ProgramPath,
             UseShellExecute = false,
             // 窗口可见：进度与结果都在控制台里
             CreateNoWindow = false,
-            // 密码与 Qt 一样走 stdin 管道，控制台只负责显示
+            // 密码走 stdin 管道；stdout/stderr 不重定向 → 直接显示在控制台窗口
             RedirectStandardInput = true,
             RedirectStandardOutput = false,
             RedirectStandardError = false,
         };
+        foreach (var a in request.Arguments) psi.ArgumentList.Add(a);
         if (!string.IsNullOrEmpty(request.WorkingDirectory))
             psi.WorkingDirectory = request.WorkingDirectory;
         psi.Environment["FILEENCRYPTOR_STATS_FILE"] = _statsFile;
@@ -188,83 +188,8 @@ public class CliProcessService
         });
     }
 
-    // 结束后保留 3 秒再关窗；延迟展开取 CLI 真实退出码
-    // 不用 psi.ArgumentList：走 cmd.exe 才有可见控制台窗口，而 cmd 只能吃字符串命令行。
-    // 参数写进临时 .cmd 批处理（每行一条，DisableDelayedExpansion），
-    // 避免字符串拼接把含 & | < > ^ % ! 的路径改坏 —— 引号只对空格类生效是常见错法。
-    private string BuildConsoleCommand(CommandRequest request)
-    {
-        var cmdPath = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "FileEncryptor", "GUI",
-            $"fe_run_{Convert.ToHexString(RandomNumberGenerator.GetBytes(8)).ToLowerInvariant()}.cmd");
-        var sb = new StringBuilder();
-        sb.AppendLine("@echo off");
-        // 关闭延迟展开：路径里的 ! 才不会被吃掉；同时 %errorlevel% 逐行解析仍能拿到真实退出码
-        sb.AppendLine("setlocal EnableExtensions DisableDelayedExpansion");
-        sb.Append(QuoteCmd(request.ProgramPath));
-        foreach (var a in request.Arguments)
-        {
-            sb.Append(' ');
-            sb.Append(QuoteCmd(a));
-        }
-        sb.AppendLine();
-        sb.AppendLine("exit /b %errorlevel%");
-        // 必须用控制台代码页写：cmd 按它解码，写 UTF-8 会把中文参数解码成乱码
-        File.WriteAllText(cmdPath, sb.ToString(), ConsoleEncoding());
-        _consoleCmdFile = cmdPath;
-        // /c ""<脚本路径>"" ：路径含空格时外层还要再包一层引号
-        return "/c \"\"" + cmdPath + "\"\"";
-    }
-
-    // 临时批处理文件用完即删
-    private string? _consoleCmdFile;
-
-    // cmd.exe 按控制台代码页（OEM）解码 .cmd，用同一代码页写文件才能无损还原。
-    private static Encoding ConsoleEncoding()
-    {
-        try
-        {
-            var oem = System.Globalization.CultureInfo.CurrentCulture.TextInfo.OEMCodePage;
-            if (oem > 0) return Encoding.GetEncoding(oem);
-        }
-        catch { }
-        return Encoding.Default;
-    }
-
-    // 往返判定：编成字节再解回来若与原文不同，说明该字符在该代码页里无法表示
-    private static bool FitsInConsoleEncoding(string s, Encoding enc)
-    {
-        if (string.IsNullOrEmpty(s)) return true;
-        try { return enc.GetString(enc.GetBytes(s)) == s; }
-        catch { return false; }
-    }
-
-    private static bool ConsoleEncodingFits(CommandRequest request)
-    {
-        var enc = ConsoleEncoding();
-        if (!FitsInConsoleEncoding(request.ProgramPath, enc)) return false;
-        foreach (var a in request.Arguments)
-            if (!FitsInConsoleEncoding(a, enc)) return false;
-        return true;
-    }
-
-    private void CleanupConsoleCmd()
-    {
-        var p = _consoleCmdFile;
-        if (p == null) return;
-        _consoleCmdFile = null;
-        try { File.Delete(p); } catch { }
-    }
-
-    // cmd 参数转义：% 必须写成 %%，其余特殊字符靠双引号隔离
-    private static string QuoteCmd(string arg)
-    {
-        var s = arg.Replace("%", "%%");
-        // Windows 文件名不允许含 "，但命令行参数可能出现：内层成对写出交给 CommandLineToArgvW 处理
-        s = s.Replace("\"", "\"\"");
-        return "\"" + s + "\"";
-    }
+    // 结束后保留 3 秒再关窗；延迟展开取 CLI 真实退出码（保留原注释意图：此处不再经 cmd.exe）。
+    private void CleanupConsoleCmd() { }
 
     private void StartRedirected(CommandRequest request)
     {

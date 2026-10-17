@@ -72,8 +72,10 @@ struct VDiskApi {
     // M6 写支持（可写挂载）
     VDiskStatus  (*mount_rw)(VDiskHandle*, const char*) = nullptr;
     VDiskStatus  (*create_file)(VDiskHandle*, const char*) = nullptr;
+    VDiskStatus  (*create_file_ex)(VDiskHandle*, const char*, int) = nullptr;  // 目录感知创建
     VDiskStatus  (*delete_file)(VDiskHandle*, const char*) = nullptr;
     VDiskStatus  (*truncate_file)(VDiskHandle*, const char*, uint64_t) = nullptr;
+    VDiskStatus  (*rename)(VDiskHandle*, const char*, const char*) = nullptr; // 重命名 / 移动
     VDiskStatus  (*stat_space)(VDiskHandle*, uint64_t*, uint64_t*) = nullptr;
 };
 
@@ -103,6 +105,12 @@ extern VDiskApi*     g_ipc_v;                  // 服务端绑定的 vdisk API
 extern VDiskHandle** g_ipc_h;                  // 指向当前句柄（lock 置空）
 extern std::atomic<bool> g_ipc_unlocked;
 extern std::atomic<bool> g_ipc_stop;
+// M5 前台活动自动锁（Windows）：最近一次「前台程序」文件访问时刻（单调时钟毫秒，0=无记录）。
+// 后台程序/托盘程序（无可见顶层窗口或非交互会话）的访问不刷新它。定义在 fe_ipc.cpp，
+// 供 fe_winfsp 的 I/O 回调刷新、watchdog 读取、IPC 解锁时重置。
+extern std::atomic<uint64_t> g_last_fg_activity_ms;
+// 卸载（eject）：收到后由各挂载后端接管——停服务/退进程，释放盘符
+extern void (*g_ipc_eject_hook)();
 std::string ipc_pipe_name(const std::string& vault);
 std::string hex_encode(const std::string& s);
 std::string hex_decode(const std::string& s);

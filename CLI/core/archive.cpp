@@ -571,6 +571,12 @@ bool archive_make_temp(const std::string& tag, std::string& out_path, std::strin
     DWORD n = GetTempPathW(MAX_PATH, wbuf);
     if (n == 0 || n > MAX_PATH) { err = "cannot locate temp directory"; return false; }
     std::string dir = wstring_to_utf8(wbuf);
+#elif defined(__ANDROID__)
+    // Android 没有全局可写 /tmp（app 沙箱内该路径通常根本不存在，直接用会 ENOENT）。
+    // 依次回退：TMPDIR（Termux / adb shell 会设）→ XDG_CACHE_HOME → /data/local/tmp。
+    const char* e = getenv("TMPDIR");
+    if (!(e && *e)) e = getenv("XDG_CACHE_HOME");
+    std::string dir = (e && *e) ? std::string(e) : "/data/local/tmp";
 #else
     const char* e = getenv("TMPDIR");
     std::string dir = (e && *e) ? e : "/tmp";

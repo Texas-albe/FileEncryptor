@@ -32,7 +32,11 @@ public:
         if (n > 0) {
             data_.resize(n);
             if (sodium_mlock(data_.data(), n) == 0) locked_ = true;
+#ifndef __ANDROID__
+            // Android 的 RLIMIT_MEMLOCK 极小且不可提升，锁页失败是常态而非异常，
+            // 告警只会污染日志，故整块跳过（wipe() 仍负责清零，安全性不降）。
             else fe_report_mlock_warning_once();  // 锁页失败：密钥可能换出到 swap
+#endif
         }
     }
 

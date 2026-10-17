@@ -38,6 +38,7 @@ typedef enum {
     VDISK_E_NOTIMPL = -7,     /* M6 写支持未实现 */
     VDISK_E_NOTFOUND = -8,    /* 虚拟路径不存在 */
     VDISK_E_RO = -9,          /* 只读挂载拒绝写 */
+    VDISK_E_EXIST = -10,      /* 目标已存在（重命名冲突） */
     VDISK_E_INTERNAL = -99
 } VDiskStatus;
 
@@ -84,8 +85,12 @@ VDISK_API VDiskStatus vdisk_write_file(VDiskHandle*, const char* vpath,
 VDISK_API VDiskStatus vdisk_mount_rw(VDiskHandle*, const char* mount_point);
 /* 创建/删除/截断（M6 写支持；写后原子更新 .feindex） */
 VDISK_API VDiskStatus vdisk_create_file(VDiskHandle*, const char* vpath);
+/* 目录感知创建：is_dir≠0 时只登记目录条目（不建 .ptd），供挂载盘 mkdir / 拷文件夹保留目录树 */
+VDISK_API VDiskStatus vdisk_create_file_ex(VDiskHandle*, const char* vpath, int is_dir);
 VDISK_API VDiskStatus vdisk_delete_file(VDiskHandle*, const char* vpath);
 VDISK_API VDiskStatus vdisk_truncate_file(VDiskHandle*, const char* vpath, uint64_t new_size);
+/* 重命名 / 移动（挂载盘 Explorer 改名）。文件改 rel_path 并搬 .ptd；目录按前缀批量改并重搬所有子 .ptd */
+VDISK_API VDiskStatus vdisk_rename(VDiskHandle*, const char* old_vpath, const char* new_vpath);
 
 /* 错误串（GUI 报错文案） */
 VDISK_API const char* vdisk_strerror(VDiskStatus);

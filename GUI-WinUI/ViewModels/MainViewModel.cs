@@ -88,8 +88,23 @@ public class MainViewModel : ObservableObject
     public bool IsUnwrapMode => ActionIndex == 8;
     // 公钥路线没有 KEK，不需要密码
     public bool WrapUsesPublicKey => WrapAlgIndex == 2;
-    // 解密与解包只需输入一次密码（1=解密 / 3=批解密 / 8=解包）
-    public bool PasswordNeedsConfirm => ActionIndex is not (1 or 3 or 8);
+    // 解密与解包只需输入一次密码（1=解密 / 3=批解密 / 8=解包）。
+    // 入加密盘且该盘已初始化（vault.meta 存在 = 已设过密码）时同样只输一次：
+    // 此时填的是既有盘密码，不是新建密码，无需二次确认。
+    public bool PasswordNeedsConfirm =>
+        ActionIndex is not (1 or 3 or 8) && !VaultAlreadyInitialized;
+
+    // 目标加密盘是否已初始化：vault.meta 存在即视为已设过密码
+    public bool VaultAlreadyInitialized
+    {
+        get
+        {
+            var dir = (IntoVault ?? "").Trim();
+            if (dir.Length == 0) return false;
+            try { return File.Exists(Path.Combine(dir, "vault.meta")); }
+            catch { return false; }
+        }
+    }
 
     // 包装算法：0=KWP 1=AES-KW 2=收件人公钥，与 WrapAlgCombo 索引对齐
     private int _wrapAlgIndex;
@@ -138,7 +153,7 @@ public class MainViewModel : ObservableObject
 
     // 加密盘：勾选后产物入该目录并登记进加密索引（CLI --into-vault）
     private string _intoVault = "";
-    public string IntoVault { get => _intoVault; set { SetProperty(ref _intoVault, value); RefreshCommandPreview(); } }
+    public string IntoVault { get => _intoVault; set { SetProperty(ref _intoVault, value); OnPropertyChanged(nameof(PasswordNeedsConfirm)); RefreshCommandPreview(); } }
 
     // 加密盘能力探测：--features 缺 vault=1 的旧 CLI 不认 --into-vault
     public bool VaultAvailable
@@ -383,7 +398,7 @@ public class MainViewModel : ObservableObject
         _totalFiles = InputPaths.Count(p => p.IsSelected);
         _runTimer.Restart();
         IsRunning = true;
-        SetStatus("运行中...");
+        SetStatus(L10n.T("正在运行"));
 
         // 计算总大小
         long totalBytes = 0;
@@ -486,7 +501,7 @@ public class MainViewModel : ObservableObject
             IsRunning = false;
             if (result.WasCancelled) SetStatus("已取消");
             else if (result.ExitCode == 0) SetStatus("完成");
-            else SetStatus("失败 (exit {0})", result.ExitCode);
+            else SetStatus("失败（退出码 {0}）", result.ExitCode);
 
             if (_currentTask != null)
             {
@@ -506,7 +521,7 @@ public class MainViewModel : ObservableObject
             {
                 Title = result.WasCancelled
                     ? L10n.T("任务已取消")
-                    : (result.ExitCode == 0 ? L10n.T("任务完成") : L10n.F("任务结束 (exit {0})", result.ExitCode)),
+                    : (result.ExitCode == 0 ? L10n.T("操作完成") : L10n.F("任务已结束（退出码 {0}）", result.ExitCode)),
                 Duration = EtaEstimatorService.FormatDuration(_runTimer.ElapsedMilliseconds),
                 Done = _cli.FilesDone,
                 Skip = _cli.FilesSkip,
@@ -530,10 +545,14 @@ public class MainViewModel : ObservableObject
                 string sizeText = "-";
                 try
                 {
+                    // 入加密盘模式 OutputDir 为空，改用 IntoVault 根目录统计盘内密文体积
+                    if (string.IsNullOrEmpty(outDir)) outDir = IntoVault;
                     if (!string.IsNullOrEmpty(outDir) && Directory.Exists(outDir))
                     {
-                        long encBytes = Directory.EnumerateFiles(outDir, "*.ptd", SearchOption.AllDirectories)
-                            .Sum(f => { try { return new FileInfo(f).Length; } catch { return 0; } });
+                        long encBytes = 0;
+                        foreach (var pat in new[] { "*.ptd", "*.fevault" })
+                            encBytes += Directory.EnumerateFiles(outDir, pat, SearchOption.AllDirectories)
+                                .Sum(f => { try { return new FileInfo(f).Length; } catch { return 0; } });
                         sizeText = EtaEstimatorService.FormatBytes(encBytes);
                     }
                 }
@@ -561,7 +580,7 @@ public class MainViewModel : ObservableObject
 
     private void UpdateProgressLabel()
     {
-        ProgressLabel = L10n.F("当前: {0} | 完成 {1} | 跳过 {2} | 失败 {3} / 共 {4}",
+        ProgressLabel = L10n.F("当前：{0} | 完成 {1} | 跳过 {2} | 失败 {3} / 共 {4}",
             _currentFile, _doneFiles, _skipFiles, _failFiles, _totalFiles);
     }
 
@@ -709,7 +728,7 @@ public class MainViewModel : ObservableObject
         CryptoAction.Derive => "密码派生密钥对",
         CryptoAction.PubKey => "导出公钥",
         CryptoAction.WrapKey => "包装密钥",
-        CryptoAction.UnwrapKey => "解开密钥",
+        CryptoAction.UnwrapKey => "解包密钥",
         _ => "加密"
     };
 

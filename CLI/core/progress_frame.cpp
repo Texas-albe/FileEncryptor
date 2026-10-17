@@ -216,6 +216,14 @@ constexpr int kEtaW  = 11;   // "ETA 1:02:03"
 constexpr int kSepW  = 3;    // " | "
 }
 
+// 渲染用宽度：比终端宽度少留 1 列。
+// 帧每行正好写满行宽时，conhost 会置上「待换行」状态，下一帧的光标上移量与实际行数
+// 就对不上了——表现为控制台里进度块不断往下漂、旧行不消失（刷出一串新行）。
+static int render_width() {
+    int w = terminal_width();
+    return (w > 8) ? (w - 1) : w;
+}
+
 bool BatchProgress::begin(int threads, uint64_t total_bytes) {
     std::lock_guard<std::mutex> lk(m_mutex);
     m_total = total_bytes;
@@ -228,6 +236,7 @@ bool BatchProgress::begin(int threads, uint64_t total_bytes) {
     m_last_render = std::chrono::steady_clock::time_point();
     m_tty = stdout_is_tty();
     m_enabled = frame_mode_enabled() && threads > 0;
+    m_prev.clear();
     return m_enabled;
 }
 
@@ -354,22 +363,34 @@ std::vector<std::string> BatchProgress::build_lines(int width) {
 
 void BatchProgress::emit_frame(const std::vector<std::string>& lines, bool final_frame) {
     if (m_tty) {
-        // 上一次渲染后光标停在帧的最后一行 → 上移 (行数-1) 行回到帧首行
-        if (m_written > 1) {
-            char buf[32];
-            std::snprintf(buf, sizeof(buf), "\x1b[%dA", m_written - 1);
-            std::fputs(buf, stdout);
+        // 用保存/恢复光标（\x1b[s / \x1b[u）回到帧首，而非按行数上移：
+        // 某行若超出终端宽度换行，物理行数会多于逻辑行数，按 (m_rows-1) 上移会少移、
+        // 导致帧逐帧向下堆叠（表现为「重复输出」）。保存/恢复不依赖行数，换行也不受影响。
+        if (!m_saved) {
+            std::fputs("\x1b[s", stdout);   // 首帧前保存帧首光标位置
+            m_saved = true;
         }
+        std::fputs("\x1b[u", stdout);       // 每帧先恢复到帧首，再重绘
+        // 按行增量：只重写与上一帧不同的行，未变化的行仅把光标移过去，
+        // 避免整帧逐行重绘（可见的「从上往下刷一遍」与无谓输出）。
+        // 首帧 / 行数变化 / 收尾帧都全量重写：收尾帧若走增量，未变化行会沿用上一次的文本，
+        // 终端宽度变化或被其他输出打断时就会留下半旧半新的画面。
+        const bool full = (m_prev.size() != lines.size()) || final_frame;
         for (size_t i = 0; i < lines.size(); ++i) {
-            std::fputs("\r", stdout);
-            std::fputs(lines[i].c_str(), stdout);
-            std::fputs("\x1b[K", stdout);       // 清除行尾残留
+            if (full || m_prev[i] != lines[i]) {
+                std::fputs("\r", stdout);
+                std::fputs(lines[i].c_str(), stdout);
+                std::fputs("\x1b[K", stdout);       // 清除行尾残留
+            }
             if (i + 1 < lines.size()) std::fputc('\n', stdout);
         }
+        m_prev = lines;
         m_written = (int)lines.size();
         if (final_frame) {
             std::fputc('\n', stdout);           // 帧后换行，后续输出另起一行
+            std::fputs("\x1b[J", stdout);       // 清掉帧下方残留（换行导致的余行）
             m_written = 0;
+            m_prev.clear();
         }
     } else {
         // 非 tty（宿主解析模式）：整帧以哨兵行包裹
@@ -385,7 +406,7 @@ void BatchProgress::emit_frame(const std::vector<std::string>& lines, bool final
     std::fflush(stdout);
 }
 
-void BatchProgress::render() {
+void BatchProgress::render(bool force) {
     if (!m_enabled) return;
     const auto now = std::chrono::steady_clock::now();
     bool due;
@@ -393,11 +414,13 @@ void BatchProgress::render() {
         std::lock_guard<std::mutex> lk(m_mutex);
         // 帧率分级：TTY 80ms / 非 TTY（GUI 管道解析）250ms；无进度增量时放宽到 500ms
         // （KDF 阶段 worker 全在 Argon2 里，无新进度可显示，空转渲染纯浪费 CPU）。
+        // force=true 时绕过节流：收尾/完成时强制再刷一帧，避免「看着没动其实已跑完」。
         const auto base_throttle = m_tty ? std::chrono::milliseconds(80)
                                          : std::chrono::milliseconds(250);
         const auto idle_throttle = std::chrono::milliseconds(500);
         const uint64_t proc = m_processed.load(std::memory_order_relaxed);
-        due = m_last_render.time_since_epoch().count() == 0
+        due = force
+            || m_last_render.time_since_epoch().count() == 0
             || (now - m_last_render) >= (proc == m_last_proc ? idle_throttle : base_throttle);
         if (due) { m_last_render = now; m_last_proc = proc; }
         if (!due) return;
@@ -405,7 +428,7 @@ void BatchProgress::render() {
     std::vector<std::string> lines;
     {
         std::lock_guard<std::mutex> lk(m_mutex);
-        lines = build_lines(terminal_width());
+        lines = build_lines(render_width());
     }
     emit_frame(lines, false);
 }
@@ -415,9 +438,13 @@ void BatchProgress::finish() {
     std::vector<std::string> lines;
     {
         std::lock_guard<std::mutex> lk(m_mutex);
-        // 收尾帧：所有槽位置空闲，汇总行保留最终吞吐与 ETA
-        for (ProgressSlot& s : m_slots) { s.active = false; s.done = 0; s.total = 0; s.path.clear(); }
-        lines = build_lines(terminal_width());
+        // 收尾帧：有活干过的槽位保持满格（显示最后一个文件 + 100%），
+        // 不再全部置空闲——否则收尾画面全是 '-' 占位符，看起来像「没统计、没结果」。
+        for (ProgressSlot& s : m_slots) {
+            if (s.total > 0 && !s.path.empty()) { s.done = s.total; s.active = true; }
+            else { s.active = false; s.done = 0; s.total = 0; s.path.clear(); }
+        }
+        lines = build_lines(render_width());
     }
     emit_frame(lines, true);
 }

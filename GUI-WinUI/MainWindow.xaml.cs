@@ -2,6 +2,7 @@
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Media.Imaging;
+using Microsoft.UI.Dispatching;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -17,6 +18,8 @@ using System.Security.Principal;
 using FileEncryptorGUI.Services;
 using FileEncryptorGUI.Models;
 using FileEncryptorGUI.ViewModels;
+using WinRT.Interop;
+using System.Runtime.InteropServices;
 
 namespace FileEncryptorGUI;
 
@@ -24,6 +27,14 @@ public sealed partial class MainWindow : Window
 {
     public MainViewModel ViewModel { get; } = new();
     private readonly ImageBrush _backgroundBrush = new();
+    // 锁定盘访问事件轮询（FE-Mounter 写 fe_locked_*.event → 拉起 GUI 前台弹单密码解锁框）
+    private DispatcherQueueTimer? _lockTimer;
+    private bool _unlockPromptActive;   // 防止解锁框重复弹出
+
+    [DllImport("user32.dll")]
+    private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+    [DllImport("user32.dll")]
+    private static extern bool SetForegroundWindow(IntPtr hWnd);
 
     private ElementTheme CurrentTheme => App.Settings.Current.Theme switch
     {
@@ -62,6 +73,14 @@ public sealed partial class MainWindow : Window
         tb.ButtonHoverBackgroundColor = Windows.UI.Color.FromArgb(0x20, 0, 0, 0);
         tb.ButtonPressedBackgroundColor = Windows.UI.Color.FromArgb(0x30, 0, 0, 0);
         UpdateTitleBarButtonColors();
+
+        // 轮询锁定盘访问事件（FE-Mounter 写 fe_locked_*.event → 拉起 GUI 前台弹单密码解锁框）
+        _lockTimer = DispatcherQueue.CreateTimer();
+        _lockTimer.Interval = TimeSpan.FromSeconds(2);
+        _lockTimer.Tick += PollLockedAccess;
+        _lockTimer.Start();
+        // 启动即处理一次待解锁事件：本就是因「双击锁定盘」被拉起时，立刻弹解锁框，不必等首拍轮询
+        PollLockedAccess(_lockTimer, null);
 
         // 16:9 窗口比例。横向加宽给功能区更多余量，英文/俄文选项不再挤成滚动条
         const int kWinW = 1440;
@@ -136,12 +155,12 @@ public sealed partial class MainWindow : Window
             if (ViewModel.KeywrapAvailable)
             {
                 // 可用时保留说明性提示（随语言切换由 LocalizeTree 翻译）
-                ToolTipService.SetToolTip(RbWrapKey, L10n.T("把一份 32 字节的数据密钥单独包进 .fekw 文件，用密码或收件人公钥保护"));
-                ToolTipService.SetToolTip(RbUnwrapKey, L10n.T("把 .fekw 里的数据密钥还原成 32 字节文件"));
+                ToolTipService.SetToolTip(RbWrapKey, L10n.T("将一份 32 字节数据密钥单独封装进 .fekw 文件，用密码或收件人公钥保护"));
+                ToolTipService.SetToolTip(RbUnwrapKey, L10n.T("将 .fekw 中的数据密钥还原为 32 字节文件"));
             }
             else
             {
-                var tip = L10n.T("配套的命令行程序没有密钥包装能力，请更换带 OpenSSL 的 CLI");
+                var tip = L10n.T("当前 CLI 不支持密钥包装，请使用带 OpenSSL 的 CLI");
                 ToolTipService.SetToolTip(RbWrapKey, tip);
                 ToolTipService.SetToolTip(RbUnwrapKey, tip);
             }
@@ -358,7 +377,7 @@ public sealed partial class MainWindow : Window
         {
             Title = L10n.T("语言 / Language"),
             Content = L10n.T("语言已切换，界面已立即刷新。\nLanguage switched; the UI has been refreshed."),
-            CloseButtonText = L10n.T("确定 / OK"),
+            CloseButtonText = L10n.T("确定"),
             XamlRoot = Content.XamlRoot,
             RequestedTheme = CurrentTheme,
         };
@@ -521,7 +540,7 @@ public sealed partial class MainWindow : Window
         // 赶上了就刷新命令预览，没赶上用户再点一次「重新检测 CLI 程序」
         if (ViewModel.DetectCli(out var path))
         {
-            ViewModel.SetStatus("已检测到 CLI: {0}", path);
+            ViewModel.SetStatus("已检测到 CLI：{0}", path);
             ViewModel.RefreshCommandPreview();
         }
         _ = downloading;
@@ -624,13 +643,13 @@ public sealed partial class MainWindow : Window
                 if (!string.Equals(actualHash, expectedHash, StringComparison.OrdinalIgnoreCase))
                 {
                     File.Delete(tempPath); tempPath = null;
-                    statusText.Text = L10n.T("SHA256 校验失败，下载内容已被丢弃");
+                    statusText.Text = L10n.T("SHA256 校验失败，下载内容已作废");
                     return;
                 }
             }
             else
             {
-                System.Diagnostics.Debug.WriteLine("CLI release 未提供 .sha256 清单，跳过完整性校验");
+                System.Diagnostics.Debug.WriteLine("CLI 发布包未提供 .sha256 清单，已跳过完整性校验");
             }
 
             var savePath = Path.Combine(AppContext.BaseDirectory, fileName);
@@ -641,7 +660,7 @@ public sealed partial class MainWindow : Window
             catch (UnauthorizedAccessException)
             {
                 // 装在 Program Files 下时没管理员权限就是这个异常
-                statusText.Text = L10n.F("安装失败：程序目录不可写，请以管理员身份运行，或手动把文件放到：{0}", savePath);
+                statusText.Text = L10n.F("安装失败：程序目录不可写，请以管理员身份运行，或手动将文件放置到：{0}", savePath);
                 return;
             }
             tempPath = null;
@@ -659,11 +678,10 @@ public sealed partial class MainWindow : Window
     // ===== 密码请求 =====
     private async void OnPasswordRequested()
     {
-        var dlg = new PasswordDialog
+        var dlg = new PasswordDialog(ViewModel.PasswordNeedsConfirm)
         {
             XamlRoot = Content.XamlRoot,
             RequestedTheme = CurrentTheme,
-            NeedConfirm = ViewModel.PasswordNeedsConfirm
         };
         var result = await dlg.ShowAsync();
         if (result == ContentDialogResult.Primary && !string.IsNullOrEmpty(dlg.Password))
@@ -685,7 +703,7 @@ public sealed partial class MainWindow : Window
         }
         catch (Exception ex)
         {
-            ViewModel.SetStatus("[添加文件] 错误: {0}", ex.Message);
+            ViewModel.SetStatus("[添加文件] 错误：{0}", ex.Message);
         }
     }
 
@@ -701,7 +719,7 @@ public sealed partial class MainWindow : Window
         }
         catch (Exception ex)
         {
-            ViewModel.SetStatus("[添加目录] 错误: {0}", ex.Message);
+            ViewModel.SetStatus("[添加目录] 错误：{0}", ex.Message);
         }
     }
 
@@ -757,11 +775,11 @@ public sealed partial class MainWindow : Window
         byte[] password = Array.Empty<byte>();
         if (string.IsNullOrEmpty(identity))
         {
-            var pwd = new PasswordDialog
+            // 预览恒为解密：单次输入
+            var pwd = new PasswordDialog(false)
             {
                 XamlRoot = Content.XamlRoot,
                 RequestedTheme = CurrentTheme,
-                NeedConfirm = false   // 预览恒为解密
             };
             if (await pwd.ShowAsync() != ContentDialogResult.Primary) return;
             password = Encoding.UTF8.GetBytes(pwd.Password);
@@ -901,7 +919,7 @@ public sealed partial class MainWindow : Window
             picker.FileTypeFilter.Add("*");
             var folder = await picker.PickSingleFolderAsync();
             if (folder != null) OutDirEdit.Text = folder.Path;
-        } catch (Exception ex) { ViewModel.SetStatus("[输出目录] 错误: {0}", ex.Message); }
+        } catch (Exception ex) { ViewModel.SetStatus("[输出目录] 错误：{0}", ex.Message); }
     }
 
     // 加密盘：勾选才启用目录输入，取消勾选要把路径一起清掉，否则残留值仍会被下发
@@ -923,7 +941,7 @@ public sealed partial class MainWindow : Window
             picker.FileTypeFilter.Add("*");
             var folder = await picker.PickSingleFolderAsync();
             if (folder != null) VaultDirEdit.Text = folder.Path;
-        } catch (Exception ex) { ViewModel.SetStatus("[加密盘] 错误: {0}", ex.Message); }
+        } catch (Exception ex) { ViewModel.SetStatus("[加密盘] 错误：{0}", ex.Message); }
     }
 
     // ===== 加密盘库管理：与 Qt 前端同源，砍掉普通用户用不到的重建索引/库内重加密 =====
@@ -954,7 +972,8 @@ public sealed partial class MainWindow : Window
         var pw = await AskPasswordAsync(L10n.T("加密盘密码"), false);
         if (pw == null) return;
         await RunVaultCliAsync(L10n.T("查看盘内文件"),
-            new List<string> { "--vault-list", dir, "--key-stdin" }, ToStdin(pw));
+            new List<string> { "--vault-list", dir, "--key-stdin" }, ToStdin(pw),
+            scrollable: true);
     }
 
     // 修改盘密码：旧密码走 -k 临时文件，新密码走 stdin（stdin 只能被一个来源占用）
@@ -972,7 +991,7 @@ public sealed partial class MainWindow : Window
             await ShowMessageAsync(L10n.T("修改加密盘密码"), L10n.T("无法写入临时密码文件。"));
             return;
         }
-        var newPw = await AskPasswordAsync(L10n.T("再输入新密码（需输入两遍）"), true);
+        var newPw = await AskPasswordAsync(L10n.T("新密码（需输入两次）"), true);
         if (newPw == null) { try { File.Delete(tmp); } catch { } return; }
 
         await RunVaultCliAsync(L10n.T("修改加密盘密码"),
@@ -1003,11 +1022,11 @@ public sealed partial class MainWindow : Window
         var dir = await PickVaultPathAsync(L10n.T("用恢复码找回密码"), true);
         if (dir == null) return;
         var code = await PromptTextAsync(L10n.T("用恢复码找回密码"),
-            L10n.T("请输入此前抄录的 48 位恢复码（仅限数字）："), L10n.T("恢复码"));
+            L10n.T("请输入此前记录的 48 位恢复码（仅限数字）："), L10n.T("恢复码"));
         if (code == null) return;
         await RunVaultCliAsync(L10n.T("用恢复码找回密码"),
             new List<string> { "--vault-recovery", dir, "--recovery-arg", "open " + code }, null,
-            L10n.T("上行为原密码。找回后请尽快修改密码并重新生成恢复码。"));
+            L10n.T("上方显示的是原密码。找回后请尽快修改密码并重新生成恢复码。"));
     }
 
     // 选加密盘目录：默认填上次用的那块盘，可直接改路径，也可点「浏览…」用系统选择器。
@@ -1024,7 +1043,7 @@ public sealed partial class MainWindow : Window
         var panel = new StackPanel { Spacing = 10 };
         panel.Children.Add(new TextBlock
         {
-            Text = L10n.T("该加密盘位于哪个文件夹？"),
+            Text = L10n.T("请选择该加密盘所在的文件夹"),
             TextWrapping = TextWrapping.Wrap,
         });
         panel.Children.Add(box);
@@ -1075,11 +1094,10 @@ public sealed partial class MainWindow : Window
     // 密码弹窗；取消或空密码返回 null
     private async Task<string?> AskPasswordAsync(string purpose, bool needConfirm)
     {
-        var dlg = new PasswordDialog
+        var dlg = new PasswordDialog(needConfirm)
         {
             XamlRoot = Content.XamlRoot,
             RequestedTheme = CurrentTheme,
-            NeedConfirm = needConfirm,
             Title = purpose,
         };
         if (await dlg.ShowAsync() != ContentDialogResult.Primary) return null;
@@ -1113,7 +1131,8 @@ public sealed partial class MainWindow : Window
 
     // 跑一次 CLI 加密盘命令并回显结果；hint 为追加的中文说明，deleteAfter 为用完即删的临时密码文件
     private async Task RunVaultCliAsync(string title, List<string> args, byte[]? stdin,
-                                        string? hint = null, string? deleteAfter = null)
+                                        string? hint = null, string? deleteAfter = null,
+                                        bool scrollable = false)
     {
         var cli = ViewModel.CliPath;
         if (string.IsNullOrEmpty(cli))
@@ -1141,18 +1160,20 @@ public sealed partial class MainWindow : Window
         string detail = sb.ToString().Trim();
         if (result.ExitCode == 0)
         {
-            ViewModel.SetStatus("{0}：成功", title);
+            ViewModel.SetStatus("{0}：操作成功完成。", title);
             var body = detail;
             if (!string.IsNullOrEmpty(hint)) body = (body + "\n\n" + hint).Trim();
-            await ShowMessageAsync(title, string.IsNullOrEmpty(body) ? L10n.T("完成。") : body);
+            if (scrollable) await new ScrollOutputDialog(title, string.IsNullOrEmpty(body) ? L10n.T("操作成功完成。") : body).ShowAsync();
+            else await ShowMessageAsync(title, string.IsNullOrEmpty(body) ? L10n.T("操作成功完成。") : body);
         }
         else
         {
-            ViewModel.SetStatus("{0}：失败 (exit {1})", title, result.ExitCode);
-            await ShowMessageAsync(title,
-                string.IsNullOrEmpty(detail)
-                    ? L10n.F("命令失败（exit {0}）。", result.ExitCode)
-                    : L10n.F("命令失败（exit {0}）：\n{1}", result.ExitCode, detail));
+            ViewModel.SetStatus("{0}：操作失败（退出码 {1}）", title, result.ExitCode);
+            var body = string.IsNullOrEmpty(detail)
+                ? L10n.F("命令执行失败（退出码 {0}）。", result.ExitCode)
+                : L10n.F("命令失败（exit {0}）：\n{1}", result.ExitCode, detail);
+            if (scrollable) await new ScrollOutputDialog(title, body).ShowAsync();
+            else await ShowMessageAsync(title, body);
         }
     }
 
@@ -1168,12 +1189,16 @@ public sealed partial class MainWindow : Window
             return;
         }
         // WinFSP 用户态 DLL 必须与 FE-Mounter 同目录（静态导入，缺了进程都起不来）。
-        // 先自查一遍，否则用户只看到「盘没挂上」，没有任何线索。
+        // 但 WinFSP 也可由安装包装到系统目录（C:\Program Files (x86)\WinFsp\bin），
+        // 此处两者任一存在即放行，避免「已装系统 WinFSP 却误报缺运行时」。
         var wfsp = Path.Combine(Path.GetDirectoryName(mounter) ?? "", "winfsp-x64.dll");
-        if (!File.Exists(wfsp))
+        var wfspSys = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86) ?? @"C:\Program Files (x86)",
+            "WinFsp", "bin", "winfsp-x64.dll");
+        if (!File.Exists(wfsp) && !File.Exists(wfspSys))
         {
             await ShowMessageAsync(L10n.T("挂载为磁盘"),
-                L10n.T("挂载组件缺少 WinFSP 运行时（winfsp-x64.dll），无法挂载。\n请重新安装本程序（安装时勾选「加密盘挂载」）。"));
+                L10n.T("挂载组件缺少 WinFSP 运行时（winfsp-x64.dll），无法挂载。\n请重新安装本程序（安装时勾选「加密盘挂载」与「WinFSP 运行时」）。"));
             return;
         }
         var dir = await PickVaultPathAsync(L10n.T("挂载为磁盘"), true);
@@ -1227,11 +1252,94 @@ public sealed partial class MainWindow : Window
         _ = Task.Run(async () => { await Task.Delay(2000); try { File.Delete(tmp); } catch { } });
 
         if (ok)
+        {
+            RecordMount(dir, point);
             await ShowMessageAsync(L10n.T("挂载为磁盘"),
                 L10n.F("正在挂载，盘符由后台进程持有。稍后可在「此电脑」中看到：{0}", point));
+        }
         else
             await ShowMessageAsync(L10n.T("挂载为磁盘"),
                 L10n.T("无法启动挂载组件。请确认 FE-Mounter 存在，且未被安全软件拦截。"));
+    }
+
+    // 卸载磁盘：让持有盘符的后台进程收尾退出（停服务 → 释放盘符）。
+    // 走 IPC eject 而不是直接杀进程：杀进程会跳过解锁/卸载收尾，索引镜像可能来不及落盘。
+    private async void OnVaultUnmount(object sender, RoutedEventArgs e)
+    {
+        if (!ViewModel.VaultAvailable) return;
+        var mounter = FileEncryptorLocator.LocateMounter();
+        if (mounter == null)
+        {
+            await ShowMessageAsync(L10n.T("卸载磁盘"),
+                L10n.T("未找到挂载组件 FE-Mounter。"));
+            return;
+        }
+        var dir = await PickVaultPathAsync(L10n.T("卸载磁盘"), true);
+        if (dir == null) return;
+        var mp = (App.Settings.Current.LastMountPoint ?? "").Trim();
+        var body = string.IsNullOrEmpty(mp)
+            ? L10n.T("将卸载该加密盘的挂载，盘符会随之消失。")
+            : L10n.F("将卸载该加密盘的挂载（{0}），盘符会随之消失。", mp);
+        var ask = new ContentDialog
+        {
+            XamlRoot = Content.XamlRoot,
+            RequestedTheme = CurrentTheme,
+            Title = L10n.T("卸载磁盘"),
+            Content = body,
+            PrimaryButtonText = L10n.T("卸载"),
+            CloseButtonText = L10n.T("取消"),
+            DefaultButton = ContentDialogButton.Close,
+        };
+        if (await ask.ShowAsync() != ContentDialogResult.Primary) return;
+        await RunVaultIpcAsync(mounter, dir, new List<string> { "eject" }, null, L10n.T("卸载磁盘"));
+        ForgetMount(dir);
+    }
+
+    // 记录 / 清除已挂载加密盘（供「已挂载加密盘」列表与双击解锁）
+    private void RecordMount(string dir, string point)
+    {
+        try
+        {
+            var list = App.Settings.Current.MountedVaults;
+            list.RemoveAll(m => m.VaultDir.Equals(dir, StringComparison.OrdinalIgnoreCase));
+            list.Add(new MountedVault { VaultDir = dir, MountPoint = point });
+            App.Settings.Save();
+        }
+        catch { }
+    }
+    private void ForgetMount(string dir)
+    {
+        try
+        {
+            var list = App.Settings.Current.MountedVaults;
+            if (list.RemoveAll(m => m.VaultDir.Equals(dir, StringComparison.OrdinalIgnoreCase)) > 0)
+                App.Settings.Save();
+        }
+        catch { }
+    }
+
+    // 格式化：清空盘内全部内容（索引置空 + 删除所有 .ptd），保留盘身份与密码。不可撤销。
+    private async void OnVaultFormat(object sender, RoutedEventArgs e)
+    {
+        if (!ViewModel.VaultAvailable) return;
+        var dir = await PickVaultPathAsync(L10n.T("格式化加密盘"), true);
+        if (dir == null) return;
+        var warn = new ContentDialog
+        {
+            XamlRoot = Content.XamlRoot,
+            RequestedTheme = CurrentTheme,
+            Title = L10n.T("格式化加密盘"),
+            Content = L10n.F("将清空该加密盘内的全部文件（{0}）。\n\n盘的身份与密码保留，格式化后仍可用原密码继续入盘；但盘内原有文件无法恢复。\n\n若该盘正被挂载，请先执行「卸载磁盘」。", dir),
+            PrimaryButtonText = L10n.T("格式化"),
+            CloseButtonText = L10n.T("取消"),
+            DefaultButton = ContentDialogButton.Close,
+        };
+        if (await warn.ShowAsync() != ContentDialogResult.Primary) return;
+        var pw = await AskPasswordAsync(L10n.T("加密盘密码"), false);
+        if (pw == null) return;
+        await RunVaultCliAsync(L10n.T("格式化加密盘"),
+            new List<string> { "--vault-format", dir, "--key-stdin" }, ToStdin(pw),
+            L10n.T("加密盘已成功清空，可继续存入文件。"));
     }
 
     private async void OnVaultLock(object sender, RoutedEventArgs e)
@@ -1252,6 +1360,14 @@ public sealed partial class MainWindow : Window
     private async void OnVaultUnlock(object sender, RoutedEventArgs e)
     {
         if (!ViewModel.VaultAvailable) return;
+        var dir = await PickVaultPathAsync(L10n.T("重新解锁"), true);
+        if (dir == null) return;
+        await UnlockVaultDir(dir);
+    }
+
+    // 用单次输入的密码解锁指定加密盘（程序内列表双击 / 菜单均复用）
+    private async Task UnlockVaultDir(string dir)
+    {
         var mounter = FileEncryptorLocator.LocateMounter();
         if (mounter == null)
         {
@@ -1259,10 +1375,13 @@ public sealed partial class MainWindow : Window
                 L10n.T("未找到挂载组件 FE-Mounter。"));
             return;
         }
-        var dir = await PickVaultPathAsync(L10n.T("重新解锁"), true);
-        if (dir == null) return;
-
-        var pwd = new PasswordDialog { XamlRoot = Content.XamlRoot, RequestedTheme = CurrentTheme, NeedConfirm = false };
+        // 解锁只需输入一次；标题写清用途，便于与「设置新密码」类弹窗区分
+        var pwd = new PasswordDialog(false)
+        {
+            XamlRoot = Content.XamlRoot,
+            RequestedTheme = CurrentTheme,
+            Title = L10n.T("解锁加密盘"),
+        };
         if (await pwd.ShowAsync() != ContentDialogResult.Primary) return;
         if (string.IsNullOrEmpty(pwd.Password)) return;
 
@@ -1274,6 +1393,25 @@ public sealed partial class MainWindow : Window
         }
         await RunVaultIpcAsync(mounter, dir,
             new List<string> { "unlock", "--pass-file", tmp }, tmp, L10n.T("重新解锁"));
+    }
+
+    // 已挂载加密盘列表：双击锁定的盘即解锁
+    private async void OnMountedVaults(object sender, RoutedEventArgs e)
+    {
+        if (!ViewModel.VaultAvailable) return;
+        var mounter = FileEncryptorLocator.LocateMounter();
+        if (mounter == null)
+        {
+            await ShowMessageAsync(L10n.T("已挂载加密盘"), L10n.T("未找到挂载组件 FE-Mounter。"));
+            return;
+        }
+        var dlg = new MountedVaultsDialog(mounter,
+            new List<MountedVault>(App.Settings.Current.MountedVaults), dir => _ = UnlockVaultDir(dir))
+        {
+            XamlRoot = Content.XamlRoot,
+            RequestedTheme = CurrentTheme,
+        };
+        await dlg.ShowAsync();
     }
 
     // 写临时密码文件（收紧为仅当前用户读写），用完即删；失败返回 null
@@ -1319,11 +1457,84 @@ public sealed partial class MainWindow : Window
                 RedirectStandardError = false,
                 CreateNoWindow = true,
             };
+            // 告知 mounter 自身路径：锁定访问需拉起 GUI 时使用（回退安装目录）
+            try { psi.EnvironmentVariables["FE_GUI_PATH"] = Process.GetCurrentProcess().MainModule!.FileName; }
+            catch { }
             foreach (var a in args) psi.ArgumentList.Add(a);
             Process.Start(psi);
             return true;
         }
         catch { return false; }
+    }
+
+    // 轮询 FE-Mounter 写的锁定访问事件文件：检测到「锁定且被访问」→ 拉起 GUI 前台并弹单密码解锁框
+    private async void PollLockedAccess(DispatcherQueueTimer sender, object args)
+    {
+        if (_unlockPromptActive) return;   // 已有解锁框在，避免叠加
+        try
+        {
+            var dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                                   "FileEncryptor", "GUI");
+            if (!Directory.Exists(dir)) return;
+            var files = Directory.GetFiles(dir, "fe_locked_*.event");
+            foreach (var f in files)
+            {
+                string vault = "";
+                try
+                {
+                    foreach (var line in File.ReadAllLines(f))
+                        if (line.StartsWith("vault=")) vault = line.Substring(6);
+                }
+                catch { }
+                try { File.Delete(f); } catch { }
+                if (string.IsNullOrEmpty(vault)) continue;
+                // 已解锁（解锁竞态）则跳过，避免误弹
+                if (!await IsVaultLockedAsync(vault)) continue;
+                _unlockPromptActive = true;
+                BringToForeground();
+                _ = UnlockVaultDir(vault).ContinueWith(_ => _unlockPromptActive = false,
+                    TaskScheduler.FromCurrentSynchronizationContext());
+                break;   // 一次只处理一个，避免刷屏
+            }
+        }
+        catch { }
+    }
+
+    // 拉起主窗口到前台（还原最小化 + 置前），确保解锁框可见
+    private void BringToForeground()
+    {
+        try
+        {
+            var hwnd = WindowNative.GetWindowHandle(this);
+            ShowWindow(hwnd, 9);            // SW_RESTORE
+            SetForegroundWindow(hwnd);
+            Activate();
+        }
+        catch { }
+    }
+
+    // 查询该加密盘当前是否仍锁定；无法确认时按「锁定」处理（宁可弹，不漏弹）
+    private async Task<bool> IsVaultLockedAsync(string dir)
+    {
+        try
+        {
+            var mounter = FileEncryptorLocator.LocateMounter();
+            if (mounter == null) return true;
+            var cli = new CliProcessService();
+            var sb = new StringBuilder();
+            cli.OutputLine += l => { lock (sb) sb.AppendLine(l); };
+            var tcs = new TaskCompletionSource<CommandResult>();
+            cli.Finished += r => tcs.TrySetResult(r);
+            cli.Execute(new CommandRequest
+            {
+                ProgramPath = mounter,
+                Arguments = new List<string> { "ipc-call", "--vault", dir, "status" },
+            });
+            var r = await tcs.Task;
+            if (r.ExitCode == 0 && sb.ToString().Contains("unlocked=1")) return false;
+            return true;
+        }
+        catch { return true; }
     }
 
     // 经 FE-Mounter ipc-call 执行短命令（lock/unlock），回显结果
@@ -1344,20 +1555,31 @@ public sealed partial class MainWindow : Window
 
         var result = await tcs.Task;
         if (passFile != null)
-            _ = Task.Run(async () => { await Task.Delay(2000); try { File.Delete(passFile); } catch { } });
+            _ = Task.Run(async () =>
+            {
+                await Task.Delay(2000);
+                try
+                {
+                    // 删除前先清零文件内容，避免明文密码在磁盘上残留
+                    var len = new FileInfo(passFile).Length;
+                    if (len > 0) File.WriteAllBytes(passFile, new byte[len]);
+                }
+                catch { }
+                try { File.Delete(passFile); } catch { }
+            });
 
         string detail = sb.ToString().Trim();
         if (result.ExitCode == 0)
         {
-            ViewModel.SetStatus("{0}：成功", title);
+            ViewModel.SetStatus("{0}：操作成功完成。", title);
             if (!string.IsNullOrEmpty(detail)) await ShowMessageAsync(title, detail);
         }
         else
         {
-            ViewModel.SetStatus("{0}：失败 (exit {1})", title, result.ExitCode);
+            ViewModel.SetStatus("{0}：操作失败（退出码 {1}）", title, result.ExitCode);
             await ShowMessageAsync(title,
                 string.IsNullOrEmpty(detail)
-                    ? L10n.F("命令失败（exit {0}）。", result.ExitCode)
+                    ? L10n.F("命令执行失败（退出码 {0}）。", result.ExitCode)
                     : L10n.F("命令失败（exit {0}）：\n{1}", result.ExitCode, detail));
         }
     }
@@ -1370,7 +1592,7 @@ public sealed partial class MainWindow : Window
             picker.FileTypeFilter.Add("*");
             var file = await picker.PickSingleFileAsync();
             if (file != null) KeyfileEdit.Text = file.Path;
-        } catch (Exception ex) { ViewModel.SetStatus("[密钥文件] 错误: {0}", ex.Message); }
+        } catch (Exception ex) { ViewModel.SetStatus("[密钥文件] 错误：{0}", ex.Message); }
     }
 
     private async void OnBrowseRecipient(object sender, RoutedEventArgs e)
@@ -1381,7 +1603,7 @@ public sealed partial class MainWindow : Window
             picker.FileTypeFilter.Add("*");
             var file = await picker.PickSingleFileAsync();
             if (file != null) RecipientEdit.Text = file.Path;
-        } catch (Exception ex) { ViewModel.SetStatus("[收件人] 错误: {0}", ex.Message); }
+        } catch (Exception ex) { ViewModel.SetStatus("[收件人] 错误：{0}", ex.Message); }
     }
 
     private async void OnBrowseIdentity(object sender, RoutedEventArgs e)
@@ -1392,7 +1614,7 @@ public sealed partial class MainWindow : Window
             picker.FileTypeFilter.Add("*");
             var file = await picker.PickSingleFileAsync();
             if (file != null) IdentityEdit.Text = file.Path;
-        } catch (Exception ex) { ViewModel.SetStatus("[身份文件] 错误: {0}", ex.Message); }
+        } catch (Exception ex) { ViewModel.SetStatus("[身份文件] 错误：{0}", ex.Message); }
     }
 
     private async void OnBrowseWrapFile(object sender, RoutedEventArgs e)
@@ -1404,7 +1626,7 @@ public sealed partial class MainWindow : Window
             else { picker.FileTypeFilter.Add(".fekw"); picker.FileTypeFilter.Add("*"); }
             var file = await picker.PickSingleFileAsync();
             if (file != null) WrapFileEdit.Text = file.Path;
-        } catch (Exception ex) { ViewModel.SetStatus("[密钥文件] 错误: {0}", ex.Message); }
+        } catch (Exception ex) { ViewModel.SetStatus("[密钥文件] 错误：{0}", ex.Message); }
     }
 
     private async void OnBrowseWrapOut(object sender, RoutedEventArgs e)
@@ -1416,7 +1638,7 @@ public sealed partial class MainWindow : Window
                 new List<string> { ViewModel.IsWrapKeyMode ? ".fekw" : ".dek" });
             var file = await picker.PickSaveFileAsync();
             if (file != null) WrapOutEdit.Text = file.Path;
-        } catch (Exception ex) { ViewModel.SetStatus("[输出路径] 错误: {0}", ex.Message); }
+        } catch (Exception ex) { ViewModel.SetStatus("[输出路径] 错误：{0}", ex.Message); }
     }
 
     private async void OnBrowseWatermarkKey(object sender, RoutedEventArgs e)
@@ -1429,8 +1651,8 @@ public sealed partial class MainWindow : Window
             if (file == null) return;
             // 密钥内容直接进密码框，界面不回显明文
             WatermarkKeyEdit.Password = await FileIO.ReadTextAsync(file);
-            ViewModel.SetStatus("[水印私钥] 已载入: {0}", file.Name);
-        } catch (Exception ex) { ViewModel.SetStatus("[水印私钥] 错误: {0}", ex.Message); }
+            ViewModel.SetStatus("[水印私钥] 已载入：{0}", file.Name);
+        } catch (Exception ex) { ViewModel.SetStatus("[水印私钥] 错误：{0}", ex.Message); }
     }
 
     private void UpdateVisibility()
@@ -1495,9 +1717,9 @@ public sealed partial class MainWindow : Window
         IdentityPanel.Visibility = (isAsym && !isEncrypt) || (ViewModel.IsUnwrapMode && wrapPubkey)
             ? Visibility.Visible : Visibility.Collapsed;
         // 同一面板在包装动作下装的是另一种密钥，标签跟着改
-        RecipientLabel.Text = L10n.T(isWrapKey ? "收件人公钥:" : "收件人:");
+        RecipientLabel.Text = L10n.T(isWrapKey ? "收件人公钥：" : "收件人：");
         RecipientEdit.PlaceholderText = L10n.T(isWrapKey ? "公钥或公钥文件路径（--wrap-to）" : "公钥或公钥文件路径");
-        IdentityLabel.Text = L10n.T(ViewModel.IsUnwrapMode ? "身份私钥:" : "身份文件:");
+        IdentityLabel.Text = L10n.T(ViewModel.IsUnwrapMode ? "身份私钥：" : "身份文件：");
         ChkRestoreName.Visibility = ViewModel.ActionIndex == 3 ? Visibility.Visible : Visibility.Collapsed;
         // PQC 在密钥生成时仍有意义（CLI 的 -g 读 --no-pqc），X448 由上一行单独控制；
         // 签名水印只在加密动作下露出（见上）。
@@ -1530,10 +1752,10 @@ public sealed partial class MainWindow : Window
         WrapAlgLabel.Text = L10n.T(wrapKey ? "包装算法" : "解密方式");
         WrapIntroText.Text = L10n.T(wrapKey
             ? (pubkey
-                ? "把 32 字节数据密钥用收件人公钥封装，不需要密码。"
-                : "用密码派生出的密钥包装 32 字节数据密钥。")
+                ? "使用收件人公钥封装 32 字节数据密钥，无需密码。"
+                : "使用密码派生的密钥包装 32 字节数据密钥。")
             : (pubkey
-                ? "从 .fekw 中取回 32 字节数据密钥，需要当初收件人的身份私钥。"
+                ? "从 .fekw 中取回 32 字节数据密钥，需要包装时收件人的身份私钥。"
                 : "从 .fekw 中取回 32 字节数据密钥，需要包装时使用的密码。"));
     }
 
@@ -1602,7 +1824,7 @@ public sealed partial class MainWindow : Window
                 && (vdNoSlash.Length == 1 || (vdNoSlash.Length == 2 && vdNoSlash[1] == ':'));
             if (isDrive)
             {
-                await ShowMessageAsync(L10n.T("不支持填盘符"),
+                await ShowMessageAsync(L10n.T("不支持使用盘符"),
                     L10n.T("「入加密盘」需要填写加密盘的存储目录，而不是挂载盘符。\n\n盘符（如 Z:）只是加密盘挂载后的访问视图，数据并不存放在那里。请填写数据实际所在的目录，例如 D:\\Vault。"));
                 VaultDirEdit.Focus(FocusState.Programmatic);
                 return;
@@ -1622,7 +1844,7 @@ public sealed partial class MainWindow : Window
                     XamlRoot = Content.XamlRoot,
                     RequestedTheme = CurrentTheme,
                     Title = L10n.T("初始化为新加密盘"),
-                    Content = L10n.F("这个文件夹还不是加密盘：{0}\n是否把它初始化为新的加密盘并写入文件？", vd),
+                    Content = L10n.F("这个文件夹还不是加密盘：{0}\n请确认是否把它初始化为新的加密盘并写入文件。", vd),
                     PrimaryButtonText = L10n.T("继续"),
                     CloseButtonText = L10n.T("取消"),
                     DefaultButton = ContentDialogButton.Close,
@@ -1640,7 +1862,7 @@ public sealed partial class MainWindow : Window
             if (!ViewModel.KeywrapAvailable)
             {
                 await ShowMessageAsync(L10n.T("密钥包装不可用"),
-                    L10n.T("配套的命令行程序没有密钥包装能力，无法包装或解开密钥。\n请更换带 OpenSSL 的 CLI。"));
+                    L10n.T("配套的命令行程序没有密钥包装能力，无法包装或解包密钥。\n请更换带 OpenSSL 的 CLI。"));
                 return;
             }
             // 包装输入是单个文件，不走文件清单；缺路径或路径不存在在这里拦下
@@ -1650,7 +1872,7 @@ public sealed partial class MainWindow : Window
                 await ShowMessageAsync(L10n.T("缺少密钥文件"),
                     L10n.T(ViewModel.IsWrapKeyMode
                         ? "请先选择要包装的 32 字节数据密钥文件。"
-                        : "请先选择要解开的 .fekw 包装文件。"));
+                        : "请先选择要解包的 .fekw 包装文件。"));
                 WrapFileEdit.Focus(FocusState.Programmatic);
                 return;
             }
@@ -1716,7 +1938,7 @@ public sealed partial class MainWindow : Window
             var file = await picker.PickSingleFileAsync();
             if (file != null)
             {
-                ViewModel.SetStatus("密钥轮换功能实现中");
+                ViewModel.SetStatus("密钥轮换功能开发中");
             }
         }
     }
@@ -1758,7 +1980,7 @@ public sealed partial class MainWindow : Window
         var updater = LocateUpdater();
         if (updater == null)
         {
-            await ShowMessageAsync(L10n.T("检查更新"), L10n.T("未找到更新器 (Updater.exe)。请确认程序安装完整，或前往 GitHub 手动获取新版本。"));
+            await ShowMessageAsync(L10n.T("检查更新"), L10n.T("未找到更新器（Updater.exe）。请确认程序安装完整，或前往 GitHub 手动获取新版本。"));
             return;
         }
         try
@@ -1811,7 +2033,7 @@ public sealed partial class MainWindow : Window
                 var dlg = new ContentDialog
                 {
                     Title = L10n.T("发现新版本"),
-                    Content = L10n.F("发现新版本 {0}。\n\n{1}\n\n{2}\n\n是否现在下载并安装？", latest, notes, L10n.F("当前版本：{0}", curVer)),
+                    Content = L10n.F("发现新版本 {0}。\n\n{1}\n\n{2}\n\n请确认是否现在下载并安装。", latest, notes, L10n.F("当前版本：{0}", curVer)),
                     PrimaryButtonText = L10n.T("下载并安装"),
                     CloseButtonText = L10n.T("关闭"),
                     XamlRoot = Content.XamlRoot,
@@ -2013,6 +2235,14 @@ public sealed partial class MainWindow : Window
 
     private void RestoreTask(Models.TaskRecord rec)
     {
+        // M18：该条落盘时已抹去完整路径（隐私默认），拿只剩下文件名的残缺记录回放
+        // 会拼出指向错误位置的命令行。明确提示并指出开启方式，而不是默默回放。
+        if (rec.PathsStripped)
+        {
+            ViewModel.SetStatus(L10n.T(
+                "该历史记录未保存完整路径，无法回放。可在设置中开启「任务历史保存完整路径」后，新任务才支持回放。"));
+            return;
+        }
         ViewModel.ActionIndex = rec.Action switch
         {
             "encrypt" => 0,
@@ -2096,14 +2326,14 @@ public sealed partial class MainWindow : Window
             ViewModel.IntoVault = "";
         }
         UpdateVisibility();
-        ViewModel.SetStatus("已恢复任务: {0}", rec.ActionLabel);
+        ViewModel.SetStatus("已恢复任务：{0}", rec.ActionLabel);
     }
 
     private void OnRetryCliDetection(object sender, RoutedEventArgs e)
     {
         if (ViewModel.DetectCli(out var path))
         {
-            ViewModel.SetStatus("已检测到 CLI: {0}", path);
+            ViewModel.SetStatus("已检测到 CLI：{0}", path);
             ViewModel.RefreshCommandPreview();
         }
         else

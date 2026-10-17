@@ -164,8 +164,10 @@ bool vdisk_load(VDiskApi& v, const std::string& path, std::string& err) {
     v.set_read_cache  = (decltype(v.set_read_cache))sym("vdisk_set_read_cache");
     v.mount_rw        = (decltype(v.mount_rw))sym("vdisk_mount_rw");
     v.create_file     = (decltype(v.create_file))sym("vdisk_create_file");
+    v.create_file_ex  = (decltype(v.create_file_ex))sym("vdisk_create_file_ex");
     v.delete_file     = (decltype(v.delete_file))sym("vdisk_delete_file");
     v.truncate_file   = (decltype(v.truncate_file))sym("vdisk_truncate_file");
+    v.rename          = (decltype(v.rename))sym("vdisk_rename");
     v.stat_space      = (decltype(v.stat_space))sym("vdisk_stat_space");
     if (!v.open || !v.close || !v.unlock || !v.lock || !v.readdir ||
         !v.getattr || !v.read_file || !v.strerror) { err = "libvdisk missing required symbols"; return false; }
@@ -190,7 +192,9 @@ uint64_t fnv1a64(const uint8_t* p, size_t n) {
     return h;
 }
 
-void secure_zero(void* p, size_t n) { volatile unsigned char* q = (volatile unsigned char*)p; while (n--) *q++ = 0; }
+// 统一内存清零：委托 libsodium（编译器屏障 + 平台最优实现），避免自实现与 sodium_memzero 并存。
+#include <sodium.h>
+void secure_zero(void* p, size_t n) { if (p && n) sodium_memzero(p, n); }
 
 // ---- M5 多库注册表 ----
 std::string vaults_registry_path() {

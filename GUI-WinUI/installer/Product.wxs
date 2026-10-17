@@ -9,7 +9,10 @@
            UpgradeCode="12345678-1234-1234-1234-1234567890AB"
            Language="1033" Codepage="utf-8">
 
-    <MajorUpgrade AllowSameVersionUpgrades="yes" DowngradeErrorMessage="A newer version of FileEncryptor GUI is already installed." />
+    <!-- 先卸载旧产品再装新版（afterInstallValidate）：否则同版本覆盖安装时 Windows Installer
+         按「已装文件版本 >= 新文件」跳过 exe/dll 的替换，装出来永远是第一次安装那套旧文件
+         （曾表现为新版 XAML 的连接器与旧 DLL 错位，启动即 InvalidCastException 无窗口）。 -->
+    <MajorUpgrade AllowSameVersionUpgrades="yes" Schedule="afterInstallValidate" DowngradeErrorMessage="A newer version of FileEncryptor GUI is already installed." />
 
     <!-- Close running GUI before install/uninstall to avoid file-in-use errors -->
     <util:CloseApplication Id="CloseGui" Target="FileEncryptorGUI.WinUI3.exe" Description="FileEncryptor GUI is running. Close it to continue." RebootPrompt="no" />
@@ -28,11 +31,30 @@
       </DirectorySearch>
     </Property>
 
+    <!-- 检测系统是否已安装 WinFSP（Program Files (x86)\WinFsp\bin\winfsp-x64.dll）。
+         已装则跳过捆绑安装，避免重复安装/版本冲突。 -->
+    <Property Id="WINFSP_INSTALLED" Secure="yes">
+      <DirectorySearch Id="WinFspSearch" Path="[ProgramFilesFolder]WinFsp\bin" Depth="0">
+        <FileSearch Id="WinFspDll" Name="winfsp-x64.dll" />
+      </DirectorySearch>
+    </Property>
+
     <!-- Custom action: install Windows Terminal via winget (MS Store backend) -->
     <CustomAction Id="InstallWT"
                   Directory="INSTALLFOLDER"
                   ExeCommand="cmd /c winget install --id Microsoft.WindowsTerminal -e --silent --accept-package-agreements --accept-source-agreements"
                   Execute="immediate"
+                  Return="asyncNoWait" />
+
+    <!-- 自定义操作：静默安装捆绑的 WinFSP（msiexec /i）。安排在 InstallFiles 之后
+         （事务内、InstallFinalize 之前，满足 ICE77），此时 redist\winfsp MSI 已落盘。
+         用 asyncNoWait + ping 延迟，让 msiexec 在主安装提交、释放 MSI 互斥锁后才真正
+         启动，规避「另一安装正在进行」。/norestart 不强制重启。Impersonate=no 以 SYSTEM 提权安装。 -->
+    <CustomAction Id="InstallWinFsp"
+                  Directory="REDISTDIR"
+                  ExeCommand="cmd.exe /c ping -n 6 127.0.0.1 &gt;nul &amp; msiexec.exe /i &quot;[REDISTDIR]winfsp-2.1.25156.msi&quot; /qn /norestart"
+                  Execute="deferred"
+                  Impersonate="no"
                   Return="asyncNoWait" />
 
     <!-- Custom action: launch GUI after install (working dir = install folder) -->
@@ -58,6 +80,17 @@
         <ComponentRef Id="FeMounterExe" />
         <ComponentRef Id="WinFspDll" />
         <ComponentRef Id="WinFspLauncher" />
+<?ifdef WINFSP_SYS?>
+        <ComponentRef Id="WinFspSys" />
+<?endif?>
+      </Feature>
+
+      <!-- WinFSP 运行时：把捆绑的 WinFSP 安装包静默装到系统（C:\Program Files (x86)\WinFsp），
+           真正注册内核驱动服务，使未预装 WinFSP 的干净机（Win11 22H2/26H2）也能盘符挂载。
+           默认勾选；已装则跳过。 -->
+      <Feature Id="WinFspFeature" Title="WinFSP runtime (recommended)" Level="1"
+               Description="Installs the WinFSP kernel driver and user-mode runtime so encrypted vaults can be mounted as drive letters. Recommended unless WinFSP is already installed system-wide.">
+        <ComponentRef Id="WinFspRedist" />
       </Feature>
     </Feature>
 
@@ -75,6 +108,7 @@
     <!-- Open Microsoft Store after install if Terminal feature selected and WT not installed -->
     <InstallExecuteSequence>
       <Custom Action="InstallWT" After="InstallFinalize" Condition="&amp;TerminalFeature=3 AND NOT WT_INSTALLED" />
+      <Custom Action="InstallWinFsp" After="InstallFiles" Condition="&amp;WinFspFeature=3 AND NOT WINFSP_INSTALLED" />
       <Custom Action="LaunchApp" After="InstallFinalize" Condition="WIXUI_EXITDIALOGOPTIONALCHECKBOX=1 AND NOT Installed" />
     </InstallExecuteSequence>
 
@@ -83,7 +117,9 @@
   <Fragment>
     <Directory Id="TARGETDIR" Name="SourceDir">
       <Directory Id="ProgramFiles64Folder">
-        <Directory Id="INSTALLFOLDER" Name="FileEncryptor (WinUI)" />
+        <Directory Id="INSTALLFOLDER" Name="FileEncryptor (WinUI)">
+          <Directory Id="REDISTDIR" Name="redist" />
+        </Directory>
       </Directory>
       <Directory Id="ProgramMenuFolder">
         <Directory Id="ProgramMenuDir" Name="FileEncryptor (WinUI)" />
@@ -131,6 +167,22 @@
     <Component Id="WinFspLauncher" Directory="INSTALLFOLDER">
       <File Id="WinFspLauncherFile" Source="$(var.PublishDir)\launcher-x64.exe" KeyPath="yes" />
     </Component>
+
+    <!-- WinFSP 安装包（捆绑进 MSI，落入 INSTALLFOLDER\redist）。由 WinFspFeature 控制安装，
+         安装阶段由 InstallWinFsp 自定义操作静默装到系统。 -->
+    <Component Id="WinFspRedist" Directory="REDISTDIR">
+      <File Id="WinFspMsi" Source="..\..\third_party\winfsp-2.1.25156.msi" KeyPath="yes" />
+    </Component>
+
+<?ifdef WINFSP_SYS?>
+    <!-- WinFSP 内核驱动：与 winfsp-x64.dll 同目录时，FE-Mounter 以管理员身份首次挂载会由 DLL
+         嵌入式自安装并启动内核驱动（WinFsp.Fsd）与 Launcher 服务，使未预装 WinFSP 的干净机
+         （如 Win11 22H2 样机）也能盘符挂载。缺它则干净机挂载无效。
+         仅当构建期能在 SDK bin（winfsp-x64.sys）/ System32\drivers（winfsp.sys）/ third_party\winfsp\ 找到内核驱动时才编入。 -->
+    <Component Id="WinFspSys" Directory="INSTALLFOLDER">
+      <File Id="WinFspSysFile" Source="$(var.PublishDir)\winfsp-x64.sys" KeyPath="yes" />
+    </Component>
+<?endif?>
 
     <Component Id="StartMenuShortcut" Directory="ProgramMenuDir">
       <Shortcut Id="StartMenuSc"

@@ -10,16 +10,20 @@ public sealed partial class PasswordDialog : ContentDialog
 {
     public string Password => PwdBox.Password;
 
-    // 解密只需输入一次：没有确认框，也不做强度策略校验（既有密码可能不满足现行策略）
-    public bool NeedConfirm { get; init; } = true;
+    // 是否二次确认。只能由构造函数传入：对象初始化器在构造之后才赋值，
+    // 用 init 属性时构造里读到的永远是默认值 true，确认框会被无条件加进面板。
+    // 解密只需输入一次：无确认框，也不做强度策略校验（既有密码可能不合现行策略）
+    public bool NeedConfirm { get; }
 
     private PasswordBox PwdBox = null!;
     private PasswordBox? ConfirmBox;
     private TextBlock StrengthText = null!;
     private TextBlock MatchText = null!;
 
-    public PasswordDialog()
+    public PasswordDialog(bool needConfirm = true)
     {
+        NeedConfirm = needConfirm;
+
         RequestedTheme = App.Settings.Current.Theme switch
         {
             Services.AppTheme.Light => ElementTheme.Light,

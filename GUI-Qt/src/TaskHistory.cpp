@@ -157,7 +157,7 @@ QString TaskHistory::actionLabel(const QString& actionKey) {
     if(actionKey==QStringLiteral("derive"))         return th("密码派生 (-G)");
     if(actionKey==QStringLiteral("pubkey"))         return th("导出公钥 (-Y)");
     if(actionKey==QStringLiteral("wrap"))           return th("包装密钥 (--wrap-key)");
-    if(actionKey==QStringLiteral("unwrap"))         return th("解开密钥 (--unwrap-key)");
+    if(actionKey==QStringLiteral("unwrap"))         return th("解包密钥 (--unwrap-key)");
     return actionKey;
 }
 

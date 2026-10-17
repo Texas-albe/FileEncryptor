@@ -50,6 +50,9 @@
                         <MenuFlyoutItem x:Name="MenuVaultRecoveryOpen" Text="用恢复码找回密码..." Click="OnVaultRecoveryOpen" />
                         <MenuFlyoutSeparator />
                         <MenuFlyoutItem x:Name="MenuVaultMount" Text="挂载为磁盘..." Click="OnVaultMount" />
+                        <MenuFlyoutItem x:Name="MenuVaultMounted" Text="已挂载加密盘..." Click="OnMountedVaults" />
+                        <MenuFlyoutItem x:Name="MenuVaultUnmount" Text="卸载磁盘..." Click="OnVaultUnmount" />
+                        <MenuFlyoutItem x:Name="MenuVaultFormat" Text="格式化加密盘..." Click="OnVaultFormat" />
                         <MenuFlyoutItem x:Name="MenuVaultLock" Text="暂时锁定" Click="OnVaultLock" />
                         <MenuFlyoutItem x:Name="MenuVaultUnlock" Text="重新解锁..." Click="OnVaultUnlock" />
                     </MenuFlyoutSubItem>
@@ -150,9 +153,9 @@
                                           VerticalScrollBarVisibility="Disabled" Padding="0,2,14,14">
                             <StackPanel x:Name="WrapRow" Orientation="Horizontal" Spacing="16">
                                 <RadioButton x:Name="RbWrapKey" Content="包装密钥" GroupName="Wrap" Checked="OnWrapRadioChecked"
-                                             ToolTipService.ToolTip="把一份 32 字节的数据密钥单独包进 .fekw 文件，用密码或收件人公钥保护" />
-                                <RadioButton x:Name="RbUnwrapKey" Content="解开密钥" GroupName="Wrap" Checked="OnWrapRadioChecked"
-                                             ToolTipService.ToolTip="把 .fekw 里的数据密钥还原成 32 字节文件" />
+                                             ToolTipService.ToolTip="将一份 32 字节数据密钥单独封装进 .fekw 文件，用密码或收件人公钥保护" />
+                                <RadioButton x:Name="RbUnwrapKey" Content="解包密钥" GroupName="Wrap" Checked="OnWrapRadioChecked"
+                                             ToolTipService.ToolTip="将 .fekw 中的数据密钥还原为 32 字节文件" />
                             </StackPanel>
                             </ScrollViewer>
                         </Grid>
@@ -218,10 +221,10 @@
 
         <!-- 压缩：非对称（.ptd）同样支持 zstd，CLI 的 run_asym 会把级别透传给 encrypt_file -->
         <Grid x:Name="CompressionRow" ColumnDefinitions="120,*">
-            <TextBlock Grid.Column="0" Text="压缩 (zstd)" VerticalAlignment="Center" TextWrapping="Wrap" />
+            <TextBlock Grid.Column="0" Text="压缩（zstd）" VerticalAlignment="Center" TextWrapping="Wrap" />
                             <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
                                 <CheckBox x:Name="ChkCompress" Content="压缩数据" Checked="OnOptionChanged" Unchecked="OnOptionChanged" VerticalAlignment="Center" />
-                                <TextBlock Text="压缩级别（-5 到 22）:" VerticalAlignment="Center" />
+                                <TextBlock Text="压缩级别（-5 到 22）：" VerticalAlignment="Center" />
                                 <controls:NumberBox x:Name="CompressLevel" Value="3" Minimum="-5" Maximum="22" SmallChange="1" Width="60" SpinButtonPlacementMode="Hidden" ValueChanged="OnCompressLevelChanged" Foreground="{ThemeResource TextFillColorPrimaryBrush}" />
                             </StackPanel>
                         </Grid>
@@ -235,7 +238,7 @@
                             </StackPanel>
                         </Grid>
 
-                        <!-- 加密盘：勾选后产物入盘并登记进加密索引（CLI 3.0.0+） -->
+                        <!-- 加密盘：勾选后产物入盘并登记进加密索引（CLI 3.0.1+） -->
                         <Grid ColumnDefinitions="120,*" x:Name="VaultRow" Visibility="Collapsed">
                             <TextBlock Grid.Column="0" Text="加密盘" VerticalAlignment="Center" TextWrapping="Wrap" />
                             <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
@@ -250,7 +253,7 @@
                         <Grid ColumnDefinitions="120,*">
                             <TextBlock Grid.Column="0" Text="密钥文件" VerticalAlignment="Center" TextWrapping="Wrap" />
                             <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="4">
-                                <TextBox x:Name="KeyfileEdit" PlaceholderText="留空 = 运行弹窗输入" Width="320" TextChanged="OnKeyfileChanged" />
+                                <TextBox x:Name="KeyfileEdit" PlaceholderText="留空 = 运行时弹窗输入" Width="320" TextChanged="OnKeyfileChanged" />
                                 <Button Content="浏览..." Click="OnBrowseKeyfile" />
                             </StackPanel>
                         </Grid>
@@ -271,7 +274,7 @@
                                 <CheckBox x:Name="ChkForce" Content="覆盖已存在文件" Checked="OnOptionChanged" Unchecked="OnOptionChanged" VerticalAlignment="Center" />
                                 <CheckBox x:Name="ChkPack" Content="打包为单个文件" Checked="OnOptionChanged" Unchecked="OnOptionChanged"
                                           VerticalAlignment="Center" IsEnabled="{x:Bind ViewModel.PackAvailable, Mode=OneWay}"
-                                          ToolTipService.ToolTip="把整个目录树或多个文件打成单个文件，不删除源文件" />
+                                          ToolTipService.ToolTip="将整个目录树或多个文件打包为单个文件，不删除源文件" />
                                 <CheckBox x:Name="ChkSplit" Content="分卷输出" Checked="OnOptionChanged" Unchecked="OnOptionChanged"
                                           VerticalAlignment="Center" ToolTipService.ToolTip="将密文切分为多个 .001/.002 分卷；解密时任选一卷即可自动合并" />
                                 <CheckBox x:Name="ChkSha256" Content="生成校验单" Checked="OnOptionChanged" Unchecked="OnOptionChanged" VerticalAlignment="Center" />
@@ -309,7 +312,7 @@
                             <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
                                 <PasswordBox x:Name="WatermarkKeyEdit" Width="300" PasswordChar="•"
                                              PasswordChanged="OnOptionChanged"
-                                             PlaceholderText="私钥 PEM（密码框输入，不明文回显）" />
+                                             PlaceholderText="私钥 PEM（在密码框中输入，不回显明文）" />
                                 <Button Content="浏览..." Click="OnBrowseWatermarkKey" />
                                 <TextBlock Text="留空 = 只写水印记录不签名" VerticalAlignment="Center" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                             </StackPanel>
@@ -344,14 +347,14 @@
 
                         <!-- 非对称：收件人 -->
                         <StackPanel x:Name="RecipientPanel" Orientation="Horizontal" Spacing="4" Visibility="Collapsed">
-                            <TextBlock x:Name="RecipientLabel" Text="收件人:" VerticalAlignment="Center" Width="72" />
+                            <TextBlock x:Name="RecipientLabel" Text="收件人：" VerticalAlignment="Center" Width="72" />
                             <TextBox x:Name="RecipientEdit" PlaceholderText="公钥或公钥文件路径" Width="320" TextChanged="OnRecipientChanged" />
                             <Button Content="浏览..." Click="OnBrowseRecipient" />
                         </StackPanel>
 
                         <!-- 非对称：身份私钥 -->
                         <StackPanel x:Name="IdentityPanel" Orientation="Horizontal" Spacing="4" Visibility="Collapsed">
-                            <TextBlock x:Name="IdentityLabel" Text="身份文件:" VerticalAlignment="Center" Width="72" />
+                            <TextBlock x:Name="IdentityLabel" Text="身份文件：" VerticalAlignment="Center" Width="72" />
                             <TextBox x:Name="IdentityEdit" PlaceholderText="私钥文件路径" Width="320" TextChanged="OnIdentityChanged" />
                             <Button Content="浏览..." Click="OnBrowseIdentity" />
                         </StackPanel>

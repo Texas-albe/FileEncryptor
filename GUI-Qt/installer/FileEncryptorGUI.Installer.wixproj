@@ -1,9 +1,9 @@
 <Project Sdk="WixToolset.Sdk/4.0.5">
   <PropertyGroup>
     <!-- 版本唯一来源：Product.wxs 通过 $(var.Version) 消费，MSI 版本与输出文件名一起变 -->
-    <GuiVersion>3.0.0</GuiVersion>
+    <GuiVersion>3.0.1</GuiVersion>
     <!-- CLI 产物名由 CMake project(VERSION) 拼出，只支持数值版（无 -alpha.N），故独立定义 -->
-    <CliVersion>3.0.0</CliVersion>
+    <CliVersion>3.0.1</CliVersion>
     <OutputType>Package</OutputType>
     <OutputName>FileEncryptorGUI-$(GuiVersion)-Qt-Windows</OutputName>
     <Platform>x64</Platform>
@@ -26,7 +26,7 @@
     <!-- FE-Mounter 的独立构建目录（FE-Mounter/CMakeLists.txt，产物并入 CliBuildDir） -->
     <MounterBuildDir>$(MSBuildThisFileDirectory)..\..\CLI\out\build\fe-mounter</MounterBuildDir>
     <CliBuildDir>$(MSBuildThisFileDirectory)..\..\CLI\out\build\windows-release\bin\Release\</CliBuildDir>
-    <DefineConstants>PublishDir=$(QtStageDir);Version=$(GuiVersion);ProductVersion=3.0.0</DefineConstants>
+    <DefineConstants>PublishDir=$(QtStageDir);Version=$(GuiVersion);ProductVersion=3.0.1</DefineConstants>
   </PropertyGroup>
 
   <PropertyGroup>
@@ -54,6 +54,9 @@
           Condition="Exists('$(MSBuildThisFileDirectory)..\..\CLI\out\build\windows-release\CMakeCache.txt')" />
     <Exec Command="&quot;$(BuildHelper)&quot; &quot;$(VcVarsBat)&quot; &quot;$(CMakeExe)&quot; &quot;$(MounterBuildDir)&quot; $(Configuration)"
           Condition="Exists('$(MounterBuildDir)\CMakeCache.txt')" />
+    <!-- Updater 独立工程（build_updater.ps1 已废弃），构建后供 Stage 阶段拷贝 -->
+    <Exec Command="&quot;$(BuildHelper)&quot; &quot;$(VcVarsBat)&quot; &quot;$(CMakeExe)&quot; &quot;$(MSBuildThisFileDirectory)..\..\Updater\out\build\x64-Release&quot; $(Configuration)"
+          Condition="Exists('$(MSBuildThisFileDirectory)..\..\Updater\out\build\x64-Release\CMakeCache.txt')" />
   </Target>
 
   <!-- 构建 MSI 前把 Qt GUI 与 Updater 拷进暂存目录，供 Product.wxs 引用 -->
@@ -66,10 +69,10 @@
     <Copy SourceFiles="$(QtGuiExePath)"
           DestinationFiles="$(QtStageDir)\FileEncryptorGUI-Qt.exe"
           SkipUnchangedFiles="true" Condition="Exists('$(QtGuiExePath)')" />
-    <Copy SourceFiles="$(QtStageSrcDir)Updater.exe"
+    <Copy SourceFiles="$(MSBuildThisFileDirectory)..\..\Updater\out\build\x64-Release\bin\Updater.exe"
           DestinationFiles="$(QtStageDir)\Updater.exe"
           SkipUnchangedFiles="true"
-          Condition="Exists('$(QtStageSrcDir)Updater.exe')" />
+          Condition="Exists('$(MSBuildThisFileDirectory)..\..\Updater\out\build\x64-Release\bin\Updater.exe')" />
     <!-- CLI 工具链：重命名带版本号 exe 为固定名，便于 Product.wxs 引用。
          产物目录逐个文件解析：CLI 主构建是 Ninja 单配置，产物直接落 bin\；
          FE-Mounter 走 VS 生成器，产物落 bin\Release\。写死一个目录会取到

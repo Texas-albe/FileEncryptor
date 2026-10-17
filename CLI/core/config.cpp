@@ -516,7 +516,7 @@ Config load_config() {
             if (!file_exists_utf8(def)) {
                 wrote = write_file_utf8(def, DEFAULT_CONFIG_YAML);
             } else {
-                wrote = true; // 已存在，视为 OK
+                wrote = true; // 已存在，视为已成功
             }
         }
         if (!wrote) {
@@ -709,7 +709,7 @@ static void write_log(int level, const std::string& msg,
             if (!g_log_stream) {
                 static bool warned = false;
                 if (!warned) {
-                    std::cerr << "Warning: cannot write log file (disk full or permission change?): "
+                    std::cerr << "Warning: cannot write log file (disk full or permission change): "
                               << g_log_file << "\n";
                     warned = true;
                 }

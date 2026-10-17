@@ -67,12 +67,12 @@ public sealed partial class TaskHistoryDialog : ContentDialog
                 });
                 item.Children.Add(new TextBlock
                 {
-                    Text = L10n.F("输入 {0} 个, {1}, 耗时 {2}", r.InputCount, EtaEstimatorService.FormatBytes(r.TotalBytes), EtaEstimatorService.FormatDuration(r.DurationMs)),
+                    Text = L10n.F("输入 {0} 个，{1}，耗时 {2}", r.InputCount, EtaEstimatorService.FormatBytes(r.TotalBytes), EtaEstimatorService.FormatDuration(r.DurationMs)),
                     FontSize = 12
                 });
                 // 右键菜单
                 var flyout = new MenuFlyout();
-                var delItem = new MenuFlyoutItem { Text = L10n.T("删除此条") };
+                var delItem = new MenuFlyoutItem { Text = L10n.T("删除该记录") };
                 delItem.Click += (_, _) =>
                 {
                     _records.Remove(r);
@@ -88,6 +88,33 @@ public sealed partial class TaskHistoryDialog : ContentDialog
             _list.DoubleTapped += OnDoubleTapped;
             panel.Children.Add(_list);
         }
+        // M18：路径隐私开关（默认关闭）。放在历史窗口内，用户看到历史时就能就地决定，
+        // 不必另找设置入口。改动立即落 settings.json，此后新记录按新策略写盘。
+        var pathChk = new CheckBox
+        {
+            Content = L10n.T("任务历史保存完整路径"),
+            IsChecked = App.Settings.Current.HistoryStorePaths,
+            Margin = new Thickness(0, 4, 0, 0)
+        };
+        pathChk.Checked += (_, _) =>
+        {
+            App.Settings.Current.HistoryStorePaths = true;
+            App.Settings.Save();
+        };
+        pathChk.Unchecked += (_, _) =>
+        {
+            App.Settings.Current.HistoryStorePaths = false;
+            App.Settings.Save();
+        };
+        panel.Children.Add(pathChk);
+        panel.Children.Add(new TextBlock
+        {
+            Text = L10n.T("开启后任务历史会记录完整文件路径（便于双击回放）；关闭则只记录文件名，不把「保护了哪些文件」明文留在磁盘上。"),
+            FontSize = 12,
+            Opacity = 0.6,
+            TextWrapping = TextWrapping.Wrap,
+            MaxWidth = 520
+        });
         Content = panel;
     }
 

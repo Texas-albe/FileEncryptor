@@ -1,10 +1,10 @@
 <Project Sdk="WixToolset.Sdk/4.0.5">
   <PropertyGroup>
-    <!-- 版本固定 3.0.0。覆盖安装的文件替换问题由 Product.wxs 的
+    <!-- 版本固定 3.0.1。覆盖安装的文件替换问题由 Product.wxs 的
          MajorUpgrade AllowSameVersionUpgrades="yes" 解决（相同版本也先卸后装），不靠版本号递增。 -->
-    <GuiVersion>3.0.0</GuiVersion>
+    <GuiVersion>3.0.1</GuiVersion>
     <!-- CLI 产物名由 CMake project(VERSION) 拼出，只支持数值版（无 -alpha.N），故独立定义 -->
-    <CliVersion>3.0.0</CliVersion>
+    <CliVersion>3.0.1</CliVersion>
     <OutputType>Package</OutputType>
     <OutputName>FileEncryptorGUI-$(GuiVersion)-WinUI-Windows</OutputName>
     <Platform>x64</Platform>
@@ -35,10 +35,12 @@
              Properties="Configuration=$(Configuration);Platform=x64;RuntimeIdentifier=win-x64;SelfContained=true" />
     <Copy SourceFiles="..\bin\x64\$(Configuration)\net8.0-windows10.0.19041.0\win-x64\App.xbf;..\bin\x64\$(Configuration)\net8.0-windows10.0.19041.0\win-x64\MainWindow.xbf;..\bin\x64\$(Configuration)\net8.0-windows10.0.19041.0\win-x64\TaskNotificationWindow.xbf"
           DestinationFolder="..\bin\x64\$(Configuration)\net8.0-windows10.0.19041.0\win-x64\publish" />
-    <!-- Updater 由 build_updater.ps1 产出，publish 后补拷，MSI 才能把更新器一并装入 -->
-    <Copy SourceFiles="..\bin\x64\$(Configuration)\net8.0-windows10.0.19041.0\win-x64\Updater.exe"
+    <!-- Updater 由 Updater 工程独立产出（build_updater.ps1 已废弃），先构建再补拷进 publish -->
+    <Exec Command="&quot;$(BuildHelper)&quot; &quot;$(VcVarsBat)&quot; &quot;$(CMakeExe)&quot; &quot;..\..\Updater\out\build\x64-Release&quot; Release"
+          Condition="Exists('..\..\Updater\out\build\x64-Release\CMakeCache.txt')" />
+    <Copy SourceFiles="..\..\Updater\out\build\x64-Release\bin\Updater.exe"
           DestinationFolder="..\bin\x64\$(Configuration)\net8.0-windows10.0.19041.0\win-x64\publish"
-          Condition="Exists('..\bin\x64\$(Configuration)\net8.0-windows10.0.19041.0\win-x64\Updater.exe')"
+          Condition="Exists('..\..\Updater\out\build\x64-Release\bin\Updater.exe')"
           SkipUnchangedFiles="true" />
   </Target>
 
@@ -61,6 +63,12 @@
     <!-- FE-Mounter 已从 CLI 主构建拆出，需单独构建（产物同落 bin\Release） -->
     <Exec Command="&quot;$(BuildHelper)&quot; &quot;$(VcVarsBat)&quot; &quot;$(CMakeExe)&quot; &quot;$(MounterBuildDir)&quot; Release"
           Condition="Exists('$(MounterBuildDir)\CMakeCache.txt')" />
+    <!-- 构建树被删除时上面的 Exec 会被 Condition 静默跳过，表现为「MSI 里没有 CLI/挂载组件」
+         却无任何提示。这里显式告警并给出恢复命令。 -->
+    <Warning Condition="!Exists('$(CliBuildDir)\CMakeCache.txt')"
+             Text="[installer] CLI 构建树未配置（$(CliBuildDir) 无 CMakeCache.txt），已跳过 CLI 编译：安装包将缺少 CLI 与 vdisk.dll。请先执行：python E:\FileEncryptor\.workbuddy\build_cli.py" />
+    <Warning Condition="!Exists('$(MounterBuildDir)\CMakeCache.txt')"
+             Text="[installer] FE-Mounter 构建树未配置（$(MounterBuildDir) 无 CMakeCache.txt），已跳过挂载组件编译：安装包将缺少 FE-Mounter.exe。请先执行：python E:\FileEncryptor\.workbuddy\build_mounter.py" />
     <!-- 产物目录逐个文件解析：CLI 主构建是 Ninja 单配置，产物直接落 bin\；
          FE-Mounter 走 VS 生成器，产物落 bin\Release\（bin\Release\ 里还留着早期
          多配置时代的陈旧 CLI 副本）。写死一个目录会装进旧 CLI，表现为
@@ -78,6 +86,9 @@
       <P_Winfsp Condition="'$(P_Winfsp)'==''">$(CliBinCfg)winfsp-x64.dll</P_Winfsp>
       <P_Launcher Condition="Exists('$(CliBinRoot)launcher-x64.exe')">$(CliBinRoot)launcher-x64.exe</P_Launcher>
       <P_Launcher Condition="'$(P_Launcher)'==''">$(CliBinCfg)launcher-x64.exe</P_Launcher>
+      <P_WinfspSys Condition="Exists('$(CliBinRoot)winfsp-x64.sys')">$(CliBinRoot)winfsp-x64.sys</P_WinfspSys>
+      <P_WinfspSys Condition="'$(P_WinfspSys)'==''">$(CliBinCfg)winfsp-x64.sys</P_WinfspSys>
+      <P_WinfspSys Condition="'$(P_WinfspSys)'==''">$(MSBuildThisFileDirectory)..\..\third_party\winfsp\winfsp-x64.sys</P_WinfspSys>
     </PropertyGroup>
     <Copy SourceFiles="$(P_CliExe)"
           DestinationFiles="$(GuiPublishDir)\FileEncryptorCLI.exe"
@@ -93,11 +104,22 @@
           Condition="Exists('$(P_Mounter)')" />
     <!-- WinFSP 用户态运行时：FE-Mounter 静态导入 winfsp-x64.dll，缺它进程根本起不来
          （表现为「挂载盘用不了」且没有任何提示）。launcher 是 WinFSP 服务启动器，
-         目标机没预装 WinFSP 时由它拉起服务。两者都必须与 FE-Mounter.exe 同目录。 -->
+         目标机没预装 WinFSP 时由它拉起服务。两者都必须与 FE-Mounter.exe 同目录。
+         winfsp.sys 是内核驱动：与 dll 同目录时，FE-Mounter 以管理员身份首次挂载会由 DLL
+         嵌入式自安装并启动内核驱动，使未预装 WinFSP 的干净机也能盘符挂载。 -->
     <Copy SourceFiles="$(P_Winfsp);$(P_Launcher)"
           DestinationFolder="$(GuiPublishDir)"
           SkipUnchangedFiles="true"
           Condition="Exists('$(P_Winfsp)')" />
+    <Copy SourceFiles="$(P_WinfspSys)"
+          DestinationFolder="$(GuiPublishDir)"
+          SkipUnchangedFiles="true"
+          Condition="Exists('$(P_WinfspSys)')" />
+    <!-- winfsp-x64.sys 已落入 publish 才把 WINFSP_SYS 传给 candle：Product.wxs 据此条件编入内核驱动组件；
+         缺失时整个组件不进 MSI，构建照常通过（干净机挂载退化为需预装 WinFSP，与改动前一致）。 -->
+    <PropertyGroup Condition="Exists('$(GuiPublishDir)\winfsp-x64.sys')">
+      <DefineConstants>$(DefineConstants);WINFSP_SYS=1</DefineConstants>
+    </PropertyGroup>
     <!-- 暂存区缺件要显式告警：Copy 的 Exists 条件会静默跳过，最后表现为
          「安装包里没有 CLI / FE-Mounter / WinFSP」，比构建失败更难查。 -->
     <Warning Condition="!Exists('$(P_CliExe)')"
@@ -108,5 +130,7 @@
              Text="[installer] 未找到 FE-Mounter.exe：安装包将不含加密盘挂载组件。请先构建 FE-Mounter 工程。" />
     <Warning Condition="!Exists('$(P_Winfsp)')"
              Text="[installer] 未找到 winfsp-x64.dll：安装包将不含 WinFSP 运行时，盘符挂载无法工作。请确认构建 FE-Mounter 时能找到 WinFSP SDK。" />
+    <Warning Condition="!Exists('$(P_WinfspSys)')"
+             Text="[installer] 未找到 winfsp-x64.sys（已查 CLI bin\、bin\Release\、third_party\winfsp\）：安装包将不含 WinFSP 内核驱动，未预装 WinFSP 的干净机（如 Win11 22H2 样机）盘符挂载会失效。请确认 WinFSP SDK 完整（含 bin\winfsp-x64.sys），或将正版签名的 winfsp-x64.sys 放入 E:\FileEncryptor\third_party\winfsp\ 后重新生成。" />
   </Target>
 </Project>
