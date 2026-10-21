@@ -12,10 +12,13 @@ public sealed partial class VaultMountDialog : ContentDialog
     public string MountPoint => MpBox.Text.Trim();
     public string Password => PwBox.Password;
     public bool ReadWrite => RwChk != null && RwChk.IsChecked == true;
+    // 挂载前清空（格式化）：勾选后挂载流程会先用密码格式化该盘再挂载，得到空盘
+    public bool FormatVault => FmtChk != null && FmtChk.IsChecked == true;
 
     private readonly TextBox MpBox = null!;
     private readonly PasswordBox PwBox = null!;
     private readonly CheckBox? RwChk;
+    private readonly CheckBox? FmtChk;
 
     // defaultPoint：上次用的盘符，空则用 Z:
     public VaultMountDialog(bool allowReadWrite, string defaultPoint = "")
@@ -64,6 +67,15 @@ public sealed partial class VaultMountDialog : ContentDialog
             };
             panel.Children.Add(RwChk);
         }
+
+        // 挂载前格式化：勾选后本次挂载会先用密码清空该盘再挂，得到空盘。
+        // 适合「盘里有旧数据想直接抹掉重来」的场景，免去先挂载再单独格式化的两步。
+        FmtChk = new CheckBox
+        {
+            Content = L10n.T("挂载前清空此加密盘（格式化）"),
+            IsChecked = false,
+        };
+        panel.Children.Add(FmtChk);
 
         Content = panel;
         Title = L10n.T("挂载为磁盘");

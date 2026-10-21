@@ -14,22 +14,17 @@
          （曾表现为新版 XAML 的连接器与旧 DLL 错位，启动即 InvalidCastException 无窗口）。 -->
     <MajorUpgrade AllowSameVersionUpgrades="yes" Schedule="afterInstallValidate" DowngradeErrorMessage="A newer version of FileEncryptor GUI is already installed." />
 
-    <!-- Close running GUI before install/uninstall to avoid file-in-use errors -->
+    <!-- 安装/卸载前关闭 GUI，避免文件占用 -->
     <util:CloseApplication Id="CloseGui" Target="FileEncryptorGUI.WinUI3.exe" Description="FileEncryptor GUI is running. Close it to continue." RebootPrompt="no" />
+    <!-- FE-Mounter 占用 vdisk/winfsp 的 dll；不关它升级替换会失败 -->
+    <util:CloseApplication Id="CloseMounter" Target="FE-Mounter.exe" Description="FE-Mounter is running. Close it to continue." RebootPrompt="no" />
 
     <MediaTemplate EmbedCab="yes" />
 
     <Icon Id="app.ico" SourceFile="..\..\GUI-Qt\logogui.ico" />
 
-    <!-- GPLv3 License -->
+    <!-- GPLv3 许可证 -->
     <WixVariable Id="WixUILicenseRtf" Value="license.rtf" />
-
-    <!-- Detect Windows Terminal -->
-    <Property Id="WT_INSTALLED" Secure="yes">
-      <DirectorySearch Id="WTSearch" Path="[LocalAppDataFolder]\Microsoft\WindowsApps" Depth="0">
-        <FileSearch Name="wt.exe" />
-      </DirectorySearch>
-    </Property>
 
     <!-- 检测系统是否已安装 WinFSP（Program Files (x86)\WinFsp\bin\winfsp-x64.dll）。
          已装则跳过捆绑安装，避免重复安装/版本冲突。 -->
@@ -38,13 +33,6 @@
         <FileSearch Id="WinFspDll" Name="winfsp-x64.dll" />
       </DirectorySearch>
     </Property>
-
-    <!-- Custom action: install Windows Terminal via winget (MS Store backend) -->
-    <CustomAction Id="InstallWT"
-                  Directory="INSTALLFOLDER"
-                  ExeCommand="cmd /c winget install --id Microsoft.WindowsTerminal -e --silent --accept-package-agreements --accept-source-agreements"
-                  Execute="immediate"
-                  Return="asyncNoWait" />
 
     <!-- 自定义操作：静默安装捆绑的 WinFSP（msiexec /i）。安排在 InstallFiles 之后
          （事务内、InstallFinalize 之前，满足 ICE77），此时 redist\winfsp MSI 已落盘。
@@ -57,13 +45,13 @@
                   Impersonate="no"
                   Return="asyncNoWait" />
 
-    <!-- Custom action: launch GUI after install (working dir = install folder) -->
+    <!-- 安装后启动 GUI（工作目录=安装目录） -->
     <CustomAction Id="LaunchApp"
                   Directory="INSTALLFOLDER"
                   ExeCommand="[#MainExeFile]"
                   Return="asyncNoWait" />
 
-    <!-- Main program: required (Level=1 + Absent=disallow, always installed) -->
+    <!-- 主程序：必装（Level=1+Absent=disallow） -->
     <Feature Id="MainFeature" Title="FileEncryptor GUI (WinUI)" Level="1"
              Description="The main FileEncryptor graphical user interface (WinUI 3). Required.">
       <ComponentGroupRef Id="AppFiles" />
@@ -72,6 +60,11 @@
       <ComponentRef Id="CliExe" />
       <ComponentRef Id="StartMenuShortcut" />
       <ComponentRef Id="DesktopShortcut" />
+      <!-- P1-3 禁崩溃转储：整机层面把本产品各 exe 登记进 WER 排除列表。
+           排除后 WER 不再为这些程序生成错误报告与转储——崩溃 dump 会把进程内存
+           （口令、派生 KEK、明文缓冲）整体写盘。安装器有管理员权限，可写 HKLM 覆盖所有用户。
+           值格式经实证：...\ExcludedApplications 下的 DWORD 值 <exe 文件名>=1（不是子键）。 -->
+      <ComponentRef Id="WerExclusions" />
       <!-- 加密盘挂载组件：与 vdisk.dll 捆绑（FE-Mounter 必须 dlopen 它，两者同装同卸）。
            CLI 本身不依赖 vdisk.dll，不选只影响盘符挂载，GUI 会自动隐藏加密盘入口。 -->
       <Feature Id="VaultFeature" Title="Encrypted vault mounting (FE-Mounter)" Level="1"
@@ -94,20 +87,12 @@
       </Feature>
     </Feature>
 
-    <!-- Windows Terminal integration: optional -->
-    <Feature Id="TerminalFeature" Title="Windows Terminal Integration" Level="2"
-             Description="Adds a 'FileEncryptor Terminal' shortcut. If Windows Terminal is not installed, it is automatically installed via Microsoft Store (winget).">
-      <ComponentRef Id="TerminalShortcut" />
-    </Feature>
-
     <ui:WixUI Id="WixUI_FeatureTree" />
     <Property Id="WIXUI_INSTALLDIR" Value="INSTALLFOLDER" />
     <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOXTEXT" Value="Launch FileEncryptor GUI" />
     <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOX" Value="1" />
 
-    <!-- Open Microsoft Store after install if Terminal feature selected and WT not installed -->
     <InstallExecuteSequence>
-      <Custom Action="InstallWT" After="InstallFinalize" Condition="&amp;TerminalFeature=3 AND NOT WT_INSTALLED" />
       <Custom Action="InstallWinFsp" After="InstallFiles" Condition="&amp;WinFspFeature=3 AND NOT WINFSP_INSTALLED" />
       <Custom Action="LaunchApp" After="InstallFinalize" Condition="WIXUI_EXITDIALOGOPTIONALCHECKBOX=1 AND NOT Installed" />
     </InstallExecuteSequence>
@@ -129,12 +114,12 @@
   </Fragment>
 
   <Fragment>
-    <!-- Main exe (separate component for shortcut reference) -->
+    <!-- 主 exe（独立组件，便于快捷方式引用） -->
     <Component Id="MainExe" Directory="INSTALLFOLDER">
       <File Id="MainExeFile" Source="$(var.PublishDir)\FileEncryptorGUI.WinUI3.exe" KeyPath="yes" />
     </Component>
 
-    <!-- Auto-update helper: needed by the GUI to check and apply updates -->
+    <!-- 自动更新助手：GUI 检查/应用更新所需 -->
     <Component Id="UpdaterExe" Directory="INSTALLFOLDER">
       <File Id="UpdaterExeFile" Source="$(var.PublishDir)\Updater.exe" KeyPath="yes" />
     </Component>
@@ -205,15 +190,25 @@
                      Name="desktop_shortcut" Type="integer" Value="1" KeyPath="yes" />
     </Component>
 
-    <!-- Windows Terminal shortcut: opens wt.exe with install dir as working directory -->
-    <Component Id="TerminalShortcut" Directory="ProgramMenuDir">
-      <Shortcut Id="TerminalSc"
-                Name="FileEncryptor Terminal"
-                Target="wt.exe"
-                Arguments="-d &quot;[INSTALLFOLDER]&quot;"
-                Icon="app.ico" />
-      <RegistryValue Root="HKCU" Key="Software\FileEncryptor\GUI"
-                     Name="terminal_shortcut" Type="integer" Value="1" KeyPath="yes" />
+    <!-- P1-3 禁崩溃转储（整机）：HKLM\...\Windows Error Reporting\ExcludedApplications
+         下写 <exe>=1，格式与 WerAddExcludedApplication(bAllUsers=TRUE) 一致（已实证）。
+         覆盖所有用户；GUI 首次启动还会再调一次 API 兜底（未以管理员安装时写 HKCU）。 -->
+    <Component Id="WerExclusions" Directory="INSTALLFOLDER">
+      <RegistryValue Root="HKLM"
+                     Key="SOFTWARE\Microsoft\Windows\Windows Error Reporting\ExcludedApplications"
+                     Name="FileEncryptorGUI.WinUI3.exe" Type="integer" Value="1" KeyPath="yes" />
+      <RegistryValue Root="HKLM"
+                     Key="SOFTWARE\Microsoft\Windows\Windows Error Reporting\ExcludedApplications"
+                     Name="FE-Mounter.exe" Type="integer" Value="1" />
+      <RegistryValue Root="HKLM"
+                     Key="SOFTWARE\Microsoft\Windows\Windows Error Reporting\ExcludedApplications"
+                     Name="FileEncryptorCLI.exe" Type="integer" Value="1" />
+      <RegistryValue Root="HKLM"
+                     Key="SOFTWARE\Microsoft\Windows\Windows Error Reporting\ExcludedApplications"
+                     Name="Updater.exe" Type="integer" Value="1" />
+      <RegistryValue Root="HKLM"
+                     Key="SOFTWARE\Microsoft\Windows\Windows Error Reporting\ExcludedApplications"
+                     Name="RestartAgent.exe" Type="integer" Value="1" />
     </Component>
   </Fragment>
 

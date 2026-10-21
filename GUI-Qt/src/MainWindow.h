@@ -159,9 +159,14 @@ private:
     QString resolveRecipients(const QString& raw) const;
 
     // 任务记录与 ETA
-    void beginTaskRecord(const ShellOptions& o);
+    // rawRecipient：收件人原始列表（resolveRecipients 之前的界面原文），
+    // 任务结束即删的临时文件路径不能进历史，否则回放必失败
+    void beginTaskRecord(const ShellOptions& o, const QString& rawRecipient = QString());
     void finishTaskRecord(const CommandResult& r);
     void applyTaskRecord(const TaskRecord& rec);
+    // M45：临时文件统一清理。析构函数与 closeEvent 都调用——
+    // 「立即重启」走 qApp->quit() 不触发 closeEvent，只有析构能兜底。
+    void cleanupTempFiles();
     void recomputePending();
     void resetPendingCache();
     void updateProgressLabel();

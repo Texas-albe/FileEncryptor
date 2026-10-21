@@ -100,12 +100,15 @@ public sealed partial class MountedVaultsDialog : ContentDialog
                                     : new SolidColorBrush(Microsoft.UI.Colors.Gray),
                 Width = 70,
             });
-            row.DoubleTapped += (_, _) =>
+            // 双击解锁：先 Hide 本页再触发宿主解锁（宿主会弹密码框，
+            // 同一 XamlRoot 不能双 ContentDialog 并存，顺序倒置即「双击没反应」）
+            row.DoubleTapped += async (_, _) =>
             {
                 if (locked && !string.IsNullOrEmpty(m.VaultDir))
                 {
-                    _unlock?.Invoke(m.VaultDir);
                     Hide();
+                    await Task.Delay(120);   // 等退场动画结束，规避同 XamlRoot 双框竞态
+                    _unlock?.Invoke(m.VaultDir);
                 }
             };
             _rowsPanel.Children.Add(row);

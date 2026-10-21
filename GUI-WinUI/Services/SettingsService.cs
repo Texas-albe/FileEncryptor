@@ -84,7 +84,10 @@ public class SettingsService
         {
             Directory.CreateDirectory(ConfigDir);
             var json = JsonSerializer.Serialize(Current, new JsonSerializerOptions { WriteIndented = true });
-            File.WriteAllText(ConfigPath, json);
+            // 原子写：先写临时文件再 File.Move 覆盖，写中途崩溃不会留下半截配置（与 DeviceKeyService 一致）
+            var tmp = ConfigPath + ".tmp";
+            File.WriteAllText(tmp, json);
+            File.Move(tmp, ConfigPath, overwrite: true);
         }
         catch {  }
     }

@@ -131,8 +131,9 @@ public static class TaskHistoryService
                 Directory.CreateDirectory(HistoryDir);
                 EnsureAcl();
                 // 写回时反转为正序
+                // M43: 与读取/追加路径一致：关闭 HistoryStorePaths 后，旧记录（可能含全路径）不得被原样回写
                 var ordered = records.AsEnumerable().Reverse().ToList();
-                var lines = ordered.Select(r => JsonSerializer.Serialize(r));
+                var lines = ordered.Select(r => JsonSerializer.Serialize(SanitizeForStorage(r)));
                 File.WriteAllLines(HistoryFile, lines);
                 // 重写后重新收紧 ACL
                 RestrictToCurrentUser(HistoryFile, isDirectory: false);

@@ -14,6 +14,8 @@
 #include <sddl.h>
 #include <windows.h>
 #include <winnt.h>      // TOKEN_USER / LPTOKEN_USER（windows.h 已带守卫，此处显式补）
+#include <shlobj.h>     // SHGetKnownFolderPath：允许根不再取自可伪造环境变量（低危 B）
+#pragma comment(lib, "shell32.lib")
 #include <tlhelp32.h>   // CreateToolhelp32Snapshot：检测 GUI 进程是否存活
 #include <Wtsapi32.h>   // WTSGetActiveConsoleSessionId：交互会话探测（前台判定用）
 #include <cstdio>
@@ -51,12 +53,14 @@ static bool fe_is_locked() { return !g_ipc_unlocked.load(std::memory_order_relax
 // 它们对盘内文件的访问不刷新自动锁计时。mounter 由 GUI 在用户会话内 detached 拉起时
 // EnumWindows 能看到用户窗口，按窗口判定；SCM 服务场景（session 0）枚举不到别会话
 // 窗口，退化为「调用方与 mounter 同会话即前台」的近似（宁漏锁，不误锁）。
-static std::mutex g_idle_mtx;                  // 保护「刷新活动 ↔ 上锁决策」临界区
+// M7：该临界区同时被 IPC do_unlock 的成功置位路径持有（锁定义于 fe_ipc.cpp，跨文件经 accessor 取）；M6 的库调用互斥始终先于它获取，加锁序统一为 fe→idle。
+static std::mutex& g_idle_mtx = fe_idle_decision_mutex();   // 保护「刷新活动 ↔ 上锁决策」临界区
 static std::mutex g_fg_snap_mtx;               // 单独保护前台快照（与 I/O 热路径解耦）
 static DWORD     g_my_session = 0;             // mounter 自身所在会话
 static bool      g_fg_can_enum = false;        // 能否枚举本会话窗口（= 在交互会话内）
 static std::atomic<bool> g_fg_stop{false};     // 前台快照线程退出标志
 static std::thread g_fg_thread;                // 后台周期刷新前台窗口快照
+static std::thread g_watchdog_thread;          // M5 空闲看门狗：SvcStop 释放 g_wh 前先 join 它（low B UAF）
 
 // 可见顶层窗口进程集合 + 前台窗口进程。由独立后台线程每 ~1s 刷新，
 // I/O 热路径只读取、不再调用 EnumWindows，避免窗口枚举阻塞所有并发文件操作
@@ -154,6 +158,14 @@ static std::string wfspath_to_vpath(const WCHAR* FileName) {
     }
     if (out.empty()) out = "/";
     while (out.size() > 1 && out.back() == '/') out.pop_back();
+    // 纵深防御：显式拒绝 "."/".." 分量，不依赖 WinFSP 内核规范化（低危 A 组）。返回空串即拒绝，调用方须检查；合法 IRP 永不含这两个分量。
+    for (size_t i = 0; i < out.size(); ) {
+        size_t j = out.find('/', i);
+        if (j == std::string::npos) j = out.size();
+        std::string comp = out.substr(i, j - i);
+        if (comp == "." || comp == "..") return std::string();
+        i = (j == out.size()) ? j : j + 1;
+    }
     return out;
 }
 
@@ -163,19 +175,21 @@ static void wf_fill_fileinfo(FSP_FSCTL_FILE_INFO* fi, bool isdir, uint64_t size,
     fi->ReparseTag      = 0;
     fi->AllocationSize  = isdir ? 0 : size;
     fi->FileSize        = size;
-    UINT64 ft = ((UINT64)mtime + 11644473600ULL) * 10000000ULL;   // unix 秒 → FILETIME
+    UINT64 ft = ((UINT64)mtime + 11644473600ULL) * 10000000ULL;   // unix 秒转 FILETIME
     fi->CreationTime = ft; fi->LastAccessTime = ft; fi->LastWriteTime = ft; fi->ChangeTime = ft;
     fi->IndexNumber = 0; fi->HardLinks = 0; fi->EaSize = 0;
 }
 
-void fe_notify_locked_access();   // 前向声明（下方定义，wf_st 中调用）
+void fe_notify_locked_access(DWORD owner_pid);   // 前向声明（仅真正访问入口调用，带访问者 PID）
 static void launch_gui_if_needed();   // 前向声明：锁定访问时拉起 GUI（若未运行）
 static NTSTATUS wf_st(VDiskStatus st) {
     if (st == VDISK_OK) return STATUS_SUCCESS;
     // 锁定态一律拒绝访问（而非 DEVICE_NOT_READY）：让 Explorer 明确报「拒绝访问」，
     // 避免「设备未就绪」被当可重试而误以为盘可开。盘符仍可见、双击即拒。
     if (st == VDISK_E_LOCKED) {
-        fe_notify_locked_access();   // 写事件文件，GUI 轮询后弹「解锁」提示
+        // 注意：此处不再发解锁通知。wf_st 是 getSecurityByName / getattr / 读写的公共映射器，
+        // 被资源管理器刷图标、权限、缩略图等高频后台调用，在此通知会「打开任意文件夹都弹 GUI」。
+        // 解锁提示只由 wf_open_common / wf_ReadDirectory / 读写的锁定分支显式发出（见各处）。
         return STATUS_ACCESS_DENIED;
     }
     if (st == VDISK_E_NOTFOUND) return STATUS_OBJECT_NAME_NOT_FOUND;
@@ -187,7 +201,9 @@ static NTSTATUS wf_st(VDiskStatus st) {
 // 解锁通知的用户输入活跃窗：仅当用户近期有键鼠输入时才认为本次锁定访问是主动操作。
 // Explorer 后台刷（索引/缩略图/杀软实时扫描）与主动双击走同一 Open/Read 路径，
 // 但后台刷发生时用户没有输入活动，借此区分，杜绝「莫名其妙弹解锁窗」。
-static const uint32_t kNotifyIdleWindowMs = 30000;
+// 窗口收紧到 3s：双击/主动打开锁盘时 lastInput 几乎为 0（必过）；而用户闲置 >3s 后的
+// 后台枚举会被拦下，避免「只要盘是锁的、机器有活动就反复拉起 GUI」。
+static const uint32_t kNotifyIdleWindowMs = 3000;
 static bool user_recently_active(uint32_t max_idle_ms) {
     LASTINPUTINFO li;
     li.cbSize = sizeof(li);
@@ -196,13 +212,27 @@ static bool user_recently_active(uint32_t max_idle_ms) {
     return (GetTickCount() - li.dwTime) < max_idle_ms;
 }
 
+// 访问进程是否为前台窗口所属进程：仅当用户正操作该进程（如双击盘符所在的资源管理器窗口）时为真。
+// 后台枚举、搜索索引、杀软实时扫描、缩略图生成等多半由非前台进程（或用户正看别的窗口时）发起，
+// 借此彻底区分「用户真想打开锁盘」与「系统后台碰了锁盘」，杜绝无关操作误弹 GUI。
+static bool is_foreground_process(DWORD pid) {
+    if (pid == 0) return true;   // 拿不到 PID 保守放行（宁弹不漏）
+    HWND fg = GetForegroundWindow();
+    if (!fg) return true;
+    DWORD fgPid = 0;
+    GetWindowThreadProcessId(fg, &fgPid);
+    return fgPid == pid;
+}
+
 // 锁定态被访问时写事件文件，GUI 轮询据此弹出「解锁」提示（替代无法拦截的资源管理器双击）。
 // 8 秒节流，避免一次双击/枚举刷出大量事件；文件名用 vault 哈希，避免路径字符非法。
 static std::mutex                g_locked_notify_mtx;
 static std::unordered_map<std::string, uint64_t> g_last_locked_notify;  // vault -> 上次写毫秒
-void fe_notify_locked_access() {
+void fe_notify_locked_access(DWORD owner_pid) {
     const std::string vault = g_svc_vault;
     if (vault.empty()) return;
+    // 仅前台进程（用户正操作的窗口所属进程）的访问才提示；后台枚举/索引/缩略图忽略
+    if (!is_foreground_process(owner_pid)) return;
     // 用户近期无输入 = 后台程序触发的锁定访问，不打扰（置于节流前，省一次哈希表操作）
     if (!user_recently_active(kNotifyIdleWindowMs)) return;
     uint64_t now = wf_now_ms();
@@ -220,7 +250,8 @@ void fe_notify_locked_access() {
     for (char c : vault) { h ^= (unsigned char)c; h *= 0x100000001b3ULL; }
     char nm[64]; snprintf(nm, sizeof nm, "fe_locked_%016llx.event", (unsigned long long)h);
     std::string path = dir + "\\" + nm;
-    FILE* f = fopen(path.c_str(), "w");
+    // 防符号链接劫持：路径可预测（FNV 名 + LOCALAPPDATA 下），同用户可预置 symlink 把写导向库外（低危 A 组）。
+    FILE* f = fe_open_write_nofollow(path, false);
     if (f) { fprintf(f, "vault=%s\nmount=%s\n", vault.c_str(), g_svc_mp.c_str()); fclose(f); }
     // 事件已落盘：若 GUI 未运行则拉起它（双击锁定盘也能弹解锁框，无需 GUI 事先常驻）
     launch_gui_if_needed();
@@ -244,12 +275,9 @@ static bool gui_process_running() {
                     auto p = s.find_last_of(L"\\/");
                     std::wstring base = (p == std::wstring::npos) ? s : s.substr(p + 1);
                     if (_wcsicmp(base.c_str(), L"FileEncryptorGUI.WinUI3.exe") == 0) found = true;
-                } else {
-                    found = true;   // 查询失败不阻断（可用性优先，避免漏判重复拉起）
                 }
+                // 查询失败改判「未运行」：宁可多拉一次 GUI，也不漏拉（漏拉=双击锁盘没有解锁框）（低危 B 组）。
                 CloseHandle(h);
-            } else {
-                found = true;       // 打不开也按命中
             }
             if (found) break;
         } while (Process32NextW(snap, &pe));
@@ -264,10 +292,17 @@ static bool gui_path_allowed(const std::wstring& wp) {
     auto lower = [](std::wstring s) { for (auto& c : s) c = (wchar_t)towlower(c); return s; };
     std::wstring p = lower(wp);
     std::vector<std::wstring> allowed;
-    wchar_t buf[MAX_PATH] = {0};
-    if (GetEnvironmentVariableW(L"ProgramFiles", buf, MAX_PATH)) allowed.push_back(lower(buf));
-    wchar_t buf86[MAX_PATH] = {0};
-    if (GetEnvironmentVariableW(L"ProgramFiles(x86)", buf86, MAX_PATH)) allowed.push_back(lower(buf86));
+    // 允许根取自 Known Folder 而非环境变量：进程环境可被父进程伪造，借此可借「锁定访问」自动执行任意 exe（低危 B 组）。
+    PWSTR kf = nullptr;
+    if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_ProgramFiles, 0, nullptr, &kf)) && kf) {
+        allowed.push_back(lower(kf));
+        CoTaskMemFree(kf);
+    }
+    kf = nullptr;
+    if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_ProgramFilesX86, 0, nullptr, &kf)) && kf) {
+        allowed.push_back(lower(kf));
+        CoTaskMemFree(kf);
+    }
     wchar_t mod[MAX_PATH] = {0};
     if (GetModuleFileNameW(nullptr, mod, MAX_PATH)) {
         std::wstring m(mod); auto pos = m.find_last_of(L"\\/");
@@ -316,10 +351,8 @@ static PSECURITY_DESCRIPTOR wf_build_sd() {
                 void* sid = *reinterpret_cast<void**>(buf.data());
                 wchar_t* sidbuf = nullptr;
                 if (sid && ConvertSidToStringSidW(sid, &sidbuf)) {
-                    // 给 Everyone(WD) 授 FA：解锁后的挂载卷对交互用户可读/可执行/枚举，
-                    // 不依赖 FE-Mounter 以何种身份（用户/服务）运行。解密挂载卷本就等同明文，
-                    // 授权范围与 Veracrypt/BitLocker 挂载盘一致。
-                    std::wstring sddl = std::wstring(L"O:BAG:BAD:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;FA;;;WD)(A;;FA;;;")
+                    // 当前用户+Administrators+SYSTEM 完全控制，无 Everyone：解锁态盘上是明文，Everyone-FA 等于同机任何用户可读
+                    std::wstring sddl = std::wstring(L"O:BAG:BAD:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;FA;;;")
                                       + sidbuf + L")";
                     LocalFree(sidbuf);
                     PSECURITY_DESCRIPTOR sd = nullptr; DWORD need = 0;
@@ -333,9 +366,9 @@ static PSECURITY_DESCRIPTOR wf_build_sd() {
         }
         CloseHandle(tok);
     }
-    PSECURITY_DESCRIPTOR sd = nullptr; DWORD need = 0;   // 取不到用户 SID 时的保守兜底
+    PSECURITY_DESCRIPTOR sd = nullptr; DWORD need = 0;   // 取不到用户 SID 时的保守兜底（同样无 Everyone）
     if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(
-            L"O:BAG:BAD:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;FA;;;WD)", SDDL_REVISION_1, &sd, &need)) return nullptr;
+            L"O:BAG:BAD:P(A;;FA;;;SY)(A;;FA;;;BA)", SDDL_REVISION_1, &sd, &need)) return nullptr;
     return sd;
 }
 
@@ -371,6 +404,34 @@ static uint64_t wf_file_size(const std::string& utf8_path) {
     return ((uint64_t)fad.nFileSizeHigh << 32) | (uint64_t)fad.nFileSizeLow;
 }
 
+// 递归汇总目录内所有文件字节（分目录索引 .feindex.d 的占盘统计；目录缺失返回 0）
+static uint64_t wf_dir_size_w(const std::wstring& dir, int depth = 0) {
+    uint64_t total = 0;
+    std::wstring base = dir;
+    if (base.empty()) return 0;
+    if (base.back() != L'\\') base += L'\\';
+    WIN32_FIND_DATAW fd;
+    HANDLE h = FindFirstFileW((base + L"*").c_str(), &fd);
+    if (h == INVALID_HANDLE_VALUE) return 0;
+    do {
+        std::wstring name = fd.cFileName;
+        if (name == L"." || name == L"..") continue;
+        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+            // 低危 A 组：junction/symlink 会造成目录环（栈溢出），跳过重解析点；另限深 32 层兜底。
+            if (fd.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) continue;
+            if (depth >= 32) continue;
+            total += wf_dir_size_w(base + name, depth + 1);
+        } else {
+            total += ((uint64_t)fd.nFileSizeHigh << 32) | (uint64_t)fd.nFileSizeLow;
+        }
+    } while (FindNextFileW(h, &fd));
+    FindClose(h);
+    return total;
+}
+static uint64_t wf_dir_size(const std::string& utf8_dir) {
+    return wf_dir_size_w(utf8_to_wide(utf8_dir));
+}
+
 static NTSTATUS wf_GetVolumeInfo(FSP_FILE_SYSTEM*, FSP_FSCTL_VOLUME_INFO* VolumeInfo) {
     WFDBG("[fe] GetVolumeInfo\n");
     // 容量口径：下限 64MiB，按已用量 2 倍留增长余量（与 stat_space 一致）。
@@ -381,9 +442,11 @@ static NTSTATUS wf_GetVolumeInfo(FSP_FILE_SYSTEM*, FSP_FSCTL_VOLUME_INFO* Volume
         total = 64ull << 20;
         used = 0;
     }
-    // 元数据（.feindex / vault.meta）真实占盘，计入已用，使容量与真实占用对齐
+    // 元数据（分目录索引 .feindex.d / 旧单 .feindex / vault.meta）真实占盘，计入已用
     if (!g_svc_vault.empty())
-        used += wf_file_size(g_svc_vault + "/.feindex") + wf_file_size(g_svc_vault + "/vault.meta");
+        used += wf_dir_size(g_svc_vault + "/.feindex.d")
+              + wf_file_size(g_svc_vault + "/.feindex")     // 旧单索引（未迁移时存在）
+              + wf_file_size(g_svc_vault + "/vault.meta");
     if (total < used) total = used + (64ull << 20);   // 防元数据把已用顶过总量
     VolumeInfo->TotalSize = total;
     VolumeInfo->FreeSize  = (total > used) ? (total - used) : 0;
@@ -396,6 +459,7 @@ static NTSTATUS wf_GetVolumeInfo(FSP_FILE_SYSTEM*, FSP_FSCTL_VOLUME_INFO* Volume
 static NTSTATUS wf_GetSecurityByName(FSP_FILE_SYSTEM*, PWSTR FileName, PUINT32 PFileAttributes,
     PSECURITY_DESCRIPTOR SecurityDescriptor, SIZE_T* PSecurityDescriptorSize) {
     std::string vp = wfspath_to_vpath(FileName);
+    if (vp.empty()) return STATUS_OBJECT_NAME_INVALID;
     WFDBG("[fe] GetSecurityByName '%s'\n", vp.c_str());
     uint64_t size = 0, mtime = 0; uint8_t isdir = 0;
     VDiskStatus st = g_wv->getattr(g_wh, vp.c_str(), &size, &mtime, &isdir);
@@ -406,8 +470,9 @@ static NTSTATUS wf_GetSecurityByName(FSP_FILE_SYSTEM*, PWSTR FileName, PUINT32 P
 static NTSTATUS wf_open_common(PWSTR FileName, UINT32 CreateOptions, UINT32 GrantedAccess,
     PVOID* PFileContext, FSP_FSCTL_FILE_INFO* FileInfo) {
     std::string vp = wfspath_to_vpath(FileName);
+    if (vp.empty()) return STATUS_OBJECT_NAME_INVALID;
     // 锁定态：根目录 getattr 返回 OK，靠它拦不住。此处显式拒访并触发解锁提示。
-    if (fe_is_locked()) { fe_notify_locked_access(); return STATUS_ACCESS_DENIED; }
+    if (fe_is_locked()) { fe_notify_locked_access((DWORD)FspFileSystemOperationProcessId()); return STATUS_ACCESS_DENIED; }
     uint64_t size = 0, mtime = 0; uint8_t isdir = 0;
     VDiskStatus st = g_wv->getattr(g_wh, vp.c_str(), &size, &mtime, &isdir);
     if (getenv("FE_MOUNT_DEBUG"))
@@ -436,6 +501,9 @@ static NTSTATUS wf_Create(FSP_FILE_SYSTEM*, PWSTR FileName, UINT32 CreateOptions
     UINT32 FileAttributes, PSECURITY_DESCRIPTOR, UINT64 AllocationSize,
     PVOID* PFileContext, FSP_FSCTL_FILE_INFO* FileInfo) {
     std::string vp = wfspath_to_vpath(FileName);
+    if (vp.empty()) return STATUS_OBJECT_NAME_INVALID;
+    // H8：锁定期拒绝创建——索引条目登记与 .ptd 落盘都不需要密钥，持锁定前句柄即可写入新条目。
+    if (fe_is_locked()) return STATUS_ACCESS_DENIED;
     WFDBG("[fe] Create '%s' rw=%d dir=%d\n", vp.c_str(), g_svc_rw ? 1 : 0,
           (FileAttributes & FILE_ATTRIBUTE_DIRECTORY) ? 1 : 0);
     bool is_dir = (FileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
@@ -457,8 +525,11 @@ static NTSTATUS wf_Create(FSP_FILE_SYSTEM*, PWSTR FileName, UINT32 CreateOptions
 static NTSTATUS wf_Rename(FSP_FILE_SYSTEM*, PVOID FileContext, PWSTR FileName, PWSTR NewFileName, BOOLEAN ReplaceIfExists) {
     std::string old_vp = wfspath_to_vpath(FileName);
     std::string new_vp = wfspath_to_vpath(NewFileName);
+    if (old_vp.empty() || new_vp.empty()) return STATUS_OBJECT_NAME_INVALID;
     WFDBG("[fe] Rename '%s' -> '%s' replace=%d\n", old_vp.c_str(), new_vp.c_str(), ReplaceIfExists ? 1 : 0);
     if (!g_svc_rw) return STATUS_ACCESS_DENIED;   // 只读拒绝
+    // H8：锁定期拒绝改名/移动——.ptd 搬运与索引改写同样不需要密钥。
+    if (fe_is_locked()) return STATUS_ACCESS_DENIED;
     FeCtx* rc = (FeCtx*)FileContext;
     if (rc)     fe_note_if_fg(rc->owner_pid);
     VDiskStatus st = g_wv->rename(g_wh, old_vp.c_str(), new_vp.c_str());
@@ -478,7 +549,8 @@ static VOID wf_Cleanup(FSP_FILE_SYSTEM*, PVOID FileContext, PWSTR FileName, ULON
     // 删除的唯一执行点：Flags 含 FspCleanupDelete 表示 FSD 已标记该文件删除、现在真正删。
     // （SDK winfsp.h:364 三阶段协议；CanDelete/SetDelete 都只做预检、绝不删）
     WFDBG("[fe] Cleanup '%s' flags=0x%lX\n", c->vpath.c_str(), (unsigned long)Flags);
-    if ((Flags & FspCleanupDelete) && g_svc_rw) {
+    // H8：锁定期不执行删除——删除链路（索引操作 + .ptd 擦除）不需要密钥，持锁定前拿到的句柄即可删。锁态下整段跳过（FileContext 仍正常释放）。
+    if ((Flags & FspCleanupDelete) && g_svc_rw && !fe_is_locked()) {
         // 前台程序发起删除同样算访问（删除前刷新，删除本身即活动）
         fe_note_if_fg(c->owner_pid);
         // 目录也走这里：库层 delete_file 删索引条目 + 擦除其下 .ptd。
@@ -491,7 +563,7 @@ static VOID wf_Cleanup(FSP_FILE_SYSTEM*, PVOID FileContext, PWSTR FileName, ULON
     delete c;
 }
 static VOID wf_Close(FSP_FILE_SYSTEM*, PVOID FileContext) {
-    (void)FileContext;  // context lifetime is managed in Cleanup
+    (void)FileContext;  // 上下文生命周期由 Cleanup 管理
 }
 static NTSTATUS wf_Read(FSP_FILE_SYSTEM*, PVOID FileContext, PVOID Buffer,
     UINT64 Offset, ULONG Length, PULONG PBytesTransferred) {
@@ -500,7 +572,7 @@ static NTSTATUS wf_Read(FSP_FILE_SYSTEM*, PVOID FileContext, PVOID Buffer,
     fe_note_if_fg(c->owner_pid);
     uint64_t len = Length;
     VDiskStatus st = g_wv->read_file(g_wh, c->vpath.c_str(), Offset, (uint8_t*)Buffer, &len);
-    if (st != VDISK_OK) return wf_st(st);
+    if (st != VDISK_OK) { if (fe_is_locked()) fe_notify_locked_access(c->owner_pid); return wf_st(st); }
     *PBytesTransferred = (ULONG)len;
     return STATUS_SUCCESS;
 }
@@ -512,7 +584,7 @@ static NTSTATUS wf_Write(FSP_FILE_SYSTEM*, PVOID FileContext, PVOID Buffer,
     if (!c || c->is_dir) return STATUS_INVALID_DEVICE_REQUEST;
     fe_note_if_fg(c->owner_pid);
     VDiskStatus st = g_wv->write_file(g_wh, c->vpath.c_str(), Offset, (const uint8_t*)Buffer, (uint64_t)Length);
-    if (st != VDISK_OK) return wf_st(st);
+    if (st != VDISK_OK) { if (fe_is_locked()) fe_notify_locked_access(c->owner_pid); return wf_st(st); }
     *PBytesTransferred = Length;
     if (FileInfo) {  // 回填 FileInfo 让系统看到新大小
         uint64_t mtime = 0, sz = 0; uint8_t isdir = 0;
@@ -528,7 +600,7 @@ static NTSTATUS wf_SetFileSize(FSP_FILE_SYSTEM*, PVOID FileContext, UINT64 NewSi
     fe_note_if_fg(c->owner_pid);
     if (!SetAllocationSize) {  // 仅 EOF 调整改文件大小；AllocationSize 仅预留则忽略
         VDiskStatus st = g_wv->truncate_file(g_wh, c->vpath.c_str(), NewSize);
-        if (st != VDISK_OK) return wf_st(st);
+        if (st != VDISK_OK) { if (fe_is_locked()) fe_notify_locked_access(c->owner_pid); return wf_st(st); }
     }
     if (FileInfo) {
         uint64_t mtime = 0, sz = NewSize; uint8_t isdir = 0;
@@ -552,6 +624,9 @@ static NTSTATUS wf_GetFileInfo(FSP_FILE_SYSTEM*, PVOID FileContext, FSP_FSCTL_FI
 }
 static NTSTATUS wf_GetDirInfoByName(FSP_FILE_SYSTEM*, PVOID, PWSTR FileName, FSP_FSCTL_DIR_INFO* DirInfo) {
     std::string vp = wfspath_to_vpath(FileName);
+    if (vp.empty()) return STATUS_OBJECT_NAME_INVALID;
+    // H8：锁定期直接拒绝，不逐名探测文件存在性/大小。
+    if (fe_is_locked()) return STATUS_ACCESS_DENIED;
     uint64_t size = 0, mtime = 0; uint8_t isdir = 0;
     VDiskStatus st = g_wv->getattr(g_wh, vp.c_str(), &size, &mtime, &isdir);
     if (st != VDISK_OK) return wf_st(st);
@@ -574,7 +649,7 @@ static NTSTATUS wf_ReadDirectory(FSP_FILE_SYSTEM* FileSystem, PVOID FileContext0
     // 锁定态：资源管理器双击盘符必经此处。此前 readdir 返回 VDISK_E_LOCKED 却被
     // 「== VDISK_OK」判空后照常返回 SUCCESS，Explorer 只看到空目录、且从不进 wf_st，
     // 导致解锁提示永不触发。锁定即拒访并通知 GUI 弹解锁窗。
-    if (fe_is_locked()) { fe_notify_locked_access(); return STATUS_ACCESS_DENIED; }
+    if (fe_is_locked()) { fe_notify_locked_access(c->owner_pid); return STATUS_ACCESS_DENIED; }
     // 浏览目录同样算前台活动：只翻目录、不打开任何文件时 g_last_fg_activity_ms 不刷新，
     // M5 空闲守护会在窗口到期后误锁，紧接着读文件就变成「无权限」。
     fe_note_if_fg(c->owner_pid);
@@ -584,9 +659,17 @@ static NTSTATUS wf_ReadDirectory(FSP_FILE_SYSTEM* FileSystem, PVOID FileContext0
     if (first_page) {
         uint64_t n = 0;
         if (g_wv->readdir(g_wh, c->vpath.c_str(), nullptr, &n) == VDISK_OK && n > 0) {
-            ents.resize((size_t)n);
+            // M5：条目数上限。n 直接来自 vault 索引，恶意/损坏 .feindex 可令其变成天文数字，无上限 resize 触发 bad_alloc，异常穿出 WinFSP 回调链即 terminate 整个进程；resize 另加 bad_alloc 兜底。
+            if (n > kFeMaxDirEntries) {
+                WFDBG("[fe] readdir '%s' n=%llu exceeds cap %llu\n", c->vpath.c_str(),
+                      (unsigned long long)n, (unsigned long long)kFeMaxDirEntries);
+                return STATUS_INSUFFICIENT_RESOURCES;
+            }
+            try { ents.resize((size_t)n); }
+            catch (const std::bad_alloc&) { return STATUS_INSUFFICIENT_RESOURCES; }
             VDiskEntry* parr = ents.data();
-            if (g_wv->readdir(g_wh, c->vpath.c_str(), &parr, &n) == VDISK_OK) ents.resize((size_t)n);
+            if (g_wv->readdir(g_wh, c->vpath.c_str(), &parr, &n) == VDISK_OK && n <= kFeMaxDirEntries)
+                ents.resize((size_t)n);
             else ents.clear();
         }
     }
@@ -620,6 +703,9 @@ static NTSTATUS wf_ReadDirectory(FSP_FILE_SYSTEM* FileSystem, PVOID FileContext0
 static NTSTATUS wf_CanDelete(FSP_FILE_SYSTEM*, PVOID, PWSTR FileName) {
     if (!g_svc_rw) { WFDBG("[fe] CanDelete denied (read-only)\n"); return STATUS_MEDIA_WRITE_PROTECTED; }
     std::string vp = wfspath_to_vpath(FileName);
+    if (vp.empty()) return STATUS_OBJECT_NAME_INVALID;
+    // H8：锁定期拒绝删除预检（WinFSP 三阶段协议入口；真正删除在 Cleanup 的 FspCleanupDelete 分支，那里同样拦截）。
+    if (fe_is_locked()) return STATUS_ACCESS_DENIED;
     return (g_wv->getattr(g_wh, vp.c_str(), nullptr, nullptr, nullptr) == VDISK_OK)
         ? STATUS_SUCCESS : STATUS_OBJECT_NAME_NOT_FOUND;
 }
@@ -679,16 +765,39 @@ void idle_watchdog_thread() {
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
         }
         if (done) break;
-        if (!g_ipc_unlocked.load() || !g_wv || !g_wh || !g_wapi.lock) continue;
+        // P2-2 休眠/待机/快速启动：电源回调只置标记，实际锁定在这里执行——
+        // 电源通知线程不可阻塞，而这里已持有 g_idle_mtx，与 fe_note_if_fg 同临界区。
+        if (g_power_suspend_pending.exchange(false, std::memory_order_relaxed) ||
+            g_power_resumed.exchange(false, std::memory_order_relaxed)) {
+            {   // M6：与 IPC 线程/SvcStop 在 g_wh 上串行化 libvdisk 调用
+                std::lock_guard<std::mutex> lk(fe_vdisk_call_mutex());
+                if (g_wapi.lock && g_wh && g_ipc_unlocked.load()) {
+                    // 同源清密钥：purge_on_suspend 让库清掉派生密钥（内存/休眠镜像不留）
+                    if (g_wapi.purge_on_suspend) g_wapi.purge_on_suspend(g_wh);
+                    else g_wapi.lock(g_wh);
+                    g_ipc_unlocked = false;
+                    fprintf(stderr, "[fe] power: locked before/after suspend\n");
+                }
+            }
+            std::lock_guard<std::mutex> lk2(g_idle_mtx);
+            g_last_fg_activity_ms.store(0, std::memory_order_relaxed);  // 恢复后重新起算窗口
+            continue;
+        }
+        if (!g_ipc_unlocked.load() || !g_wv || !g_wapi.lock) continue;
         if (g_svc_idle == 0) continue;   // IPC `idle 0` 可运行时关闭自动锁
         // 库可能在 I/O 路径上自行超时锁定（touch_activity/check_idle_only）而没同步 IPC 标志：
         // 锁态下 idle_remaining 返回 UINT32_MAX，借此把 g_ipc_unlocked 纠回 false。
-        if (g_wapi.idle_remaining && g_wapi.idle_remaining(g_wh) == UINT32_MAX) {
-            g_ipc_unlocked = false;
-            std::lock_guard<std::mutex> lk(g_idle_mtx);
-            g_last_fg_activity_ms.store(0, std::memory_order_relaxed);
-            continue;
+        {   // M6：互斥锁下读 g_wh 并调 libvdisk（SvcStop 并发置空并关闭）
+            std::lock_guard<std::mutex> lk(fe_vdisk_call_mutex());
+            if (g_wh && g_wapi.idle_remaining && g_wapi.idle_remaining(g_wh) == UINT32_MAX) {
+                g_ipc_unlocked = false;
+                std::lock_guard<std::mutex> lk2(g_idle_mtx);
+                g_last_fg_activity_ms.store(0, std::memory_order_relaxed);
+                continue;
+            }
         }
+        // M6+M7：库调用互斥（先）与上锁决策临界区（后）一并持有——do_unlock 的成功置位走同一把决策锁，杜绝「判定该锁、真正上锁」的间隙里被解锁置位插穿的不一致态。
+        std::lock_guard<std::mutex> lkf(fe_vdisk_call_mutex());
         std::lock_guard<std::mutex> lk(g_idle_mtx);   // 与 fe_note_if_fg 互斥
         if (!g_ipc_unlocked.load()) continue;
         const uint64_t now = wf_now_ms();
@@ -698,7 +807,7 @@ void idle_watchdog_thread() {
             continue;
         }
         if (now - last < (uint64_t)g_svc_idle * 1000ull) continue;   // 窗口期内不到点不锁
-        g_wapi.lock(g_wh);
+        if (g_wh) g_wapi.lock(g_wh);
         g_ipc_unlocked = false;
         g_last_fg_activity_ms.store(0, std::memory_order_relaxed);
         fprintf(stderr, "[fe] idle timeout: auto-locked (no foreground access for %u s)\n",
@@ -732,12 +841,15 @@ static NTSTATUS wf_SvcStart(FSP_SERVICE* Service, ULONG, PWSTR*) {
     // 否则立刻被计时。库侧计时器保留作兜底（库会在 I/O 路径自行超时锁定），前台 watchdog 总是先到。
     if (g_svc_idle > 0 && g_wapi.set_idle_timeout) g_wapi.set_idle_timeout(g_wh, g_svc_idle);
     fg_init_session();   // 前台判定依赖会话探测，须在首个 I/O 回调与 watchdog 前完成
+    power_register();    // P2-2 休眠/待机/恢复通知（进休眠前上锁、恢复后强制上锁）
     std::thread(ipc_server_thread).detach();
     // 前台活动守护：库的超时判定是「惰性」的，只在有 I/O 到来时才检查；且它认所有 I/O
     // （含后台程序），不满足「仅前台访问续期」。这里独立起定时器按秒主动查前台活动时刻，
     // 到点直接锁。
-    if (g_svc_idle > 0 && g_wapi.lock)
-        std::thread(idle_watchdog_thread).detach();
+    // 无条件启动：watchdog 除自动锁外还消费 P2-2 的休眠/恢复标记（电源线程不执行锁定）。
+    // idle==0 时自动锁判定在循环内被 g_svc_idle==0 跳过，休眠锁仍生效。
+    if (g_wapi.lock)
+        g_watchdog_thread = std::thread(idle_watchdog_thread);   // 可 join：SvcStop 释放 g_wh 前先 join
 
     FSP_FSCTL_VOLUME_PARAMS vol; memset(&vol, 0, sizeof vol);
     FILETIME nowft; GetSystemTimeAsFileTime(&nowft);
@@ -763,7 +875,20 @@ static NTSTATUS wf_SvcStart(FSP_SERVICE* Service, ULONG, PWSTR*) {
     if (!NT_SUCCESS(st)) { fprintf(stderr, "[fe] FspFileSystemCreate failed 0x%08lX\n", (unsigned long)st); return st; }
     std::wstring mount_w = utf8_to_wide(g_svc_mp);
     st = FspFileSystemSetMountPoint(fs, (PWSTR)mount_w.c_str());
-    if (!NT_SUCCESS(st)) { fprintf(stderr, "[fe] SetMountPoint(%s) failed 0x%08lX\n", g_svc_mp.c_str(), (unsigned long)st); FspFileSystemDelete(fs); return st; }
+    if (!NT_SUCCESS(st)) {
+        // P0-2 盘符冲突：WinFSP 直接失败。给出可操作提示（此前只写裸 NTSTATUS，
+        // GUI 又关闭了 stderr 重定向，用户完全看不到失败原因）。
+        fprintf(stderr, "[fe] SetMountPoint(%s) failed 0x%08lX\n", g_svc_mp.c_str(), (unsigned long)st);
+        if (st == STATUS_OBJECT_NAME_COLLISION || st == STATUS_ACCESS_DENIED ||
+            st == STATUS_SHARING_VIOLATION) {
+            fprintf(stderr,
+                "[fe] 盘符 %s 已被占用或不可用（NTSTATUS 0x%08lX）。\n"
+                "[fe] 请先卸载占用该盘符的设备，或换一个盘符重新挂载。\n",
+                g_svc_mp.c_str(), (unsigned long)st);
+        }
+        FspFileSystemDelete(fs);
+        return st;
+    }
     if (g_svc_rw) g_wapi.mount_rw(g_wh, g_svc_mp.c_str());
     else          g_wapi.mount_readonly(g_wh, g_svc_mp.c_str());
     if (getenv("FE_MOUNT_DEBUG")) FspFileSystemSetDebugLog(fs, (UINT32)-1);
@@ -773,6 +898,34 @@ static NTSTATUS wf_SvcStart(FSP_SERVICE* Service, ULONG, PWSTR*) {
     g_wsvc = Service;
     // 卸载：停服务 → FspServiceRun 返回 → 进程退出，盘符随之释放
     g_ipc_eject_hook = []() { if (g_wsvc) FspServiceStop(g_wsvc); };
+    // P0-2 盘符稳定映射：把「实际挂载到的盘符」落到状态文件，供 GUI 与后续重挂读取。
+    // 之前 mount_point 只是单向记录在 vault.meta（记录的是「期望」），实际盘符从不回写，
+    // 跨重启/换接口后 GUI 显示与资源管理器可能不一致。此文件是「事实」的来源。
+    {
+        const char* la = getenv("LOCALAPPDATA");
+        if (la) {
+            std::string dir = std::string(la) + "\\FileEncryptor";
+            CreateDirectoryW(utf8_to_wide(dir).c_str(), nullptr);
+            std::string sub = dir + "\\mount";
+            CreateDirectoryW(utf8_to_wide(sub).c_str(), nullptr);
+            uint64_t hsh = 0xcbf29ce484222325ULL;
+            for (char c : g_svc_vault) { hsh ^= (unsigned char)c; hsh *= 0x100000001b3ULL; }
+            char nm[80]; snprintf(nm, sizeof nm, "vault_%016llx.txt", (unsigned long long)hsh);
+            std::string path = sub + "\\" + nm;
+            // 防符号链接劫持：FNV 名可预测，同用户可预置 symlink 把挂载态写导向库外（低危 A 组）。
+            FILE* fp = fe_open_write_nofollow(path, false);
+            if (fp) {
+                fprintf(fp, "vault=%s\nmount=%s\nrw=%d\npid=%lu\n",
+                        g_svc_vault.c_str(), g_svc_mp.c_str(), g_svc_rw ? 1 : 0,
+                        (unsigned long)GetCurrentProcessId());
+                fclose(fp);
+            }
+            // 挂载成功即登记到多库注册表：保证「加密盘管理」能列出真实挂载的盘，
+            // 即使 GUI 侧漏调 vaults add 也能识别（vaults_add 内部去重，重复调用安全）。
+            std::string reg_err;
+            vaults_add(g_svc_vault, reg_err);
+        }
+    }
     printf("MOUNTED at %s (unlocked=%d)\n", g_svc_mp.c_str(), g_ipc_unlocked.load() ? 1 : 0); fflush(stdout);
     return STATUS_SUCCESS;
 }
@@ -782,7 +935,13 @@ static NTSTATUS wf_SvcStop(FSP_SERVICE* Service) {
     g_fg_stop = true;                              // 停前台快照线程
     if (g_fg_thread.joinable()) g_fg_thread.join();
     g_ipc_stop = true;
-    if (g_wv && g_wh) { g_wv->unmount(g_wh); g_wv->close(g_wh); g_wh = nullptr; }
+    // 低危 B 组：先 join watchdog 再 close g_wh——否则 eject/关机时守护线程可能仍在用已关闭的句柄调库（use-after-free）。
+    if (g_watchdog_thread.joinable()) g_watchdog_thread.join();
+    power_unregister();                            // P2-2：注销电源通知
+    {   // M6：与 IPC 线程串行；仅当无进行中 libvdisk 调用时才释放句柄
+        std::lock_guard<std::mutex> lk(fe_vdisk_call_mutex());
+        if (g_wv && g_wh) { g_wv->unmount(g_wh); g_wv->close(g_wh); g_wh = nullptr; }
+    }
     g_wfs = nullptr;
     g_wsvc = nullptr;
     return STATUS_SUCCESS;

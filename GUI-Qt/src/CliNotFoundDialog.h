@@ -37,6 +37,14 @@ private:
     void failDownload(const QString& msg);
     QString pickCliAsset(const QJsonArray& assets) const;
     bool isAllowedDownloadHost(const QUrl& url) const;
+    // M47：QNetworkAccessManager 的自动重定向不过白名单，改为手动跟随，
+    // 每跳都对新 url 复检主机白名单；返回 true 表示已发起新请求
+    bool followRedirect(QNetworkReply* reply,
+                        void (CliNotFoundDialog::*restart)(const QUrl&));
+    void startTagsRequest(const QUrl& url);
+    void startReleaseRequest(const QUrl& url);
+    void startAssetRequest(const QUrl& url);
+    void startShaRequest(const QUrl& url);
 
     bool m_retry=false;
     bool m_downloaded=false;
@@ -50,5 +58,6 @@ private:
     QString m_assetUrl;
     QString m_tempPath;
     QByteArray m_assetData;
-    bool m_shaWarned=false;
+    // M47：手动跟随重定向的计数（防重定向环）
+    int m_redirects = 0;
 };

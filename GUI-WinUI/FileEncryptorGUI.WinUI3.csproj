@@ -14,15 +14,18 @@
     <WindowsPackageType>None</WindowsPackageType>
     <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
     <EnableMsixTooling>true</EnableMsixTooling>
-    <!-- AssemblyVersion 固定以保持内部 XAML/类型引用稳定；FileVersion/Version 固定 3.0.1.0/3.0.1。
+    <!-- AssemblyVersion 固定以保持内部 XAML/类型引用稳定；FileVersion/Version 固定 3.1.0.0/3.1.0。
          覆盖安装的文件替换由 installer 的 MajorUpgrade AllowSameVersionUpgrades="yes" 解决（相同
          版本也先卸后装），不依赖版本号递增。 -->
-    <AssemblyVersion>3.0.1.0</AssemblyVersion>
-    <FileVersion>3.0.1.0</FileVersion>
-    <Version>3.0.1</Version>
+    <AssemblyVersion>3.1.0.0</AssemblyVersion>
+    <FileVersion>3.1.0.0</FileVersion>
+    <Version>3.1.0</Version>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <LangVersion>latest</LangVersion>
+    <!-- NETSDK1206: WindowsAppSDK 携带 win10-* 版本化 RID 资产，.NET 8+ 默认不解析。
+         本工程 RuntimeIdentifier 仅 win-x64，资产实际可用；属 SDK 级提示，静音保持输出干净。 -->
+    <NoWarn>NETSDK1206</NoWarn>
     <!-- 发布卫生：Release 不产出 portable PDB，避免 IL 字节码/源码绝对路径/局部变量名随 MSI 外泄（B2） -->
     <DebugType Condition=" '$(Configuration)' == 'Release' ">none</DebugType>
     <DebugSymbols Condition=" '$(Configuration)' == 'Release' ">false</DebugSymbols>
@@ -32,6 +35,8 @@
   <ItemGroup>
     <PackageReference Include="Microsoft.WindowsAppSDK" Version="1.5.240802000" />
     <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.26100.1" />
+    <!-- P2-1 设备绑定：ProtectedData（DPAPI）在 net8.0-windows 不含于默认引用集 -->
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="8.0.0" />
   </ItemGroup>
 
   <!-- 共享资源：引用 GUI-Qt 中的图标，不重复存放 -->

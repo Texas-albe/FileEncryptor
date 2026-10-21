@@ -173,9 +173,8 @@
       <Component Id="f26" Directory="INSTALLFOLDER">
         <File Source="$(var.PublishDir)\CoreMessagingXP.dll" />
       </Component>
-      <Component Id="f27" Directory="INSTALLFOLDER">
-        <File Source="$(var.PublishDir)\createdump.exe" />
-      </Component>
+      <!-- P1-3：createdump.exe 已从发布产物剔除（Installer.wixproj 的 PublishGuiBeforeBuild 删除），
+           此处不再打包。它可对同用户任意进程生成完整内存转储，会带走口令/KEK/明文缓冲。 -->
       <Component Id="f28" Directory="dir_cs_CZ">
         <File Source="$(var.PublishDir)\cs-CZ\Microsoft.ui.xaml.dll.mui" />
       </Component>
@@ -1189,6 +1188,9 @@
       </Component>
       <Component Id="f365" Directory="INSTALLFOLDER">
         <File Source="$(var.PublishDir)\System.Security.Cryptography.X509Certificates.dll" />
+      </Component>
+      <Component Id="f365pd" Directory="INSTALLFOLDER">
+        <File Source="$(var.PublishDir)\System.Security.Cryptography.ProtectedData.dll" />
       </Component>
       <Component Id="f366" Directory="INSTALLFOLDER">
         <File Source="$(var.PublishDir)\System.Security.dll" />

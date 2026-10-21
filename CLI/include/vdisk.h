@@ -42,6 +42,14 @@ typedef enum {
     VDISK_E_INTERNAL = -99
 } VDiskStatus;
 
+/*
+ * ABI 版本（构建期常量）。加载方（FE-Mounter / SAF vdisk host）绑定符号后必须调 vdisk_abi_version() 校验，
+ * 与构建期 VDISK_ABI_VERSION 不符即拒绝加载——旧版/第三方 DLL 可能符号齐全但语义或结构体布局已漂移。
+ * 破坏性变更（函数语义 / VDiskEntry 布局）必须递增此版本号；仅新增符号可不增。
+ */
+#define VDISK_ABI_VERSION 0x00010000u
+VDISK_API uint32_t vdisk_abi_version(void);
+
 /* 生命周期 */
 VDISK_API VDiskHandle* vdisk_open(const char* library_dir);   /* 打开库（不解锁） */
 VDISK_API void         vdisk_close(VDiskHandle*);
@@ -100,7 +108,8 @@ VDISK_API const char* vdisk_strerror(VDiskStatus);
 VDISK_API VDiskStatus vdisk_recovery_gen(char* out_code, uint64_t code_cap);
 /* 建立/重建保险文件 .fevault（存主密码副本；已有则覆盖）。 */
 VDISK_API VDiskStatus vdisk_recovery_create(VDiskHandle*, const char* code);
-/* 用恢复密钥解出主密码副本（写入 out，*len 为容量/实际长度）；不入常驻状态。 */
+/* 用恢复密钥解出主密码副本。*len 入参为 out_pass 容量，成功时出参为实际长度；
+ * 容量不足返回 VDISK_E_BADARG 且 *len 保持调用方原值不被改写（需要更大缓冲由调用方自行决定）。不入常驻状态。 */
 VDISK_API VDiskStatus vdisk_recovery_open(VDiskHandle*, const char* code,
                                           char* out_pass, uint64_t* len);
 VDISK_API VDiskStatus vdisk_recovery_remove(VDiskHandle*);

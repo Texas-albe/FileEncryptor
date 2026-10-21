@@ -18,6 +18,8 @@
 #include <vector>
 #include <atomic>
 #include <cstdint>
+#include <cstdio>    // FILE*（fe_open_write_nofollow 返回类型）
+#include <mutex>     // M6/M7 跨文件互斥访问器
 
 #ifdef _WIN32
 #  include <windows.h>   // 不要 WIN32_LEAN_AND_MEAN：会排除 NTSTATUS/PNTSTATUS 所在头，WinFSP 原生 API 编译不过
@@ -79,6 +81,19 @@ struct VDiskApi {
     VDiskStatus  (*stat_space)(VDiskHandle*, uint64_t*, uint64_t*) = nullptr;
 };
 
+// ---- 共享资源上限与跨文件互斥（M5/M6/M7 + low A/C） ----
+// M5：索引驱动的分配上限。恶意/损坏 .feindex 可令条目数/文件大小变成天文数字，直接 resize/assign 即 bad_alloc，异常穿到 WinFSP 回调链外会 terminate 整个进程。
+inline constexpr uint64_t kFeMaxDirEntries = 10000000;   // 目录项数上限（1000 万）
+inline constexpr uint64_t kFeMaxFileSize   = 1ull << 40; // 单文件大小上限（1 TiB）
+// M6：libvdisk 调用互斥。IPC 线程、watchdog、SvcStop 并发操作同一 g_wh（库层非线程安全），控制面命令在临界区内完成「判空→调用」。
+std::mutex& fe_vdisk_call_mutex();
+// M7：解锁成功置位 g_ipc_unlocked 与 watchdog 上锁决策须互斥，否则交叉时出现「IPC 显示已解锁、库实际已锁」的不一致态。锁定义于 fe_ipc.cpp，跨文件经此取。
+std::mutex& fe_idle_decision_mutex();
+// 低危（A 组）：防符号链接劫持的写打开。Windows: CreateFileW + FILE_FLAG_OPEN_REPARSE_POINT 并复查重解析点；POSIX: O_NOFOLLOW。失败（含遇 symlink）返回 nullptr。
+FILE* fe_open_write_nofollow(const std::string& path, bool append);
+// 低危（C 组）：进程存活探测（挂载态文件内 pid 校验用；Windows 打不开且非拒绝访问时判死）。
+bool fe_pid_alive(long pid);
+
 // ---- fe_vdisk ----
 #ifdef _WIN32
 std::wstring utf8_to_wide(const std::string& s);
@@ -95,6 +110,10 @@ std::string vaults_registry_path();
 bool vaults_add(const std::string& dir, std::string& err);
 bool vaults_remove(const std::string& dir, std::string& err);
 std::vector<std::string> vaults_list();
+
+// P1-2 多盘批量：聚合注册表里全部盘的 IPC 状态（JSON），或对全部盘扇出 lock/eject。
+int vaults_status_json();
+int vaults_batch(const std::string& cmd);
 bool read_whole(const VDiskApi& v, VDiskHandle* h, const std::string& vpath,
                 std::vector<uint8_t>& out, std::string& err);
 void walk(const VDiskApi& v, VDiskHandle* h, const std::string& vpath);
@@ -117,8 +136,25 @@ std::string hex_decode(const std::string& s);
 void        ipc_server_thread();               // 阻塞循环，g_ipc_stop 退出
 std::string ipc_call(const std::string& vault, const std::string& req);  // 客户端
 
-// ---- fe_service（常驻：Windows 服务 / Linux systemd user unit）----
-// 两侧同名命令 install-service / uninstall-service，参数与语义一致。
+// ---- fe_power（休眠/待机/快速启动的锁一致性）----
+// 休眠会把内存换到磁盘：进休眠前必须主动上锁，否则恢复后明文密钥随休眠镜像落盘。
+// 电源回调线程不能阻塞，故只置标记，由 idle_watchdog 实际执行锁定。
+extern std::atomic<bool> g_power_suspend_pending;  // 已收到休眠通知，待 watchdog 锁定
+extern std::atomic<bool> g_power_resumed;          // 已恢复，watchdog 须清活动时刻并上锁
+void power_register();                              // 注册电源通知（幂等）
+void power_unregister();
+void power_request_lock(const char* reason);        // 主动请求上锁（休眠/测试）
+
+// ---- fe_harden（进程加固）----
+// P0-1：收紧自身进程对象 DACL 为「当前用户+SYSTEM+Administrators」，阻断同机其他非特权用户
+// 读内存（口令/KEK/明文）或注入。失败静默；POSIX 为空实现。
+void fe_harden_process_dacl();
+// P1-2：镜像加载策略（禁远程/低 IL 镜像，系统 DLL 强制走 System32）。失败静默。
+void fe_harden_image_load_policy();
+// P1-3：把自身排除出 WER，不产生崩溃转储（dump 会带走内存里的口令/KEK）。失败静默。
+void fe_harden_no_crash_dump();
+
+// ---- fe_service（常驻：Windows 服务 / Linux systemd user unit）----// 两侧同名命令 install-service / uninstall-service，参数与语义一致。
 #if defined(_WIN32)
 extern const char* kSvcName;                   // = "FE-Mount"，须与 FspServiceRun 一致
 bool install_service(const std::string& vault, const std::string& drive,

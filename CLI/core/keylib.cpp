@@ -131,7 +131,7 @@ bool read_key_material(const std::string& path, std::string& content, std::strin
     return false;
 }
 
-} // namespace
+}
 
 std::string keylib_dir() {
     const std::string base = user_config_dir();

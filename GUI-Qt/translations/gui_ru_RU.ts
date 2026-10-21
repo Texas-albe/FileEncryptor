@@ -2592,4 +2592,15 @@
 Если хранилище смонтировано, сначала размонтируйте его.</translation>
     </message>
 </context>
+<context>
+    <name>OsHarden</name>
+    <message>
+        <source>检测到调试器</source>
+        <translation>Обнаружен отладчик</translation>
+    </message>
+    <message>
+        <source>检测到有调试器附加到本程序。若非你本人操作，请立即退出并检查系统安全；程序功能不受影响。</source>
+        <translation>К программе подключён отладчик. Если это не вы, немедленно выйдите и проверьте безопасность системы. Функции программы не затрагиваются.</translation>
+    </message>
+</context>
 </TS>

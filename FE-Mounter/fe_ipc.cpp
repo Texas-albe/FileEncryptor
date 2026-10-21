@@ -4,6 +4,7 @@
 #include <cstdio>
 #include <cstring>
 #include <thread>
+#include <mutex>
 #include <chrono>
 #include <sodium.h>
 #ifdef _WIN32
@@ -20,6 +21,13 @@ std::atomic<bool> g_ipc_unlocked{false};
 std::atomic<bool> g_ipc_stop{false};
 std::atomic<uint64_t> g_last_fg_activity_ms{0};   // M5 前台活动自动锁：最近一次前台访问时刻
 void        (*g_ipc_eject_hook)() = nullptr;
+
+// M6：libvdisk 调用互斥（fe_winfsp 的 watchdog/SvcStop 共用，声明见 fe_common.h）。IPC 控制面命令在临界区内完成「判空→调用」，与 watchdog/SvcStop 对 g_wh 的操作序列化。
+static std::mutex g_vdisk_call_mtx;
+std::mutex& fe_vdisk_call_mutex() { return g_vdisk_call_mtx; }
+// M7：g_ipc_unlocked 置位与 watchdog 上锁决策的同一临界区（g_last_fg_activity_ms 同受保护）。
+static std::mutex g_idle_decision_mtx;
+std::mutex& fe_idle_decision_mutex() { return g_idle_decision_mtx; }
 
 // 管道名派生：用 blake2b（crypto_generichash）替代非密码学 FNV-1a，避免同机可控
 // vault 路径构造哈希碰撞、跨 vault 命中管道（§5.1 标识符强度）。
@@ -84,6 +92,8 @@ static std::string do_unlock(const std::string& arg, int flags) {
     VDiskStatus st = g_ipc_v->unlock(*g_ipc_h, pass.c_str(), flags);
     sodium_memzero(pass.data(), pass.size());   // 用后即清
     if (st == VDISK_OK) {
+        // M7：与 watchdog 的上锁决策同一临界区——否则交叉时出现「IPC 显示已解锁、库实际已被 watchdog 锁上」的不一致态（原约 1s 才自纠）。
+        std::lock_guard<std::mutex> lk(fe_idle_decision_mutex());
         g_ipc_unlocked = true;
         g_last_fg_activity_ms.store(now_ms(), std::memory_order_relaxed);   // 解锁即起算一个完整自动锁窗口
         g_unlock_fails.store(0);
@@ -97,10 +107,13 @@ static std::string do_unlock(const std::string& arg, int flags) {
 }
 
 static std::string ipc_dispatch(const std::string& req) {
+    // M6：控制面命令统一在库调用互斥区内执行——与 watchdog/SvcStop 对 g_wh 的并发访问序列化。加锁序：fe_vdisk_call_mutex 始终先于 fe_idle_decision_mutex（watchdog 同序）。
+    std::lock_guard<std::mutex> lk(fe_vdisk_call_mutex());
     size_t sp = req.find(' ');
     std::string cmd = (sp == std::string::npos) ? req : req.substr(0, sp);
     std::string arg = (sp == std::string::npos) ? "" : req.substr(sp + 1);
-    if (!g_ipc_v || !g_ipc_h) return "ERR nostate";
+    // 低危 C 组：句柄判空与 lock/unlock 一致（关闭竞态下偶发 null 解引用）。
+    if (!g_ipc_v || !g_ipc_h || !*g_ipc_h) return "ERR nostate";
     VDiskApi& v = *g_ipc_v;
     if (cmd == "status") {
         std::string s = std::string("OK unlocked=") + (g_ipc_unlocked.load() ? "1" : "0");
@@ -256,6 +269,12 @@ static bool ipc_client_allowed(HANDLE pipe) {
 void ipc_server_thread() {
     std::string name = ipc_pipe_name(g_ipc_vault);
     PSECURITY_DESCRIPTOR sd = ipc_pipe_sd();
+    // P0-4 失败关闭：拿不到受限 SD 就绝不开放解锁口。
+    // 旧行为是回退 NULL 安全属性＝采用默认 DACL，等于把解锁控制面暴露给本机任意可连方。
+    if (!sd) {
+        fprintf(stderr, "[fe] ipc: restricted security descriptor unavailable, refusing to serve\n");
+        return;
+    }
     SECURITY_ATTRIBUTES sa = {};
     sa.nLength = sizeof sa;
     sa.lpSecurityDescriptor = sd;
@@ -263,26 +282,36 @@ void ipc_server_thread() {
     while (!g_ipc_stop.load()) {
         HANDLE pipe = CreateNamedPipeW(utf8_to_wide(name).c_str(),
             PIPE_ACCESS_DUPLEX, PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS,
-            PIPE_UNLIMITED_INSTANCES, 4096, 4096, 0, sd ? &sa : nullptr);
+            PIPE_UNLIMITED_INSTANCES, 4096, 4096, 0, &sa);
         if (pipe == INVALID_HANDLE_VALUE) break;
         if (ConnectNamedPipe(pipe, nullptr)) {
             if (ipc_client_allowed(pipe)) {
-                // 读超时：客户端连上不发数据会永久占住服务线程 → 解锁/锁定全失效（M4/坏连接 DoS）
+                // M4 读超时：客户端连上不发数据会永久占住服务线程 → 解锁/锁定全失效（坏连接 DoS）。真正实现 5s 超时：overlapped ReadFile + WaitForSingleObject。PIPE_WAIT 下同步 ReadFile 无限阻塞，SetNamedPipeHandleState 传不了超时，原 deadline 判断是死代码。
                 DWORD mode = PIPE_READMODE_BYTE;
                 SetNamedPipeHandleState(pipe, &mode, nullptr, nullptr);
-                char buf[8192]; DWORD n = 0;
-                DWORD deadline = GetTickCount() + 5000;   // 5s 未发完即断开
-                bool got = false;
-                for (;;) {
-                    if (!ReadFile(pipe, buf + n, (DWORD)(sizeof(buf) - 1 - n), &n, nullptr)) break;
-                    if (n > 0) { got = true; break; }
-                    if (GetTickCount() > deadline) break;
-                }
-                if (got && n > 0) {
-                    buf[n] = 0; std::string req(buf);
-                    while (!req.empty() && (req.back() == '\n' || req.back() == '\r')) req.pop_back();
-                    std::string resp = ipc_dispatch(req);
-                    DWORD w = 0; WriteFile(pipe, resp.c_str(), (DWORD)resp.size(), &w, nullptr);
+                OVERLAPPED ov; memset(&ov, 0, sizeof ov);
+                ov.hEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+                if (ov.hEvent) {
+                    char buf[8192]; DWORD n = 0;
+                    BOOL ok = ReadFile(pipe, buf, (DWORD)(sizeof(buf) - 1), &n, &ov);
+                    if (!ok && GetLastError() == ERROR_IO_PENDING) {
+                        if (WaitForSingleObject(ov.hEvent, 5000) != WAIT_OBJECT_0) {
+                            CancelIo(pipe);                            // 5s 超时：取消本线程挂起的读
+                            GetOverlappedResult(pipe, &ov, &n, TRUE);  // 等取消完成；n 无意义
+                            n = 0;
+                        } else if (!GetOverlappedResult(pipe, &ov, &n, FALSE)) {
+                            n = 0;                                     // 读失败（客户端已断开）
+                        }
+                    } else if (!ok) {
+                        n = 0;
+                    }
+                    CloseHandle(ov.hEvent);
+                    if (n > 0) {
+                        buf[n] = 0; std::string req(buf);
+                        while (!req.empty() && (req.back() == '\n' || req.back() == '\r')) req.pop_back();
+                        std::string resp = ipc_dispatch(req);
+                        DWORD w = 0; WriteFile(pipe, resp.c_str(), (DWORD)resp.size(), &w, nullptr);
+                    }
                 }
             }
             FlushFileBuffers(pipe);
@@ -301,7 +330,9 @@ std::string ipc_call(const std::string& vault, const std::string& req) {
     char buf[4096]; DWORD n = 0; std::string resp;
     DWORD deadline = GetTickCount() + 5000;
     for (;;) {
-        if (ReadFile(pipe, buf, sizeof(buf) - 1, &n, nullptr) && n > 0) { buf[n] = 0; resp = buf; break; }
+        // 低危 C 组：读失败即退。原写法失败不 break，tight loop 空转至 5s（客户端 CPU 空转）。
+        if (!ReadFile(pipe, buf, sizeof(buf) - 1, &n, nullptr)) break;
+        if (n > 0) { buf[n] = 0; resp = buf; break; }
         if (GetTickCount() > deadline) break;
     }
     CloseHandle(pipe);

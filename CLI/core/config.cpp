@@ -1,10 +1,11 @@
 #define _CRT_SECURE_NO_WARNINGS
 #include "config.hpp"
-#include "FileEncryptor.hpp"  // for create_directory_recursive (user config dir fallback)
+#include "FileEncryptor.hpp"  // 为 create_directory_recursive（用户配置目录回退）
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <cctype>
+#include <cmath>
 #include <fstream>
 #include <sstream>
 #include <iostream>
@@ -255,7 +256,12 @@ bool parse_size(const std::string& s, uint64_t& out_bytes) {
     double val = 0;
     try { val = std::stod(num); } catch (...) { return false; }
     if (val < 0) return false;
-    out_bytes = (uint64_t)(val * factor);
+    // stod 接受 "nan"/"inf"：与 0 比较全为假会直接穿透到转换，且 (uint64_t)NaN/inf
+    // 是 UB；乘积 >= 2^64 时的 double->uint64 转换同样是 UB，须在转换前拦掉。
+    if (!(val >= 0) || !std::isfinite(val)) return false;
+    const double prod = val * factor;
+    if (!(prod < 18446744073709551616.0)) return false;   // 2^64
+    out_bytes = (uint64_t)prod;
     return true;
 }
 
@@ -585,10 +591,31 @@ Config load_config() {
             cfg.obfuscate_names = def.obfuscate_names;
             clamped = true;
         }
+        // M22：资源与审计类键同样不可托管付给 CWD——log_level 可被置 ERROR 抑制
+        // 全部审计日志，io_buffer_size/max_memory_bytes 超大值致 OOM，
+        // default_cipher/max_speed/write_sha256/max_path_length 影响安全与行为。
+        if (cfg.log_level != def.log_level ||
+            cfg.io_buffer_size != def.io_buffer_size ||
+            cfg.max_memory_bytes != def.max_memory_bytes ||
+            cfg.max_speed != def.max_speed ||
+            cfg.max_path_length != def.max_path_length ||
+            cfg.default_cipher != def.default_cipher ||
+            cfg.write_sha256 != def.write_sha256) {
+            cfg.log_level = def.log_level;
+            cfg.io_buffer_size = def.io_buffer_size;
+            cfg.max_memory_bytes = def.max_memory_bytes;
+            cfg.max_speed = def.max_speed;
+            cfg.max_path_length = def.max_path_length;
+            cfg.default_cipher = def.default_cipher;
+            cfg.write_sha256 = def.write_sha256;
+            clamped = true;
+        }
         if (clamped) {
             std::cerr << "Warning: config from the current directory (" << path << ") is not trusted; "
                       << "security-sensitive keys (log_file / path_whitelist / kdf_preset / "
-                      << "min_password_* / obfuscate_names) from it were ignored. "
+                      << "min_password_* / obfuscate_names / log_level / io_buffer_size / "
+                      << "max_memory_bytes / max_speed / max_path_length / default_cipher / "
+                      << "write_sha256) from it were ignored. "
                       << "Put them in the exe directory or user config dir instead.\n";
         }
     }

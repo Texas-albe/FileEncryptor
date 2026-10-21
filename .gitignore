@@ -1,4 +1,3 @@
-# 构建产物
 build/
 out/
 bin/
@@ -21,13 +20,12 @@ Release/
 /core
 core.*
 *.core
-
+CERT/
 *.gcno
 *.gcda
 *.profraw
 *.profdata
 
-# CMake
 CMakeCache.txt
 CMakeFiles/
 cmake_install.cmake
@@ -88,8 +86,14 @@ fileencryptor.yaml
 .workbuddy/
 The Next Release/
 
-# SAF 独立工程：阶段一骨架，暂不发布
-/SAF/
-
+CERT/
+*.pvk
+*.spc
+*.pfx
+*.p12
+*.jks
+*.keystore
+*.asc
+docs/
 scripts/
 Updates/

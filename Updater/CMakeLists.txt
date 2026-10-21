@@ -3,7 +3,7 @@
 
 cmake_minimum_required(VERSION 3.20)
 
-# 必须在 project() 之前钉住链接器（同 CLI，见 CLI/CMakeLists.txt 注释）
+# 须先于 project() 钉链接器
 if(WIN32)
   find_program(FE_CL_EXECUTABLE NAMES cl.exe
                HINTS "$ENV{VCToolsInstallDir}/bin/Hostx64/x64"
@@ -50,7 +50,7 @@ if(FE_ENABLE_ASAN)
   endif()
 endif()
 
-# libcurl 为 C 源码，显式启用 C 语言
+# libcurl 是 C，显式开 C
 enable_language(C)
 
 set(HTTP_ONLY ON CACHE BOOL "" FORCE)            # 仅 HTTP/HTTPS
@@ -159,8 +159,8 @@ if(MSVC)
   target_compile_options(Updater PRIVATE /W3 /utf-8 /EHsc)
 endif()
 
-# 产物名 Updater：GUI 按固定文件名查找，改名会导致找不到
-# per-config 固定到 bin：VS 多配置生成器不再追加 Release/Debug 子目录
+# GUI 按固定名查找，勿改名
+# 固定输出到 bin，免追加子目录
 set_target_properties(Updater PROPERTIES
   RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
   RUNTIME_OUTPUT_DIRECTORY_RELEASE ${CMAKE_BINARY_DIR}/bin

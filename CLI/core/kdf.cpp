@@ -54,7 +54,7 @@ struct KdfSemaphore {
 
 KdfSemaphore g_kdf_sem;
 
-} // namespace
+}
 
 void kdf_preset_params(int preset, unsigned int& ops, unsigned int& mem_kb) {
     switch(preset) {

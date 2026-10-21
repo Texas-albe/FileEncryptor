@@ -141,7 +141,7 @@ bool digest_record(const unsigned char* rec, unsigned char out[32]) {
     return SHA256(rec, WM_RECORD_FIXED, out) != nullptr;
 }
 
-}  // namespace
+}
 
 bool wm_sign_and_serialize(uint64_t timestamp,
                            const unsigned char machine_id[16],

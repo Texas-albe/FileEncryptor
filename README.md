@@ -16,7 +16,9 @@
 FileEncryptor/
 ├── CLI/                # 命令行程序（CMake，产出 FileEncryptorCLI）
 │   ├── core/           # 加密核心
+│   │   └── saf/        # SAF 存储抽象框架（本地/归档/加密盘/云/挂载 后端 + 管道原语）
 │   ├── cli/            # main.cpp 参数解析
+│   ├── include/        # vdisk.h 等对外 C ABI 头
 │   └── cmake/          # 校验脚本
 ├── GUI-Qt/             # Linux 图形界面（Qt6 Widgets，C++，CMake）
 │   ├── src/            # MainWindow、QProcess 调 CLI
@@ -28,11 +30,35 @@ FileEncryptor/
 │   ├── ViewModels/
 │   ├── installer/      # WiX v4 MSI 安装包
 │   └── build.cmd
+├── CERT/               # 自签名代码签名证书（root.cer/.pvk/.spc，本机私有，不入库）
 ├── FileEncryptor.slnx  # VS 解决方案（GUI-WinUI + installer）
 └── README.md
 ```
 
 CLI 与 GUI 相互独立构建。GUI 不链接加密代码，通过子进程调用 CLI（Windows: `System.Diagnostics.Process`；Linux: `QProcess`），二者置于同一目录即可协同运行。
+
+### SAF 存储抽象框架
+
+`CLI/core/saf/` 提供统一存储抽象（`Stream` + `StorageBackend`），已并入 CLI 一同构建，
+覆盖本地文件系统、归档（zip/7z/tar）、加密盘（经 `vdisk.dll` 运行时加载）、
+云端（可插拔）与挂载盘五类后端。核心能力：
+
+- `saf_pump` 通用分块搬运：任意 `Stream` → 任意 `Stream`，不落临时文件；
+- `saf_open_stdio` / `saf_open_memory_read|write`：stdio 与内存流；
+- `saf_transfer_file` / `saf_transfer_tree`：后端间搬运与断点续传、幂等去重。
+
+CLI 的管道传输即建立在这些原语之上（见下）。
+
+### 管道传输（stdin / stdout）
+
+```bash
+cat secret.txt | fe -e - -k pw -o out/          # 明文从 stdin，密文落盘
+fe -e - -k pw --stdout < secret.txt > s.ptd     # 明文从 stdin，密文直出 stdout
+fe -d s.ptd -k pw --stdout | tar x              # 明文直出 stdout，明文零落盘
+```
+
+`-`（stdin 数据）与 `--key-stdin`（stdin 口令）互斥：管道传数据时口令走 `-k <file>`
+或 `ENCRYPTOR_KEY` 环境变量。解密到 stdout 完全不落盘明文。
 
 ## 快速上手
 

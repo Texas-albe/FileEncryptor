@@ -1,6 +1,8 @@
 // Cipher 工厂实现：XChaCha20 / AEGIS-256 / AES-GCM（仅解密旧格式）/ SM4-GCM。
 #include "cipher.hpp"
 #include <sodium.h>
+#include <vector>
+#include <cstring>
 
 #ifdef FE_WITH_OPENSSL
 #include <openssl/evp.h>
@@ -136,11 +138,14 @@ public:
             if(EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_IVLEN, (int)nonce_size(), nullptr) != 1) break;
             if(EVP_DecryptInit_ex(ctx, nullptr, nullptr, key, nonce) != 1) break;
             if(aad && aad_len && EVP_DecryptUpdate(ctx, nullptr, &len, aad, (int)aad_len) != 1) break;
-            if(EVP_DecryptUpdate(ctx, pt_out, &len, ct, (int)body) != 1) break;
+            // tag 认证通过前不得向 pt_out 写任何字节：先解到局部缓冲，EVP_DecryptFinal_ex 验 tag 成功后再拷贝（与 libsodium 各 AEAD 接口「验证先于输出」的语义一致）；失败路径不产出任何明文字节
+            std::vector<unsigned char> tmp(body ? body : 1);
+            if(EVP_DecryptUpdate(ctx, tmp.data(), &len, ct, (int)body) != 1) break;
             int pt_off = len;
             if(EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_TAG, (int)tag_size(),
                                     const_cast<unsigned char*>(ct + body)) != 1) break;
-            if(EVP_DecryptFinal_ex(ctx, pt_out + pt_off, &len) != 1) break;
+            if(EVP_DecryptFinal_ex(ctx, tmp.data() + pt_off, &len) != 1) break;
+            if(pt_off + len > 0) std::memcpy(pt_out, tmp.data(), (size_t)(pt_off + len));
             pt_len = (unsigned long long)(pt_off + len);
             rc = 0;
         } while(false);
@@ -151,7 +156,7 @@ public:
 };
 #endif
 
-} // namespace
+}
 
 std::unique_ptr<Cipher> create_cipher(CryptoMode mode) {
     switch (mode) {

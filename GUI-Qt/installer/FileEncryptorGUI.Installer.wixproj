@@ -1,9 +1,9 @@
 <Project Sdk="WixToolset.Sdk/4.0.5">
   <PropertyGroup>
     <!-- 版本唯一来源：Product.wxs 通过 $(var.Version) 消费，MSI 版本与输出文件名一起变 -->
-    <GuiVersion>3.0.1</GuiVersion>
+    <GuiVersion>3.1.0</GuiVersion>
     <!-- CLI 产物名由 CMake project(VERSION) 拼出，只支持数值版（无 -alpha.N），故独立定义 -->
-    <CliVersion>3.0.1</CliVersion>
+    <CliVersion>3.1.0</CliVersion>
     <OutputType>Package</OutputType>
     <OutputName>FileEncryptorGUI-$(GuiVersion)-Qt-Windows</OutputName>
     <Platform>x64</Platform>
@@ -26,7 +26,7 @@
     <!-- FE-Mounter 的独立构建目录（FE-Mounter/CMakeLists.txt，产物并入 CliBuildDir） -->
     <MounterBuildDir>$(MSBuildThisFileDirectory)..\..\CLI\out\build\fe-mounter</MounterBuildDir>
     <CliBuildDir>$(MSBuildThisFileDirectory)..\..\CLI\out\build\windows-release\bin\Release\</CliBuildDir>
-    <DefineConstants>PublishDir=$(QtStageDir);Version=$(GuiVersion);ProductVersion=3.0.1</DefineConstants>
+    <DefineConstants>PublishDir=$(QtStageDir);Version=$(GuiVersion);ProductVersion=$(GuiVersion)</DefineConstants>
   </PropertyGroup>
 
   <PropertyGroup>
@@ -78,7 +78,9 @@
          FE-Mounter 走 VS 生成器，产物落 bin\Release\。写死一个目录会取到
          另一个目录里的陈旧副本（表现为装出来的 CLI 是旧版）。 -->
     <PropertyGroup>
-      <CliBinRoot>$(CliBuildDir)..\bin\</CliBinRoot>
+      <!-- CliBuildDir 基准已是 bin\Release\：回一级即 bin\（Ninja 单配置产物处）。
+           曾误写 ..\bin\，规范化后成 bin\bin\，CLI exe 永远找不到（MSI 不含加密引擎）。 -->
+      <CliBinRoot>$(CliBuildDir)..\</CliBinRoot>
       <P_CliExe Condition="Exists('$(CliBinRoot)FileEncryptorCLI-$(CliVersion)-cmd-Windows.exe')">$(CliBinRoot)FileEncryptorCLI-$(CliVersion)-cmd-Windows.exe</P_CliExe>
       <P_CliExe Condition="'$(P_CliExe)'==''">$(CliBuildDir)FileEncryptorCLI-$(CliVersion)-cmd-Windows.exe</P_CliExe>
       <P_Vdisk Condition="Exists('$(CliBinRoot)vdisk.dll')">$(CliBinRoot)vdisk.dll</P_Vdisk>

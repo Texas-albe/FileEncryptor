@@ -13,7 +13,7 @@ if(FE_CL_EXECUTABLE)
       CACHE FILEPATH "MSVC 链接器（不按 PATH 搜索）" FORCE)
 endif()
 
-project(FileEncryptorGUI VERSION 3.0.1 LANGUAGES CXX)
+project(FileEncryptorGUI VERSION 3.1.0 LANGUAGES CXX)
 
 # FileEncryptor GUI - Qt6 图形界面（Windows + Linux 双平台；Windows 另有 WinUI3 版本）
 
@@ -80,7 +80,8 @@ set(SHELL_SOURCES
     src/BatchProgressPanel.cpp
     src/TaskHistoryDialog.cpp
     src/TaskSummaryDialog.cpp
-    src/I18n.cpp)
+    src/I18n.cpp
+    src/OsHarden.cpp)
 
 set(SHELL_HEADERS
     src/MainWindow.h
@@ -102,7 +103,8 @@ set(SHELL_HEADERS
     src/BatchProgressPanel.h
     src/TaskHistoryDialog.h
     src/TaskSummaryDialog.h
-    src/I18n.h)
+    src/I18n.h
+    src/OsHarden.h)
 
 # Windows 图标资源（嵌入 exe；Linux/macOS 无 .rc，图标经窗口图标设置）
 set(SHELL_RESOURCES )
@@ -121,6 +123,12 @@ endif()
 
 add_executable(FileEncryptorGUI WIN32 ${SHELL_SOURCES} ${SHELL_HEADERS} ${SHELL_RESOURCES})
 target_link_libraries(FileEncryptorGUI PRIVATE Qt6::Widgets Qt6::Concurrent Qt6::Network)
+
+# P0-1：OsHarden 用 SetEntriesInAclW / SetSecurityInfo（ACL API 在 advapi32）。
+# 虽通常属 MSVC 默认库，显式链接以免静态 Qt 场景下解析不到符号。
+if(WIN32)
+    target_link_libraries(FileEncryptorGUI PRIVATE advapi32)
+endif()
 
 if(MSVC)
     # CFG：与 CLI/Updater 对齐；Qt 是静态库，CFG 按模块生效，本目标自身加编译+链接位

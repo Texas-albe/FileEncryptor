@@ -13,6 +13,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <cerrno>
 #include <string>
 #include <vector>
 #include <iostream>
@@ -32,6 +33,9 @@
 #ifdef _WIN32
 #include <io.h>
 #include <fcntl.h>
+#else
+#include <fcntl.h>
+#include <unistd.h>
 #endif
 
 #ifdef _MSC_VER
@@ -388,8 +392,8 @@ static std::vector<std::string> get_utf8_argv() {
 }
 #endif
 
-// Resolve -r into a list of recipient public keys. The value is either a literal public key ("age1...", optionally prefixed with "publickey:") or
-// a path to a file holding one public key per line ('#' comments and a "publickey:" prefix are tolerated).
+// -r 收件人公钥：内联公钥（age1.../publickey: 前缀）或
+// 每行一个公钥的文件（容忍 # 注释与 publickey: 前缀）
 static bool collect_recipients(const std::string& spec,
                                std::vector<std::string>& out,
                                std::string& err) {
@@ -415,14 +419,14 @@ static bool collect_recipients(const std::string& spec,
     const std::string t=trim(spec);
     if(t.empty()) { err="Empty recipient specification."; return false; }
 
-    if(is_pubkey(t)) {                      // inline public key
+    if(is_pubkey(t)) {                      // 内联公钥
         std::string v=strip_prefix(t);
         if(v.empty()) { err="Empty recipient public key."; return false; }
         out.push_back(v);
         return true;
     }
 
-    std::ifstream rf;                       // otherwise: a file of public keys
+    std::ifstream rf;                       // 否则：公钥文件
     if(!open_stream(rf,t,std::ios::in|std::ios::binary)) {
         err="Cannot open public key file: "+t;
         return false;
@@ -657,7 +661,7 @@ static bool run_pack(const std::vector<std::string>& input_paths,
 }
 
 // 非对称调度：DEK 以收件人公钥（X25519/X448）包装进 v6 容器（.ptd）。
-// 路径校验 / 符号链接守卫 / .prt 原子落盘复用对称路径同一套。
+// 路径校验 / 符号链接守卫 / 流式直写落盘复用对称路径同一套。
 static bool run_asym(const std::vector<std::string>& input_paths,
                      const std::string& output_dir,
                      bool is_encrypt,
@@ -673,7 +677,7 @@ static bool run_asym(const std::vector<std::string>& input_paths,
                      uint64_t split_bytes = 0) {
     std::vector<std::string> recipients;
     if(is_encrypt) {
-        // -r takes the public key itself ("age1..." / "X448-...") or a file of public keys;
+        // -r 收件人：内联公钥（age1.../X448-...）或公钥文件；
         // -K 补充密钥库收件人（二者至少其一）。重复公钥去重。
         if(recipient_spec.empty()&&extra_recipients.empty()) {
             std::cerr<<"Asymmetric encryption requires -r <public key or public key file> "
@@ -694,7 +698,7 @@ static bool run_asym(const std::vector<std::string>& input_paths,
             return false;
         }
     } else {
-        // Decryption takes the private key as a file (-k), never as an inline string.
+        // 解密私钥仅用文件(-k)，不收内联字符串
         if(identity_file.empty()) {
             std::cerr<<"Asymmetric decryption requires a private key file: -k <identity file>.\n";
             return false;
@@ -796,19 +800,13 @@ static bool run_asym(const std::vector<std::string>& input_paths,
             }
         }
 
-        // 先写 .prt 再原子替换，避免中断时留下半截（明文）输出被误认为成品。
-        const std::string part_path=out_path+".prt";
-        if(path_is_symlink(part_path)) {
-            std::cerr<<"Refusing to write through existing symlink: "<<part_path<<"\n";
-            all_ok=false; continue;
-        }
-        remove_file_utf8(part_path);   // 清掉上次残留
-
+        // 解密走 .prt 半成品 + 原子 rename 收尾（out 要么完整要么不存在）；加密仍直写 out_path。
+        // 失败由核心层删 .prt（解密）或此处兜底删除（加密）。
         bool ok=false;
         if(is_encrypt) {
             std::cout<<"Asymmetric encrypting: "<<in_path<<" -> "<<out_path<<"\n";
             try {
-                ok=encrypt_file(src_path,part_path,SecureBuffer(),mode,nullptr,false,compress_level,
+                ok=encrypt_file(src_path,out_path,SecureBuffer(),mode,nullptr,false,compress_level,
                                 true,&recipients);
             } catch(const std::exception& e) {
                 fprintf(stderr,"Error: asymmetric encryption failed: %s\n",e.what());
@@ -828,8 +826,8 @@ static bool run_asym(const std::vector<std::string>& input_paths,
                 if(a>0)               identity.erase(0,a);
             }
             try {
-                ok=decrypt_file(src_path,part_path,SecureBuffer(),nullptr,
-                                false,false,nullptr,nullptr,0,false,0,identity);
+                ok=decrypt_file(src_path,out_path,SecureBuffer(),nullptr,
+                                false,false,nullptr,nullptr,0,false,0,identity,force_overwrite);
             } catch(const std::exception& e) {
                 fprintf(stderr,"Error: asymmetric decryption failed: %s\n",e.what());
                 ok=false;
@@ -843,12 +841,8 @@ static bool run_asym(const std::vector<std::string>& input_paths,
         }
         if(!ok) {
             std::cerr<<"Failed to process: "<<in_path<<"\n";
-            remove_file_utf8(part_path);
-            all_ok=false; continue;
-        }
-        if(!replace_file_utf8(part_path,out_path)) {
-            std::cerr<<"Cannot finalize output file: "<<out_path<<"\n";
-            remove_file_utf8(part_path);
+            // 解密失败时核心层已安全擦除输出；加密失败（密文半成品）在此兜底删除
+            remove_file_utf8(out_path);
             all_ok=false; continue;
         }
         if(is_encrypt && source_action!=0) {
@@ -1068,18 +1062,59 @@ static bool run_keygen(const std::string& output_dir,bool force_overwrite,uint8_
         return !bad;
     };
 
+    // H5c：私钥独占创建（O_EXCL，不跟随符号链接、不覆盖既有私钥）。
+    // 即便 -y 也不覆写：私钥一旦被静默覆盖，用它加密的所有 .age 文件将永久
+    // 不可解密；预置符号链接时 trunc 打开还会把私钥写到攻击者指定的文件。
+    auto write_line_exclusive=[](const std::string& path,const std::string& content)->bool{
+#ifdef _WIN32
+        const std::wstring wp=utf8_to_wstring(path);
+        int fd=_wopen(wp.c_str(),_O_WRONLY|_O_CREAT|_O_EXCL|_O_BINARY,_S_IREAD|_S_IWRITE);
+        if(fd<0) {
+            std::cerr<<(errno==EEXIST
+                ? "Private key file already exists (delete it or choose another directory): "
+                : "Cannot create: ")<<path<<"\n";
+            return false;
+        }
+        FILE* fp=_fdopen(fd,"wb");
+        if(!fp) { _close(fd); _wunlink(wp.c_str()); std::cerr<<"Cannot write: "<<path<<"\n"; return false; }
+#else
+        int fd=::open(path.c_str(),O_WRONLY|O_CREAT|O_EXCL|O_NOFOLLOW,0600);
+        if(fd<0) {
+            std::cerr<<(errno==EEXIST
+                ? "Private key file already exists (delete it or choose another directory): "
+                : "Cannot create: ")<<path<<"\n";
+            return false;
+        }
+        FILE* fp=fdopen(fd,"wb");
+        if(!fp) { ::close(fd); ::unlink(path.c_str()); std::cerr<<"Cannot write: "<<path<<"\n"; return false; }
+#endif
+        const std::string line=content+"\n";
+        const size_t n=std::fwrite(line.data(),1,line.size(),fp);
+        bool ok=(n==line.size());
+        if(std::fclose(fp)!=0) ok=false;
+        if(!ok) {
+#ifdef _WIN32
+            _wunlink(wp.c_str());
+#else
+            ::unlink(path.c_str());
+#endif
+            std::cerr<<"Cannot write: "<<path<<"\n";
+        }
+        return ok;
+    };
+
     const std::string priv_path=dir+"rage_private.txt";
 
     // v2.1.2：补上与 run_derive 一致的覆盖保护 私钥一旦被静默覆盖，用它加密的
-    // 所有 .age 文件将永久不可解密。
+    // 所有 .age 文件将永久不可解密。即便 -y 也不覆写既有私钥（见下方独占创建）。
     if(!force_overwrite&&file_exists_path(priv_path)) {
         std::cerr<<"Refusing to overwrite existing private key file: "<<priv_path
-            <<"\nUse -y to overwrite.\n";
+            <<"\nDelete it or choose another directory first.\n";
         sodium_memzero(priv.data(),priv.size());
         return false;
     }
 
-    if(!write_line(priv_path,priv)) {
+    if(!write_line_exclusive(priv_path,priv)) {
         sodium_memzero(priv.data(),priv.size());
         return false;
     }
@@ -1093,10 +1128,10 @@ static bool run_keygen(const std::string& output_dir,bool force_overwrite,uint8_
         return false;
     }
 
-    // stdout: the public key alone, so it can be piped straight into -r or a file
+    // stdout 只输出公钥，可直接管道喂给 -r 或存文件
     std::cout<<pub<<"\n";
     std::cout.flush();
-    // stderr: everything else, so redirecting stdout still yields a clean key
+    // stderr 输出其余信息，重定向 stdout 仍得干净公钥
     std::cerr<<"Private key file: "<<priv_path<<"\n";
     std::cerr<<"Public key file : "<<pub_path<<"\n";
     std::cerr<<"Public key ("<<(algo==RECIP_ALGO_MLKEM?"MLKEM1-...":algo==RECIP_ALGO_X448?"X448-...":"age1...")
@@ -1185,6 +1220,46 @@ static bool run_derive(const std::string& output_dir,
         of.close();
         return !bad;
     };
+    // H5c：私钥独占创建（O_EXCL，不跟随符号链接、不覆盖既有私钥）。
+    // 即便 -y 也不覆写：私钥一旦被静默覆盖，用它加密的所有 .age 文件将永久
+    // 不可解密；预置符号链接时 trunc 打开还会把私钥写到攻击者指定的文件。
+    auto write_line_exclusive=[](const std::string& path,const std::string& content)->bool{
+#ifdef _WIN32
+        const std::wstring wp=utf8_to_wstring(path);
+        int fd=_wopen(wp.c_str(),_O_WRONLY|_O_CREAT|_O_EXCL|_O_BINARY,_S_IREAD|_S_IWRITE);
+        if(fd<0) {
+            std::cerr<<(errno==EEXIST
+                ? "Private key file already exists (delete it or choose another directory): "
+                : "Cannot create: ")<<path<<"\n";
+            return false;
+        }
+        FILE* fp=_fdopen(fd,"wb");
+        if(!fp) { _close(fd); _wunlink(wp.c_str()); std::cerr<<"Cannot write: "<<path<<"\n"; return false; }
+#else
+        int fd=::open(path.c_str(),O_WRONLY|O_CREAT|O_EXCL|O_NOFOLLOW,0600);
+        if(fd<0) {
+            std::cerr<<(errno==EEXIST
+                ? "Private key file already exists (delete it or choose another directory): "
+                : "Cannot create: ")<<path<<"\n";
+            return false;
+        }
+        FILE* fp=fdopen(fd,"wb");
+        if(!fp) { ::close(fd); ::unlink(path.c_str()); std::cerr<<"Cannot write: "<<path<<"\n"; return false; }
+#endif
+        const std::string line=content+"\n";
+        const size_t n=std::fwrite(line.data(),1,line.size(),fp);
+        bool ok=(n==line.size());
+        if(std::fclose(fp)!=0) ok=false;
+        if(!ok) {
+#ifdef _WIN32
+            _wunlink(wp.c_str());
+#else
+            ::unlink(path.c_str());
+#endif
+            std::cerr<<"Cannot write: "<<path<<"\n";
+        }
+        return ok;
+    };
 
     const std::string priv_path=dir+"rage_private.txt";
     const std::string salt_path=dir+"rage_derive_salt.txt";
@@ -1202,7 +1277,7 @@ static bool run_derive(const std::string& output_dir,
         return false;
     }
 
-    bool ok=write_line(priv_path,priv);
+    bool ok=write_line_exclusive(priv_path,priv);
     if(ok) ok=write_line(salt_path,std::string(salt_hex));
     if(ok) tighten_file_permissions(priv_path);   // 收紧密钥文件权限（仅拥有者可读）
 
@@ -1680,7 +1755,7 @@ int main(int argc,char* argv[]) {
     std::string keyfile_path;   // 一.1：密钥文件输入（-k）
     bool asym_mode=false;       // -m x25519/x448：非对称（DEK 由收件人公钥包裹进 v6 容器）
     bool x448_mode=false;        // -x448：非对称 ECDH 曲线用 X448（默认 X25519）
-    std::string recipient_spec; // -r <pub|file>: public key (age1... / X448-...) or a file of them (encrypt)
+    std::string recipient_spec; // -r <pub|file>：公钥（age1… / X448-…）或含多个公钥的文件（加密用）
     bool key_from_stdin=false;  // --key-stdin：从 stdin 读取密钥材料（密码或 age 身份私钥）
     bool preview_mode=false;    // --preview：仅解密并输出明文前缀到 stdout，不落盘
     size_t preview_max=4096;    // --max-bytes N：预览字节数上限（默认 4 KiB）
@@ -1718,12 +1793,12 @@ int main(int argc,char* argv[]) {
 
     CLI::App app("FileEncryptor command-line interface");
 
-    // Temp bools: CLI11 add_flag binds bool targets; merged into action / switches after parse
+    // 临时布尔：CLI11 add_flag 绑定，解析后并入动作/开关
     bool f_encrypt=false, f_decrypt=false, f_bencrypt=false, f_bdecrypt=false,
          f_keygen=false, f_derive=false, f_pubkey=false, f_info=false,
          f_verify=false, f_recover=false, f_keylib=false, f_rewrap=false, f_randomread=false;
     bool f_preview=false, f_pqc=false, f_nopqc=false, f_wm=false, f_nowm=false,
-         f_compress=false, f_verbose=false;
+         f_compress=false, f_verbose=false, f_stdout=false;
     std::vector<std::string> mode_strs;
     std::string split_str;
     uint64_t random_offset=0, random_length=65536;
@@ -1741,7 +1816,7 @@ int main(int argc,char* argv[]) {
     bool features_mode=false;
     bool cl_given=false;
 
-    // ===== actions (mutually exclusive; merged after parse) =====
+    // ===== 动作（互斥；解析后合并） =====
     app.add_flag("-e", f_encrypt);
     app.add_flag("-d", f_decrypt);
     app.add_flag("--be", f_bencrypt);
@@ -1755,7 +1830,7 @@ int main(int argc,char* argv[]) {
     app.add_flag("-L,--keylib", f_keylib);
     app.add_flag("--rewrap", f_rewrap);
 
-    // ===== common options =====
+    // ===== 通用选项 =====
     app.add_option("-m,--mode", mode_strs, "crypto mode: xchacha20|aegis256|aes-gcm|sm4|x25519|x448")
         ->multi_option_policy(CLI::MultiOptionPolicy::TakeAll);
     app.add_flag("--x448", x448_mode);
@@ -1787,6 +1862,7 @@ int main(int argc,char* argv[]) {
     app.add_option("-s,--split,--split-size", split_str, "split volume size, e.g. 4GB");
     app.add_flag("--features", features_mode);
     app.add_flag("--preview", f_preview);
+    app.add_flag("--stdout", f_stdout);   // 解密明文直写 stdout（不落盘）；与 -o/--output 互斥
     app.add_option("--max-bytes", preview_max, "preview max bytes (default 4096)");
     app.add_flag("--force-decrypt", force_decrypt);
     app.add_flag("-y,--force", force_overwrite);
@@ -1842,7 +1918,7 @@ int main(int argc,char* argv[]) {
 
     for(auto& s: explicit_inputs) input_paths.push_back(s);
 
-    // ===== merge / validate after parse =====
+    // ===== 解析后合并/校验 =====
     if(features_mode) {
 #ifdef FE_WITH_ZSTD
         std::cout<<"zstd=1\n";
@@ -1864,7 +1940,7 @@ int main(int argc,char* argv[]) {
 
     if(f_verbose) set_verbose(true);
 
-    // -m mode validation (order preserved; asym can appear with a payload mode)
+    // -m 模式校验（保序；非对称可与载荷模式共存）
     for(auto& ms : mode_strs) {
         if(ms=="xchacha20") mode=CryptoMode::XCHACHA20;
         else if(ms=="aegis256") mode=CryptoMode::AEGIS256;
@@ -1874,7 +1950,7 @@ int main(int argc,char* argv[]) {
         else { std::cerr<<"Unknown mode: "<<ms<<"\n"; return 1; }
     }
 
-    // mutually exclusive action merge
+    // 互斥动作合并
     {
         const int n_act = (f_encrypt?1:0)+(f_decrypt?1:0)+(f_bencrypt?1:0)+(f_bdecrypt?1:0)
             +(f_keygen?1:0)+(f_derive?1:0)+(f_pubkey?1:0)+(f_info?1:0)+(f_verify?1:0)+(f_randomread?1:0)
@@ -1907,7 +1983,7 @@ int main(int argc,char* argv[]) {
         else if(!vault_format_dir.empty()) action=ACTION_VAULT_FORMAT;
     }
 
-    // --watermark-extract: read-only tail watermark, not a regular action
+    // --watermark-extract：只读尾部水印，非普通动作
     if(!wm_extract_path.empty()) {
         if(action!=ACTION_NONE) { std::cerr<<"Multiple modes specified.\n"; return 1; }
         action=ACTION_WATERMARK;
@@ -2060,7 +2136,7 @@ if(wrap_mode || unwrap_mode) {
         return 0;
     }
 
-    // Key generation needs no input file: -g [-o <dir>] [-x448] [--no-pqc]
+    // 密钥生成无需输入文件：-g [-o <dir>] [-x448] [--no-pqc]
     if(action==ACTION_KEYGEN) {
         uint8_t kalgo = RECIP_ALGO_X25519;
         if(pqc_on)                     kalgo = RECIP_ALGO_MLKEM;   // 默认：X25519 + ML-KEM-768
@@ -2255,8 +2331,8 @@ if(wrap_mode || unwrap_mode) {
         log_event(LOG_INFO,"key_source",{{"type","keyfile"},{"path",keyfile_path}});
     }
     else if(key_from_stdin) {
-        // Secure channel: read entire stdin (binary-safe, until EOF) as key material. Symmetric mode -> password; asymmetric decrypt ->
-        // age identity. GUI pipes via this channel to avoid leaking through env vars / command line.
+        // 安全通道：整段 stdin（二进制安全、读到 EOF）作密钥材料；对称→密码，非对称解密→
+        // age 身份；GUI 经此通道传入，避免经环境变量/命令行泄露
         // 流式读取并封顶 1 MB，防止恶意大管道撑爆内存。
         std::vector<char> sbuf;
         {
@@ -2360,8 +2436,12 @@ if(wrap_mode || unwrap_mode) {
             std::cout.write(reinterpret_cast<const char*>(buf.data()),(std::streamsize)buf.size());
             std::cout.flush();
         } else {
-            std::ofstream of(random_out,std::ios::binary|std::ios::trunc);
-            if(!of) { std::cerr<<"Cannot open output file: "<<random_out<<"\n"; return 1; }
+            // 低危（A 组）：与解密输出同策略，no-follow 创建，拒绝经符号链接写穿
+            if(!fe_create_output_no_follow(random_out)) return 1;
+            std::ofstream of;
+            if(!open_stream(of,random_out,std::ios::out|std::ios::binary|std::ios::trunc)) {
+                std::cerr<<"Cannot open output file: "<<random_out<<"\n"; return 1;
+            }
             of.write(reinterpret_cast<const char*>(buf.data()),(std::streamsize)buf.size());
         }
         double secs=std::chrono::duration<double>(t1-t0).count();
@@ -2524,8 +2604,34 @@ if(wrap_mode || unwrap_mode) {
         const uint32_t kTargetChunk = 64u*1024u;
         std::error_code ec;
         auto U = [](const std::string& s){ return std::filesystem::u8path(s); };
+        // M18：rel 来自索引（持密钥者可写），投毒索引可借 ".."/绝对路径/
+        // 反斜杠让明文落到 tmpdir 之外，逐条校验拒绝。
+        auto rel_safe = [](const std::string& rel) {
+            if (rel.empty()) return false;
+            if (rel.find('\\') != std::string::npos) return false;
+            if (rel[0] == '/' || rel[0] == '\\') return false;
+            if (rel.size() >= 2 && rel[1] == ':') return false;
+            size_t i = 0;
+            while (i < rel.size()) {
+                size_t j = rel.find('/', i);
+                if (j == std::string::npos) j = rel.size();
+                if (rel.compare(i, j - i, "..") == 0) return false;
+                i = j + 1;
+            }
+            return true;
+        };
         std::string tmpdir = vault_recrypt_dir + "/.recrypt.tmp";
+        // M18：.recrypt.tmp 名可预测，预置成符号链接时 create_directories
+        // 会跟随，明文便会落到库外。先判链接再创建（竞态残留风险见下方注释）。
+        if (path_is_symlink(tmpdir)) {
+            std::cerr << "vault-recrypt: refusing to use a symlinked temp dir: " << tmpdir << "\n";
+            return 1;
+        }
         std::filesystem::create_directories(U(tmpdir), ec);
+        if (ec) {
+            std::cerr << "vault-recrypt: cannot create temp dir: " << tmpdir << "\n";
+            return 1;
+        }
         size_t converted=0, skipped=0, failed=0;
         for(const auto& e : entries) {
             // 随机命名后按 store 定位物理 .ptd（store 空=旧盘回退 rel 基名）
@@ -2533,8 +2639,39 @@ if(wrap_mode || unwrap_mode) {
             PtdMeta pm;
             if(!read_ptd_metadata(ptd, pm)) { failed++; continue; }
             if(pm.version>=3 && pm.compression==0 && pm.chunk_size<=kTargetChunk) { skipped++; continue; }
+            if (!rel_safe(e.rel_path)) {
+                std::cerr << "  unsafe rel_path in index, skipping: " << e.rel_path << "\n";
+                failed++; continue;
+            }
             std::string plain = tmpdir + "/" + e.rel_path;
-            std::filesystem::create_directories(std::filesystem::u8path(plain).parent_path(), ec);
+            // M18：plain 的各父分量（tmpdir 之下）逐一判链接——
+            // create_directories 会跟随已存在的符号链接目录，发现链接即拒绝，
+            // 避免 "tmpdir/sub -> 库外" 这类预置把明文写出去。
+            // TOCTOU：判定与创建之间被换链的残留风险无法在本层根治。
+            {
+                std::string acc = tmpdir;
+                std::string rest = plain.substr(tmpdir.size());
+                bool linked = false;
+                while (!rest.empty() && !linked) {
+                    size_t s = rest.find_first_of("/\\");
+                    std::string comp = (s == std::string::npos) ? rest : rest.substr(0, s);
+                    rest = (s == std::string::npos) ? std::string() : rest.substr(s + 1);
+                    if (!comp.empty()) {
+                        acc += "/" + comp;
+                        if (path_is_symlink(acc)) linked = true;
+                    }
+                }
+                if (linked) {
+                    std::cerr << "  symlinked parent in temp dir, skipping: " << e.rel_path << "\n";
+                    failed++; continue;
+                }
+            }
+            std::filesystem::create_directories(U(plain).parent_path(), ec);
+            if (ec) { std::cerr << "  cannot create temp subdir for: " << e.rel_path << "\n"; failed++; continue; }
+            if (path_is_symlink(plain)) {
+                std::cerr << "  refusing symlinked temp target, skipping: " << e.rel_path << "\n";
+                failed++; continue;
+            }
             if(!decrypt_file(ptd, plain, password, nullptr, /*silent=*/true)) {
                 std::cerr<<"  decrypt failed: "<<e.rel_path<<"\n"; failed++; continue;
             }
@@ -2544,8 +2681,9 @@ if(wrap_mode || unwrap_mode) {
                                    nullptr, nullptr, nullptr, nullptr, kTargetChunk);
             std::filesystem::remove(U(plain), ec);
             if(!ok) { std::cerr<<"  re-encrypt failed: "<<e.rel_path<<"\n"; failed++; continue; }
-            // 原子替换旧容器（同目录 rename）；u8path 避免 rel_path 含中文时被 ACP 误解
-            std::filesystem::remove(U(ptd), ec);
+            // 原子替换旧容器（同目录 rename 即覆盖）；u8path 避免 rel_path 含中文时被 ACP 误解。
+            // M19：去掉先 remove——remove 成功而 rename 失败会让库内文件永久丢失，
+            // rename 本身即原子覆盖（Windows 侧为 MoveFileExW 替换语义）。
             std::filesystem::rename(U(newptd), U(ptd), ec);
             if(ec) { std::cerr<<"  replace failed: "<<e.rel_path<<"\n"; failed++; continue; }
             converted++;
@@ -2633,10 +2771,21 @@ if(wrap_mode || unwrap_mode) {
             std::cerr<<"vault-format failed: "<<err<<"\n"; return 1;
         }
         size_t removed=0, failed_n=0;
-        for(const auto& e: entries) {
-            std::string ptd = vault_ptd_path(vault_format_dir, e.rel_path, e.store);
-            if(remove_file_utf8(ptd)) removed++;
-            else { failed_n++; std::cerr<<"Warning: cannot remove "<<ptd<<"\n"; }
+        // 全盘扫描删除所有 .ptd：索引只记录文件逻辑名，磁盘上才是真实存储（随机名/store 映射）；
+        // 仅按索引删会在「索引与磁盘不一致」时漏删，表现为「空间显示空了但源文件还在」。
+        // 直接扫目录删全部 .ptd 最稳：vault.meta / .feindex 不是 .ptd，会保留（身份与密码不变）。
+        {
+            std::error_code ec;
+            std::filesystem::path vdir = std::filesystem::u8path(vault_format_dir);
+            if (std::filesystem::exists(vdir, ec)) {
+                std::filesystem::recursive_directory_iterator it(vdir, ec);
+                for (auto& e : it) {
+                    if (!e.is_regular_file()) continue;
+                    if (e.path().extension().u8string() != ".ptd") continue;
+                    if (remove_file_utf8(e.path().u8string())) removed++;
+                    else { failed_n++; std::cerr<<"Warning: cannot remove "<<e.path().u8string()<<"\n"; }
+                }
+            }
         }
         if(!vault_write_index(vault_format_dir, meta, password, "[]", err)) {
             std::cerr<<"vault-format failed: "<<err<<"\n"; return 1;
@@ -2699,9 +2848,16 @@ if(wrap_mode || unwrap_mode) {
 
     if(is_encrypt && !asym_mode) {
         if(used_key_source) {
-            // 非交互密钥源：不二次确认、不做强度提示
-            if(password.size()<6) {
-                std::cerr<<"Key too short (min 6 characters)\n";
+            // M27：非交互密钥源（-k / ENCRYPTOR_KEY / --key-stdin）同样应用
+            // password_policy 的 min_len/min_classes，与交互路径一致，
+            // 避免 6 位短口令经非交互通道旁路密码策略。
+            std::string preason;
+            const Config& cfg = global_config();
+            size_t min_len = (cfg.min_password_length > 0)
+                ? (size_t)cfg.min_password_length : 8;
+            int min_classes = (cfg.min_password_classes > 0) ? cfg.min_password_classes : 2;
+            if(!fe::password_policy::meets_policy(password.cdata(), password.size(), min_len, min_classes, preason)) {
+                std::cerr<<preason<<"\n";
                 return 1;
             }
         }
@@ -3037,12 +3193,26 @@ if(wrap_mode || unwrap_mode) {
         // 写宿主（GUI）统计文件：入加密盘此前未写，导致 GUI 末态统计全为 0。
         // 与 process_files 一致：经 FILEENCRYPTOR_STATS_FILE 环境变量指定路径，拒绝符号链接写穿。
         if (const char* stats_path = std::getenv("FILEENCRYPTOR_STATS_FILE")) {
-            bool blocked = false;
-            { std::error_code sec; blocked = std::filesystem::is_symlink(stats_path, sec); }
+            // 低危（A 组）：统计文件同样拒绝符号链接写穿——末级与各级父目录都要查
+            // （父目录为链接时 fopen 会跟随写到库外），创建走 no-follow。
+            std::string sp(stats_path);
+            bool blocked = path_is_symlink(sp);
+            if (!blocked) {
+                std::string cur = sp;
+                for (;;) {
+                    std::string::size_type slash = cur.find_last_of("/\\");
+                    if (slash == std::string::npos) break;
+                    cur = cur.substr(0, slash);
+                    if (cur.empty() || cur.back() == ':') break;   // 根目录 / 盘符根
+                    if (path_is_symlink(cur)) { blocked = true; break; }
+                }
+            }
             if (blocked) {
                 std::cerr << "拒绝通过符号链接写入统计：" << stats_path << "\n";
+            } else if (!fe_create_output_no_follow(sp)) {
+                std::cerr << "Cannot create stats file: " << sp << "\n";
             } else {
-                FILE* sf = fopen(stats_path, "wb");
+                FILE* sf = fopen(sp.c_str(), "wb");
                 if (sf) {
                     fprintf(sf, "{\"total_bytes\":%llu,\"files_done\":%llu,\"files_failed\":%llu,"
                               "\"files_skipped\":%llu,\"total_files\":%llu}\n",
@@ -3086,6 +3256,23 @@ if(wrap_mode || unwrap_mode) {
         // 避免跨过带非平凡析构的 std::ifstream 声明（严格 C++ 下 ill-formed，MSVC -W4 报 C4533）。
         all_ok = [&]() -> bool {
             const std::string& in_path=input_paths[0];
+            // 管道输入：'-' 表示明文来自 stdin（二进制模式避免 Windows CRLF 篡改）
+            std::istream* pipe_in=nullptr;
+            if(in_path=="-") {
+#ifdef _WIN32
+                (void)_setmode(_fileno(stdin),_O_BINARY);
+#endif
+                // 解开 cerr/cin 对 cout 的 tie：默认 cerr 每次写都会 flush cout，
+                // 与 AggWriter 的大缓冲交错会导致密文块丢失（--stdout 输出字节不稳定）。
+                std::cerr.tie(nullptr);
+                std::cin.tie(nullptr);
+                pipe_in=&std::cin;
+            }
+            // --stdout：数据通道独占 stdout，进度/状态一律走 stderr
+            if(f_stdout) {
+                std::cerr.tie(nullptr);
+                std::cin.tie(nullptr);
+            }
             // 目录不属于单文件动作：批量动作（-be/-bd）才有目录递归展开，
             // 否则会打印 "Encrypting: <目录>" 后才报打不开，语义误导
             if(fe_path_is_directory(in_path)) {
@@ -3114,6 +3301,7 @@ if(wrap_mode || unwrap_mode) {
             // 输出名按 base 推导：输入 foo.003.ptd 时应得 foo，而不是 foo.003
             std::string name_path=plan.from_volumes ? base_ptd_of(in_path) : in_path;
             if(name_path.empty()) name_path=in_path;
+            if(in_path=="-") name_path="stdin";   // 管道输入无真实名，用占位名推导输出
 
             std::string out_path;
             if(!output_dir.empty()) {
@@ -3168,18 +3356,21 @@ if(wrap_mode || unwrap_mode) {
                 out_path+=".ptd";
             }
 
-            // 续传无缝衔接：若检测到续传元数据（加密看 .prs；解密需 .prs + .prt），
+            // 续传无缝衔接：若检测到续传元数据（加密看 .prs；解密需 .prs + 已写入的输出），
             // 跳过覆盖确认，直接交给 encrypt/decrypt_file 续传，避免大文件中断后重跑被“覆盖？”打断。
             bool has_resume_meta=false;
             {
-                std::ifstream pf;
-                if(open_stream(pf,out_path+".prs",std::ios::in|std::ios::binary)&&pf.good()) {
-                    pf.close();
+                // M21：加密的进度文件写在 AtomicOutput 的派生路径
+                // <out>.fe_tmp_<FNV>.prs 下，此前查 out_path+".prs" 恒不命中：
+                // 续传场景被「覆盖？」打断，且攻击者伪造 out.ptd.prs 即可让确认
+                // 短路、静默覆盖已有输出。改查真实路径，并做 magic/version 预校验。
+                ProgressInfo pi;
+                if(fe_load_progress(is_encrypt?atomic_output_tmp_path(out_path):out_path,pi)) {
                     if(is_encrypt) has_resume_meta=true;
                     else {
-                        std::ifstream part;
-                        if(open_stream(part,out_path+".prt",std::ios::in|std::ios::binary)&&part.good()) {
-                            part.close();
+                        std::ifstream out;
+                        if(open_stream(out,out_path+".prt",std::ios::in|std::ios::binary)&&out.good()) {
+                            out.close();
                             has_resume_meta=true;
                         }
                     }
@@ -3201,6 +3392,26 @@ if(wrap_mode || unwrap_mode) {
 
             bool ok;
             if(is_encrypt) {
+                if(f_stdout) {
+                    // 管道输出：密文直写 stdout，不落盘、不续传、不原子提交、不处置源文件。
+                    // 走 RawStreamBuf（FILE* 二进制），绕开 iostream 与 stderr 交错的缓冲问题。
+                    std::cerr<<"Encrypting to stdout: "<<in_path<<"\n";
+                    RawStreamBuf raw(stdout);
+                    std::ostream data_out(&raw);
+                    try {
+                        ok=encrypt_file(in_path, std::string(), password, mode, nullptr, true, compress_level,
+                                        false,nullptr,wm_spec.enabled?&wm_spec:nullptr,
+                                        nullptr,nullptr,0,pipe_in,&data_out);
+                    } catch(const std::exception& e) {
+                        fprintf(stderr,"Error: encryption failed: %s\n",e.what());
+                        ok=false;
+                    } catch(...) {
+                        fprintf(stderr,"Error: encryption failed (unexpected exception)\n");
+                        ok=false;
+                    }
+                    std::cout.flush();   // 密文全部刷出（管道语义：已写出不可撤回）
+                    fflush(stdout);
+                } else {
                 std::cout<<"Encrypting: "<<in_path<<" -> "<<out_path<<"\n";
                 // 原子落盘：先写同目录临时文件，encrypt_file 内部自校验通过后再
                 // 替换到最终路径。进程被强杀（GUI 取消=杀进程树）或崩溃时，最终
@@ -3211,7 +3422,8 @@ if(wrap_mode || unwrap_mode) {
                 // 而非未捕获导致 std::terminate/fastfail（GUI 侧表现为"进程崩溃"）。
                 try {
                     ok=encrypt_file(in_path,enc_target,password,mode,nullptr,true,compress_level,
-                                    false,nullptr,wm_spec.enabled?&wm_spec:nullptr);
+                                    false,nullptr,wm_spec.enabled?&wm_spec:nullptr,
+                                    nullptr,nullptr,0,pipe_in);
                 } catch(const std::exception& e) {
                     fprintf(stderr,"Error: encryption failed: %s\n",e.what());
                     ok=false;
@@ -3227,8 +3439,9 @@ if(wrap_mode || unwrap_mode) {
                         ok=false;
                     }
                 }
-                if(ok && write_sha256_enabled()) write_sha256_sidecar(out_path); // 功能10：校验单
-                if(ok && split_bytes>0) {
+                }
+                if(ok && !f_stdout && write_sha256_enabled()) write_sha256_sidecar(out_path); // 功能10：校验单
+                if(ok && !f_stdout && split_bytes>0) {
                     std::string serr;
                     if(!finish_encrypt_split(out_path,split_bytes,
                                              write_sha256_enabled(),serr)) {
@@ -3238,6 +3451,29 @@ if(wrap_mode || unwrap_mode) {
                 }
             }
             else {
+                if(f_stdout) {
+                    // 管道输出：明文直写 stdout，不落盘、不展开归档、不处置源文件。
+                    // 走 RawStreamBuf（FILE* 二进制），绕开 iostream 与 stderr 交错的缓冲问题。
+                    std::cerr<<"Decrypting to stdout: "<<src_path<<"\n";
+                    RawStreamBuf raw(stdout);
+                    std::ostream data_out(&raw);
+                    try {
+                        // 状态走 stderr，明文独占 stdout；silent=true 避免内部信息污染 stdout
+                        std::function<void(size_t,size_t)> noop_cb=[](size_t,size_t){};
+                        ok=decrypt_file(src_path, std::string(), password,
+                            preview_mode?noop_cb:nullptr, /*silent=*/true, /*resume=*/true,
+                            nullptr,nullptr,0,false,preview_mode?preview_max:0,std::string(),force_overwrite,
+                            &data_out);
+                    } catch(const std::exception& e) {
+                        fprintf(stderr,"Error: decryption failed: %s\n",e.what());
+                        ok=false;
+                    } catch(...) {
+                        fprintf(stderr,"Error: decryption failed (unexpected exception)\n");
+                        ok=false;
+                    }
+                    fflush(stdout);   // 明文全部刷出（管道语义：已写出不可撤回）
+                    return ok;
+                }
                 if(preview_mode) {
                     std::cerr<<"Previewing first "<<preview_max<<" bytes of: "<<in_path<<"\n";
                 } else {
@@ -3248,7 +3484,7 @@ if(wrap_mode || unwrap_mode) {
                     std::function<void(size_t,size_t)> noop_cb=[](size_t,size_t){};
                     ok=decrypt_file(src_path,out_path,password,
                         preview_mode?noop_cb:nullptr,false,true,
-                        nullptr,nullptr,0,false,preview_mode?preview_max:0);
+                        nullptr,nullptr,0,false,preview_mode?preview_max:0,std::string(),force_overwrite);
                 } catch(const std::exception& e) {
                     fprintf(stderr,"Error: decryption failed: %s\n",e.what());
                     ok=false;

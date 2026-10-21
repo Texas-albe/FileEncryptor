@@ -18,6 +18,10 @@ bool fe_process_alive(int pid);
 // 以「不跟随符号链接」的方式创建/截断输出文件，杜绝被链接劫持写穿到无关路径。
 bool fe_create_output_no_follow(const std::string& path);
 
+// AtomicOutput 的临时路径（<final>.fe_tmp_<FNV>）：续传元数据探测等场景
+// 需要在构造 AtomicOutput 之前就算出这个路径（与 atomic_tmp_path 同一算法）。
+std::string atomic_output_tmp_path(const std::string& final_path);
+
 // 清掉只读属性（Windows 属性位 / POSIX 属主写位），为覆写做准备
 void clear_readonly_attribute(const std::string& path);
 

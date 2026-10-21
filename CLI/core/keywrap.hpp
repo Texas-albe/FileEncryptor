@@ -1,7 +1,7 @@
 #pragma once
 // 把 32 字节 DEK 用 AES-256-KWP/AES-KW 藏进小文件。包装的是密钥而非数据，
 // 与载荷加密正交，故不属于 -m。
-// blob：magic[4]="FEKW" ver(1) alg(1) eph_len(2) salt_len(2) flags(2) salt eph cipher
+// blob 布局：magic[4]="FEKW" ver(1) alg(1) eph_len(2) salt_len(2) flags(2) salt eph cipher
 #include <cstddef>
 #include <cstdint>
 #include <string>

@@ -17,6 +17,7 @@
 #include <array>
 #include <unordered_map>
 #include <fstream>
+#include <sstream>
 #include <algorithm>
 #include <string>
 #include <chrono>
@@ -137,7 +138,7 @@ public:
     PooledBuf(const PooledBuf&)=delete;
     PooledBuf& operator=(const PooledBuf&)=delete;
 };
-} // namespace
+}
 
 // ProgressInfo / PROGRESS_MAGIC / PROGRESS_VERSION / PROGRESS_SIZE 已迁入 core/resume.hpp
 
@@ -424,6 +425,8 @@ static std::vector<unsigned char> build_aad_with_metadata(
 // 判断路径是否为符号链接 / 重解析点（已存在才报告，不存在返回 false）。
 // v2.1.2：去掉 static，供非对称分支（run_asym）复用同样的守卫。
 bool path_is_symlink(const std::string& path) {
+    // SAF content:// 句柄由用户选择器授予，文件系统层无符号链接可劫持，直接否。
+    if (path.rfind("content://", 0) == 0) return false;
 #ifdef _WIN32
     std::wstring w=utf8_to_wstring(path);
     DWORD attr=GetFileAttributesW(w.c_str());
@@ -551,10 +554,14 @@ bool validate_io_paths(const std::string& in_path,const std::string& out_path,bo
 }
 
 // 收紧新建输出文件的权限（避免半截明文被其他用户读取）。
-// Windows 复用密钥文件的 PROTECTED_DACL 实现（仅当前用户+SYSTEM），收紧半成品 .prt/输出文件 DACL。
+// Windows 复用密钥文件的 PROTECTED_DACL 实现（仅当前用户+SYSTEM），收紧输出文件 DACL。
 static void restrict_permissions(const std::string& path) {
 #ifdef _WIN32
     tighten_file_permissions(path);
+#elif defined(__ANDROID__)
+    // SAF fd 的权限由 DocumentsContract/MediaStore 管控，chmod 对 content:// 无效，
+    // 静默忽略（不作保留承诺）；桌面 POSIX 正常收紧 0600。
+    (void)path;
 #else
     chmod(path.c_str(),0600);
 #endif
@@ -583,6 +590,12 @@ static void secure_wipe_and_remove(const std::string& path) {
         CloseHandle(h);
     }
 #else
+#ifdef __ANDROID__
+    // SAF fd 无覆写句柄（content:// 不可 O_WRONLY 打开）：直接删除，不假装擦除成功，
+    // 也不保留半成品明文。桌面 POSIX 保留「补写位 + 零覆写 + fsync」完整语义。
+    remove_file_utf8(path);
+    return;
+#endif
     // 只读源直接 O_WRONLY 会失败，那样等于「跳过覆写只删文件」，明文仍可被恢复。
     // 复用源文件处置那条路径的 clear_readonly_attribute（补属主写位）
     clear_readonly_attribute(path);
@@ -701,7 +714,8 @@ static void secure_clear(T& v) {
 
 void print_progress(size_t processed,size_t total,
     std::chrono::steady_clock::time_point start,
-    bool finish) {
+    bool finish, std::ostream* progress_out) {
+    if(!progress_out) return;   // 管道输出模式：调用方不传流即抑制进度（stdout 是数据通道）
     static std::mutex print_mutex;
     std::lock_guard<std::mutex> lock(print_mutex);
 
@@ -740,10 +754,10 @@ void print_progress(size_t processed,size_t total,
 
     if(finish) {
         last_pct=-1;   // 复位，下一文件从 0% 重新开始
-        std::cout<<buf<<'\n';
+        *progress_out<<buf<<'\n';
     }
     else {
-        std::cout<<buf<<std::flush;
+        *progress_out<<buf<<std::flush;
     }
 }
 
@@ -924,16 +938,26 @@ bool encrypt_file(const std::string& in_path,
     const WatermarkSpec* wm,
     const unsigned char* ext_salt,
     const unsigned char* ext_kek,
-    uint32_t chunk_override) {
+    uint32_t chunk_override,
+    std::istream* in_stream,
+    std::ostream* out_stream) {
 
     disable_core_dump();
+
+    // 流输出：stdout 切二进制，避免 Windows 文本模式把 0x0A 翻译成 CRLF 破坏密文
+    if(out_stream) {
+#ifdef _WIN32
+        (void)_setmode(_fileno(stdout), _O_BINARY);
+#endif
+    }
 
     // 非对称加密：DEK 仅由收件人包装，不经密码，且暂不支持断点续传（强制全新写入）。
     std::vector<unsigned char> recip_blob_out;
     if(asym_mode) resume=false;
 
-    // 依据 YAML 配置校验输入/输出路径（长度上限 / 白名单）
-    if(!validate_io_paths(in_path,out_path,false)) {
+    // 依据 YAML 配置校验输入/输出路径（长度上限 / 白名单）；管道输入不打开 in_path，
+    // 流输出不落盘，二者均跳过校验
+    if(!in_stream && !out_stream && !validate_io_paths(in_path,out_path,false)) {
         fprintf(stderr,"Path validation failed (config policy)\n");
         return false;
     }
@@ -953,14 +977,36 @@ bool encrypt_file(const std::string& in_path,
     // 输入侧 4 MiB 页对齐大缓冲（先于 fin 声明，析构时 fin 先销毁，缓冲存活期覆盖流）
     InputBuffer fin_buf;
     std::ifstream fin;
-    if(!open_stream(fin,in_path,std::ios::binary)) {
-        fprintf(stderr,"Cannot open input file: %s\n",in_path.c_str());
-        return false;
+    // 管道/stdin 输入 或 流输出（--stdout）：需全量缓冲明文。
+    //  - 管道输入规避 stdin 不可 seek；
+    //  - 流输出因明文哈希写在文件头，必须先算哈希再写头部（非 seekable 输出无法回头补写）。
+    // 明文只驻内存、不落盘（管道场景体量通常可控；超大输入受内存限制，属固有约束）。
+    std::string mem_in;
+    std::unique_ptr<std::istringstream> mem_is;
+    std::istream* inp=&fin;
+    bool buffer_input = (in_stream!=nullptr) || (out_stream!=nullptr);
+    if(buffer_input) {
+        resume=false;   // 缓冲输入不可重放，禁用续传
+        if(in_stream) {
+            std::ostringstream ss; ss<<in_stream->rdbuf();
+            mem_in=std::move(ss).str();
+        } else {
+            // 流输出 + 文件输入：先整文件读入内存，供前置哈希计算
+            std::ostringstream ss; ss<<fin.rdbuf();
+            mem_in=std::move(ss).str();
+        }
+        mem_is=std::make_unique<std::istringstream>(mem_in);
+        inp=mem_is.get();
+    } else {
+        if(!open_stream(fin,in_path,std::ios::binary)) {
+            fprintf(stderr,"Cannot open input file: %s\n",in_path.c_str());
+            return false;
+        }
     }
-    fin_buf.attach(fin);
-    fin.seekg(0,std::ios::end);
-    uint64_t total_size=static_cast<uint64_t>(fin.tellg());
-    fin.seekg(0,std::ios::beg);
+    fin_buf.attach(*inp);
+    inp->seekg(0,std::ios::end);
+    uint64_t total_size=static_cast<uint64_t>(inp->tellg());
+    inp->seekg(0,std::ios::beg);
     auto start_time=std::chrono::steady_clock::now();
     // .prs 节流基点：进度文件只服务"进程被强杀后的断点续传"，无需逐块落盘。
     // （声明在所有 goto cleanup 之前，避免 C4533 跳过初始化。）
@@ -1230,7 +1276,14 @@ bool encrypt_file(const std::string& in_path,
     }
 
     std::fstream fout;
-    if(has_progress&&start_chunk>0) {
+    std::ostream* eff_out=nullptr;   // 流输出模式指向调用方流，否则回落 fout
+    std::ostream* wout=nullptr;     // 实际写入目标（头部/元数据直写，绕开 AggWriter 缓冲）
+    if(out_stream) {
+        // 流输出：跳过 .ptd 创建/续传，密文直写调用方流
+        eff_out=out_stream;
+        wout=out_stream;
+    }
+    else if(has_progress&&start_chunk>0) {
         // 续传：先丢弃中断瞬间落盘但未记账的密文残片，再从断点继续写入
         if(!fe_truncate_file(out_path,trunc_pos)) {
             fprintf(stderr,"Failed to truncate output for resume: %s\n",out_path.c_str());
@@ -1280,7 +1333,8 @@ bool encrypt_file(const std::string& in_path,
 
     // 4 MiB 聚合写出缓冲：后续密文块写入 outbuf 而非直接 fout，攒满 4 MiB 再写盘
     AggWriter outbuf;
-    outbuf.bind(fout);
+    outbuf.bind(eff_out ? *eff_out : fout);
+    if(!eff_out) wout=&fout;   // 文件模式：头部/元数据直写 fout（绕开 AggWriter，保证密文头部紧贴流首）
 
     if(!header_written) {
         memcpy(header.magic,MAGIC,4);
@@ -1355,6 +1409,12 @@ bool encrypt_file(const std::string& in_path,
         aad=build_aad_with_metadata(reinterpret_cast<unsigned char*>(&header),
             aad_cover, chunk_size,total_chunks,orig_size);
 
+        // 流输出：明文哈希写在文件头，而 stdout 不可回头补写，故先对缓冲明文算哈希填入头
+        if(out_stream) {
+            crypto_generichash(header.plaintext_hash, HASH_SIZE,
+                reinterpret_cast<const unsigned char*>(mem_in.data()), mem_in.size(), nullptr, 0);
+        }
+
         // 文件头 HMAC 写头时即计算落盘（覆盖对应前缀，不含 plaintext_hash/hmac 自身）：
         // 半成品 .ptd 也带合法 hmac 供续传校验，并防替换 salt/iv/mode 后重放旧 .prs。
         {
@@ -1365,20 +1425,20 @@ bool encrypt_file(const std::string& in_path,
             sodium_memzero(hdr_auth,sizeof(hdr_auth));
         }
 
-        if(!fout.write(reinterpret_cast<const char*>(&header),
+        if(!wout->write(reinterpret_cast<const char*>(&header),
                 use_v6 ? HEADER_SIZE_V6 : (do_compress?HEADER_SIZE_V5:HEADER_SIZE_V4))) {
             fprintf(stderr,"Write header failed\n"); ok=false; goto cleanup;
         }
         // 非对称：固定头之后、16 字节块元数据之前写入收件人 blob（recip_len 已记入 reserved）
         if(asym_mode && !recip_blob_out.empty()) {
-            if(!fout.write(reinterpret_cast<const char*>(recip_blob_out.data()),
+            if(!wout->write(reinterpret_cast<const char*>(recip_blob_out.data()),
                     (std::streamsize)recip_blob_out.size())) {
                 fprintf(stderr,"Write recipient blob failed\n"); ok=false; goto cleanup;
             }
         }
-        if(!fout.write(reinterpret_cast<const char*>(&chunk_size),4)||
-            !fout.write(reinterpret_cast<const char*>(&total_chunks),4)||
-            !fout.write(reinterpret_cast<const char*>(&orig_size),8)) {
+        if(!wout->write(reinterpret_cast<const char*>(&chunk_size),4)||
+            !wout->write(reinterpret_cast<const char*>(&total_chunks),4)||
+            !wout->write(reinterpret_cast<const char*>(&orig_size),8)) {
             fprintf(stderr,"Write metadata failed\n"); ok=false; goto cleanup;
         }
     }
@@ -1427,13 +1487,13 @@ bool encrypt_file(const std::string& in_path,
     crypto_generichash_state hstate;
     crypto_generichash_init(&hstate,nullptr,0,HASH_SIZE);
     if(start_bytes>0) {
-        fin.seekg(0,std::ios::beg);
+        inp->seekg(0,std::ios::beg);
         uint64_t remain=start_bytes;
         PooledBuf tmp(DataBufPool::plain());
         while(remain>0) {
             size_t n=(size_t)std::min<uint64_t>(CHUNK_SIZE,remain);
-            fin.read(reinterpret_cast<char*>(tmp.data()),n);
-            if(fin.gcount()!=(std::streamsize)n) {
+            inp->read(reinterpret_cast<char*>(tmp.data()),n);
+            if(inp->gcount()!=(std::streamsize)n) {
                 fprintf(stderr,"Read error during hash catch-up\n");
                 ok=false; break;
             }
@@ -1441,7 +1501,7 @@ bool encrypt_file(const std::string& in_path,
             remain-=n;
         }
         if(!ok) goto cleanup;
-        fin.seekg((std::streamoff)start_bytes,std::ios::beg);
+        inp->seekg((std::streamoff)start_bytes,std::ios::beg);
     }
 
     // nonce 基值 = header.iv；按块索引用 sodium_increment 递增（消除 nonce 碰撞理论风险）
@@ -1451,8 +1511,8 @@ bool encrypt_file(const std::string& in_path,
     for(uint32_t i=static_cast<uint32_t>(start_chunk); i<total_chunks; ++i) {
         if(processed_bytes>=total_size) break;
         size_t chunk_len=std::min<size_t>(chunk_size,(size_t)(total_size-processed_bytes));
-        fin.read(reinterpret_cast<char*>(plaintext_chunk.data()),chunk_len);
-        if(fin.gcount()!=(std::streamsize)chunk_len) {
+        inp->read(reinterpret_cast<char*>(plaintext_chunk.data()),chunk_len);
+        if(inp->gcount()!=(std::streamsize)chunk_len) {
             fprintf(stderr,"Read error at chunk %u\n",i);
             ok=false; break;
         }
@@ -1502,10 +1562,10 @@ bool encrypt_file(const std::string& in_path,
         processed_bytes+=chunk_len;
         fe_throttle_consume(chunk_len);
         // 逐块 save_progress 曾拖垮吞吐，改为按 500ms 节流：先 flush 密文再记账，
-        // 保持「磁盘 .prt ≥ .prs 记账」不变式；强杀时截断到记账处重算。
+        // 保持「磁盘 out ≥ .prs 记账」不变式；强杀时截断到记账处重算。
         auto prs_now=std::chrono::steady_clock::now();
         if(persistent_progress && prs_now-last_prs_save>=std::chrono::milliseconds(500)) {
-            outbuf.flush();   // 先落盘密文再记账进度（带 HMAC），保持「磁盘 .prt ≥ .prs」不变式
+            outbuf.flush();   // 先落盘密文再记账进度（带 HMAC），保持「磁盘 out ≥ .prs」不变式
             if(!fe_save_progress(out_path,i+1,processed_bytes,auth_key.data(),prog_binding)) {
                 fprintf(stderr,"Failed to save progress at chunk %u\n",i);
             }
@@ -1513,34 +1573,46 @@ bool encrypt_file(const std::string& in_path,
         }
 
         if(progress_callback) progress_callback(processed_bytes,total_size);
-        else print_progress(processed_bytes,total_size,start_time);
+        else print_progress(processed_bytes,total_size,start_time,false,
+                           out_stream ? &std::cerr : &std::cout);
 
         if(i+1<total_chunks) sodium_increment(nonce,iv_len);
     }
 
     if(ok) {
-        // 结束哈希并回填 plaintext_hash；文件头 HMAC 已在写头瞬间算好（覆盖区由 hdr_cover 决定，
-        // v6=192 / v5=63 / v4=61 字节），此处仅重算一遍（前缀未变，结果一致）后随 plaintext_hash 写回。
-        crypto_generichash_final(&hstate,header.plaintext_hash,HASH_SIZE);
-        unsigned char hdr_auth[HEADER_HMAC_SIZE];
-        derive_header_auth_key(key.data(),hdr_auth);
-        crypto_auth(header.header_hmac,
-            reinterpret_cast<const unsigned char*>(&header),hdr_cover,hdr_auth);
-        sodium_memzero(hdr_auth,sizeof(hdr_auth));
-        outbuf.flush();   // 先把缓冲的密文落盘，再回头写头部哈希 / HMAC
-        size_t hdr_size = use_v6 ? HEADER_SIZE_V6
-                        : (do_compress?HEADER_SIZE_V5:HEADER_SIZE_V4);
-        fout.seekp((std::streamoff)(hdr_size-HASH_SIZE-HEADER_HMAC_SIZE),std::ios::beg);
-        fout.write(reinterpret_cast<const char*>(header.plaintext_hash),HASH_SIZE);
-        fout.write(reinterpret_cast<const char*>(header.header_hmac),HEADER_HMAC_SIZE);
-        fout.flush();
-        if(wm && wm->enabled && !fe_append_watermark_tail(fout,*wm)) {
-            fprintf(stderr,"Failed to append watermark tail.\n");
-            ok=false;
-        }
-        if(ok && !fe_append_encrypted_name_footer(fout,in_path,key.data(),header.salt)) {
-            fprintf(stderr,"Failed to append encrypted original-name footer.\n");
-            ok=false;
+        if(out_stream) {
+            // 流输出：头部哈希已在写头前算好并写入，无需回头补写；
+            // 仍需追加加密文件名尾（容器合法字段，解密端尺寸校验依赖它）。
+            outbuf.flush();
+            if(!fe_append_encrypted_name_footer(*out_stream,in_path,key.data(),header.salt)) {
+                fprintf(stderr,"Failed to append encrypted original-name footer.\n");
+                ok=false;
+            }
+            out_stream->flush();
+        } else {
+            // 结束哈希并回填 plaintext_hash；文件头 HMAC 已在写头瞬间算好（覆盖区由 hdr_cover 决定，
+            // v6=192 / v5=63 / v4=61 字节），此处仅重算一遍（前缀未变，结果一致）后随 plaintext_hash 写回。
+            crypto_generichash_final(&hstate,header.plaintext_hash,HASH_SIZE);
+            unsigned char hdr_auth[HEADER_HMAC_SIZE];
+            derive_header_auth_key(key.data(),hdr_auth);
+            crypto_auth(header.header_hmac,
+                reinterpret_cast<const unsigned char*>(&header),hdr_cover,hdr_auth);
+            sodium_memzero(hdr_auth,sizeof(hdr_auth));
+            outbuf.flush();   // 先把缓冲的密文落盘，再回头写头部哈希 / HMAC
+            size_t hdr_size = use_v6 ? HEADER_SIZE_V6
+                            : (do_compress?HEADER_SIZE_V5:HEADER_SIZE_V4);
+            fout.seekp((std::streamoff)(hdr_size-HASH_SIZE-HEADER_HMAC_SIZE),std::ios::beg);
+            fout.write(reinterpret_cast<const char*>(header.plaintext_hash),HASH_SIZE);
+            fout.write(reinterpret_cast<const char*>(header.header_hmac),HEADER_HMAC_SIZE);
+            fout.flush();
+            if(wm && wm->enabled && !fe_append_watermark_tail(fout,*wm)) {
+                fprintf(stderr,"Failed to append watermark tail.\n");
+                ok=false;
+            }
+            if(ok && !fe_append_encrypted_name_footer(fout,in_path,key.data(),header.salt)) {
+                fprintf(stderr,"Failed to append encrypted original-name footer.\n");
+                ok=false;
+            }
         }
     }
     else {
@@ -1556,10 +1628,13 @@ cleanup:
 
     if(ok) {
         fe_remove_progress(out_path);
-        if(!progress_callback) print_progress(total_size,total_size,start_time,true);
+        if(!progress_callback) print_progress(total_size,total_size,start_time,true,
+                                              out_stream ? &std::cerr : &std::cout);
 
         // 自解密验证：复用本次已派生的密钥（key），边解密边计算明文哈希，
         // 不再落盘 .verify.tmp，消除 4 倍 I/O（写明文 + 读回 + 哈希 + 删除）。
+        // 流输出（--stdout）无落盘文件，无法自校验，跳过（头哈希已在写头前算好）。
+        if(!out_stream) {
         bool verify_ok=decrypt_file(out_path, out_path, password,
             [](size_t,size_t){}, true, false, key.data(), nullptr, 0, true);
         if(!verify_ok) {
@@ -1567,6 +1642,7 @@ cleanup:
             remove_file_utf8(out_path);
             fe_remove_progress(out_path);
             fprintf(stderr,"Self-decrypt verification failed, output removed.\n");
+        }
         }
     }
     else {
@@ -1591,25 +1667,26 @@ bool decrypt_file(const std::string& in_path,
     const unsigned char* ext_kek, size_t ext_kek_len,
     bool verify_only,
     size_t preview_bytes,
-    const std::string& asym_identity) {
+    const std::string& asym_identity, bool force_overwrite,
+    std::ostream* out_stream) {
     size_t force_skipped_chunks=0;
     bool preview_only=(preview_bytes>0);
-    if(preview_only) {
-        // 预览输出走二进制 stdout，避免 Windows 文本模式把 0x0A 翻译成 CRLF 破坏内容。
+    if(preview_only || out_stream) {
+        // 预览/管道输出走二进制 stdout，避免 Windows 文本模式把 0x0A 翻译成 CRLF 破坏内容。
 #ifdef _WIN32
         (void)_setmode(_fileno(stdout), _O_BINARY);
 #endif
     }
     disable_core_dump();
 
-    // 依据 YAML 配置校验输入/输出路径（长度上限 / 白名单）
-    if(!validate_io_paths(in_path,out_path,silent)) {
+    // 依据 YAML 配置校验输入/输出路径（长度上限 / 白名单）；管道输出不落盘，跳过输出校验
+    if(!out_stream && !validate_io_paths(in_path,out_path,silent)) {
         if(!silent) fprintf(stderr,"Path validation failed (config policy)\n");
         return false;
     }
 
-    // 防路径穿越：输出路径若含未解析的 ".." 分量则拒绝
-    if(path_has_traversal(out_path)) {
+    // 防路径穿越：输出路径若含未解析的 ".." 分量则拒绝；管道输出不落盘，跳过
+    if(!out_stream && path_has_traversal(out_path)) {
         if(!silent) fprintf(stderr,"Output path contains directory traversal\n");
         return false;
     }
@@ -1938,11 +2015,11 @@ bool decrypt_file(const std::string& in_path,
         sodium_memzero(hdr_auth,sizeof(hdr_auth));
     }
 
-    // 跨进程锁 + 临时文件：解密先将明文写入 <out>.prt，全部校验通过后再原子重命名
-    std::string part_path=out_path+".prt";
-    // 防符号链接劫持：若 .prt 半成品已存在且为符号链接/重解析点，拒绝写入，避免清空被指向的敏感文件
-    if(!verify_only && !preview_only && path_is_symlink(part_path)) {
-        if(!silent) fprintf(stderr,"Refusing to write through existing symlink: %s\n",part_path.c_str());
+    // 跨进程锁 + 流式直写：解密逐块直接写入 <out>，失败即安全擦除，明文全程不落中间文件
+    //（原 .prt 半成品 + 原子改名方案已废止：中断/校验失败同样留不下明文，且少一次 rename）。
+    // 防符号链接劫持：若输出已存在且为符号链接/重解析点，拒绝写入，避免清空被指向的敏感文件
+    if(!verify_only && !preview_only && path_is_symlink(out_path)) {
+        if(!silent) fprintf(stderr,"Refusing to write through existing symlink: %s\n",out_path.c_str());
         return false;
     }
     std::string lock_path;
@@ -1981,29 +2058,35 @@ bool decrypt_file(const std::string& in_path,
             }
             return true;
         }
+        if(out_stream) {
+            // 空文件：管道输出无需创建文件，仅做完整性校验（明文为零字节，不写 stdout）
+            if(have_hash) {
+                unsigned char empty_hash[HASH_SIZE];
+                crypto_generichash(empty_hash,HASH_SIZE,nullptr,0,nullptr,0);
+                if(sodium_memcmp(empty_hash,stored_hash,HASH_SIZE)!=0) {
+                    report_auth_error(silent, "Plaintext integrity check failed (empty file).");
+                    return false;
+                }
+            }
+            return true;
+        }
         std::ofstream fout;
 #ifdef _WIN32
         // Windows: create_output_no_follow 内部用 GetFinalPathNameByHandleW 复核
 #else
         ScopedUmask su_empty(0077);
 #endif
-        if(!fe_create_output_no_follow(part_path)) {
+        if(!fe_create_output_no_follow(out_path)) {
             if(!silent) fprintf(stderr,"Cannot create output file: %s\n",out_path.c_str());
             return false;
         }
-        if(!open_stream(fout,part_path,std::ios::binary)) {
+        if(!open_stream(fout,out_path,std::ios::binary)) {
             if(!silent) fprintf(stderr,"Cannot create output file: %s\n",out_path.c_str());
             return false;
         }
-        restrict_permissions(part_path);
+        restrict_permissions(out_path);
         fout.close();
         fe_remove_progress(out_path);
-        // 空文件无明文内容，直接原子落盘
-        if(!replace_file_utf8(part_path,out_path)) {
-            if(!silent) fprintf(stderr,"Failed to finalize output file: %s\n",out_path.c_str());
-            remove_file_utf8(part_path);
-            return false;
-        }
         // 空文件完整性校验（v3）
         if(have_hash) {
             unsigned char empty_hash[HASH_SIZE];
@@ -2033,8 +2116,9 @@ bool decrypt_file(const std::string& in_path,
     }
 
     ProgressInfo prog_info={0,0,0,0,{0}};
-    // 续传需要“进度文件”与“对应的 .prt 半成品”同时齐备，否则视为全新开始
+    // 续传需要「进度文件」与「已写入的输出文件」同时齐备，否则视为全新开始
     bool has_progress=false;
+    std::string part_path = out_path + ".prt";   // 半成品：原子 rename 收尾前明文只落此临时名
     if(resume && fe_load_progress(out_path,prog_info) && fe_file_exists(part_path)) {
         // 密钥与进度 HMAC 密钥已在前面（空文件短路之前）派生到 key / auth_key，此处直接复用，
         // 并把源文件绑定标识（规范化路径 + 大小 + mtime）纳入 HMAC 校验，防重放。
@@ -2049,14 +2133,19 @@ bool decrypt_file(const std::string& in_path,
     uint64_t start_chunk=has_progress ? prog_info.processed_chunks : 0;
     uint64_t start_bytes=has_progress ? prog_info.processed_bytes : 0;
 
-    // 解密续传：明文半成品（.prt）可能残留未完成块的残片，截断到已确认写入的明文长度
+    // 解密续传：输出文件可能残留未完成块的残片，截断到已确认写入的明文长度
     std::fstream fout;
+    std::ostream* eff_out = nullptr;   // stream 模式指向调用方流，否则回落 fout
     if(verify_only || preview_only) {
         // 自校验 / 预览模式：不创建/写入任何明文文件；预览改向 stdout 输出前缀
     }
+    else if(out_stream) {
+        // 管道输出：明文直写调用方流，跳过 .prt / 续传 / 原子 rename（仅对落盘有意义）
+        eff_out = out_stream;
+    }
     else if(has_progress&&start_chunk>0) {
         if(!fe_truncate_file(part_path,start_bytes)) {
-            if(!silent) fprintf(stderr,"Failed to truncate partial output for resume: %s\n",part_path.c_str());
+            if(!silent) fprintf(stderr,"Failed to truncate partial output for resume: %s\n",out_path.c_str());
             return false;
         }
         if(!open_stream(fout,part_path,std::ios::in|std::ios::out|std::ios::binary)) {
@@ -2069,10 +2158,16 @@ bool decrypt_file(const std::string& in_path,
 #ifdef _WIN32
         // Windows: create_output_no_follow 内部用 GetFinalPathNameByHandleW 复核
 #else
-        ScopedUmask su_prt(0077);
+        ScopedUmask su_out(0077);
 #endif
+        if(force_overwrite) { remove_file_utf8(out_path); remove_file_utf8(part_path); }
         if(!fe_create_output_no_follow(part_path)) {
-            if(!silent) fprintf(stderr,"Cannot create output file: %s\n",out_path.c_str());
+            if(!silent) {
+                if(fe_file_exists(part_path))
+                    fprintf(stderr,"Output file already exists (delete it first, or use -y to overwrite, or resume if interrupted): %s\n",out_path.c_str());
+                else
+                    fprintf(stderr,"Cannot create output file: %s\n",out_path.c_str());
+            }
             return false;
         }
         if(!open_stream(fout,part_path,std::ios::out|std::ios::binary|std::ios::trunc)) {
@@ -2085,7 +2180,7 @@ bool decrypt_file(const std::string& in_path,
 
     // 4 MiB 聚合写出缓冲：明文块写入 outbuf，攒满 4 MiB 再写盘（verify_only 下不绑定，空操作）
     AggWriter outbuf;
-    if(!verify_only && !preview_only) outbuf.bind(fout);
+    if(!verify_only && !preview_only) outbuf.bind(eff_out ? *eff_out : fout);
 
     // 密钥已在前面（空文件短路之前）派生到 key / auth_key，此处无需重复派生。
 
@@ -2122,6 +2217,7 @@ bool decrypt_file(const std::string& in_path,
     PooledBuf dec_chunk(DataBufPool::plain());        // zstd 解压后的最终明文（仅压缩模式使用）
     unsigned char nonce[32]={0};
     bool ok=true;
+    bool rename_failed=false;   // rename 收尾失败：.prt 已解密成功但没换出，保留不删
     uint64_t processed_bytes=start_bytes;
     uint64_t preview_written=0;   // 预览模式已写出 stdout 的明文字节数
     // 小于 64 MiB 的文件跳过进度文件写入（见 encrypt_file 同款说明）
@@ -2168,13 +2264,13 @@ bool decrypt_file(const std::string& in_path,
         }
     }
 
-    // 明文 Blake2b 流式哈希（续传时先回放 .prt 前缀）
+    // 明文 Blake2b 流式哈希（续传时先回放已写入的输出前缀）
     crypto_generichash_state hstate;
     if(have_hash || verify_only) crypto_generichash_init(&hstate,nullptr,0,HASH_SIZE);
     if((have_hash || verify_only) && start_bytes>0) {
         std::ifstream pin;
         if(!open_stream(pin,part_path,std::ios::binary)) {
-            if(!silent) fprintf(stderr,"Cannot open .prt for hash catch-up\n");
+            if(!silent) fprintf(stderr,"Cannot open output for hash catch-up\n");
             ok=false;
         }
         else {
@@ -2184,7 +2280,7 @@ bool decrypt_file(const std::string& in_path,
                 size_t n=(size_t)std::min<uint64_t>(CHUNK_SIZE,remain);
                 pin.read(reinterpret_cast<char*>(tmp.data()),n);
                 if(pin.gcount()!=(std::streamsize)n) {
-                    if(!silent) fprintf(stderr,"Read .prt for hash catch-up failed\n");
+                    if(!silent) fprintf(stderr,"Read output for hash catch-up failed\n");
                     ok=false; break;
                 }
                 crypto_generichash_update(&hstate,tmp.data(),n);
@@ -2301,7 +2397,7 @@ bool decrypt_file(const std::string& in_path,
         processed_bytes+=out_len;
         fe_throttle_consume(out_len);
         // 逐块 save_progress 曾拖垮吞吐，改为 500ms 节流：先 flush 明文再记账，
-        // 保持「磁盘 .prt ≥ .prs」不变式；verify_only 不落盘不写进度。
+        // 保持「磁盘 out ≥ .prs」不变式；verify_only 不落盘不写进度。
         if(!verify_only && persistent_progress) {
             auto prs_now=std::chrono::steady_clock::now();
             if(prs_now-last_prs_save>=std::chrono::milliseconds(500)) {
@@ -2317,7 +2413,8 @@ bool decrypt_file(const std::string& in_path,
             progress_callback(processed_bytes,total_size);
         }
         else {
-            print_progress(processed_bytes,total_size,start_time);
+            print_progress(processed_bytes,total_size,start_time,false,
+                           out_stream ? &std::cerr : &std::cout);
         }
 
         if(use_increment) {
@@ -2351,8 +2448,14 @@ dec_cleanup:
     secure_clear(plaintext_chunk);
 
     fin.close();
-    outbuf.flush();   // 把缓冲的明文落盘（verify_only 下为空操作）
-    fout.close();
+    outbuf.flush();   // 把缓冲的明文落盘/管道（verify_only 下为空操作）
+    if(out_stream) {
+        // 管道输出：刷新调用方流，不关闭它（属调用方所有）
+        out_stream->flush();
+        if(preview_only) fflush(stdout);
+    } else {
+        fout.close();
+    }
 
     if(verify_only || preview_only) {
         // 自校验 / 预览模式：不落盘、不替换、不删除任何文件
@@ -2361,25 +2464,25 @@ dec_cleanup:
     }
     if(ok) {
         fe_remove_progress(out_path);
-        // 防符号链接劫持
-        if(path_is_symlink(out_path)) {
-            if(!silent) fprintf(stderr,"Refusing to overwrite existing symlink: %s\n",out_path.c_str());
-            ok=false;
-            secure_wipe_and_remove(part_path);
+        // 原子收尾：半成品 .prt -> 最终名 out；rename 同目录原子，out 要么完整要么不存在
+        // 管道输出无 .prt / 无落盘，跳过 rename
+        if(!out_stream && !verify_only && !preview_only) {
+            if(std::rename(part_path.c_str(), out_path.c_str()) != 0) {
+                rename_failed=true;
+                if(!silent) fprintf(stderr,"Failed to finalize output (rename .prt -> %s)\n",out_path.c_str());
+                ok=false;
+            }
         }
-        else if(!replace_file_utf8(part_path,out_path)) {
-            ok=false;
-            if(!silent) fprintf(stderr,"Failed to finalize output file: %s\n",out_path.c_str());
-        }
-        if(ok&&!progress_callback) {
-            print_progress(total_size,total_size,start_time,true);
+        if(!rename_failed && !progress_callback) {
+            print_progress(total_size,total_size,start_time,true,
+                           out_stream ? &std::cerr : &std::cout);
         }
     }
     if(!ok) {
-        // 失败时覆写并删除半成品（.prt），最终输出路径不写入任何明文
-        secure_wipe_and_remove(part_path);
+        // 失败：直接删除半成品（不覆写——半成品本就删除，覆写对 SSD 无物理擦除收益且双倍 I/O）
+        if(!out_stream && !rename_failed && !verify_only && !preview_only) remove_file_utf8(part_path);
         fe_remove_progress(out_path);
-        if(!silent) {
+        if(!rename_failed && !silent) {
             fprintf(stderr,"Decryption failed, partial output removed.\n");
         }
     }

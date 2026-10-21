@@ -99,6 +99,12 @@ public:
     // 构建 argv（不含程序名）
     static QStringList buildArguments(const ShellOptions& options);
 
+    // M49：预览专用纯构建，绝不落盘水印私钥；真正执行须走 buildArguments。
+    static QStringList buildArgumentsForPreview(const ShellOptions& options);
+
+    // H6b：敏感临时文件 DACL 收紧为「当前用户 + SYSTEM」，去除继承的 Administrators；POSIX 回落 0600 权限。
+    static void setTempFileAcl(const QString& path);
+
     static QProcessEnvironment buildEnvironment(const ShellOptions& options);
 
     // 命令预览文本构建

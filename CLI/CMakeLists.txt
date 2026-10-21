@@ -11,7 +11,7 @@ if(WIN32)
   endif()
 endif()
 
-project(FileEncryptorCLI VERSION 3.0.1 LANGUAGES CXX)
+project(FileEncryptorCLI VERSION 3.1.0 LANGUAGES CXX)
 
 # CLI 命令行加密工具（独立工程），静态链接零外部依赖，GUI 经 QProcess 调用。
 
@@ -317,7 +317,6 @@ set(SOURCES
   core/keylib.cpp
   core/progress_frame.cpp
   core/asym_crypto.cpp
-  core/mapped_file.cpp
   core/password_policy.cpp
   core/machine_id.cpp
   core/watermark.cpp
@@ -341,6 +340,24 @@ if(WIN32)
 endif()
 
 add_executable(FileEncryptor ${SOURCES})
+
+# ---- SAF（存储抽象框架）源码：已并入 CLI/core/saf/，编入本目标 ----
+# SAF 原为独立工程，现完全融入 CLI（源码移入 core/saf/，随 CLI 一同维护）。
+# 全 saf_* 前缀与 CLI 符号不冲突；SecureBuf(saf_secure.hpp) 与 SecureBuffer(secure_buffer.hpp) 异名共存。
+# SAF 无外部库依赖；vdisk ABI 复用 CLI/include/vdisk.h（唯一权威副本）。
+set(FE_SAF_DIR "${CMAKE_CURRENT_SOURCE_DIR}/core/saf")
+target_sources(FileEncryptor PRIVATE
+    ${FE_SAF_DIR}/saf.cpp
+    ${FE_SAF_DIR}/saf_local_fs.cpp
+    ${FE_SAF_DIR}/saf_archive.cpp
+    ${FE_SAF_DIR}/saf_vault.cpp
+    ${FE_SAF_DIR}/saf_vdisk_host.cpp
+    ${FE_SAF_DIR}/saf_batch.cpp
+    ${FE_SAF_DIR}/saf_cloud.cpp
+    ${FE_SAF_DIR}/saf_mount.cpp
+    ${FE_SAF_DIR}/saf_pipe.cpp
+)
+target_include_directories(FileEncryptor PRIVATE ${FE_SAF_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/include)
 
 if(MSVC)
     # CFG：阻断间接调用劫持与 ROP 链。编译与链接两侧都必须给，
@@ -652,7 +669,7 @@ endif()
 set(VDISK_CORE_SOURCES
   core/FileEncryptor.cpp core/cipher.cpp core/ptd_format.cpp core/kdf.cpp
   core/source_handling.cpp core/config.cpp core/keylib.cpp core/progress_frame.cpp
-  core/asym_crypto.cpp core/mapped_file.cpp core/password_policy.cpp
+  core/asym_crypto.cpp core/password_policy.cpp
   core/machine_id.cpp core/watermark.cpp core/split_volumes.cpp core/archive.cpp
   core/keywrap.cpp core/vault_index.cpp core/vdisk_abi.cpp core/rate_limit.cpp core/fileio_util.cpp core/resume.cpp core/output_lock.cpp core/name_obfuscate.cpp core/ptd_meta.cpp core/batch.cpp)
 
@@ -1039,14 +1056,17 @@ set(CPACK_RPM_PACKAGE_REQUIRES "libsodium, zlib")
 set(CPACK_RPM_PACKAGE_RECOMMENDS "libfuse3")
 
 # 模糊测试 harness（可选）
-# FE_BUILD_FUZZ=ON 构建 FileEncryptorFuzz：驱动 CLI/fuzz/fuzz_ptd_header.cpp。
+# FE_BUILD_FUZZ=ON 构建 FileEncryptorFuzz：驱动 CLI/fuzz/fuzz_ptd_header.cpp
+# 与 CLI/fuzz/fuzz_paths.cpp。
 #   clang：直接加 -fsanitize=fuzzer,address，产出可喂给 libFuzzer 的二进制；
 #   其他编译器：编译出"读文件当输入"的独立驱动，可手工喂样本回归。
-# 只依赖 ptd_format + libsodium，不牵连 yaml-cpp/zstd/age，保持 harness 轻量。
+# 只依赖 ptd_format + util/path_norm（头文件）+ libsodium，不牵连
+# yaml-cpp/zstd/age，保持 harness 轻量。
 option(FE_BUILD_FUZZ "Build the fuzz harness (CLI/fuzz)" OFF)
 if(FE_BUILD_FUZZ)
   add_executable(FileEncryptorFuzz
     fuzz/fuzz_ptd_header.cpp
+    fuzz/fuzz_paths.cpp
     core/ptd_format.cpp)
   target_include_directories(FileEncryptorFuzz PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/core ${SODIUM_INCLUDE_DIRS})

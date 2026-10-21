@@ -13,7 +13,7 @@
 #   cmake -S FE-Mounter -B out -DFE_MOUNT_CLI_DIR=/path/to/FileEncryptor/CLI
 #   cmake -S FE-Mounter -B out -DFE_MOUNT_CLI_INCLUDE=/path/to/vdisk.h
 cmake_minimum_required(VERSION 3.15)
-project(FileEncryptorMounter VERSION 3.0.1 LANGUAGES CXX)
+project(FileEncryptorMounter VERSION 3.1.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -78,6 +78,9 @@ add_executable(FE-Mounter
   fe_vdisk.cpp
   fe_ipc.cpp
   fe_service.cpp
+  fe_power.cpp
+  fe_bulk.cpp
+  fe_harden.cpp
   fe_winfsp.cpp)
 
 target_include_directories(FE-Mounter PRIVATE "${_fe_mount_inc}")
@@ -189,6 +192,11 @@ if(WIN32)
       target_include_directories(FE-Mounter PRIVATE "${_winfsp_root}/inc" "${_winfsp_root}/inc/winfsp")
       target_compile_definitions(FE-Mounter PRIVATE FE_HAVE_WINFSP=1)
       target_link_libraries(FE-Mounter PRIVATE "${_winfsp_lib}")
+      # P2-2 电源事件：RegisterSuspendResumeNotification 是 API Set 转发函数，
+      # GetProcAddress 取不到（转发项不作普通导出暴露），必须由链接器按契约名解析。
+      # 注：不能用 /DELAYLOAD —— 与本目标静态链接的 libsodium 冲突。
+      # 老系统缺该 API 时不影响 Win7+ 目标平台（API 自 Vista 就有）。
+      target_link_libraries(FE-Mounter PRIVATE powrprof)
       # usermode 驱动 DLL 必须与 exe 同目录：静态导入 winfsp-x64.dll，
       # 缺失则进程加载即 0xC0000135（SDK 装在 Program Files 不在默认搜索路径）。
       # launcher-x64.exe 是 WinFSP 服务启动器（服务未运行时由 winfsp-x64.dll 拉起），

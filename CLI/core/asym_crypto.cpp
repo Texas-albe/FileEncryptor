@@ -31,7 +31,7 @@ bool bech32_encode(std::string& out, const std::string& hrp,
                    const unsigned char* data, size_t len);
 bool bech32_decode(const std::string& str, std::string& hrp,
                    std::vector<unsigned char>& data);
-} // namespace
+}
 
 namespace {
 
@@ -235,7 +235,7 @@ void hybrid_kek(const unsigned char* ml_shared, size_t n1,
     sodium_memzero(buf, sizeof(buf));
 }
 
-} // namespace
+}
 
 namespace {
 
@@ -249,14 +249,29 @@ bool raw_keypair(int type, std::vector<unsigned char>& pub_raw,
         return false;
     }
     EVP_PKEY_CTX_free(kctx);
+    // get_raw_* 的返回值与 rlen 必须逐次校验：探测调用成功而取值失败时缓冲区保持全零，全零私钥一旦被当作有效密钥输出，用户资产将永久丢失且公钥可被推算冒充；失败即清零退出
     size_t rlen=0;
-    EVP_PKEY_get_raw_private_key(pkey, nullptr, &rlen);
-    priv_raw.assign(rlen, 0);
-    EVP_PKEY_get_raw_private_key(pkey, priv_raw.data(), &rlen);
+    if(EVP_PKEY_get_raw_private_key(pkey,nullptr,&rlen)!=1 || rlen==0) {
+        EVP_PKEY_free(pkey); return false;
+    }
+    priv_raw.assign(rlen,0);
+    if(EVP_PKEY_get_raw_private_key(pkey,priv_raw.data(),&rlen)!=1 || rlen!=priv_raw.size()) {
+        if(!priv_raw.empty()) sodium_memzero(priv_raw.data(),priv_raw.size());
+        priv_raw.clear();
+        EVP_PKEY_free(pkey); return false;
+    }
     rlen=0;
-    EVP_PKEY_get_raw_public_key(pkey, nullptr, &rlen);
-    pub_raw.assign(rlen, 0);
-    EVP_PKEY_get_raw_public_key(pkey, pub_raw.data(), &rlen);
+    if(EVP_PKEY_get_raw_public_key(pkey,nullptr,&rlen)!=1 || rlen==0) {
+        if(!priv_raw.empty()) sodium_memzero(priv_raw.data(),priv_raw.size());
+        priv_raw.clear();
+        EVP_PKEY_free(pkey); return false;
+    }
+    pub_raw.assign(rlen,0);
+    if(EVP_PKEY_get_raw_public_key(pkey,pub_raw.data(),&rlen)!=1 || rlen!=pub_raw.size()) {
+        if(!priv_raw.empty()) sodium_memzero(priv_raw.data(),priv_raw.size());
+        priv_raw.clear();
+        EVP_PKEY_free(pkey); return false;
+    }
     EVP_PKEY_free(pkey);
     return true;
 }
@@ -282,7 +297,7 @@ bool hybrid_keypair(std::vector<unsigned char>& pub_raw,
     return true;
 }
 
-} // namespace
+}
 
 AsymOutcome fe_generate_keypair(uint8_t algo, std::string& pub, std::string& priv) {
     AsymOutcome o;
@@ -394,16 +409,29 @@ AsymOutcome fe_wrap_dek_to_recipients(const unsigned char* dek,
             EVP_PKEY_CTX_free(kctx); o.error="ephemeral keygen failed"; return o;
         }
         EVP_PKEY_CTX_free(kctx);
-        size_t elen=0; EVP_PKEY_get_raw_public_key(eph, nullptr, &elen);
+        // 临时密钥的原始字节导出同样校验返回值与长度：全零临时私钥会产出可预测的 ECDH 共享密钥，使 DEK 包装失效或被推导
+        size_t elen=0;
+        if(EVP_PKEY_get_raw_public_key(eph,nullptr,&elen)!=1 || elen==0) {
+            EVP_PKEY_free(eph); o.error="ephemeral public key export failed"; return o;
+        }
         std::vector<unsigned char> eph_pub(elen);
-        EVP_PKEY_get_raw_public_key(eph, eph_pub.data(), &elen);
+        if(EVP_PKEY_get_raw_public_key(eph,eph_pub.data(),&elen)!=1 || elen!=eph_pub.size()) {
+            EVP_PKEY_free(eph); o.error="ephemeral public key export failed"; return o;
+        }
 
         std::vector<unsigned char> shared;
         // ECDH: 临时私钥 × 收件人公钥
         {
-            size_t prlen=0; EVP_PKEY_get_raw_private_key(eph, nullptr, &prlen);
+            size_t prlen=0;
+            if(EVP_PKEY_get_raw_private_key(eph,nullptr,&prlen)!=1 || prlen==0) {
+                EVP_PKEY_free(eph); o.error="ephemeral private key export failed"; return o;
+            }
             std::vector<unsigned char> eph_priv(prlen);
-            EVP_PKEY_get_raw_private_key(eph, eph_priv.data(), &prlen);
+            if(EVP_PKEY_get_raw_private_key(eph,eph_priv.data(),&prlen)!=1 || prlen!=eph_priv.size()) {
+                if(!eph_priv.empty()) sodium_memzero(eph_priv.data(),eph_priv.size());
+                eph_priv.clear();
+                EVP_PKEY_free(eph); o.error="ephemeral private key export failed"; return o;
+            }
             if(!ecdh(algo, eph_priv.data(), prlen, recip_pub.data(), recip_pub.size(), shared)) {
                 EVP_PKEY_free(eph); sodium_memzero(eph_priv.data(), eph_priv.size());
                 o.error="ECDH failed"; return o;
@@ -596,7 +624,7 @@ inline void wipe(std::string& s) {
     }
 }
 
-} // namespace
+}
 
 namespace {
 // ML-KEM 段（纯原始私钥）→ 原始公钥；失败时 pub_raw 内容不保留。
@@ -647,7 +675,7 @@ bool derive_pub_from_raw(uint8_t algo, const std::vector<unsigned char>& priv_ra
     EVP_PKEY_free(pkey);
     return got && encode_key(algo, pub_raw.data(), pub_raw.size(), false, out);
 }
-} // namespace
+}
 
 AsymOutcome fe_identity_to_recipient(const std::string& identity, std::string& pub) {
     AsymOutcome o;

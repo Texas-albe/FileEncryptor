@@ -71,13 +71,19 @@ static bool recover_dek_v6_asym(const std::string& ptd_path,
     if(!f.read(reinterpret_cast<char*>(hdrbuf),5)) return false;
     if(memcmp(hdrbuf,MAGIC,4)!=0) return false;
     unsigned char ver=hdrbuf[4];
-    // VERSION 是 v4 基础布局常量（非最新格式版本），v6 容器必须显式放行，否则非对称 -R 会被误拒。
-    if(ver!=VERSION&&ver!=6) return false;
+    // 本函数仅处理 v6 非对称容器：VERSION(4) 的基础布局与 FileHeaderV6 不同，混入会按错误结构解析仅部分读入的缓冲（未初始化栈内存），故只放行 ver==6
+    if(ver!=6) return false;
     size_t hdr_size=header_size_for_version(ver);
     if(!f.read(reinterpret_cast<char*>(hdrbuf+5),(std::streamoff)(hdr_size-5))) return false;
     FileHeaderV6 h6=load_header<FileHeaderV6>(hdrbuf);
     const uint32_t recip_len=get_recip_len(h6.reserved);
     if(recip_len==0) return false;
+    // recip_len 来自未认证头部（uint32 最大 4GiB-1）：分配前必须与文件剩余长度比对设上限，否则恶意 .ptd 可令本路径瞬间分配并清零数 GB（bad_alloc/OOM，可重复）
+    f.seekg(0,std::ios::end);
+    const std::streamoff total=f.tellg();
+    if(total<0) return false;
+    if((uint64_t)recip_len>(uint64_t)total-(uint64_t)hdr_size) return false;
+    f.seekg((std::streamoff)hdr_size,std::ios::beg);
     std::vector<unsigned char> blob(recip_len);
     if(!f.read(reinterpret_cast<char*>(blob.data()),recip_len)) return false;
     std::vector<RecipientStanza> stanzas;
@@ -257,7 +263,25 @@ bool rewrap_file_with(const std::string& ptd_path,
     }
     sodium_memzero(old_kek.data(),old_kek.size());
 
+    // 重写头部前，先用 DEK 派生的认证密钥对旧 header_hmac 做 crypto_auth_verify：被篡改的头（iv/opslimit 等）不得借 rewrap 洗白为自洽状态；验签失败即中止，不写回任何字节
+    {
+        unsigned char hdr_auth[HEADER_HMAC_SIZE];
+        derive_header_auth_key(dek.data(), hdr_auth);
+        int hv=crypto_auth_verify(hdr+(HEADER_SIZE_V6-HEADER_HMAC_SIZE),
+                                  hdr, HEADER_HMAC_COVER_V6, hdr_auth);
+        sodium_memzero(hdr_auth,sizeof(hdr_auth));
+        if(hv!=0) {
+            fprintf(stderr,"Header authentication failed (container tampered); rewrap aborted.\n");
+            f.close(); return false;
+        }
+    }
+
     // 用新密码派生新 KEK，重裹 DEK（重新随机 nonce + box）。DEK 保持不变。
+    // 注意：此处必须沿用旧 salt 与旧 KDF 参数——载荷 AEAD 的 AAD 覆盖头部前 63 字节
+    // （含 salt/opslimit/memlimit_kb，见 ptd_format.hpp HEADER_AAD_COVER_V6 与
+    // FileEncryptor.cpp 解密端复刻），改盐或改参数都会令既有密文认证失败、文件不可解密。
+    // 「新口令继承旧参数过弱」的完整治理需要格式层配合（如 AAD 排除 KDF 字段 + 版本
+    // 协商），超出本文件安全改动范围，故暂不在此处重抽 salt。
     SecureBuffer new_kek(ARGON2_OUTPUT_LEN);
     if(!derive_key(new_pw.data(),new_pw.size(),h.salt,new_kek.data(),
             h.opslimit,(size_t)h.memlimit_kb*1024)) {

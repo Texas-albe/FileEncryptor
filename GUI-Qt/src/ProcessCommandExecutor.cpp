@@ -4,6 +4,12 @@
 #include <QFile>
 #include <QTimer>
 
+// M50：stdout/stderr 行缓冲与帧收集的上限。CLI 输出大量无换行数据
+// （畸形或被篡改的输出）时，不设上限会让 GUI 内存无界增长。
+static const int kMaxBufferChars = 8 * 1024 * 1024;
+// 帧内行数上限（单帧按 200 列估算约数百 KB，留足正常批量进度帧余量）
+static const int kMaxFrameLines = 65536;
+
 ProcessCommandExecutor::ProcessCommandExecutor(QObject* parent)
     : ICommandExecutor(parent) {}
 
@@ -21,12 +27,17 @@ void ProcessCommandExecutor::execute(const CommandRequest& request) {
     m_errBuffer.clear();
     m_frameLines.clear();
     m_inFrame = false;
+    m_outTruncated = false;
+    m_frameTruncated = false;
     m_finishedEmitted = false;
     m_confirmPending = false;
     m_confirmAnswered = false;
     m_confirmFile = request.confirmFile;
     if (!m_confirmFile.isEmpty()) {
-        QFile::remove(m_confirmFile);   // 上一轮的残留内容不能被这轮读到
+        // 原地清空：先 remove 再创建会让 CLI 120ms 轮询看到文件缺失，
+        // 把「未取走」误判成新的问题状态；重创还会丢掉创建时设的 DACL
+        QFile f(m_confirmFile);
+        if (f.open(QIODevice::WriteOnly | QIODevice::Truncate)) f.close();
         if (!m_confirmTimer) {
             m_confirmTimer = new QTimer(this);
             m_confirmTimer->setInterval(120);
@@ -94,8 +105,9 @@ void ProcessCommandExecutor::pollConfirmFile() {
 
 void ProcessCommandExecutor::answerConfirm(bool yes) {
     if (!m_confirmPending || m_confirmAnswered || m_confirmFile.isEmpty()) return;
-    QFile::remove(m_confirmFile);
     QFile f(m_confirmFile);
+    // 原地覆写：先 QFile::remove 再创建会让 CLI 120ms 轮询在间隙看到文件缺失，
+    // 把「未取走」误判成新问题状态
     if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text)) {
         m_confirmPending = false;   // 写不进去就别卡住 CLI 之外的状态
         return;
@@ -130,13 +142,31 @@ void ProcessCommandExecutor::onReadyReadStandardOutput() {
     // raw 模式：原样转交，不做行解析（预览解密的明文前缀可能是二进制）
     if (m_raw) { emit rawStdout(chunk); return; }
     // CLI 输出按 UTF-8 解码
+    // M50：超限截断并丢弃新数据，防无换行大块输出无界增长
+    if (m_outBuffer.size() >= kMaxBufferChars) {
+        m_outTruncated = true;
+        return;
+    }
     m_outBuffer.append(QString::fromUtf8(chunk));
+    if (m_outBuffer.size() > kMaxBufferChars) {
+        m_outBuffer.truncate(kMaxBufferChars);
+        m_outTruncated = true;
+    }
     flushLines(m_outBuffer, false);
 }
 
 void ProcessCommandExecutor::onReadyReadStandardError() {
     if (!m_process) return;
+    // M50：同 stdout 的上限处理
+    if (m_errBuffer.size() >= kMaxBufferChars) {
+        m_outTruncated = true;
+        return;
+    }
     m_errBuffer.append(QString::fromUtf8(m_process->readAllStandardError()));
+    if (m_errBuffer.size() > kMaxBufferChars) {
+        m_errBuffer.truncate(kMaxBufferChars);
+        m_outTruncated = true;
+    }
     flushLines(m_errBuffer, true);
 }
 
@@ -180,7 +210,11 @@ void ProcessCommandExecutor::handleLine(const QString& line, bool isError) {
         return;
     }
     if (m_inFrame) {
-        m_frameLines << line;
+        // M50：帧内行数同样设上限，畸形帧不拖垮 GUI
+        if (m_frameLines.size() < kMaxFrameLines)
+            m_frameLines << line;
+        else
+            m_frameTruncated = true;
         return;
     }
     // 普通行按 \r 刷新
@@ -197,6 +231,12 @@ void ProcessCommandExecutor::handleLine(const QString& line, bool isError) {
 
 void ProcessCommandExecutor::onFinished(int exitCode, QProcess::ExitStatus exitStatus) {
     Q_UNUSED(exitStatus);
+    // M50：超限截断提示（每轮至多一次）
+    if (m_outTruncated || m_frameTruncated) {
+        m_outTruncated = false;
+        m_frameTruncated = false;
+        emit outputLine(OutputLine{tr("[警告] 命令输出过长，超过 8MB 的部分已截断显示"), true});
+    }
     // 刷出残余半行
     if (!m_outBuffer.isEmpty()) {
         flushLines(m_outBuffer, false);
@@ -284,4 +324,6 @@ void ProcessCommandExecutor::cleanup() {
     m_errBuffer.clear();
     m_frameLines.clear();
     m_inFrame = false;
+    m_outTruncated = false;
+    m_frameTruncated = false;
 }

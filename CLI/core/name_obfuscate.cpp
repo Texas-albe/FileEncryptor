@@ -36,7 +36,8 @@ void derive_name_key(const unsigned char* master_key,
     sodium_memzero(in.data(), in.size());
 }
 
-// 由文件 salt 派生文件名加密 nonce（每文件唯一，杜绝 nonce 复用）
+// 由文件 salt 派生文件名加密 nonce
+// nonce 派生不变量：nonce=H(tag||salt) 的正确性完全依赖「每文件 salt 唯一」这一外部前提（已核实现有各调用方均为每文件随机盐，满足）。一旦任一未来路径复用同一 salt 为两个文件名信封派生 nonce，即在同一 name_key 下造成 keystream 复用——攻击者可异或恢复明文原名并伪造信封。新增任何 salt 复用路径（缓存盐/派生盐/模板盐等）之前，必须先把 per-file 熵（如 header.iv）纳入本派生，或改为随信封存储随机 nonce。
 void derive_name_nonce(const unsigned char* salt, size_t salt_len,
                        unsigned char nonce[XCHACHA20_IV_LEN]) {
     const char tag[] = "FE_name_nonce_v4";
@@ -45,7 +46,44 @@ void derive_name_nonce(const unsigned char* salt, size_t salt_len,
     crypto_generichash(nonce, XCHACHA20_IV_LEN, in.data(), in.size(), nullptr, 0);
 }
 
+// SAF content:// uri 的 displayName 提取：先按 uri 结构取尾段，再百分号解码，
+// 最后从 document id（primary:Dir/Name）拆出纯显示名——不把 uri 的 tree 结构
+// 路径写进信封。普通路径仍按分隔符取基名（桌面行为不变）。
+static std::string uri_percent_decode(const std::string& s) {
+    std::string out;
+    out.reserve(s.size());
+    for (size_t i = 0; i < s.size(); ++i) {
+        if (s[i] == '%' && i + 2 < s.size()) {
+            auto hex = [](char c) -> int {
+                if (c >= '0' && c <= '9') return c - '0';
+                if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+                if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+                return -1;
+            };
+            int h = hex(s[i + 1]), l = hex(s[i + 2]);
+            if (h >= 0 && l >= 0) {
+                out.push_back((char)((h << 4) | l));
+                i += 2;
+                continue;
+            }
+        }
+        out.push_back(s[i]);
+    }
+    return out;
+}
+
 std::string path_basename_utf8(const std::string& p) {
+    if (p.rfind("content://", 0) == 0) {
+        std::string last = p;
+        size_t pos = last.find_last_of("/\\");
+        if (pos != std::string::npos) last = last.substr(pos + 1);
+        last = uri_percent_decode(last);               // primary%3ADownload%2Fsecret.txt -> primary:Download/secret.txt
+        pos = last.find_last_of(':');                  // document id 去 primary: 前缀
+        if (pos != std::string::npos) last = last.substr(pos + 1);
+        pos = last.find_last_of("/\\");                // Download/secret.txt -> secret.txt
+        if (pos != std::string::npos) last = last.substr(pos + 1);
+        return last;
+    }
     size_t pos = p.find_last_of("/\\");
     return (pos != std::string::npos) ? p.substr(pos + 1) : p;
 }
@@ -108,7 +146,7 @@ std::string make_obfuscated_basename(const std::string& in_path, const SecureBuf
 
 // 用与主密文相同的 XChaCha20-Poly1305 加密原始文件名，写入文件末尾加密信封。
 // master_key 为 Argon2 派生主密钥；salt 取自文件头，用于派生独立 nonce。
-bool fe_append_encrypted_name_footer(std::fstream& fout, const std::string& in_path,
+bool fe_append_encrypted_name_footer(std::ostream& fout, const std::string& in_path,
                                      const unsigned char* master_key, const unsigned char* salt) {
     std::string base = path_basename_utf8(in_path);
     if (base.empty() || base.size() > NAME_FOOTER_MAX_NAME) return true; // 跳过则解密走文件名回退
@@ -127,7 +165,8 @@ bool fe_append_encrypted_name_footer(std::fstream& fout, const std::string& in_p
     memcpy(tail, NAME_FOOTER_MAGIC_ENC, 4);
     uint32_t n = (uint32_t)base.size();
     put_le32(tail + 4, n);
-    fout.seekp(0, std::ios::end);
+    // 文件流可能被续传/哈希回写定位过，需显式移到末尾；纯输出流（如 stdout）已在尾。
+    if(dynamic_cast<std::fstream*>(&fout)) fout.seekp(0, std::ios::end);
     fout.write(reinterpret_cast<const char*>(env.data()), (std::streamsize)envlen);
     fout.write(reinterpret_cast<const char*>(tail), NAME_FOOTER_HDR);
     fout.flush();

@@ -1,10 +1,10 @@
 <Project Sdk="WixToolset.Sdk/4.0.5">
   <PropertyGroup>
-    <!-- 版本固定 3.0.1。覆盖安装的文件替换问题由 Product.wxs 的
+    <!-- 版本 3.1.0。覆盖安装的文件替换问题由 Product.wxs 的
          MajorUpgrade AllowSameVersionUpgrades="yes" 解决（相同版本也先卸后装），不靠版本号递增。 -->
-    <GuiVersion>3.0.1</GuiVersion>
+    <GuiVersion>3.1.0</GuiVersion>
     <!-- CLI 产物名由 CMake project(VERSION) 拼出，只支持数值版（无 -alpha.N），故独立定义 -->
-    <CliVersion>3.0.1</CliVersion>
+    <CliVersion>3.1.0</CliVersion>
     <OutputType>Package</OutputType>
     <OutputName>FileEncryptorGUI-$(GuiVersion)-WinUI-Windows</OutputName>
     <Platform>x64</Platform>
@@ -42,6 +42,12 @@
           DestinationFolder="..\bin\x64\$(Configuration)\net8.0-windows10.0.19041.0\win-x64\publish"
           Condition="Exists('..\..\Updater\out\build\x64-Release\bin\Updater.exe')"
           SkipUnchangedFiles="true" />
+    <!-- P1-3：剔除 .NET 自带的 createdump.exe。
+         它可对同用户任意进程生成完整内存转储，会把口令/KEK/明文缓冲整体写盘；
+         WER 排除（Product.wxs 的 WerExclusions）管不到手动调用，故直接从发布产物里删掉。
+         应用本身不依赖它——它只是崩溃诊断工具。 -->
+    <Delete Files="..\bin\x64\$(Configuration)\net8.0-windows10.0.19041.0\win-x64\publish\createdump.exe"
+            ContinueOnError="true" />
   </Target>
 
   <PropertyGroup>

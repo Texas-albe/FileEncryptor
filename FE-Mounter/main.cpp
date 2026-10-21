@@ -38,6 +38,7 @@ static int fe_readdir(const char* path, void* buf, fuse_fill_dir_t filler, off_t
                       struct fuse_file_info*, enum fuse_readdir_flags) {
     uint64_t n = 0;
     if (g_v.readdir(g_h, path, nullptr, &n) != VDISK_OK) return -ENOENT;
+    if (n > kFeMaxDirEntries) return -EIO;   // M5：条目数上限，防畸形索引 bad_alloc
     std::vector<VDiskEntry> ents((size_t)n);
     VDiskEntry* parr = ents.data();
     if (n > 0 && g_v.readdir(g_h, path, &parr, &n) != VDISK_OK) return -ENOENT;
@@ -117,6 +118,10 @@ int main(int argc, char** argv) {
     SetConsoleOutputCP(CP_UTF8);            // 控制台默认 GBK 会把 UTF-8 中文解码乱码，强制 UTF-8
     SetConsoleCP(CP_UTF8);
 #endif
+    // 进程加固（顺序要紧：加载策略须早于任何非系统 DLL 加载）
+    fe_harden_image_load_policy();   // P1-2 禁远程/低 IL 镜像
+    fe_harden_process_dacl();        // P0-1 收紧进程对象 DACL
+    fe_harden_no_crash_dump();       // P1-3 排除出 WER，不产生崩溃转储
     if (argc < 2) { usage(); return 1; }
     std::string mode = argv[1];
     std::string vault, pass, passfile, vpath, lib, tmp;
@@ -132,7 +137,6 @@ int main(int argc, char** argv) {
         auto next = [&](std::string& dst) -> bool { if (i + 1 >= argc) return false; dst = argv[++i]; return true; };
         if (a == "--vault") { if (!next(vault)) { fprintf(stderr, "--vault needs arg\n"); return 1; } }
         else if (a == "--pass-file") { if (!next(passfile)) { fprintf(stderr, "--pass-file needs arg\n"); return 1; } }
-        else if (a == "--pass") { if (!next(pass)) { fprintf(stderr, "--pass needs arg\n"); return 1; } }
         else if (a == "--path") { if (!next(vpath)) { fprintf(stderr, "--path needs arg\n"); return 1; } }
         else if (a == "--lib") { if (!next(lib)) { fprintf(stderr, "--lib needs arg\n"); return 1; } }
         else if (a == "--relock") { relock_flag = true; }
@@ -149,6 +153,13 @@ int main(int argc, char** argv) {
     // M5 多库注册表：与具体库无关，需早于「--vault required」
     if (mode == "vaults") {
         std::string sub = fuse_args.empty() ? "list" : fuse_args[0];
+        // P1-2：批量视图（全部盘聚合状态 JSON / 批量 lock|eject）
+        if (sub == "status") return vaults_status_json();
+        if (sub == "batch") {
+            std::string cmd = (fuse_args.size() > 1) ? fuse_args[1] : std::string();
+            if (cmd.empty()) { fprintf(stderr, "vaults batch needs <lock|eject>\n"); return 2; }
+            return vaults_batch(cmd);
+        }
         if (sub == "list") {
             auto vs = vaults_list();
             printf("registry: %s\n", vaults_registry_path().c_str());
@@ -165,9 +176,37 @@ int main(int argc, char** argv) {
         return 0;
     }
 
+    if (mode == "power-test") {
+        // P2-2 诊断：不挂载加密盘即可验证电源通知注册与休眠/恢复标记流转。
+        //   power-test register          仅注册并报告是否成功
+        //   power-test suspend            模拟「即将休眠」→ 置待上锁标记
+        //   power-test resume             模拟「已恢复」→ 置恢复标记
+        //   power-test check              打印两个标记的当前值
+        std::string sub = fuse_args.empty() ? "register" : fuse_args[0];
+        if (sub == "register") {
+            power_register();
+            printf("power registered\n");
+        } else if (sub == "suspend") {
+            power_request_lock("power-test");
+            printf("suspend_pending=%d\n", g_power_suspend_pending.load() ? 1 : 0);
+        } else if (sub == "resume") {
+            g_power_resumed = true;
+            printf("resumed=%d\n", g_power_resumed.load() ? 1 : 0);
+        } else if (sub == "check") {
+            printf("suspend_pending=%d resumed=%d\n",
+                   g_power_suspend_pending.load() ? 1 : 0,
+                   g_power_resumed.load() ? 1 : 0);
+        } else {
+            fprintf(stderr, "power-test: unknown sub '%s' (register|suspend|resume|check)\n", sub.c_str());
+            return 1;
+        }
+        power_unregister();
+        return 0;
+    }
+
+    // 口令只走 --pass-file：--pass / FE_MOUNTER_PASS 会出现在命令行/环境块中，同用户/管理员可读（低危 B 组），已全仓确认无调用方后移除。
     if (pass.empty()) {
         if (!passfile.empty()) { if (!read_pass_file(passfile, pass)) { fprintf(stderr, "cannot read pass file\n"); return 1; } }
-        else if (const char* e = getenv("FE_MOUNTER_PASS")) { pass = e; }
     }
     if (vault.empty()) { fprintf(stderr, "--vault required\n"); return 1; }
     g_ipc_vault = vault;

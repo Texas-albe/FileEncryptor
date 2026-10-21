@@ -7,13 +7,17 @@
 #include <vector>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <fcntl.h>     // O_NOFOLLOW（防符号链接写打开）
 #ifndef _WIN32
 #  include <unistd.h>   // access(R_OK)：探测 libvdisk.so 是否可读
+#  include <signal.h>   // kill(pid,0)：探测进程存活
+#  include <errno.h>    // errno：区分 mkdir/kill 失败
 #endif
 
 #ifdef _WIN32
 #  include <wintrust.h>     // WinVerifyTrust（M2 签名校验；只取常量与结构体）
 #  include <softpub.h>
+#  include <io.h>           // _open_osfhandle：HANDLE 转 FILE*（防跟随写）
 #  pragma comment(lib, "wintrust.lib")
 #endif
 
@@ -53,6 +57,51 @@ std::string self_dir() {
 }
 #endif
 
+// 低危（A 组）：防符号链接劫持的写打开。事件文件/挂载态文件/注册表都落在可预测路径（FNV 名 + %LOCALAPPDATA%/$HOME），同用户可预置 symlink 把写操作导向库外目标。Windows：CreateFileW + FILE_FLAG_OPEN_REPARSE_POINT，打开后复查重解析 tag；POSIX：O_NOFOLLOW。失败（含遇 symlink）返回 nullptr，调用方按原逻辑跳过写。
+FILE* fe_open_write_nofollow(const std::string& path, bool append) {
+#ifdef _WIN32
+    HANDLE h = CreateFileW(utf8_to_wide(path).c_str(), FILE_GENERIC_WRITE, 0, nullptr,
+                           append ? OPEN_ALWAYS : CREATE_ALWAYS,
+                           FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+    if (h == INVALID_HANDLE_VALUE) return nullptr;
+    // OPEN_REPARSE_POINT 下句柄指向重解析点本身；
+    // 能取回重解析数据即证明是符号链接，拒绝跟随目标。
+    std::vector<BYTE> rp(MAXIMUM_REPARSE_DATA_BUFFER_SIZE);
+    DWORD got = 0;
+    if (DeviceIoControl(h, FSCTL_GET_REPARSE_POINT, nullptr, 0, rp.data(), (DWORD)rp.size(), &got, nullptr)) {
+        CloseHandle(h);
+        return nullptr;
+    }
+    if (append) SetFilePointer(h, 0, nullptr, FILE_END);
+    int fd = _open_osfhandle((intptr_t)h, 0);
+    if (fd < 0) { CloseHandle(h); return nullptr; }
+    FILE* f = _fdopen(fd, append ? "ab" : "wb");
+    if (!f) { _close(fd); return nullptr; }
+    return f;
+#else
+    int flags = O_WRONLY | O_CREAT | O_NOFOLLOW | (append ? O_APPEND : O_TRUNC);
+    int fd = open(path.c_str(), flags, 0600);
+    if (fd < 0) return nullptr;
+    FILE* f = fdopen(fd, append ? "ab" : "wb");
+    if (!f) { close(fd); return nullptr; }
+    return f;
+#endif
+}
+
+// 低危（C 组）：进程存活探测。挂载态文件（vault_*.txt）内容无认证，同用户可伪造「某库已挂载」误导 GUI 与 status 聚合；写入方带上了自己的 pid，读取方校验其存活，进程不在即忽略该文件。注意 PID 重用窗口内仍可能误判存活（与 M20 同源）。
+bool fe_pid_alive(long pid) {
+    if (pid <= 0) return false;
+#ifdef _WIN32
+    HANDLE h = OpenProcess(SYNCHRONIZE, FALSE, (DWORD)pid);
+    if (!h) return GetLastError() == ERROR_ACCESS_DENIED;   // 打不开≠不存在：仅 ACCESS_DENIED 算存活
+    DWORD rc = WaitForSingleObject(h, 0);
+    CloseHandle(h);
+    return rc == WAIT_TIMEOUT;   // 句柄已触发即进程已退出
+#else
+    return kill((pid_t)pid, 0) == 0 || errno == EPERM;
+#endif
+}
+
 std::string default_lib_path() {
 #ifdef _WIN32
     return self_dir() + "/vdisk.dll";
@@ -78,8 +127,7 @@ std::string default_lib_path() {
 
 #ifdef _WIN32
 // Authenticode 签名校验（§5.1#4）。必须在 LoadLibrary 之前做，加载后已被信任。
-// 三档：默认仅告警不阻断（自编译产物发布前通常无签名，强制会让开发测试全废）；
-// FE_VDISK_REQUIRE_SIGNED=1 强制拒载；FE_VDISK_ALLOW_UNSIGNED=1 跳过。
+// 策略（M3）：签名有效→加载；检测到签名但无效→一律拒载（防剥离/篡改后放行）；未签名→告警继续（自编译产物常态），除非 FE_VDISK_REQUIRE_SIGNED=1 则拒绝；FE_VDISK_ALLOW_UNSIGNED=1 整体跳过（仅调试）。
 // 原型自行 typedef 而非直接调用：各 SDK 的第三参类型不一致（10.0.28000 起为
 // LPVOID 且带 C linkage），直接调/强转/WinVerifyTrustEx 均报「指定函数无法转换」。
 // 第一参须 HANDLE 而非 HWND。
@@ -109,18 +157,18 @@ static bool verify_trusted(const std::wstring& path, std::string& err) {
     wd.dwStateAction = WTD_STATEACTION_CLOSE;
     fn(INVALID_HANDLE_VALUE, &action, (LPVOID)&wd);
     FreeLibrary(wt);
-    if (st != ERROR_SUCCESS) {
-        char b[180];
-        snprintf(b, sizeof b, "vdisk.dll signature verification failed (0x%08lX)", (unsigned long)st);
-        if (require) {
-            snprintf(b + strlen(b), sizeof b - strlen(b),
-                     "; refusing to load (FE_VDISK_REQUIRE_SIGNED=1)");
-            err = b;
-            return false;
-        }
-        fprintf(stderr, "[fe] WARNING: %s; continuing (set FE_VDISK_REQUIRE_SIGNED=1 to enforce)\n", b);
+    if (st == ERROR_SUCCESS) return true;   // 签名有效
+    // M3：区分「未签名」与「有签名但无效」。同用户替换用户级目录下的 vdisk.dll 即在持有明文 KEK 的进程内执行代码——签名被剥离/篡改后仍放行等于白加固，故无效一律拒载；未签名（自编译产物发布前常态）仅告警继续，FE_VDISK_REQUIRE_SIGNED=1 时拒绝。
+    if (st == (LONG)TRUST_E_NOSIGNATURE || st == (LONG)TRUST_E_PROVIDER_UNKNOWN ||
+        st == (LONG)TRUST_E_SUBJECT_FORM_UNKNOWN) {
+        if (require) { err = "vdisk.dll is unsigned (FE_VDISK_REQUIRE_SIGNED=1)"; return false; }
+        fprintf(stderr, "[fe] WARNING: vdisk.dll is unsigned; continuing (set FE_VDISK_REQUIRE_SIGNED=1 to enforce)\n");
+        return true;
     }
-    return true;
+    char b[180];
+    snprintf(b, sizeof b, "vdisk.dll signature invalid (0x%08lX); refusing to load", (unsigned long)st);
+    err = b;
+    return false;
 }
 
 #else   // 非 Windows：无 Authenticode 概念，恒通过
@@ -227,7 +275,7 @@ std::vector<std::string> vaults_list() {
 bool vaults_add(const std::string& dir, std::string& err) {
     auto cur = vaults_list();
     for (auto& s : cur) if (s == dir) { err = "already registered"; return false; }
-    FILE* f = fopen(vaults_registry_path().c_str(), "ab");
+    FILE* f = fe_open_write_nofollow(vaults_registry_path().c_str(), true);
     if (!f) { err = "cannot open registry"; return false; }
     fprintf(f, "%s\n", dir.c_str());
     fclose(f);
@@ -252,6 +300,8 @@ bool read_whole(const VDiskApi& v, VDiskHandle* h, const std::string& vpath,
     uint64_t sz = 0, mt = 0; uint8_t isdir = 0;
     if (v.getattr(h, vpath.c_str(), &sz, &mt, &isdir) != VDISK_OK) { err = "getattr failed"; return false; }
     if (isdir) { err = "is a directory"; return false; }
+    // M5：文件大小上限。size 来自索引，畸形/恶意值直接 assign 即 OOM/bad_alloc。
+    if (sz > kFeMaxFileSize) { err = "file too large"; return false; }
     out.assign(sz ? (size_t)sz : 1, 0);
     uint64_t len = sz;
     VDiskStatus st = v.read_file(h, vpath.c_str(), 0, out.data(), &len);
@@ -263,6 +313,7 @@ bool read_whole(const VDiskApi& v, VDiskHandle* h, const std::string& vpath,
 void walk(const VDiskApi& v, VDiskHandle* h, const std::string& vpath) {
     uint64_t n = 0;
     if (v.readdir(h, vpath.c_str(), nullptr, &n) != VDISK_OK) return;
+    if (n > kFeMaxDirEntries) return;   // M5：条目数上限，防畸形索引 bad_alloc
     std::vector<VDiskEntry> ents((size_t)n);
     VDiskEntry* parr = ents.data();
     if (n > 0 && v.readdir(h, vpath.c_str(), &parr, &n) != VDISK_OK) return;

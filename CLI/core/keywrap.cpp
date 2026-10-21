@@ -62,7 +62,8 @@ bool keywrap_write_file_exclusive(const std::string& path, const unsigned char* 
     int fd = ::open(path.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0600);
     if (fd < 0) {
         if (errno == EEXIST) {
-            fd = ::open(path.c_str(), O_WRONLY | O_TRUNC, 0600);
+            // 回退的截断打开同样带 O_NOFOLLOW：保留首次 O_EXCL 尝试的防符号链接保护，避免预置链接被截断写穿（安全失败）
+            fd = ::open(path.c_str(), O_WRONLY | O_TRUNC | O_NOFOLLOW, 0600);
             if (fd < 0) return false;
         } else {
             return false;
@@ -97,7 +98,7 @@ void put_be16(std::vector<unsigned char>& v, size_t x) {
     v.push_back((unsigned char)x);
 }
 
-} // namespace
+}
 
 const char* keywrap_alg_name(uint8_t by) {
     switch (by) {
@@ -210,7 +211,7 @@ bool kwp_unwrap(const unsigned char* kek, const unsigned char* in, size_t in_len
     return true;
 }
 
-} // namespace
+}
 #endif
 
 bool keywrap_pack(const unsigned char* dek, size_t dek_len,

@@ -25,7 +25,7 @@ bool fe_peek_name_footer_len(const std::string& ptd_path, uint64_t& footer_len,
                              uint32_t* wm_len_out = nullptr);
 
 // 把原始文件名加密后追加到 fout 末尾（写主密文之后调用）
-bool fe_append_encrypted_name_footer(std::fstream& fout, const std::string& in_path,
+bool fe_append_encrypted_name_footer(std::ostream& fout, const std::string& in_path,
                                      const unsigned char* master_key,
                                      const unsigned char* salt);
 

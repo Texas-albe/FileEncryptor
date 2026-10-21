@@ -9,16 +9,18 @@
            UpgradeCode="7F3A1C29-5B64-4E8D-9A0F-2C6B8D1E4A57"
            Language="1033" Codepage="utf-8">
 
-    <MajorUpgrade DowngradeErrorMessage="A newer version of FileEncryptor GUI is already installed." />
+    <MajorUpgrade AllowSameVersionUpgrades="yes" DowngradeErrorMessage="A newer version of FileEncryptor GUI is already installed." />
 
-    <!-- Close running GUI before install/uninstall to avoid file-in-use errors -->
+    <!-- 安装/卸载前关闭运行中的 GUI，避免文件占用 -->
     <util:CloseApplication Id="CloseGui" Target="FileEncryptorGUI-Qt.exe" Description="FileEncryptor GUI is running. Close it to continue." RebootPrompt="no" />
+    <!-- FE-Mounter 占用 vdisk.dll / winfsp-x64.dll；不关闭则替换这些文件会因占用失败 -->
+    <util:CloseApplication Id="CloseMounter" Target="FE-Mounter.exe" Description="FE-Mounter is running. Close it to continue." RebootPrompt="no" />
 
     <MediaTemplate EmbedCab="yes" />
 
     <Icon Id="app.ico" SourceFile="..\..\GUI-Qt\logogui.ico" />
 
-    <!-- GPLv3 License -->
+    <!-- GPLv3 许可协议 -->
     <WixVariable Id="WixUILicenseRtf" Value="license.rtf" />
 
     <Feature Id="MainFeature" Title="FileEncryptor GUI (Qt)" Level="1"
@@ -28,6 +30,7 @@
       <ComponentRef Id="CliExe" />
       <ComponentRef Id="StartMenuShortcut" />
       <ComponentRef Id="DesktopShortcut" />
+      <ComponentRef Id="WerExclusions" />
       <!-- 加密盘挂载组件：与 vdisk.dll 捆绑（FE-Mounter 必须 dlopen 它，两者必须同装同卸）。
            CLI 本身不依赖 vdisk.dll，故不选此功能只影响盘符挂载，GUI 会自动隐藏加密盘入口。 -->
       <Feature Id="VaultFeature" Title="Encrypted vault mounting (FE-Mounter)" Level="1"
@@ -90,12 +93,12 @@
   </Fragment>
 
   <Fragment>
-    <!-- Main exe (separate component for shortcut reference) -->
+    <!-- 主程序 exe（独立组件以便引用快捷方式） -->
     <Component Id="MainExe" Directory="INSTALLFOLDER">
       <File Id="MainExeFile" Source="$(var.PublishDir)FileEncryptorGUI-Qt.exe" KeyPath="yes" />
     </Component>
 
-    <!-- Auto-update helper: needed by the GUI to check and apply updates -->
+    <!-- 自动更新辅助程序：GUI 用它检查并应用更新 -->
     <Component Id="UpdaterExe" Directory="INSTALLFOLDER">
       <File Id="UpdaterExeFile" Source="$(var.PublishDir)Updater.exe" KeyPath="yes" />
     </Component>
@@ -152,6 +155,29 @@
                 Icon="app.ico" />
       <RegistryValue Root="HKCU" Key="Software\FileEncryptor\GUI"
                      Name="desktop_shortcut" Type="integer" Value="1" KeyPath="yes" />
+    </Component>
+
+    <!-- P1-3 禁崩溃转储（整机，与 WinUI 安装器同规格）：在 HKLM\SOFTWARE\Microsoft\Windows\
+         Windows Error Reporting\ExcludedApplications 下写 <exe>=1（DWORD），格式与
+         WerAddExcludedApplication(bAllUsers=TRUE) 一致（WinUI 侧已实证）。
+         运行时 OsHarden::disableCrashDump 只登记 GUI 自身 exe，覆盖不到真正持口令/KEK 的
+         子进程（FileEncryptorCLI / FE-Mounter）与 Updater/RestartAgent，故由安装器补齐。 -->
+    <Component Id="WerExclusions" Directory="INSTALLFOLDER">
+      <RegistryValue Root="HKLM"
+                     Key="SOFTWARE\Microsoft\Windows\Windows Error Reporting\ExcludedApplications"
+                     Name="FileEncryptorGUI-Qt.exe" Type="integer" Value="1" KeyPath="yes" />
+      <RegistryValue Root="HKLM"
+                     Key="SOFTWARE\Microsoft\Windows\Windows Error Reporting\ExcludedApplications"
+                     Name="FE-Mounter.exe" Type="integer" Value="1" />
+      <RegistryValue Root="HKLM"
+                     Key="SOFTWARE\Microsoft\Windows\Windows Error Reporting\ExcludedApplications"
+                     Name="FileEncryptorCLI.exe" Type="integer" Value="1" />
+      <RegistryValue Root="HKLM"
+                     Key="SOFTWARE\Microsoft\Windows\Windows Error Reporting\ExcludedApplications"
+                     Name="Updater.exe" Type="integer" Value="1" />
+      <RegistryValue Root="HKLM"
+                     Key="SOFTWARE\Microsoft\Windows\Windows Error Reporting\ExcludedApplications"
+                     Name="RestartAgent.exe" Type="integer" Value="1" />
     </Component>
   </Fragment>
 

@@ -30,11 +30,15 @@ public sealed partial class MainWindow : Window
     // 锁定盘访问事件轮询（FE-Mounter 写 fe_locked_*.event → 拉起 GUI 前台弹单密码解锁框）
     private DispatcherQueueTimer? _lockTimer;
     private bool _unlockPromptActive;   // 防止解锁框重复弹出
+    // 同 vault 解锁弹窗节流记录（键=盘目录，值=上次弹窗时间）
+    private readonly Dictionary<string, DateTime> _unlockPromptTimes = new();
 
     [DllImport("user32.dll")]
     private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
     [DllImport("user32.dll")]
     private static extern bool SetForegroundWindow(IntPtr hWnd);
+    [DllImport("user32.dll")]
+    private static extern bool IsIconic(IntPtr hWnd);
 
     private ElementTheme CurrentTheme => App.Settings.Current.Theme switch
     {
@@ -45,6 +49,9 @@ public sealed partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+
+        // M41: 启动即清理上个进程残留的陈旧口令文件（崩溃/被强杀时退出钩子来不及跑）
+        CleanupStaleTempPasses();
 
         // 主题要在控件加载前定死：控件模板里的 {ThemeResource} 只在解析那一刻取值，
         // 事后再改 RequestedTheme 只影响之后创建的控件，
@@ -488,7 +495,9 @@ public sealed partial class MainWindow : Window
             {
                 XamlRoot = Content.XamlRoot
             };
-            _ = dlg.ShowAsync();
+            // 观测 ShowAsync 返回的 Task：对话框在 XamlRoot 失效等场景抛异常时不落入 UnhandledException
+            _ = dlg.ShowAsync().AsTask().ContinueWith(static t => { _ = t.Exception; },
+                TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously);
         });
     }
 
@@ -992,7 +1001,7 @@ public sealed partial class MainWindow : Window
             return;
         }
         var newPw = await AskPasswordAsync(L10n.T("新密码（需输入两次）"), true);
-        if (newPw == null) { try { File.Delete(tmp); } catch { } return; }
+        if (newPw == null) { DeleteTempPass(tmp); return; }
 
         await RunVaultCliAsync(L10n.T("修改加密盘密码"),
             new List<string> { "--vault-rekey", dir, "-k", tmp, "--new-key-stdin" },
@@ -1155,7 +1164,8 @@ public sealed partial class MainWindow : Window
         var result = await tcs.Task;
 
         if (deleteAfter != null)
-            _ = Task.Run(async () => { await Task.Delay(1500); try { File.Delete(deleteAfter); } catch { } });
+            // M40: 旧密码临时文件同样先零填充再删（P2-3 策略，与 DeleteTempPass 一致）
+            _ = Task.Run(async () => { await Task.Delay(1500); DeleteTempPass(deleteAfter); });
 
         string detail = sb.ToString().Trim();
         if (result.ExitCode == 0)
@@ -1219,15 +1229,61 @@ public sealed partial class MainWindow : Window
         App.Settings.Current.LastMountPoint = point;
         App.Settings.Save();
 
+        // 登记到多库注册表：管理页（加密盘管理）才能列出已挂载盘并给出「本机免密」开关
+        try { await RunMounterAsync(mounter, "vaults", "add", dir); } catch { }
+
+        // 挂载前格式化（可选）：先用密码清空该盘再挂载，得到空盘
+        if (dlg.FormatVault)
+        {
+            if (string.IsNullOrEmpty(ViewModel.CliPath))
+            {
+                await ShowMessageAsync(L10n.T("挂载为磁盘"), L10n.T("尚未找到命令行程序，无法格式化。"));
+                return;
+            }
+            bool okFmt = false; string fmtDetail = "";
+            try
+            {
+                var svc = new CliProcessService();
+                var sb = new StringBuilder();
+                svc.OutputLine += line => { lock (sb) { sb.AppendLine(line); } };
+                var tcs = new TaskCompletionSource<CommandResult>();
+                svc.Finished += r => tcs.TrySetResult(r);
+                svc.Execute(new CommandRequest
+                {
+                    ProgramPath = ViewModel.CliPath,
+                    Arguments = new List<string> { "--vault-format", dir, "--key-stdin" },
+                    StdinData = ToStdin(pw),
+                });
+                var r = await tcs.Task;
+                okFmt = r.ExitCode == 0;
+                fmtDetail = sb.ToString().Trim();
+            }
+            catch (Exception ex) { fmtDetail = ex.Message; }
+            if (!okFmt)
+            {
+                await ShowMessageAsync(L10n.T("挂载为磁盘"),
+                    string.IsNullOrEmpty(fmtDetail) ? L10n.T("格式化失败。") : L10n.F("格式化失败：\n{0}", fmtDetail));
+                return;
+            }
+        }
+
         // 记录挂载点进 vault.meta（fire-and-forget，失败不阻断挂载）
         var cli = ViewModel.CliPath;
         if (!string.IsNullOrEmpty(cli))
         {
             try
             {
-                Process.Start(new ProcessStartInfo(cli,
-                    $"--vault-mount \"{dir}\" --mount-point \"{point}\"")
-                { UseShellExecute = false, CreateNoWindow = true });
+                // M38: 逐项传参：point/dir 含引号即可突破引号边界注入额外 CLI 参数，全库统一走 ArgumentList
+                var psi = new ProcessStartInfo(cli)
+                {
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                };
+                psi.ArgumentList.Add("--vault-mount");
+                psi.ArgumentList.Add(dir);
+                psi.ArgumentList.Add("--mount-point");
+                psi.ArgumentList.Add(point);
+                Process.Start(psi);
             }
             catch { }
         }
@@ -1249,7 +1305,7 @@ public sealed partial class MainWindow : Window
 
         bool ok = LaunchMounterDetached(mounter, args);
         // FE-Mounter 启动时即读取并关闭密码文件，稍后删除临时件
-        _ = Task.Run(async () => { await Task.Delay(2000); try { File.Delete(tmp); } catch { } });
+        _ = Task.Run(async () => { await Task.Delay(2000); DeleteTempPass(tmp); });
 
         if (ok)
         {
@@ -1366,6 +1422,7 @@ public sealed partial class MainWindow : Window
     }
 
     // 用单次输入的密码解锁指定加密盘（程序内列表双击 / 菜单均复用）
+    // P2-1：若该盘已绑定本机设备密钥（DPAPI），直接用它解锁，不再询问库密码。
     private async Task UnlockVaultDir(string dir)
     {
         var mounter = FileEncryptorLocator.LocateMounter();
@@ -1375,7 +1432,29 @@ public sealed partial class MainWindow : Window
                 L10n.T("未找到挂载组件 FE-Mounter。"));
             return;
         }
-        // 解锁只需输入一次；标题写清用途，便于与「设置新密码」类弹窗区分
+
+        // 免密路径：本机已绑定则直接用解出的库密码解锁（对用户完全无感）
+        // M42: 取 byte[] 消费，用完立即清零，避免 string 副本长驻托管堆
+        // DPAPI 缺程序集时 JIT 在调用点抛 FileNotFoundException（绕过方法内 try），
+        // 此处兜底降级到手动输密码，避免未处理异常中断解锁
+        byte[]? boundPw = null;
+        try { boundPw = DeviceKeyService.TryGetPasswordBytes(dir); }
+        catch { boundPw = null; }
+        if (boundPw is { Length: > 0 })
+        {
+            var tmpDk = WriteTempPass(boundPw);
+            // 字节已落临时文件，本地副本立即清零
+            CryptographicOperations.ZeroMemory(boundPw);
+            if (tmpDk != null)
+            {
+                await RunVaultIpcAsync(mounter, dir,
+                    new List<string> { "unlock", "--pass-file", tmpDk }, tmpDk, L10n.T("重新解锁"));
+                return;
+            }
+        }
+
+        // 常规路径：询问库密码。解锁只需输入一次；标题写清用途，
+        // 便于与「设置新密码」类弹窗区分
         var pwd = new PasswordDialog(false)
         {
             XamlRoot = Content.XamlRoot,
@@ -1393,6 +1472,83 @@ public sealed partial class MainWindow : Window
         }
         await RunVaultIpcAsync(mounter, dir,
             new List<string> { "unlock", "--pass-file", tmp }, tmp, L10n.T("重新解锁"));
+    }
+
+    // P1-1 设备加密管理页：对标 BitLocker「管理 BitLocker」的一屏视图。
+    // 数据源 FE-Mounter `vaults status`（P1-2 聚合 JSON），非本地 settings 记录——
+    // 后者只反映「本 GUI 挂过什么」，跨会话/换机不准。
+    private async void OnVaultManager(object sender, RoutedEventArgs e)
+    {
+        if (!ViewModel.VaultAvailable) return;
+        var mounter = FileEncryptorLocator.LocateMounter();
+        if (mounter == null)
+        {
+            await ShowMessageAsync(L10n.T("加密盘管理"), L10n.T("未找到挂载组件 FE-Mounter。"));
+            return;
+        }
+
+        var dlg = new VaultManagerDialog(
+            mounter,
+            mount: async (dir, point) => await MountVaultDir(dir, point),
+            unlock: async dir => await UnlockVaultDir(dir),
+            doLock: async dir => await RunVaultIpcAsync(mounter, dir, new List<string> { "lock" }, null, L10n.T("暂时锁定")),
+            refreshHost: _ => { })   // 登记由 MountVaultDir 内的 vaults add 负责，无需回写本地记录
+        {
+            XamlRoot = Content.XamlRoot,
+            RequestedTheme = CurrentTheme,
+        };
+        await dlg.ShowAsync();
+    }
+
+    // P1-1：管理页「挂载」按钮复用（不需要再次弹 VaultMountDialog，盘符已由对话框给出）
+    private async Task MountVaultDir(string dir, string point)
+    {
+        var mounter = FileEncryptorLocator.LocateMounter();
+        if (mounter == null)
+        {
+            await ShowMessageAsync(L10n.T("挂载为磁盘"), L10n.T("未找到挂载组件 FE-Mounter。"));
+            return;
+        }
+        // 登记到多库注册表，聚合视图才看得到这个盘
+        await RunMounterAsync(mounter, "vaults", "add", dir);
+
+        var pwd = new PasswordDialog(false)
+        {
+            XamlRoot = Content.XamlRoot,
+            RequestedTheme = CurrentTheme,
+            Title = L10n.T("挂载为磁盘"),
+        };
+        if (await pwd.ShowAsync() != ContentDialogResult.Primary) return;
+        if (string.IsNullOrEmpty(pwd.Password)) return;
+
+        var tmp = WriteTempPass(pwd.Password);
+        if (tmp == null)
+        {
+            await ShowMessageAsync(L10n.T("挂载为磁盘"), L10n.T("无法写入临时密码文件。"));
+            return;
+        }
+        var args = new List<string> { "winmount", point, "--vault", dir, "--rw", "--idle-timeout", "60", "--pass-file", tmp };
+        bool ok = LaunchMounterDetached(mounter, args);
+        _ = Task.Run(async () => { await Task.Delay(2000); DeleteTempPass(tmp); });
+        if (ok)
+        {
+            RecordMount(dir, point);
+            await ShowMessageAsync(L10n.T("挂载为磁盘"),
+                L10n.F("正在挂载，稍后可在「此电脑」中看到：{0}", point));
+        }
+    }
+
+    private async Task RunMounterAsync(string mounter, params string[] args)
+    {
+        var cli = new CliProcessService();
+        var tcs = new TaskCompletionSource<CommandResult>();
+        cli.Finished += r => tcs.TrySetResult(r);
+        cli.Execute(new CommandRequest
+        {
+            ProgramPath = mounter,
+            Arguments = new List<string>(args),
+        });
+        await tcs.Task;
     }
 
     // 已挂载加密盘列表：双击锁定的盘即解锁
@@ -1414,34 +1570,80 @@ public sealed partial class MainWindow : Window
         await dlg.ShowAsync();
     }
 
-    // 写临时密码文件（收紧为仅当前用户读写），用完即删；失败返回 null
+    // 写临时密码文件（创建时即带限制性 DACL：仅当前用户读写），用完即删；失败返回 null
     private string? WriteTempPass(string pw)
+        => WriteTempPass(new UTF8Encoding(false).GetBytes(pw));
+
+    // M42: byte[] overload ：免密路径解出的库口令不经不可变 string，直接写盘
+    private string? WriteTempPass(byte[] pwBytes)
     {
         try
         {
             var tmp = Path.Combine(Path.GetTempPath(),
                 $"fe_mountpw_{Convert.ToHexString(RandomNumberGenerator.GetBytes(8)).ToLowerInvariant()}.tmp");
-            File.WriteAllText(tmp, pw, new UTF8Encoding(false));
-            try
-            {
-                var fi = new FileInfo(tmp);
-                fi.Attributes &= ~System.IO.FileAttributes.ReadOnly;
-                // 仅当前用户：清掉继承的 Everyone/Users 读取权限
-                var sid = WindowsIdentity.GetCurrent().User;
-                if (sid != null)
-                {
-                    var sec = fi.GetAccessControl();
-                    sec.SetAccessRuleProtection(true, false);
-                    sec.PurgeAccessRules(sid);
-                    sec.AddAccessRule(new FileSystemAccessRule(
-                        sid, FileSystemRights.FullControl, AccessControlType.Allow));
-                    fi.SetAccessControl(sec);
-                }
-            }
-            catch { }
+            // M39: 创建句柄时即传 FileSecurity（等价 SECURITY_ATTRIBUTES），消除「先按 %TEMP% 继承 ACL 落盘、再收紧 DACL」之间的可读窗口
+            var sec = new FileSecurity();
+            sec.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
+            var sid = WindowsIdentity.GetCurrent().User;
+            if (sid == null) return null;
+            sec.AddAccessRule(new FileSystemAccessRule(
+                sid, FileSystemRights.FullControl, AccessControlType.Allow));
+            using (var fs = new FileInfo(tmp).Create(FileMode.CreateNew, FileSystemRights.Write, FileShare.None, 4096, FileOptions.None, sec))
+                fs.Write(pwBytes, 0, pwBytes.Length);
+            // M41: 登记在册，进程退出钩子据此兜底清理
+            lock (_tempPassGate) _liveTempPasses.Add(tmp);
             return tmp;
         }
         catch { return null; }
+    }
+
+    // M41: 在册临时口令文件与退出钩子：GUI 被 Kill/崩溃时延迟删除来不及跑，明文口令会永留 %TEMP%
+    private static readonly List<string> _liveTempPasses = new();
+    private static readonly object _tempPassGate = new();
+
+    static MainWindow()
+    {
+        AppDomain.CurrentDomain.ProcessExit += (_, _) =>
+        {
+            lock (_tempPassGate)
+            {
+                foreach (var f in _liveTempPasses) DeleteTempPass(f);
+                _liveTempPasses.Clear();
+            }
+        };
+    }
+
+    // M41: 启动时清理陈旧口令文件（命名规则同 WriteTempPass）
+    private static void CleanupStaleTempPasses()
+    {
+        try
+        {
+            foreach (var f in Directory.GetFiles(Path.GetTempPath(), "fe_mountpw_*.tmp"))
+                DeleteTempPass(f);
+        }
+        catch { }
+    }
+
+    // P2-3：临时口令文件必须先零填充再删除。
+    // 只 Delete 的话明文口令仍留在磁盘可恢复区，取证/恢复工具能读出来。
+    private static void DeleteTempPass(string? path)
+    {
+        try
+        {
+            if (string.IsNullOrEmpty(path) || !File.Exists(path)) return;
+            var n = new FileInfo(path).Length;
+            if (n > 0)
+            {
+                // WriteThrough 绕开操作系统缓存：零字节必须先于 Delete 落盘，否则只写进缓存就删文件，明文仍留在磁盘可恢复区
+                using var fs = new FileStream(path, FileMode.Open, FileAccess.Write,
+                    FileShare.None, 4096, FileOptions.WriteThrough);
+                fs.Write(new byte[n]);
+                fs.Flush(flushToDisk: true);
+            }
+            File.Delete(path);
+            lock (_tempPassGate) _liveTempPasses.Remove(path);
+        }
+        catch { }
     }
 
     // detached 启动 FE-Mounter（长驻，不随 GUI 退出而结束）
@@ -1468,7 +1670,7 @@ public sealed partial class MainWindow : Window
     }
 
     // 轮询 FE-Mounter 写的锁定访问事件文件：检测到「锁定且被访问」→ 拉起 GUI 前台并弹单密码解锁框
-    private async void PollLockedAccess(DispatcherQueueTimer sender, object args)
+    private async void PollLockedAccess(DispatcherQueueTimer sender, object? args)
     {
         if (_unlockPromptActive) return;   // 已有解锁框在，避免叠加
         try
@@ -1479,15 +1681,33 @@ public sealed partial class MainWindow : Window
             var files = Directory.GetFiles(dir, "fe_locked_*.event");
             foreach (var f in files)
             {
-                string vault = "";
+                string vault = "", mount = "";
                 try
                 {
                     foreach (var line in File.ReadAllLines(f))
-                        if (line.StartsWith("vault=")) vault = line.Substring(6);
+                    {
+                        if (line.StartsWith("vault=")) vault = line.Substring(6).Trim();
+                        else if (line.StartsWith("mount=")) mount = line.Substring(6).Trim();
+                    }
                 }
                 catch { }
                 try { File.Delete(f); } catch { }
-                if (string.IsNullOrEmpty(vault)) continue;
+                // 内容校验：任何同用户进程都能按命名模式伪造事件文件，必须是 vault= 与 mount= 均非空的完整内容才弹窗
+                if (string.IsNullOrEmpty(vault) || string.IsNullOrEmpty(mount)) continue;
+                // 同 vault 短时间去重节流：伪造/抖动不会诱导反复弹密码框、抢焦点
+                var now = DateTime.UtcNow;
+                lock (_unlockPromptTimes)
+                {
+                    // 顺手清理 5 分钟前的陈旧记录，避免字典无界增长
+                    List<string> stale = new();
+                    foreach (var kv in _unlockPromptTimes)
+                        if (now - kv.Value > TimeSpan.FromMinutes(5)) stale.Add(kv.Key);
+                    foreach (var k in stale) _unlockPromptTimes.Remove(k);
+                    if (_unlockPromptTimes.TryGetValue(vault, out var last)
+                        && now - last < TimeSpan.FromSeconds(10))
+                        continue;
+                    _unlockPromptTimes[vault] = now;
+                }
                 // 已解锁（解锁竞态）则跳过，避免误弹
                 if (!await IsVaultLockedAsync(vault)) continue;
                 _unlockPromptActive = true;
@@ -1500,13 +1720,16 @@ public sealed partial class MainWindow : Window
         catch { }
     }
 
-    // 拉起主窗口到前台（还原最小化 + 置前），确保解锁框可见
+    // 锁定访问后让解锁框可见：解锁提示是用户真正需要的操作，必须把它带到最前。
+    // 最小化时还原；否则（后台可见/刚被拉起）直接置前+激活，否则密码框会落在其他窗口后面，
+    // 表现为「拉起 GUI 却没弹密码框」。仅此一处调用，不影响加密等后台任务的焦点。
     private void BringToForeground()
     {
         try
         {
             var hwnd = WindowNative.GetWindowHandle(this);
-            ShowWindow(hwnd, 9);            // SW_RESTORE
+            if (IsIconic(hwnd))
+                ShowWindow(hwnd, 9);        // SW_RESTORE：还原最小化窗口
             SetForegroundWindow(hwnd);
             Activate();
         }
@@ -1958,7 +2181,7 @@ public sealed partial class MainWindow : Window
     private void OnExit(object sender, RoutedEventArgs e) => Close();
 
     // 自动更新
-    private string LocateUpdater()
+    private string? LocateUpdater()
     {
         string dir = AppContext.BaseDirectory;
         string[] cands = {
@@ -2042,9 +2265,9 @@ public sealed partial class MainWindow : Window
                 var r = await dlg.ShowAsync();
                 if (r == ContentDialogResult.Primary)
                 {
-                    var url = root.GetProperty("download_url").GetString();
-                    var sha = root.TryGetProperty("sha256", out var s) ? s.GetString() : "";
-                    var sig = root.TryGetProperty("sig_url", out var g) ? g.GetString() : "";
+                    var url = root.GetProperty("download_url").GetString() ?? "";
+                    var sha = root.TryGetProperty("sha256", out var s) ? s.GetString() ?? "" : "";
+                    var sig = root.TryGetProperty("sig_url", out var g) ? g.GetString() ?? "" : "";
                     long size = root.TryGetProperty("size", out var sz) && sz.TryGetInt64(out long szv) ? szv : 0;
                     await RunUpdaterUpdate(updater, url, sha, sig, size);
                 }

@@ -2,6 +2,10 @@
 #include "fe_common.h"
 #include <cstdio>
 #include <cstring>
+#if !defined(_WIN32)
+#  include <sys/stat.h>   // mkdir(2)：取代 system("mkdir -p")（M1 无 shell）
+#  include <errno.h>      // 区分 EEXIST（已存在）
+#endif
 
 #if defined(_WIN32)
 // 服务名必须与 FspServiceRun 的 L"FE-Mount" 一致：WinFSP 服务模型要求 SCM 注册名
@@ -71,6 +75,32 @@ static std::string unit_dir() {
     return std::string(home ? home : ".") + "/.config/systemd/user";
 }
 
+// M1：递归创建目录（不走 shell）。原实现 system("mkdir -p '<dir>'") 的 dir 由 XDG_CONFIG_HOME/HOME 派生，含单引号即 shell 注入；mkdir(2) 无此面。
+static bool mkdir_p(const std::string& d) {
+    if (d.empty()) return false;
+    std::string cur;
+    size_t i = 0;
+    if (d[0] == '/') { cur = "/"; i = 1; }
+    while (i < d.size()) {
+        size_t j = d.find('/', i);
+        if (j == std::string::npos) j = d.size();
+        if (j > i) {
+            if (!cur.empty() && cur.back() != '/') cur += '/';
+            cur.append(d, i, j - i);
+            if (mkdir(cur.c_str(), 0755) != 0 && errno != EEXIST) return false;
+        }
+        i = j + 1;
+    }
+    return true;
+}
+
+// M2：systemd unit 指令注入防护。ExecStart 原样拼接这些路径：含 \n 可注入任意 unit 指令；% 是 systemd specifier 会被展开；$ / ` 触发命令展开。一律拒绝。
+static bool unit_path_safe(const std::string& p) {
+    for (char c : p)
+        if (c == '\n' || c == '\r' || c == '%' || c == '$' || c == '`') return false;
+    return true;
+}
+
 bool install_service(const std::string& vault0, const std::string& mountpoint,
                      const std::string& passfile0, std::string& err) {
     if (!getenv("XDG_RUNTIME_DIR") && access("/run/systemd/system", F_OK) != 0) {
@@ -86,12 +116,8 @@ bool install_service(const std::string& vault0, const std::string& mountpoint,
     self[n] = '\0';
 
     std::string dir = unit_dir();
-    std::string mk = "mkdir -p '" + dir + "'";
-    if (system(mk.c_str()) != 0) { err = "cannot create " + dir; return false; }
+    if (!mkdir_p(dir)) { err = "cannot create " + dir; return false; }
 
-    std::string path = dir + "/" + unit_name_for(vault0);
-    FILE* f = fopen(path.c_str(), "wb");
-    if (!f) { err = "cannot write " + path; return false; }
     // 绝对路径：unit 的工作目录不是调用者 cwd，相对路径会解析到 $HOME
     char cwd[4096];
     std::string vault = vault0, passfile = passfile0;
@@ -101,6 +127,14 @@ bool install_service(const std::string& vault0, const std::string& mountpoint,
     if (!passfile.empty() && passfile[0] != '/') {
         if (getcwd(cwd, sizeof cwd)) passfile = std::string(cwd) + "/" + passfile;
     }
+    // M2：先校验再落盘。含 \n 可注入任意 unit 指令，%（specifier 展开）/$ / `（命令展开）一律拒绝。
+    if (!unit_path_safe(mountpoint) || !unit_path_safe(vault) || !unit_path_safe(passfile)) {
+        err = "path contains characters unsafe for systemd unit (newline, '%', '$', '`')";
+        return false;
+    }
+    std::string path = dir + "/" + unit_name_for(vault0);
+    FILE* f = fopen(path.c_str(), "wb");
+    if (!f) { err = "cannot write " + path; return false; }
     fprintf(f,
         "[Unit]\n"
         "Description=FE-Mounter encrypted vault (read-only)\n"

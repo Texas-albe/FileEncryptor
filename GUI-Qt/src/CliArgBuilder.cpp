@@ -1,8 +1,22 @@
 #include "CliArgBuilder.h"
+#include "secure_zero.h"
 #include <QCoreApplication>
 #include <QDir>
 #include <QFile>
 #include <QTemporaryFile>
+#include <QSet>
+#include <vector>
+#include <cstring>
+
+#ifdef Q_OS_WIN
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#include <aclapi.h>
+#else
+#include <unistd.h>
+#endif
 
 // 命令预览随界面语言
 
@@ -33,6 +47,80 @@ bool CliArgBuilder::isPrivateKeyMaterial(const QString& key)
     return key.contains(QStringLiteral("PRIVATE KEY"));
 }
 
+// P2-3：删前先零填充。只 remove 的话明文私钥仍留在磁盘可恢复区，恢复工具能读出来。
+// H6a：必须用 ReadWrite 打开——WriteOnly 一打开就截断，size() 恒为 0，零填充从未执行。
+// flush() 只刷用户态缓冲，还要 FlushFileBuffers/fsync 才能真正落盘后再删。
+static void shred_file(const QString& path) {
+    if (path.isEmpty()) return;
+    QFile f(path);
+    if (!f.exists()) return;
+    if (f.open(QIODevice::ReadWrite)) {
+        const qint64 n = f.size();
+        if (n > 0) {
+            f.write(QByteArray(static_cast<int>(n), '\0'));
+            f.flush();
+#ifdef Q_OS_WIN
+            FlushFileBuffers(reinterpret_cast<HANDLE>(f.handle()));
+#else
+            fsync(f.handle());
+#endif
+        }
+        f.close();
+    }
+    QFile::remove(path);
+}
+
+// H6b：把敏感临时文件的 DACL 收紧为「当前用户 + SYSTEM」，去掉继承来的
+// Administrators 完全控制。Windows 上 setPermissions(0600) 只是注释（Qt 只映射
+// 只读属性），必须显式 SetNamedSecurityInfoW；非 Windows 回落 0600 权限位。
+void CliArgBuilder::setTempFileAcl(const QString& path) {
+    if (path.isEmpty()) return;
+#ifdef Q_OS_WIN
+    HANDLE tok = NULL;
+    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &tok)) return;
+    DWORD need = 0;
+    GetTokenInformation(tok, TokenUser, NULL, 0, &need);
+    std::vector<unsigned char> buf(need ? need : 256);
+    TOKEN_USER* tu = reinterpret_cast<TOKEN_USER*>(buf.data());
+    BOOL got = GetTokenInformation(tok, TokenUser, buf.data(), (DWORD)buf.size(), &need);
+    CloseHandle(tok);
+    if (!got || !tu->User.Sid) return;
+
+    SID_IDENTIFIER_AUTHORITY nt = SECURITY_NT_AUTHORITY;
+    PSID systemSid = NULL;
+    AllocateAndInitializeSid(&nt, 1, SECURITY_LOCAL_SYSTEM_RID,
+                             0, 0, 0, 0, 0, 0, 0, &systemSid);
+
+    EXPLICIT_ACCESSW ea[2];
+    memset(ea, 0, sizeof ea);
+    int n = 0;
+    PSID sids[2] = { tu->User.Sid, systemSid };
+    for (int i = 0; i < 2; ++i) {
+        if (!sids[i]) continue;
+        ea[n].grfAccessPermissions = GENERIC_ALL;
+        ea[n].grfAccessMode = SET_ACCESS;
+        ea[n].grfInheritance = NO_INHERITANCE;
+        ea[n].Trustee.TrusteeForm = TRUSTEE_IS_SID;
+        ea[n].Trustee.TrusteeType = TRUSTEE_IS_USER;
+        ea[n].Trustee.ptstrName = reinterpret_cast<LPWSTR>(sids[i]);
+        ++n;
+    }
+    PACL dacl = NULL;
+    if (SetEntriesInAclW(n, ea, NULL, &dacl) == ERROR_SUCCESS && dacl) {
+        // PROTECTED：阻断从 %TEMP% 继承的宽松 ACE
+        SetNamedSecurityInfoW(
+            reinterpret_cast<LPWSTR>(const_cast<ushort*>(path.utf16())),
+            SE_FILE_OBJECT,
+            DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+            NULL, NULL, dacl, NULL);
+        LocalFree(dacl);
+    }
+    if (systemSid) FreeSid(systemSid);
+#else
+    QFile::setPermissions(path, QFileDevice::ReadOwner | QFileDevice::WriteOwner);
+#endif
+}
+
 // 私钥明文落 0600 临时文件；成功返回 true。失败一律返回 false，
 // 调用方必须放弃任务——绝不能把明文私钥当 argv 元素下发（/proc/<pid>/cmdline 世界可读）。
 static bool write_wm_key_temp(const QString& pem) {
@@ -45,20 +133,58 @@ static bool write_wm_key_temp(const QString& pem) {
     tmp.setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner);
     // 无参 open() 是 public；带参数的重载在 QTemporaryFile 里是 protected
     if (!tmp.open()) return false;
-    const QByteArray blob = pem.toUtf8();
+    // H6b：创建后立即收紧 DACL（Windows 0600 权限位是 no-op）
+    CliArgBuilder::setTempFileAcl(tmp.fileName());
+    QByteArray blob = pem.toUtf8();
     if (tmp.write(blob) != static_cast<qint64>(blob.size())) {
-        // 半截私钥不能留在磁盘，删掉再报失败
+        // 半截私钥不能留在磁盘，粉碎后报失败
         tmp.close();
-        QFile::remove(tmp.fileName());
+        shred_file(tmp.fileName());
+        secure_zero(blob.data(), static_cast<size_t>(blob.size()));
         s_wmKeyTempPath.clear();
         return false;
     }
     tmp.flush();
     s_wmKeyTempPath = tmp.fileName();
+    secure_zero(blob.data(), static_cast<size_t>(blob.size()));   // P2-3：明文缓冲立即清零
     return true;
 }
 
-QStringList CliArgBuilder::buildArguments(const ShellOptions& o) {
+// 以 '-' 开头的路径值会被 CLI11 当选项解析（报错或被误判）：统一加 "./" 前缀，
+// 强制回落成普通取值 / 位置参数。只动取值位，选项本身与 -m/--split 等非路径值不动。
+static QStringList guardDashPaths(const QStringList& args) {
+    static const QSet<QString> kValueFlags = {
+        QStringLiteral("-o"), QStringLiteral("-i"), QStringLiteral("-k"),
+        QStringLiteral("-r"), QStringLiteral("--into-vault"),
+        QStringLiteral("--identity"), QStringLiteral("--wrap-key"),
+        QStringLiteral("--wrap-out"), QStringLiteral("--wrap-to"),
+        QStringLiteral("--unwrap-key"), QStringLiteral("--unwrap-out"),
+        QStringLiteral("--wm-sign"), QStringLiteral("--wm-verify")
+    };
+    QStringList out;
+    out.reserve(args.size());
+    bool afterDashDash = false;
+    bool expectValue = false;
+    for (const QString& a : args) {
+        if (afterDashDash) {
+            // -- 之后一律是输入文件，同样要防
+            out << (a.startsWith(QLatin1Char('-')) ? QStringLiteral("./") + a : a);
+            continue;
+        }
+        if (expectValue && a.startsWith(QLatin1Char('-'))) {
+            out << QStringLiteral("./") + a;
+        } else {
+            out << a;
+        }
+        if (a == QStringLiteral("--")) afterDashDash = true;
+        expectValue = kValueFlags.contains(a);
+    }
+    return out;
+}
+
+// M49：落盘路径（execute 前用）与纯构建（预览用）分离：
+// allowKeyFileWrite=false 时绝不在预览里落水印私钥临时文件。
+static QStringList buildArgumentsImpl(const ShellOptions& o, bool allowKeyFileWrite) {
     QStringList args;
 
     // 三个密钥动作无需输入文件
@@ -70,7 +196,7 @@ QStringList CliArgBuilder::buildArguments(const ShellOptions& o) {
         if (!o.outputDir.isEmpty()) {
             args << QStringLiteral("-o") << o.outputDir;
         }
-        return args;
+        return guardDashPaths(args);
     }
     if (o.action == CryptoAction::Derive) {
         args << QStringLiteral("-G");
@@ -81,14 +207,14 @@ QStringList CliArgBuilder::buildArguments(const ShellOptions& o) {
             args << QStringLiteral("-y");
         }
         args << QStringLiteral("--key-stdin");
-        return args;
+        return guardDashPaths(args);
     }
     if (o.action == CryptoAction::PubKey) {
         args << QStringLiteral("-Y");
         if (!o.identityPath.isEmpty()) {
             args << QStringLiteral("-k") << o.identityPath;
         }
-        return args;
+        return guardDashPaths(args);
     }
     // 密钥包装：与加解密流程完全独立，只有 --wrap-key / --unwrap-key 一组参数。
     // 密码 / 私钥不落 argv：统一走 --key-stdin 或 -k <file>，理由同水印私钥。
@@ -107,7 +233,7 @@ QStringList CliArgBuilder::buildArguments(const ShellOptions& o) {
             args << QStringLiteral("--key-stdin");
         }
         if (o.forceOverwrite) args << QStringLiteral("-y");
-        return args;
+        return guardDashPaths(args);
     }
     if (o.action == CryptoAction::UnwrapKey) {
         args << QStringLiteral("--unwrap-key") << o.wrapInput;
@@ -125,7 +251,7 @@ QStringList CliArgBuilder::buildArguments(const ShellOptions& o) {
             args << QStringLiteral("--unwrap-out") << o.wrapOutput;
         }
         if (o.forceOverwrite) args << QStringLiteral("-y");
-        return args;
+        return guardDashPaths(args);
     }
 
     const bool isAsym = (o.mode == CryptoMode::Asymmetric);
@@ -232,10 +358,14 @@ QStringList CliArgBuilder::buildArguments(const ShellOptions& o) {
         QString key = o.watermarkKeyPath.trimmed();
         if (!key.isEmpty()) {
             if (isPrivateKeyMaterial(key)) {
-                // 唯一出口是 0600 临时文件：落盘失败即中止，不回退明文
-                if (s_wmKeyTempPath.isEmpty() && !write_wm_key_temp(key)) return {};
-                if (s_wmKeyTempPath.isEmpty()) return {};
-                key = s_wmKeyTempPath;
+                if (allowKeyFileWrite) {
+                    // 唯一出口是 0600 临时文件：落盘失败即中止，不回退明文
+                    if (s_wmKeyTempPath.isEmpty() && !write_wm_key_temp(key)) return {};
+                    if (s_wmKeyTempPath.isEmpty()) return {};
+                    key = s_wmKeyTempPath;
+                }
+                // 预览（allowKeyFileWrite=false）：PEM 原样留在 args 里，
+                // buildPreview 会显示为 <private-key> 占位符，不落盘
             }
             args << QStringLiteral("--wm-sign") << key;
         }
@@ -263,7 +393,15 @@ QStringList CliArgBuilder::buildArguments(const ShellOptions& o) {
         args << QStringLiteral("--") << o.inputPaths.first();
     }
 
-    return args;
+    return guardDashPaths(args);
+}
+
+QStringList CliArgBuilder::buildArguments(const ShellOptions& options) {
+    return buildArgumentsImpl(options, true);
+}
+
+QStringList CliArgBuilder::buildArgumentsForPreview(const ShellOptions& options) {
+    return buildArgumentsImpl(options, false);
 }
 
 QProcessEnvironment CliArgBuilder::buildEnvironment(const ShellOptions& ) {
@@ -272,7 +410,7 @@ QProcessEnvironment CliArgBuilder::buildEnvironment(const ShellOptions& ) {
 
 void CliArgBuilder::cleanupWatermarkTemp() {
     if (s_wmKeyTempPath.isEmpty()) return;
-    QFile::remove(s_wmKeyTempPath);
+    shred_file(s_wmKeyTempPath);   // P2-3：私钥明文先清零再删
     s_wmKeyTempPath.clear();
 }
 
@@ -291,7 +429,8 @@ QString CliArgBuilder::buildPreview(const QString& programPath, const ShellOptio
         QStringLiteral("--identity")
     };
 
-    const QStringList args = buildArguments(o);
+    // M49：预览只走纯构建，绝不触发水印私钥落盘
+    const QStringList args = buildArgumentsForPreview(o);
     bool expectValue = false;
     bool expectKey = false;
     for (int i=0; i<args.size(); ++i) {

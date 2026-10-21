@@ -42,6 +42,8 @@
                     <MenuFlyoutSeparator />
                     <!-- 加密盘：库管理（CLI 子命令）+ 挂载控制端（FE-Mounter 常驻持有，锁定/解锁走受限 IPC） -->
                     <MenuFlyoutSubItem x:Name="MenuVault" Text="加密盘" IsEnabled="{x:Bind ViewModel.VaultAvailable, Mode=OneWay}">
+                        <MenuFlyoutItem x:Name="MenuVaultManager" Text="加密盘管理..." Click="OnVaultManager" />
+                        <MenuFlyoutSeparator />
                         <MenuFlyoutItem x:Name="MenuVaultInit" Text="新建加密盘..." Click="OnVaultInit" />
                         <MenuFlyoutItem x:Name="MenuVaultList" Text="查看盘内文件..." Click="OnVaultList" />
                         <MenuFlyoutSeparator />

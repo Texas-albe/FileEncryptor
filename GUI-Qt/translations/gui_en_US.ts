@@ -2584,4 +2584,15 @@ The vault identity and password are kept, so you can keep using the same passwor
 If the vault is currently mounted, unmount it first.</translation>
     </message>
 </context>
+<context>
+    <name>OsHarden</name>
+    <message>
+        <source>检测到调试器</source>
+        <translation>Debugger detected</translation>
+    </message>
+    <message>
+        <source>检测到有调试器附加到本程序。若非你本人操作，请立即退出并检查系统安全；程序功能不受影响。</source>
+        <translation>A debugger is attached to this program. If this was not you, exit now and check your system's security. Program functionality is unaffected.</translation>
+    </message>
+</context>
 </TS>

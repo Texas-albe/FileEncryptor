@@ -1,4 +1,6 @@
-﻿using System.Text;
+﻿using System.Security.AccessControl;
+using System.Security.Principal;
+using System.Text;
 using System.Linq;
 using FileEncryptorGUI.Models;
 
@@ -27,7 +29,15 @@ public static class CliArgBuilder
     {
         var path = Path.Combine(Path.GetTempPath(),
             "fe_wm_" + Guid.NewGuid().ToString("N") + ".pem");
-        using (var fs = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+        // 创建句柄时即带限制性 DACL（File.Create 的 fileSecurity 形参），消除「先按 %TEMP% 继承 ACL 落盘、后 TightenTempAcl」之间的可读窗口；TightenTempAcl 保留作双保险
+        var sec = new FileSecurity();
+        sec.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
+        var me = WindowsIdentity.GetCurrent().User;
+        if (me == null) return key;
+        sec.AddAccessRule(new FileSystemAccessRule(
+            me, FileSystemRights.FullControl, AccessControlType.Allow));
+        // 创建即带限制 DACL，关闭可读窗口
+        using (var fs = new FileInfo(path).Create(FileMode.CreateNew, FileSystemRights.Write, FileShare.None, 4096, FileOptions.None, sec))
         using (var sw = new StreamWriter(fs, new UTF8Encoding(false)))
         {
             sw.Write(key);
@@ -66,6 +76,13 @@ public static class CliArgBuilder
     {
         var path = options?.WatermarkTempKeyPath;
         if (string.IsNullOrEmpty(path)) return;
+        try
+        {
+            // 先零填充再删：私钥明文不得留在磁盘可恢复区
+            var n = new FileInfo(path).Length;
+            if (n > 0) File.WriteAllBytes(path, new byte[n]);
+        }
+        catch { }
         try { File.Delete(path); } catch { }
         options!.WatermarkTempKeyPath = null;
     }

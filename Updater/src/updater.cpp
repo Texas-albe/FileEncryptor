@@ -300,7 +300,7 @@ static const char* const kGitHubAssetHosts[] = {
     "objects.githubusercontent.com", "codeload.github.com",
 };
 static bool g_allowAnyHost = false; // --allow-any-host 时放开
-static std::string g_proxy;         // --proxy 显式代理，为空则沿用 curl 的环境变量代理
+static std::string g_proxy;         // 显式代理，空则用系统
 
 // 精确匹配白名单，不做后缀模糊（防 evilgithub.com 之类）
 static bool hostInList(const std::string& host, const char* const* list, size_t n) {
@@ -467,7 +467,7 @@ static void applyProxy(CURL* h) {
 #endif
     if (proxy.empty()) return;
     curl_easy_setopt(h, CURLOPT_PROXY, proxy.c_str());
-    // 代理认证走 URL/header 里的凭据，需要关掉主机认证门禁
+    // 代理认证需关主机门禁
     curl_easy_setopt(h, CURLOPT_HTTPAUTH, (long)CURLAUTH_ANY);
     curl_easy_setopt(h, CURLOPT_UNRESTRICTED_AUTH, 1L);
 }
@@ -516,7 +516,7 @@ struct GetCtx {
     std::vector<char>* body = nullptr;
     std::string* etag = nullptr;
     std::string* finalUrl = nullptr;
-    bool allowAssetHost = false;   // 下载场景才复检 Location（API 请求不需要）
+    bool allowAssetHost = false;   // 仅下载复检 Location
 };
 static size_t getWriteCb(void* ptr, size_t size, size_t nmemb, void* userdata) {
     auto* c = static_cast<GetCtx*>(userdata);
@@ -565,7 +565,7 @@ static void classify(int curlCode, const std::string& curlErr, long status, Http
     if (status == 404) { r->error = "release_not_found"; return; }
     if (status >= 500) { r->error = "server_error"; return; }
     if (!curlErr.empty()) {
-        // 代理相关失败要单独说清：用户看得懂「代理不通」才知道去查代理而不是重装
+        // 代理失败须单独报清
         if (curlErr.find("proxy") != std::string::npos) {
             if (curlErr.find("authentication") != std::string::npos) r->error = "proxy_auth_failed";
             else if (curlErr.find("resolve") != std::string::npos ||
@@ -609,7 +609,7 @@ static HttpResult lowGet(const std::string& url, std::vector<char>* out,
     curl_easy_setopt(h, CURLOPT_FOLLOWLOCATION, 1L);
     curl_easy_setopt(h, CURLOPT_MAXREDIRS, 6L);
     curl_easy_setopt(h, CURLOPT_USERAGENT, "FileEncryptorUpdater/1.0");
-    curl_easy_setopt(h, CURLOPT_IPRESOLVE, CURL_IPRESOLVE_V4); // 避免沙箱/部分网络无 IPv6 路由导致连接失败
+    curl_easy_setopt(h, CURLOPT_IPRESOLVE, CURL_IPRESOLVE_V4); // 避免无 IPv6 路由失败
     struct curl_slist* hdr = nullptr;
     hdr = curl_slist_append(hdr, "Accept: application/vnd.github+json");
     if (!etagIn.empty()) {
@@ -679,7 +679,7 @@ static HttpResult lowGetWithRevokeFallback(const std::string& url, std::vector<c
                 "[updater] WARNING: TLS handshake failed (%s); retrying with revocation check "
                 "disabled (certificate chain and hostname are still verified)\n",
                 r.detail.c_str());
-        // 清掉半截响应再重试，避免把两次结果拼在一起
+        // 重试前清空半截响应
         if (out) out->clear();
         r = lowGet(url, out, statusOut, etagOut, finalUrlOut, etagIn, rangeHeader,
                    nullptr, nullptr, true /* relaxRevoke */);
@@ -698,7 +698,7 @@ static size_t dlWriteCb(void* ptr, size_t size, size_t nmemb, void* userdata) {
     auto* c = static_cast<DlCtx*>(userdata);
     size_t n = size * nmemb;
     c->f->write((const char*)ptr, (std::streamsize)n);
-    if (!c->f->good()) return 0; // 通知 libcurl 中止
+    if (!c->f->good()) return 0;
     *c->written += (long long)n;
     if (c->prog) (*c->prog)(*c->written, c->total);
     return n;
@@ -715,7 +715,7 @@ static size_t dlHeaderCb(char* buffer, size_t size, size_t nmemb, void* userdata
         std::string lk; for (char ch : key) lk += (char)tolower((unsigned char)ch);
         if (lk == "content-length") {
             long long len = atoll(trim(line.substr(colon + 1)).c_str());
-            // 续传时 Content-Length 只含剩余部分，进度条总长按完整大小算
+            // 续传总长按完整大小算
             if (len > 0) c->total = (c->base > 0) ? (len + c->base) : len;
         }
         // 重定向逐跳复检：下载必然跟随 GitHub 的 302，但跟随目标同样得在白名单内，
@@ -724,7 +724,7 @@ static size_t dlHeaderCb(char* buffer, size_t size, size_t nmemb, void* userdata
             std::string loc = trim(line.substr(colon + 1));
             if (!urlAllowed(loc, nullptr, true)) {
                 fprintf(stderr, "[update] redirect to disallowed host rejected: %s\n", loc.c_str());
-                return 0;   // 中止传输
+                return 0;   // 中止：主机越权
             }
         }
     }
@@ -756,7 +756,7 @@ static long long downloadToFile(const std::string& url, const std::string& outPa
     if (resumeFrom > 0) f.seekp((std::streamoff)resumeFrom, std::ios::beg);
 
     long long written = resumeFrom;
-    long long total = resumeFrom; // 若响应含 Content-Length，dlHeaderCb 会改写为剩余+偏移
+    long long total = resumeFrom; // dlHeaderCb 改写总长为剩余+偏移
     DlCtx ctx{&f, &written, total, resumeFrom, &onProgress};
 
     curl_easy_setopt(h, CURLOPT_URL, url.c_str());
@@ -767,10 +767,10 @@ static long long downloadToFile(const std::string& url, const std::string& outPa
     curl_easy_setopt(h, CURLOPT_FOLLOWLOCATION, 1L);
     curl_easy_setopt(h, CURLOPT_MAXREDIRS, 6L);
     curl_easy_setopt(h, CURLOPT_USERAGENT, "FileEncryptorUpdater/1.0");
-    curl_easy_setopt(h, CURLOPT_IPRESOLVE, CURL_IPRESOLVE_V4); // 避免沙箱/部分网络无 IPv6 路由导致连接失败
+    curl_easy_setopt(h, CURLOPT_IPRESOLVE, CURL_IPRESOLVE_V4); // 避免无 IPv6 路由失败
     curl_easy_setopt(h, CURLOPT_CONNECTTIMEOUT, 20L);
     curl_easy_setopt(h, CURLOPT_NOSIGNAL, 1L);
-    // 大文件下载给足时间，但要能出进度；单次写入无响应超过 120s 就算断流
+    // 大文件不限时，久无响应判断流
     curl_easy_setopt(h, CURLOPT_TIMEOUT, 0L);
     curl_easy_setopt(h, CURLOPT_LOW_SPEED_LIMIT, 4096L);
     curl_easy_setopt(h, CURLOPT_LOW_SPEED_TIME, 60L);
@@ -786,7 +786,7 @@ static long long downloadToFile(const std::string& url, const std::string& outPa
     char* eff = nullptr;
     curl_easy_getinfo(h, CURLINFO_EFFECTIVE_URL, &eff);
     bool ok = (rc == CURLE_OK);
-    // curl 对 4xx/5xx 也返回 CURLE_OK，不查状态码就会把错误页当安装包写完
+    // 须查状态码，否则误存错页
     if (ok && resumeFrom == 0 && code != 200 && code != 206) {
         ok = false;
         g_dlError = "http status " + std::to_string(code);
@@ -868,7 +868,7 @@ static int matchAsset(const JsonValue& assets, const std::string& type, const st
         const std::string ln = lower(n->asStr());
         bool ok = false;
         if (isWinui && win)
-            // WinUI 分发过 .msi，也曾出独立 exe：命中其一即可，别只认 .msi
+            // WinUI 既有 msi 也有 exe
             ok = (ln.find("winui") != std::string::npos || ln.find("winui3") != std::string::npos)
                  && (ln.find("windows") != std::string::npos || ln.find("win") != std::string::npos)
                  && (ln.find(".msi") != std::string::npos || ln.find(".exe") != std::string::npos);
@@ -1026,7 +1026,7 @@ static int doUpdate(const std::string& url, const std::string& expectedSha,
 
     printf("{\"progress\":0,\"stage\":\"downloading\"}\n"); fflush(stdout);
     long long got = downloadToFile(url, tmpPathUtf8, 0, progress);
-    // 握手被吊销检查挡下时重试一次；否则会出现「查得到新版本却下不下来」
+    // 吊销挡下时重试一次
     if (got < 0 && isTlsHandshakeDetail(g_dlError)) {
         fprintf(stderr, "[update] WARNING: download handshake failed; retrying with revocation check "
                         "disabled (certificate chain and hostname are still verified)\n");
@@ -1043,7 +1043,7 @@ static int doUpdate(const std::string& url, const std::string& expectedSha,
     long long fsize = 0;
     auto szec = std::error_code{};
     fsize = (long long)std::filesystem::file_size(tmpFile, szec);
-    // 断点/代理截断会在无 SHA 断言时留下半个安装包，落盘后必须核对大小
+    // 须核对大小防截断半包
     if (expectedSize > 0 && fsize != expectedSize) {
         printf("{\"progress\":100,\"stage\":\"error\",\"error\":\"size_mismatch\","
                "\"expected\":%lld,\"actual\":%lld}\n", (long long)expectedSize, fsize);
@@ -1057,7 +1057,7 @@ static int doUpdate(const std::string& url, const std::string& expectedSha,
         std::filesystem::remove_all(tmpDir, ec);
         return 1;
     }
-    // 没拿到期望摘要就没法验完整性：宁可拒装，也不能「没给摘要就算过」。
+    // 缺摘要宁可拒装
     // 攻击者能改 JSON 响应，就能把 digest 字段抹掉；这里空值直接失败。
     if (expectedSha.empty()) {
         printf("{\"progress\":100,\"stage\":\"error\",\"error\":\"sha256_missing\"}\n");
@@ -1090,9 +1090,28 @@ static int doUpdate(const std::string& url, const std::string& expectedSha,
     if (isMsi) {
 #ifdef _WIN32
         printf("{\"progress\":100,\"stage\":\"installing\"}\n"); fflush(stdout);
+        // 直接启动 msiexec.exe，不经 cmd.exe/_wsystem：临时路径来自 TMP 环境变量，
+        // 含元字符时经 shell 有注入面。路径参数单独加引号，固定参数无需引号。
         std::wstring wpath = to_wide(tmpPathUtf8);
-        std::wstring wcmd = L"msiexec /i \"" + wpath + L"\" /qn /norestart";
-        int r = _wsystem(wcmd.c_str());
+        std::wstring wcmd = L"msiexec.exe /i \"" + wpath + L"\" /qn /norestart";
+        STARTUPINFOW si;
+        ZeroMemory(&si, sizeof(si));
+        si.cb = sizeof(si);
+        PROCESS_INFORMATION pi;
+        ZeroMemory(&pi, sizeof(pi));
+        std::vector<wchar_t> cmdline(wcmd.begin(), wcmd.end());
+        cmdline.push_back(L'\0');
+        if (!CreateProcessW(nullptr, cmdline.data(), nullptr, nullptr, FALSE, 0,
+                            nullptr, nullptr, &si, &pi)) {
+            int r = (int)GetLastError();
+            printf("{\"progress\":100,\"stage\":\"error\",\"error\":\"msiexec_failed\",\"code\":%d}\n", r);
+            return 1;
+        }
+        WaitForSingleObject(pi.hProcess, INFINITE);
+        DWORD exitCode = 0;
+        int r = GetExitCodeProcess(pi.hProcess, &exitCode) ? (int)exitCode : -1;
+        CloseHandle(pi.hProcess);
+        CloseHandle(pi.hThread);
         if (r != 0) {
             printf("{\"progress\":100,\"stage\":\"error\",\"error\":\"msiexec_failed\",\"code\":%d}\n", r);
             return 1;

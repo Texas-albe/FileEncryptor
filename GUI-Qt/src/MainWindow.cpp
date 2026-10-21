@@ -20,6 +20,17 @@
 
 #include "secure_zero.h"
 
+#include <QPointer>
+
+#ifdef Q_OS_WIN
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#else
+#include <unistd.h>
+#endif
+
 #include <QMenuBar>
 #include <QApplication>
 #include <QStatusBar>
@@ -195,6 +206,51 @@ MainWindow::~MainWindow() {
     if(m_pendingTimer) m_pendingTimer->stop();
     if(m_scanCancel) m_scanCancel->store(true,std::memory_order_relaxed);
     if(m_scanWatcher&&m_scanWatcher->isRunning()) m_scanWatcher->waitForFinished();
+    // M45：qApp->quit()（立即重启）不触发 closeEvent，崩溃/强杀也绕过它，
+    // 析构是临时文件清理唯一的兜底
+    cleanupTempFiles();
+}
+
+// P2-3：删前先零填充。只 remove 的话明文钥匙仍留在磁盘可恢复区，恢复工具能读出来。
+// H6a：必须用 ReadWrite 打开——WriteOnly 一打开就截断，size() 恒为 0，零填充从未执行。
+// flush() 只刷用户态缓冲，还要 FlushFileBuffers/fsync 才能真正落盘后再删。
+static void shredFile(const QString& path) {
+    if (path.isEmpty()) return;
+    QFile f(path);
+    if (!f.exists()) return;
+    if (f.open(QIODevice::ReadWrite)) {
+        const qint64 n = f.size();
+        if (n > 0) {
+            f.write(QByteArray(static_cast<int>(n), '\0'));
+            f.flush();
+#ifdef Q_OS_WIN
+            FlushFileBuffers(reinterpret_cast<HANDLE>(f.handle()));
+#else
+            fsync(f.handle());
+#endif
+        }
+        f.close();
+    }
+    QFile::remove(path);
+}
+
+// M45：临时文件统一清理（析构与 closeEvent 共用）
+void MainWindow::cleanupTempFiles() {
+    if(!m_recipientTempFile.isEmpty()) {
+        QFile::remove(m_recipientTempFile);
+        m_recipientTempFile.clear();
+    }
+    if(!m_rewrapTempKey.isEmpty()) {
+        shredFile(m_rewrapTempKey);   // P2-3：重包装后的钥匙是明文，先清零再删
+        m_rewrapTempKey.clear();
+    }
+    // 水印私钥：中途退出时 finished() 未必跑完，这里同步兜底
+    CliArgBuilder::cleanupWatermarkTemp();
+    // 统计 JSON 同理（finishTaskRecord 没跑到就要删）
+    if(!m_statsFile.isEmpty()) {
+        QFile::remove(m_statsFile);
+        m_statsFile.clear();
+    }
 }
 
 void MainWindow::closeEvent(QCloseEvent* e) {
@@ -206,21 +262,7 @@ void MainWindow::closeEvent(QCloseEvent* e) {
         }
         m_executor->cancel();
     }
-    if(!m_recipientTempFile.isEmpty()) {
-        QFile::remove(m_recipientTempFile);
-        m_recipientTempFile.clear();
-    }
-    if(!m_rewrapTempKey.isEmpty()) {
-        QFile::remove(m_rewrapTempKey);
-        m_rewrapTempKey.clear();
-    }
-    // 水印私钥：中途退出时 finished() 未必跑完，这里同步兜底
-    CliArgBuilder::cleanupWatermarkTemp();
-    // 统计 JSON 同理（finishTaskRecord 没跑到就要删）
-    if(!m_statsFile.isEmpty()) {
-        QFile::remove(m_statsFile);
-        m_statsFile.clear();
-    }
+    cleanupTempFiles();
     QSettings(QStringLiteral("FileEncryptor"),QStringLiteral("FileEncryptorGUI"))
         .setValue(QStringLiteral("geometry"),saveGeometry());
     e->accept();
@@ -374,6 +416,8 @@ void MainWindow::onCheckForUpdate() {
     dlg->show();
 
     auto* proc = new QProcess(this);
+    // M48：finished 先于超时触发时 proc 已 deleteLater，定时器回调必须持 QPointer
+    QPointer<QProcess> procGuard = proc;
     const QString platform = []() {
 #ifdef Q_OS_WIN
         return QStringLiteral("windows");
@@ -401,8 +445,8 @@ void MainWindow::onCheckForUpdate() {
             tr("无法启动更新器，请确认程序安装完整。"));
     });
     connect(dlg, &QProgressDialog::canceled, proc, [proc] { proc->kill(); });
-    QTimer::singleShot(60000, this, [proc, dlg] {
-        if (proc->state() != QProcess::NotRunning) proc->kill();
+    QTimer::singleShot(60000, this, [procGuard, dlg] {
+        if (procGuard && procGuard->state() != QProcess::NotRunning) procGuard->kill();
         dlg->close(); dlg->deleteLater();
     });
     proc->start(updater, args);
@@ -474,6 +518,8 @@ void MainWindow::doUpdaterUpdate(const QString& updater, const QString& url,
     dlg->show();
 
     auto* proc = new QProcess(this);
+    // M48：同上，超时回调捕获 QPointer 防 use-after-free
+    QPointer<QProcess> procGuard = proc;
     QStringList args = {
         QStringLiteral("--update"),
         QStringLiteral("--url"), url,
@@ -517,8 +563,8 @@ void MainWindow::doUpdaterUpdate(const QString& updater, const QString& url,
         QMessageBox::warning(this, tr("更新"), tr("无法启动更新器，请确认程序安装完整。"));
     });
     connect(dlg, &QProgressDialog::canceled, proc, [proc] { proc->kill(); });
-    QTimer::singleShot(300000, this, [proc, dlg] {
-        if (proc->state() != QProcess::NotRunning) proc->kill();
+    QTimer::singleShot(300000, this, [procGuard, dlg] {
+        if (procGuard && procGuard->state() != QProcess::NotRunning) procGuard->kill();
         dlg->close(); dlg->deleteLater();
     });
     proc->start(updater, args);
@@ -612,10 +658,12 @@ void MainWindow::openPreviewFor(const QString& path) {
         dlg.setPurpose(tr("解密密码（用于预览）"));
         dlg.setRequireConfirm(false);
         if (dlg.exec() != QDialog::Accepted) return;
-        const std::vector<unsigned char> v = dlg.takePassword();
+        std::vector<unsigned char> v = dlg.takePassword();
         if (v.empty()) return;
         pw = QByteArray(reinterpret_cast<const char*>(v.data()),
                         static_cast<int>(v.size()));
+        secure_zero(v.data(),v.size());   // 源缓冲立即清零，别只拷进 QByteArray
+        v.clear();
     }
 
     if (!m_previewDlg) {
@@ -1059,7 +1107,7 @@ void MainWindow::onProbeFinished(int, QProcess::ExitStatus) {
     m_packAvailable=out.contains(QStringLiteral("pack=1"));
     // 包装层要 OpenSSL：字段缺失即视为不支持，否则会下发旧 CLI 不认的 --wrap-key
     m_keywrapAvailable=out.contains(QStringLiteral("keywrap=1"));
-    // 加密盘同理：vault=1 才有 --into-vault / vault-* 子命令（3.0.1+）
+    // 加密盘同理：vault=1 才有 --into-vault / vault-* 子命令（3.1.0 起）
     m_vaultAvailable=out.contains(QStringLiteral("vault=1"));
     // 可写挂载能力：vault_rw=1 才允许「可写挂载」（M6）
     m_vaultRwAvailable=out.contains(QStringLiteral("vault_rw=1"));
@@ -2067,6 +2115,8 @@ QString MainWindow::resolveRecipients(const QString& raw) const {
     }
     recTmp.close();
     m_recipientTempFile=recTmp.fileName();
+    // H6b：创建后立即收紧 DACL（Windows 上 0600 权限位是 no-op）
+    CliArgBuilder::setTempFileAcl(m_recipientTempFile);
     return m_recipientTempFile;
 }
 
@@ -2087,6 +2137,20 @@ void MainWindow::onRunClicked() {
 
     ShellOptions o=collectOptions();
 
+    // 批量模式参数总长上限：Windows CreateProcess 命令行约 32767 字符，
+    // 超大批量启动必失败，提前给出可读提示（fail-fast，别让启动错误难以定位）
+    if(o.action==CryptoAction::BatchEncrypt||o.action==CryptoAction::BatchDecrypt) {
+        int total=0;
+        for(const QString& p:o.inputPaths) total+=p.size()+8;
+        if(total>32000) {
+            MsgBox::warn(this,tr("批处理任务过大"),tr("批量输入路径的总长度超过命令行上限（约 32000 字符），请拆分成多批执行。"));
+            return;
+        }
+    }
+
+    // 任务历史要原始收件人列表：resolveRecipients 生成的临时文件任务结束即删，
+    // 把临时路径写进历史，回放时必然指向已失效的文件
+    const QString originalRecipient=o.recipientPath;
     // 多收件人写成临时文件失败时不能把含逗号的原文当 -r 值下发
     if(!o.recipientPath.trimmed().isEmpty()) {
         const QString recipFile=resolveRecipients(o.recipientPath);
@@ -2319,6 +2383,8 @@ void MainWindow::onRunClicked() {
         if(statsTmp.open()) {
             m_statsFile=statsTmp.fileName();
             statsTmp.close();
+            // H6b：创建后立即收紧 DACL（Windows 上 0600 权限位是 no-op）
+            CliArgBuilder::setTempFileAcl(m_statsFile);
         }
     }
     req.extraEnv.insert(QStringLiteral("FILEENCRYPTOR_STATS_FILE"),m_statsFile);
@@ -2331,8 +2397,10 @@ void MainWindow::onRunClicked() {
         if(confirmTmp.open()) {
             m_confirmFile=confirmTmp.fileName();
             confirmTmp.close();
+            // H6b：握手文件同样收紧 DACL。不再创建后立即 remove——
+            // 空文件常驻供 CLI 原地覆写，删掉会丢 DACL 并让轮询看到文件缺失
+            CliArgBuilder::setTempFileAcl(m_confirmFile);
         }
-        QFile::remove(m_confirmFile);
     }
     if(!m_confirmFile.isEmpty()) {
         req.confirmFile=m_confirmFile;
@@ -2372,7 +2440,7 @@ void MainWindow::onRunClicked() {
     updateProgressLabel();
     setStatus(tr("运行中..."));
 
-    beginTaskRecord(o);
+    beginTaskRecord(o,originalRecipient);
 
     m_executor->execute(req);
     if(!req.stdinData.isEmpty()) {
@@ -2444,6 +2512,8 @@ void MainWindow::onRewrapClicked() {
     const bool rewOk=(rewTmp.error()==QFile::NoError);
     const QString tmp=rewTmp.fileName();
     rewTmp.close();
+    // H6b：明文新密码文件收紧 DACL（Windows 0600 权限位是 no-op）
+    CliArgBuilder::setTempFileAcl(tmp);
     if(!rewOk) {
         QFile::remove(tmp);
         MsgBox::error(this,tr("密钥轮换"),tr("无法落盘临时新密码文件。"));
@@ -2635,6 +2705,8 @@ void MainWindow::onVaultRekey() {
     const bool wrote=(keyTmp.error()==QFile::NoError);
     const QString tmp=keyTmp.fileName();
     keyTmp.close();
+    // H6b：明文盘密码文件收紧 DACL（Windows 0600 权限位是 no-op）
+    CliArgBuilder::setTempFileAcl(tmp);
     if(!wrote) {
         QFile::remove(tmp);
         MsgBox::error(this,tr("修改加密盘密码"),tr("无法写入临时密码文件。"));
@@ -2690,14 +2762,18 @@ void MainWindow::launchMounterDetached(const QStringList& args,const QByteArray&
             f.flush();
             f.close();
             tmpPath=f.fileName();
+            // H6b：明文挂载密码文件收紧 DACL（Windows 0600 权限位是 no-op）
+            CliArgBuilder::setTempFileAcl(tmpPath);
             a<<QStringLiteral("--pass-file")<<tmpPath;
         }
     }
     const QString wd=QFileInfo(m_mounterPath).absolutePath();
     const bool ok=QProcess::startDetached(m_mounterPath,a,wd);
     if(!tmpPath.isEmpty()) {
-        // FE-Mounter 启动时即读取并关闭密码文件，稍后删除临时件
-        QTimer::singleShot(1500,this,[tmpPath] { QFile::remove(tmpPath); });
+        // M46：父对象改 qApp——定时器挂在窗口上时，窗口在延时内关闭即被销毁、
+        // 明文密码文件永不删除。延时放大到 10s：FE-Mounter 启动即读取并关闭
+        // 密码文件，但杀软扫描可能拖慢首次打开，留足余量；删前先零填充。
+        QTimer::singleShot(10000,qApp,[tmpPath] { shredFile(tmpPath); });
     }
     if(!ok)
         MsgBox::error(this,tr("挂载为磁盘"),tr("没法启动挂载组件，请确认 FE-Mounter.exe 还在、并且没被杀毒软件拦住。"));
@@ -2901,6 +2977,8 @@ void MainWindow::onVaultUnlock() {
             f.write(reinterpret_cast<const char*>(pw.data()),(qint64)pw.size());
             f.flush(); f.close();
             tmpPath=f.fileName();
+            // H6b：明文盘密码文件收紧 DACL（Windows 0600 权限位是 no-op）
+            CliArgBuilder::setTempFileAcl(tmpPath);
         }
     }
     secure_zero(pw.data(),pw.size()); pw.clear();
@@ -2921,8 +2999,10 @@ void MainWindow::onVaultUnlock() {
     m_btnCancel->setEnabled(true);
     setStatus(tr("运行中..."));
     m_executor->execute(req);
-    // ipc-call 是短命令，启动后即读取并关闭密码文件，稍后删除
-    QTimer::singleShot(2000,this,[tmpPath] { QFile::remove(tmpPath); });
+    // M46：父对象改 qApp（窗口在延时内关闭时 this 上的定时器会被销毁、文件永不删除）；
+    // 延时放大到 10s 兜底（ipc-call 启动即读取密码文件，杀软扫描可能拖慢打开）；
+    // 删前先零填充
+    QTimer::singleShot(10000,qApp,[tmpPath] { shredFile(tmpPath); });
 }
 
 void MainWindow::onCancelClicked() {
@@ -3077,7 +3157,7 @@ void MainWindow::onCommandFinished(const CommandResult& r) {
     if(m_btnRewrap) m_btnRewrap->setEnabled(true);
     m_btnCancel->setEnabled(false);
     if(!m_rewrapTempKey.isEmpty()) {
-        QFile::remove(m_rewrapTempKey);
+        shredFile(m_rewrapTempKey);   // P2-3：重包装后的钥匙是明文，先清零再删
         m_rewrapTempKey.clear();
     }
     // 任务结束即清理，避免公钥临时文件与统计 JSON 滞留到关窗口
@@ -3278,7 +3358,7 @@ void MainWindow::onPendingScanFinished() {
     updateProgressLabel();
 }
 
-void MainWindow::beginTaskRecord(const ShellOptions& o) {
+void MainWindow::beginTaskRecord(const ShellOptions& o,const QString& rawRecipient) {
     m_currentTask=TaskRecord();
     m_currentTask.id=TaskHistory::newId();
     m_currentTask.startedAt=QDateTime::currentDateTime()
@@ -3302,7 +3382,9 @@ void MainWindow::beginTaskRecord(const ShellOptions& o) {
     m_currentTask.watermarkKey=CliArgBuilder::isPrivateKeyMaterial(o.watermarkKeyPath)
         ? QStringLiteral("<protected>") : o.watermarkKeyPath;
     m_currentTask.keyfile=o.keyfilePath;
-    m_currentTask.recipient=o.recipientPath;
+    // 记录原始收件人列表：resolveRecipients 生成的临时文件任务结束即删，
+    // 把临时路径写进历史，回放时必然指向已失效的文件
+    m_currentTask.recipient=rawRecipient.isEmpty()?o.recipientPath:rawRecipient;
     m_currentTask.identity=o.identityPath;
     m_currentTask.wrapInput=o.wrapInput;
     m_currentTask.wrapOutput=o.wrapOutput;

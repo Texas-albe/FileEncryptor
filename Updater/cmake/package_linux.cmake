@@ -27,7 +27,7 @@ endif()
 
 file(MAKE_DIRECTORY "${FE_PKG_OUT_DIR}")
 
-# 定位 cpack：优先 CMake 自带的绝对路径，其次与 cmake 同目录，最后回落到 PATH
+# 优先 CMake 自带，其次 PATH
 set(_cpack "")
 if(CMAKE_CPACK_COMMAND AND EXISTS "${CMAKE_CPACK_COMMAND}")
   set(_cpack "${CMAKE_CPACK_COMMAND}")
@@ -41,7 +41,7 @@ if(NOT _cpack)
 endif()
 
 foreach(_gen IN LISTS FE_PKG_GENERATORS)
-  # RPM 依赖 rpmbuild，Debian/Ubuntu 默认不带；缺失时只警告不中断，保证 DEB 照常产出
+  # 缺 rpmbuild 只告警，保 DEB 产出
   if(_gen STREQUAL "RPM")
     find_program(_rpmbuild NAMES rpmbuild rpm)
     if(NOT _rpmbuild)

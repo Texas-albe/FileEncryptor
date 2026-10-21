@@ -7,12 +7,12 @@ namespace FileEncryptorGUI.Services;
 // 探测 CLI 路径
 public static class FileEncryptorLocator
 {
-    public const string GuiVersion = "3.0.1";
+    public const string GuiVersion = "3.1.0";
     public static string CliDownloadUrl =>
         $"https://github.com/Texas-albe/FileEncryptor/releases/tag/GUI{GuiVersion}_CLI{ExpectedCliVersion}";
 
     // 配套 CLI 版本
-    public static string ExpectedCliVersion => "3.0.1";
+    public static string ExpectedCliVersion => "3.1.0";
 
     public static string[] GetExpectedNames()
     {
@@ -21,7 +21,7 @@ public static class FileEncryptorLocator
         {
             $"FileEncryptorCLI-{ver}-cmd-Windows.exe",
             // 预发布后缀：CMake project(VERSION) 只支持数值版，产物名无 -alpha.N
-            "FileEncryptorCLI-3.0.1-cmd-Windows.exe",
+            "FileEncryptorCLI-3.1.0-cmd-Windows.exe",
             "FileEncryptorCLI.exe",
             "FileEncryptor.exe",
             "file-encryptor-cli.exe",
@@ -52,15 +52,7 @@ public static class FileEncryptorLocator
         found = FindInDir(installDir, names);
         if (found != null) return found;
 
-        var pathEnv = Environment.GetEnvironmentVariable("PATH");
-        if (!string.IsNullOrEmpty(pathEnv))
-        {
-            foreach (var p in pathEnv.Split(Path.PathSeparator))
-            {
-                found = FindInDir(p, names);
-                if (found != null) return found;
-            }
-        }
+        // PATH 回退已去除：PATH 中任意可写目录可投放同名 exe（审计低危 C 组）；只信任显式环境变量、应用目录与 Program Files 安装目录
         return null;
     }
 
@@ -110,17 +102,7 @@ public static class FileEncryptorLocator
         found = FindInDir(installDir, names);
         if (found != null) return found;
 
-        // 4) PATH
-        var pathEnv = Environment.GetEnvironmentVariable("PATH");
-        if (!string.IsNullOrEmpty(pathEnv))
-        {
-            foreach (var p in pathEnv.Split(Path.PathSeparator))
-            {
-                found = FindInDir(p, names);
-                if (found != null) return found;
-            }
-        }
-
+        // 4) PATH 回退已去除：PATH 中任意可写目录可投放同名 exe（审计低危 C 组）；只信任显式环境变量、应用目录与安装目录
         return null;
     }
 

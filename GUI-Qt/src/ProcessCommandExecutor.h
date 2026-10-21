@@ -39,6 +39,9 @@ private:
 
     QStringList m_frameLines;
     bool m_inFrame = false;
+    // M50：输出缓冲上限（8MB）的截断标记，超限后在结束时提示用户
+    bool m_outTruncated = false;
+    bool m_frameTruncated = false;
 
     QString m_confirmFile;
     // 已弹窗等回答 / 已写答案但 CLI 未取走，两态都禁止再次弹窗

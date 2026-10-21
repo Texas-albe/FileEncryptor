@@ -53,7 +53,8 @@ bool fe_truncate_file(const std::string& path, uint64_t size) {
 bool create_directory_recursive(const std::string& path) {
     // 1.5.2 安全加固：拒绝包含 ".." 的输出目录，避免越权创建目录
     //（如 -o "a/out/../../ESCAPE_X" 会在父级目录外建出 ESCAPE_X）。
-    if (path_has_traversal(path)) return false;
+    // SAF content:// 目录由用户选择器授予，无路径穿越面，跳过该检查（桌面路径模式不变）。
+    if (path.rfind("content://", 0) != 0 && path_has_traversal(path)) return false;
     if (path.empty()) return true;
 #ifdef _WIN32
     struct _stat64 st;

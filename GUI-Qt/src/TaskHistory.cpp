@@ -166,7 +166,9 @@ bool TaskHistory::append(const TaskRecord& r,QString& err) {
     if(path.isEmpty()) { err=th("无法确定用户配置目录"); return false; }
     QDir d;
     if(!d.mkpath(dir())) { err=th("无法创建历史目录"); return false; }
-    // 历史目录收紧为 0700
+    // 目录收紧为 0700。
+    // 注意：Windows 上 QFile::setPermissions 的权限位只映射只读属性，0700 实为 no-op，
+    // 文件实际继承所在目录 ACL；要真实收紧须显式 DACL（SetNamedSecurityInfo）。
     QFile::setPermissions(dir(),QFileDevice::ReadOwner|QFileDevice::WriteOwner|QFileDevice::ExeOwner);
 
     QFile f(path);
@@ -174,7 +176,7 @@ bool TaskHistory::append(const TaskRecord& r,QString& err) {
         err=f.errorString();
         return false;
     }
-    // 历史文件收紧为 0600
+    // 历史文件收紧为 0600（Windows 上同为 no-op，见上方说明）
     f.setPermissions(QFile::ReadOwner|QFile::WriteOwner);
     QTextStream ts(&f);
     ts.setEncoding(QStringConverter::Utf8);
@@ -231,12 +233,14 @@ bool TaskHistory::save(const QVector<TaskRecord>& records,QString& err) {
     if(path.isEmpty()) { err=th("无法确定用户配置目录"); return false; }
     QDir d;
     if(!d.mkpath(dir())) { err=th("无法创建历史目录"); return false; }
+    // 0700：Windows 上为 no-op（只映射只读属性），真实收紧需显式 DACL
     QFile::setPermissions(dir(),QFileDevice::ReadOwner|QFileDevice::WriteOwner|QFileDevice::ExeOwner);
     QFile f(path);
     if(!f.open(QIODevice::WriteOnly|QIODevice::Text|QIODevice::Truncate)) {
         err=f.errorString();
         return false;
     }
+    // 0600：Windows 上同为 no-op，见上方说明
     f.setPermissions(QFile::ReadOwner|QFile::WriteOwner);
     QTextStream ts(&f);
     ts.setEncoding(QStringConverter::Utf8);

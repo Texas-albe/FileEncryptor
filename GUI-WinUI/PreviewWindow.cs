@@ -51,7 +51,6 @@ public sealed class PreviewWindow
         };
         _nextBtn = new Button { Content = L10n.T("下一个文件(&N)") };
         var closeBtn = new Button { Content = L10n.T("关闭(&C)") };
-        closeBtn.Click += (_, _) => { _cli.Cancel(); _window.Close(); };
 
         _bytes.ValueChanged += (_, _) => { if (_done) NextRequested?.Invoke(); };
         _nextBtn.Click += (_, _) => NextRequested?.Invoke();
@@ -94,6 +93,9 @@ public sealed class PreviewWindow
             Content = panel,
         };
         _window.AppWindow.Resize(new Windows.Graphics.SizeInt32(900, 620));
+
+        // 关闭按钮订阅放在 _window 赋值后：lambda 引用 _window，前置会撞 CS8602（未赋值字段）
+        closeBtn.Click += (_, _) => { _cli.Cancel(); _window.Close(); };
 
         _cli.RawStdout += OnRaw;
         _cli.OutputLine += OnLine;

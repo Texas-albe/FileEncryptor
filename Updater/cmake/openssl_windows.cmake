@@ -1,5 +1,5 @@
 # Windows 静态 OpenSSL：推导 MSVC/SDK 环境后源码构建
-# 幂等：头与静态库齐备则跳过；产物留在构建目录，不污染源码树
+# 幂等：齐备则跳过，不污染源码树
 # 用法：run_openssl_windows_build(SRC_DIR <third_party/openssl 绝对路径>)
 
 function(run_openssl_windows_build SRC_DIR)
@@ -8,7 +8,7 @@ function(run_openssl_windows_build SRC_DIR)
   if(NOT FE_OSSL_PREFIX)
     set(FE_OSSL_PREFIX "${CMAKE_BINARY_DIR}/openssl" CACHE PATH "Windows OpenSSL 静态库前缀")
   endif()
-  # 仓库级共享前缀：VS 多配置与多个构建目录复用，省一轮约 30 分钟的源码构建
+  # 共享前缀：复用省 30 分钟构建
   if(FE_OSSL_PREFIX STREQUAL "${CMAKE_BINARY_DIR}/openssl"
      AND EXISTS "${CMAKE_SOURCE_DIR}/out/openssl/include/openssl/ssl.h")
     set(FE_OSSL_PREFIX "${CMAKE_SOURCE_DIR}/out/openssl" CACHE PATH "Windows OpenSSL 静态库前缀" FORCE)
@@ -37,7 +37,7 @@ function(run_openssl_windows_build SRC_DIR)
   get_filename_component(_msvc "${_msvc}" DIRECTORY)
   get_filename_component(_msvc "${_msvc}" DIRECTORY)
 
-  # ---- SDK 版本：从 CMake 记录的库搜索路径认，不写死版本号 ----
+  # 从 CMake 路径认 SDK 版本，不写死
   # 项为 <SDK>/Lib/<ver>/<mod>/<arch>，上溯两级到 SDK 根
   set(_sdk_root "")
   set(_sdk_ver "")
@@ -53,7 +53,7 @@ function(run_openssl_windows_build SRC_DIR)
     endif()
   endforeach()
 
-  # rc.exe 只在 SDK 的 bin 下；个别 SDK 有 Lib/Include 却没 bin，故按版本扫一遍
+  # rc.exe 仅在 SDK bin，按版本扫
   set(_sdk_bin "")
   if(_sdk_root)
     file(GLOB _bins LIST_DIRECTORIES true "${_sdk_root}/bin/*/x64")
@@ -88,7 +88,7 @@ function(run_openssl_windows_build SRC_DIR)
   set(_sdk_inc "${_sdk_root}/Include/${_sdk_ver}")
   set(_sdk_lib "${_sdk_root}/Lib/${_sdk_ver}/ucrt/x64;${_sdk_root}/Lib/${_sdk_ver}/um/x64")
 
-  # ---- nmake 直接调 cl/link/rc，环境必须齐 ----
+  # nmake 直调工具，环境须齐
   set(ENV{PATH} "${_cl_dir};${_sdk_bin};${_perl_dir};$ENV{PATH}")
   set(ENV{INCLUDE} "${_msvc}/include;${_sdk_inc}/shared;${_sdk_inc}/um;${_sdk_inc}/ucrt")
   set(ENV{LIB} "${_msvc}/lib/x64;${_sdk_lib}")

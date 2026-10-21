@@ -5,6 +5,14 @@
 #include <vector>
 #include <sys/stat.h>
 
+#ifdef _WIN32
+#include <io.h>
+#include <fcntl.h>
+#else
+#include <fcntl.h>
+#include <unistd.h>
+#endif
+
 #include <sodium.h>
 
 #include "FileEncryptor.hpp"    // open_stream / ProgressInfo / CryptoMode / 常量 / 路径工具
@@ -189,17 +197,32 @@ bool fe_save_progress(const std::string& out_path, uint64_t processed_chunks,
 
     std::string prog_path = out_path + ".prs";
     std::string temp_prog = prog_path + ".tmp";
-    // temp 用 trunc 打开即可覆盖残留（上次 rename 失败遗留的 tmp 会作为本次源被重写），
-    // 无需逐次 unlink 预清理——每省一次元数据操作，对每 0.5s 一次的节流保存更友好。
-    std::ofstream f;
-    if (!open_stream(f, temp_prog, std::ios::binary | std::ios::trunc)) return false;
-    f.write(reinterpret_cast<const char*>(&info), sizeof(info));
-    if (!f.good()) {
-        f.close();
+    // H5d：.prs.tmp 路径确定性可预测（>=64MiB 加密每 0.5s 保存一次），
+    // ofstream(trunc) 会跟随攻击者预置的符号链接，把进度写到库外任意文件。
+    // 改为先 unlink 清掉残留 / 旧链接（unlink 只删链接本身、不跟随），再以
+    // O_EXCL/no-follow 独占创建；两步之间若被换链，O_EXCL 必然失败，
+    // 不会写穿（Windows 无 O_NOFOLLOW，两阶段之间竞态的残留风险在此标注）。
+    remove_file_utf8(temp_prog);
+    int pfd = -1;
+#ifdef _WIN32
+    pfd = _wopen(utf8_to_wstring(temp_prog).c_str(),
+                 _O_WRONLY | _O_CREAT | _O_EXCL | _O_BINARY, _S_IREAD | _S_IWRITE);
+#else
+    pfd = ::open(temp_prog.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0600);
+#endif
+    if (pfd < 0) return false;
+    bool wrote = false;
+#ifdef _WIN32
+    wrote = _write(pfd, &info, (unsigned int)sizeof(info)) == (int)sizeof(info);
+    _close(pfd);
+#else
+    wrote = ::write(pfd, &info, sizeof(info)) == (ssize_t)sizeof(info);
+    ::close(pfd);
+#endif
+    if (!wrote) {
         remove_file_utf8(temp_prog);
         return false;
     }
-    f.close();
     // 关键：Windows std::rename 在目标已存在时失败(EEXIST)，改用 replace_file_utf8()
     //（MoveFileExW 替换写）保证每块后都能覆盖更新进度文件。
     if (!replace_file_utf8(temp_prog, prog_path)) {

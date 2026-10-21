@@ -3,6 +3,7 @@
 #include <vector>
 #include <functional>
 #include <fstream>
+#include <iostream>
 #include <atomic>
 #include <mutex>
 #include <cstdio>
@@ -20,9 +21,9 @@
 #endif
 
 #define FE_VERSION_MAJOR 3
-#define FE_VERSION_MINOR 0
-#define FE_VERSION_PATCH 1
-#define FE_VERSION_STRING "3.0.1"
+#define FE_VERSION_MINOR 1
+#define FE_VERSION_PATCH 0
+#define FE_VERSION_STRING "3.1.0"
 
 // --force-decrypt：解密时容忍块校验失败与明文哈希不匹配（强制恢复损坏数据）
 extern bool g_force_decrypt;
@@ -50,8 +51,27 @@ std::string replace_basename(const std::string& path,const std::string& newbase)
 // 递归创建目录
 
 // 非帧模式的单行 \r 进度条（批量与入盘共用同一观感）；finish=true 时收尾换行。
+// progress_out 指定输出流，默认 stdout；管道输出模式传 &std::cerr 避免污染数据通道。
 void print_progress(size_t processed,size_t total,
-    std::chrono::steady_clock::time_point start, bool finish=false);
+    std::chrono::steady_clock::time_point start, bool finish=false,
+    std::ostream* progress_out=&std::cout);
+
+// 管道数据通道（--stdout）：直接走 C `FILE*` 二进制写。
+// 绕开 std::cout 与 C stdio 的同步缓冲——二者交错（进度条写 cerr、数据写 cout）
+// 会导致字节丢失/错位、输出大小不确定，故数据通道不经 iostream。
+struct RawStreamBuf : std::streambuf {
+    FILE* fp=nullptr;
+    explicit RawStreamBuf(FILE* f): fp(f) {}
+protected:
+    int_type overflow(int_type c) override {
+        if(c==traits_type::eof()) return traits_type::not_eof(c);
+        return (fputc((char)c,fp)!=EOF) ? c : traits_type::eof();
+    }
+    std::streamsize xsputn(const char* s, std::streamsize n) override {
+        return (std::streamsize)fwrite(s,1,(size_t)n,fp);
+    }
+    int sync() override { return fflush(fp)==0 ? 0 : -1; }
+};
 
 // 判断路径是否为已存在的目录（供单文件 -e/-d 拒绝目录输入时使用）
 bool fe_path_is_directory(const std::string& path);
@@ -69,7 +89,7 @@ bool path_is_symlink(const std::string& path);
 bool validate_io_paths(const std::string& in_path,const std::string& out_path,bool silent);
 
 // UTF-8 安全原子替换（Win MoveFileExW REPLACE_EXISTING / POSIX rename）
-// 用于「先写 .prt 再落盘」，避免半截明文残留。
+// 用于「失败即安全擦除半成品输出」，避免半截明文残留。
 bool replace_file_utf8(const std::string& from,const std::string& to);
 
 // 原子输出守卫：先写 <final>.fe_tmp_<hash>，commit() 才落到最终路径。
@@ -114,7 +134,9 @@ bool encrypt_file(const std::string& in_path,
     const WatermarkSpec* wm=nullptr,    // 非空且 enabled：尾部追加机器指纹 + RSA 签名水印
     const unsigned char* ext_salt=nullptr,  // 外部预生成盐（批量预派生 KEK 用；续传时忽略）
     const unsigned char* ext_kek=nullptr,   // 外部预派生 KEK，传入则跳过 Argon2id（续传时忽略）
-    uint32_t chunk_override=0);             // 非 0 且在 [4K,1M] 内：覆盖默认 1MiB 块（库内重加密转 64KB 用）
+    uint32_t chunk_override=0,              // 非 0 且在 [4K,1M] 内：覆盖默认 1MiB 块（库内重加密转 64KB 用）
+    std::istream* in_stream=nullptr,        // 非空时明文来自该流（stdin/管道），不打开 in_path
+    std::ostream* out_stream=nullptr);      // 非空时密文直写该流（--stdout），不落盘、不追加尾部
 
 // 解密文件（支持续传）。ext_key：外部已派生最终密钥，传入则直接复用跳过 KDF/解裹；
 // ext_kek：外部已派生 KEK（批量每文件复用），传入则跳过 Argon2id，仍按版本解裹 DEK。
@@ -129,7 +151,9 @@ bool decrypt_file(const std::string& in_path,
     const unsigned char* ext_kek=nullptr, size_t ext_kek_len=0,
     bool verify_only=false,
     size_t preview_bytes=0,
-    const std::string& asym_identity=std::string());  // >0 时进入预览解密；asym_identity 非空=非对称恢复
+    const std::string& asym_identity=std::string(),
+    bool force_overwrite=false,
+    std::ostream* out_stream=nullptr);  // 非空时明文直写该流（--stdout），不落盘、不续传、不原子rename
 
 // 只读元数据 / 校验（功能2 / 功能3）
 // 不解密、不校验密钥，纯元数据预览（功能2 文件头信息查看器）。

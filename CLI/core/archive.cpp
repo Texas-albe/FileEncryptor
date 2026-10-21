@@ -2,6 +2,7 @@
 #include "FileEncryptor.hpp"   // create_directory_recursive / remove_file_utf8 / 路径工具
 #include "util/byte_io.hpp"
 #include "util/hex.hpp"
+#include "util/path_norm.hpp"
 
 #include <algorithm>
 #include <cerrno>
@@ -31,6 +32,7 @@ using fe::util::put_le32;
 using fe::util::put_le64;
 using fe::util::get_le32;
 using fe::util::get_le64;
+using fe::util::normalize_rel;
 
 const char ARCHIVE_MAGIC[8] = { 'F','E','P','K','1','\r','\n',0 };
 
@@ -40,50 +42,8 @@ const unsigned char TRAILER[8] = { 'F','E','P','K','E','N','D','!' };
 const size_t      kIoBuf = 1u << 20;
 const int         kMaxDepth = 1024;
 
-// 路径规范化：统一分隔符为 '/'，去掉重复与前导分隔符。
-// 返回 false 表示路径本身非法（含 ".."、绝对路径、盘符、空组件）。
-bool normalize_rel(const std::string& in, std::string& out) {
-    std::string s;
-    s.reserve(in.size());
-    for (char c : in) s.push_back((c=='\\') ? '/' : c);
-    // 绝对路径与盘符一律拒绝：归档内路径必须能安全地拼到输出目录下面
-    if (!s.empty() && (s[0]=='/' || s[0]=='\\')) return false;
-    if (s.size()>=2 && s[1]==':') return false;
-    if (s.find('\0')!=std::string::npos) return false;
-
-    std::vector<std::string> parts;
-    size_t i = 0;
-    while (i < s.size()) {
-        size_t j = s.find('/', i);
-        if (j == std::string::npos) j = s.size();
-        std::string seg = s.substr(i, j - i);
-        if (seg == "..") return false;             // 穿越
-        if (!seg.empty() && seg != ".") parts.push_back(seg);
-        i = j + 1;
-    }
-    if (parts.empty()) return false;
-    for (const auto& p : parts) {
-        if (p.size() > ARCHIVE_MAX_PATH) return false;
-        // Windows 保留名与非法字符：解包端要能落地，打包端就先拒
-        for (char c : p) {
-            if ((unsigned char)c < 0x20) return false;
-            if (c==':' || c=='*' || c=='?' || c=='"' || c=='<' || c=='>' || c=='|') return false;
-        }
-        std::string tail = p;
-        for (auto& c : tail) c = (char)std::tolower((unsigned char)c);
-        if (tail.size()>=4) {
-            std::string stem = tail.substr(tail.find_last_of('.')==std::string::npos
-                                           ? 0 : tail.find_last_of('.'));
-            if (stem == "con" || stem == "prn" || stem == "aux" || stem == "nul") return false;
-        }
-    }
-    out.clear();
-    for (size_t k = 0; k < parts.size(); ++k) {
-        if (k) out.push_back('/');
-        out += parts[k];
-    }
-    return true;
-}
+// 路径规范化实现已抽到 util/path_norm.hpp（打包/解包/fuzz 共用同一判定，
+// 保留名覆盖 CON/PRN/AUX/NUL/COM1-9/LPT1-9 且对带扩展名形式生效）。
 
 std::string base_name_of(const std::string& p) {
     size_t pos = p.find_last_of("/\\");
@@ -111,6 +71,31 @@ bool is_dir_path(const std::string& p) {
 #else
     struct stat st;
     if (::stat(p.c_str(), &st) != 0) return false;
+    return S_ISDIR(st.st_mode);
+#endif
+}
+
+// H5b：只对「真实目录」为真。符号链接 / 重解析点即使指向目录也为假——
+// remove_tree 与目录条目落地都靠它避免顺着链接递归或创建到树外。
+bool is_real_dir(const std::string& p) {
+#ifdef _WIN32
+    // H5b：句柄级复核。GetFileAttributesW 的属性位与后续枚举之间可被换链
+    // （TOCTOU），故以 OPEN_REPARSE_POINT 打开目录自身再判属性，不跟随链接。
+    const std::wstring w = utf8_to_wstring(p);
+    HANDLE h = CreateFileW(w.c_str(), FILE_READ_ATTRIBUTES,
+                           FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                           nullptr, OPEN_EXISTING,
+                           FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+    if (h == INVALID_HANDLE_VALUE) return false;
+    BY_HANDLE_FILE_INFORMATION fi{};
+    const bool ok = GetFileInformationByHandle(h, &fi) &&
+                    (fi.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) &&
+                    !(fi.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT);
+    CloseHandle(h);
+    return ok;
+#else
+    struct stat st;
+    if (::lstat(p.c_str(), &st) != 0) return false;
     return S_ISDIR(st.st_mode);
 #endif
 }
@@ -492,6 +477,12 @@ bool archive_extract(const std::string& archive_path, const std::string& out_dir
         std::string target = join_path(out_dir, rel);
 
         if (flags & ARCHIVE_FLAG_DIR) {
+            // M24：末级已存在且为符号链接时拒绝落地——create_directory_recursive
+            // 内部 stat 会跟随链接视为成功，后续文件条目便会经链接写到库外。
+            if (path_is_symlink(target)) {
+                err = "refusing to extract directory entry over a symlink: " + target;
+                return false;
+            }
             if (!create_directory_recursive(target)) {
                 err = "cannot create directory " + target;
                 return false;
@@ -669,7 +660,7 @@ bool remove_tree(const std::string& dir) {
         std::string p = join_path(dir, n);
         // 只对真实目录递归；符号链接 / 重解析点删链接本身，
         // 跟进去就可能删到这棵树之外
-        if (is_dir_path(p)) remove_tree(p);
+        if (is_real_dir(p)) remove_tree(p);
         else remove_file_utf8(p);
     }
     // 目录不能用 remove_file_utf8：Windows 上 _wremove 删不了目录，

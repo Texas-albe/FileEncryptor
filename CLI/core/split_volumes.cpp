@@ -36,9 +36,10 @@ const uint64_t kMinVolume = 1ull << 20;      // 1 MiB
 const uint32_t kMaxVolumes = 99999;          // 枚举兜底
 const size_t   kIoBufMax  = 16u << 20;      // 16 MiB
 
+// 低危（D 组）：窄字符 ifstream 在 Windows 上按 ACP 解析，中文/非 ASCII 卷名会
+// 静默判不存在；改走宽字符通道（fe_file_exists -> open_stream/_wstat64）。
 bool file_exists(const std::string& p) {
-    std::ifstream f(p, std::ios::binary);
-    return f.good();
+    return fe_file_exists(p);
 }
 
 std::string strip_ptd(const std::string& p) {
@@ -235,8 +236,10 @@ bool split_file(const std::string& src, uint64_t volume_bytes,
     uint32_t idx = 0;
     for (;;) {
         std::string vp = join(dir, volume_path(base + ".ptd", idx + 1));
-        std::ofstream out(vp, std::ios::binary | std::ios::trunc);
-        if (!out.good()) { err = "cannot write " + vp; return false; }
+        // H5a：卷文件名可预测，ofstream(trunc) 会跟随预置的符号链接并截断
+        // 链接指向的任意文件；O_EXCL 对已存在的名字直接失败，不创建不跟随。
+        ExclusiveFile out(vp);
+        if (!out.ok()) { err = "cannot write " + vp; return false; }
 
         uint64_t written = 0;
         while (written < volume_bytes) {
@@ -244,11 +247,9 @@ bool split_file(const std::string& src, uint64_t volume_bytes,
             in.read(buf.data(), (std::streamsize)want);
             std::streamsize got = in.gcount();
             if (got <= 0) break;
-            out.write(buf.data(), got);
-            if (!out.good()) { err = "write failed: " + vp; return false; }
+            if (!out.write(buf.data(), (size_t)got)) { err = "write failed: " + vp; return false; }
             written += (uint64_t)got;
         }
-        out.close();
 
         ++idx;
         if (written < volume_bytes) break;          // 最后一卷通常不满

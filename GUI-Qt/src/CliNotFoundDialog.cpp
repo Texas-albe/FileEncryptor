@@ -108,15 +108,24 @@ void CliNotFoundDialog::onCancel() {
 void CliNotFoundDialog::onDownload() {
     m_downloadBtn->setEnabled(false);
     m_retryBtn->setEnabled(false);
+    m_redirects = 0;   // 每次用户主动下载重置重定向计数
     m_statusLabel->setText(tr("正在从 GitHub 检索可用版本…"));
-    QUrl tagsUrl(QStringLiteral("%1/tags").arg(kGithubApi)); QNetworkRequest req(tagsUrl);
+    startTagsRequest(QUrl(QStringLiteral("%1/tags").arg(kGithubApi)));
+}
+
+// M47：统一入口——关闭自动重定向，3xx 由 followRedirect 手动跟随并复检白名单
+void CliNotFoundDialog::startTagsRequest(const QUrl& url) {
+    if (!isAllowedDownloadHost(url)) { failDownload(tr("下载地址不在允许的域名白名单内")); return; }
+    QNetworkRequest req(url);
     req.setHeader(QNetworkRequest::UserAgentHeader, "FileEncryptorGUI");
+    req.setRedirectPolicy(QNetworkRequest::NoRedirectPolicy);
     m_currentReply = m_net->get(req);
     connect(m_currentReply, &QNetworkReply::finished, this, &CliNotFoundDialog::onTagsFinished);
 }
 
 void CliNotFoundDialog::onTagsFinished() {
     if (!m_currentReply) return;
+    if (followRedirect(m_currentReply, &CliNotFoundDialog::startTagsRequest)) return;
     QNetworkReply::NetworkError err = m_currentReply->error();
     QByteArray data = m_currentReply->readAll();
     m_currentReply->deleteLater();
@@ -136,14 +145,21 @@ void CliNotFoundDialog::onTagsFinished() {
     }
     if (idx < 0) { m_statusLabel->setText(tr("未找到预期的 CLI %1（要求 tag GUI%2_CLI%1），已中止下载").arg(cliVer, guiVer)); m_downloadBtn->setEnabled(true); m_retryBtn->setEnabled(true); return; }
     m_statusLabel->setText(tr("找到 %1，正在获取下载链接…").arg(want));
-    QUrl relUrl(QStringLiteral("%1/releases/tags/%2").arg(kGithubApi, want)); QNetworkRequest req(relUrl);
+    startReleaseRequest(QUrl(QStringLiteral("%1/releases/tags/%2").arg(kGithubApi, want)));
+}
+
+void CliNotFoundDialog::startReleaseRequest(const QUrl& url) {
+    if (!isAllowedDownloadHost(url)) { failDownload(tr("下载地址不在允许的域名白名单内")); return; }
+    QNetworkRequest req(url);
     req.setHeader(QNetworkRequest::UserAgentHeader, "FileEncryptorGUI");
+    req.setRedirectPolicy(QNetworkRequest::NoRedirectPolicy);
     m_currentReply = m_net->get(req);
     connect(m_currentReply, &QNetworkReply::finished, this, &CliNotFoundDialog::onReleaseFinished);
 }
 
 void CliNotFoundDialog::onReleaseFinished() {
     if (!m_currentReply) return;
+    if (followRedirect(m_currentReply, &CliNotFoundDialog::startReleaseRequest)) return;
     QByteArray data = m_currentReply->readAll();
     m_currentReply->deleteLater();
     m_currentReply = nullptr;
@@ -158,7 +174,6 @@ void CliNotFoundDialog::onReleaseFinished() {
         m_downloadBtn->setEnabled(true); m_retryBtn->setEnabled(true); return;
     }
     m_assetUrl = downloadUrl;
-    m_shaWarned = false;
     QFileInfo fi(downloadUrl);
     m_savePath = QDir(FileEncryptorLocator::selfDir()).filePath(fi.fileName());
     m_statusLabel->setText(tr("下载中：%1").arg(fi.fileName()));
@@ -188,20 +203,51 @@ bool CliNotFoundDialog::isAllowedDownloadHost(const QUrl& url) const {
     return false;
 }
 
+// M47：3xx 手动跟随。对重定向目标复检主机白名单，不在白名单即中止下载。
+bool CliNotFoundDialog::followRedirect(QNetworkReply* reply,
+                                       void (CliNotFoundDialog::*restart)(const QUrl&)) {
+    const int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+    if (status < 301 || status > 308) return false;
+    QUrl target = reply->attribute(QNetworkRequest::RedirectionTargetAttribute).toUrl();
+    const QUrl baseUrl = reply->url();   // 先取再 deleteLater
+    reply->deleteLater();
+    m_currentReply = nullptr;
+    // 循环上限：重定向环不该把对话框挂死
+    if (++m_redirects > 20) {
+        m_redirects = 0;
+        failDownload(tr("重定向次数过多，已中止下载"));
+        return true;
+    }
+    // 相对 Location 按当前 url 解析
+    if (!target.isEmpty() && target.isRelative()) target = baseUrl.resolved(target);
+    if (target.isEmpty() || !isAllowedDownloadHost(target)) {
+        failDownload(tr("重定向地址不在允许的域名白名单内"));
+        return true;
+    }
+    (this->*restart)(target);
+    return true;
+}
+
 void CliNotFoundDialog::startDownload(const QString& url, const QString& savePath) {
     QUrl dlUrl(url);
     if (!isAllowedDownloadHost(dlUrl)) { failDownload(tr("下载地址不在允许的域名白名单内")); return; }
     QNetworkRequest req(dlUrl);
     req.setHeader(QNetworkRequest::UserAgentHeader, "FileEncryptorGUI");
+    req.setRedirectPolicy(QNetworkRequest::NoRedirectPolicy);
     m_currentReply = m_net->get(req);
     connect(m_currentReply, &QNetworkReply::downloadProgress, this, &CliNotFoundDialog::onDownloadProgress);
     connect(m_currentReply, &QNetworkReply::finished, this, &CliNotFoundDialog::onDownloadFinished);
+}
+
+void CliNotFoundDialog::startAssetRequest(const QUrl& url) {
+    startDownload(url.toString(), m_savePath);
 }
 
 void CliNotFoundDialog::onDownloadProgress(qint64 received, qint64 total) { if (total > 0) m_progress->setValue(static_cast<int>(received * 100 / total)); }
 
 void CliNotFoundDialog::onDownloadFinished() {
     if (!m_currentReply) return;
+    if (followRedirect(m_currentReply, &CliNotFoundDialog::startAssetRequest)) return;
     QNetworkReply::NetworkError err = m_currentReply->error();
     QByteArray data = m_currentReply->readAll();
     m_currentReply->deleteLater();
@@ -221,34 +267,44 @@ void CliNotFoundDialog::onDownloadFinished() {
 
 void CliNotFoundDialog::startShaCheck() {
     // 拉取 .sha256 做完整性比对
-    QUrl shaUrl(m_assetUrl + QStringLiteral(".sha256"));
-    if (!isAllowedDownloadHost(shaUrl)) { failDownload(tr("校验文件地址不在白名单内")); return; }
+    startShaRequest(QUrl(m_assetUrl + QStringLiteral(".sha256")));
+}
+
+void CliNotFoundDialog::startShaRequest(const QUrl& url) {
+    if (!isAllowedDownloadHost(url)) { failDownload(tr("校验文件地址不在白名单内")); return; }
     m_statusLabel->setText(tr("正在校验文件完整性…"));
-    QNetworkRequest req(shaUrl);
+    QNetworkRequest req(url);
     req.setHeader(QNetworkRequest::UserAgentHeader, "FileEncryptorGUI");
+    req.setRedirectPolicy(QNetworkRequest::NoRedirectPolicy);
     m_currentReply = m_net->get(req);
     connect(m_currentReply, &QNetworkReply::finished, this, &CliNotFoundDialog::onShaDownloaded);
 }
 
 void CliNotFoundDialog::onShaDownloaded() {
     if (!m_currentReply) return;
+    if (followRedirect(m_currentReply, &CliNotFoundDialog::startShaRequest)) return;
     const QNetworkReply::NetworkError err = m_currentReply->error();
     const QByteArray shaBody = m_currentReply->readAll();
     m_currentReply->deleteLater();
     m_currentReply = nullptr;
 
-    // 无校验文件则跳过校验
+    // M47：校验文件拉取失败即中止下载，绝不跳过校验直接安装（对齐 Updater 的拒装策略）
     if (err != QNetworkReply::NoError) {
-        m_shaWarned = true;
-        installFromTemp();
+        QFile::remove(m_tempPath);
+        m_tempPath.clear();
+        m_assetData.clear();
+        failDownload(tr("获取 SHA256 校验文件失败，已中止下载"));
         return;
     }
     // 解析 64 位十六进制摘要
     const QRegularExpression re(QStringLiteral("([0-9a-fA-F]{64})"));
     const QRegularExpressionMatch m = re.match(QString::fromLatin1(shaBody));
+    // M47：格式不符同样中止，不再静默跳过校验
     if (!m.hasMatch()) {
-        m_shaWarned = true;
-        installFromTemp();
+        QFile::remove(m_tempPath);
+        m_tempPath.clear();
+        m_assetData.clear();
+        failDownload(tr("SHA256 校验文件格式不符，已中止下载"));
         return;
     }
     const QString expected = m.captured(1).toLower();
@@ -288,9 +344,7 @@ void CliNotFoundDialog::installFromTemp() {
         QFileDevice::ReadGroup|QFileDevice::ExeGroup|
         QFileDevice::ReadOther|QFileDevice::ExeOther);
 #endif
-    QString msg = tr("下载完成：%1").arg(QFileInfo(m_savePath).fileName());
-    if (m_shaWarned) msg += tr("（未提供 SHA256 校验文件，已跳过完整性校验）");
-    m_statusLabel->setText(msg);
+    m_statusLabel->setText(tr("下载完成：%1").arg(QFileInfo(m_savePath).fileName()));
     m_progress->setValue(100);
     m_retryBtn->setEnabled(true);
 }
