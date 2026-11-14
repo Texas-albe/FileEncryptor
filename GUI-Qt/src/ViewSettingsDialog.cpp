@@ -16,6 +16,8 @@ ViewSettingsDialog::ViewSettingsDialog(const QString& currentPath, QWidget* pare
     setMinimumWidth(420);
 
     auto* root = new QVBoxLayout(this);
+    root->setContentsMargins(14, 12, 14, 12);
+    root->setSpacing(8);
 
     auto* tip = new QLabel(tr("选择一张图片作为主窗口背景。背景会随窗口大小自适应铺满，"
                              "并在主题切换 / 重启后保持生效。"));
@@ -31,10 +33,12 @@ ViewSettingsDialog::ViewSettingsDialog(const QString& currentPath, QWidget* pare
     root->addWidget(m_preview);
     updatePreview(m_current);
 
-    // 操作按钮行
+    // 操作
     auto* row = new QHBoxLayout;
     m_btnChoose = new QPushButton(tr("选择图片..."));
     m_btnClear  = new QPushButton(tr("清除背景"));
+    m_btnChoose->setProperty("uiRole", "secondary");
+    m_btnClear->setProperty("uiRole", "quiet");
     row->addWidget(m_btnChoose);
     row->addWidget(m_btnClear);
     row->addStretch();
@@ -42,6 +46,8 @@ ViewSettingsDialog::ViewSettingsDialog(const QString& currentPath, QWidget* pare
 
     // 标准确定/取消
     auto* box = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
+    if (auto* ok = box->button(QDialogButtonBox::Ok)) ok->setProperty("uiRole", "primary");
+    if (auto* cancel = box->button(QDialogButtonBox::Cancel)) cancel->setProperty("uiRole", "secondary");
     root->addWidget(box);
 
     connect(m_btnChoose, &QPushButton::clicked, this, &ViewSettingsDialog::onChoose);

@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+	<!-- 禁止备份与换机迁移：库文件、凭据与偏好都不应离开本机 -->
+	<application android:allowBackup="false"
+	             android:dataExtractionRules="@xml/data_extraction_rules"
+	             android:fullBackupContent="@xml/backup_rules"
+	             android:icon="@mipmap/appicon" android:roundIcon="@mipmap/appicon_round" android:supportsRtl="true">
+		<!-- 打开库内文件：缓存明文经 FileProvider 授权给系统应用，禁止 file:// 暴露 -->
+		<provider
+			android:name="androidx.core.content.FileProvider"
+			android:authorities="${applicationId}.fileprovider"
+			android:exported="false"
+			android:grantUriPermissions="true">
+			<meta-data
+				android:name="android.support.FILE_PROVIDER_PATHS"
+				android:resource="@xml/fe_file_paths" />
+		</provider>
+		        <!-- 入向分享的 intent-filter 改由 MainActivity 的 [IntentFilter] 特性声明；不在 manifest 重复声明 activity，以免覆盖 MAUI 自动生成的 MAIN/LAUNCHER 入口导致桌面图标丢失 -->
+	</application>
+	<uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+	<uses-permission android:name="android.permission.INTERNET" />
+	<!-- 全文件访问：native 库需直接 open() 外部存储卷上的加密库目录（卸载后保留） -->
+	<uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
+	<!-- Android 11 以下无「所有文件访问」特權頁：共享存储写入走旧版运行时权限 -->
+	<uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+	                  android:maxSdkVersion="29" />
+	<uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
+	                  android:maxSdkVersion="32" />
+	<!-- 应用锁：调用系统指纹/面容验证 -->
+	<uses-permission android:name="android.permission.USE_BIOMETRIC" />
+	<!-- 从第三方查看器返回后回收其进程，防止后台常驻持有明文预览 -->
+	<uses-permission android:name="android.permission.KILL_BACKGROUND_PROCESSES" />
+	<!-- 检查更新：下载新 APK 后经系统安装器安装 -->
+	<uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+	<!-- 批量任务通知栏进度 + 后台保活：前台服务（dataSync 类型） -->
+	<uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+	<uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+	<!-- 音乐「应用外播放」：前台服务（mediaPlayback 类型）维持后台音频与通知栏控制 -->
+	<uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+	<!-- Android 13+ 通知运行时权限：不授权则通知栏进度不可见 -->
+	<uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+</manifest>

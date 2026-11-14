@@ -18,7 +18,7 @@ public:
     // 是否二次确认
     void setRequireConfirm(bool on);
 
-    // 取出密码并清空内部
+    // 取出密码并清空
     std::vector<unsigned char> takePassword();
 
 private slots:
@@ -27,7 +27,7 @@ private slots:
 
 private:
     bool validate(QString& reason);
-    // 放置显隐眼睛按钮
+    // 放置显隐眼睛
     void setupEye(QLineEdit* le);
 
     QLineEdit*  m_pw = nullptr;

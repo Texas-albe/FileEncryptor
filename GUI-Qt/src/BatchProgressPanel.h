@@ -1,4 +1,4 @@
-// 批量任务帧式进度面板
+// 批量任务帧式进
 #pragma once
 #include <QWidget>
 
@@ -10,21 +10,21 @@ class BatchProgressPanel : public QWidget {
 public:
     explicit BatchProgressPanel(QWidget* parent = nullptr);
 
-    // 重建行：汇总 + 线程行
+    // 重建行
     void setThreadCount(int n);
-    // 渲染 CLI 帧（整帧覆盖）
+    // 渲染 CLI 帧
     void applyFrame(const QStringList& lines);
-    // 空闲态：汇总行 + 占位行
+    // 空闲态
     void showIdle(const QString& summary, int threads);
-    // 运行前清空（保留结构）
+    // 运行前清空
     void clearAll();
 
-    // 推算传给 CLI 的列宽
+    // 推算传给 CLI
     int recommendedColumns() const;
-    // 显式设定列宽并同步 CLI
+    // 显式设定列宽并
     void setColumns(int columns);
 
-    // 与 CLI 一致的格式化布局
+    // 与 CLI 一致
     static QString fmtBytes(qint64 bytes);
     static QString fmtRate(double bytesPerSec);
     static QString fmtEta(double seconds);

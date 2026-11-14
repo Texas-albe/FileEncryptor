@@ -1,5 +1,5 @@
 #include "archive.hpp"
-#include "FileEncryptor.hpp"   // create_directory_recursive / remove_file_utf8 / 路径工具
+#include "FileEncryptor.hpp"   // create_directory_recursive / remove_file_utf8 / 路径工
 #include "util/byte_io.hpp"
 #include "util/hex.hpp"
 #include "util/path_norm.hpp"
@@ -42,8 +42,8 @@ const unsigned char TRAILER[8] = { 'F','E','P','K','E','N','D','!' };
 const size_t      kIoBuf = 1u << 20;
 const int         kMaxDepth = 1024;
 
-// 路径规范化实现已抽到 util/path_norm.hpp（打包/解包/fuzz 共用同一判定，
-// 保留名覆盖 CON/PRN/AUX/NUL/COM1-9/LPT1-9 且对带扩展名形式生效）。
+// 路径规范化实现
+// 保留名覆盖 CON/PRN/AUX/NUL
 
 std::string base_name_of(const std::string& p) {
     size_t pos = p.find_last_of("/\\");
@@ -75,12 +75,12 @@ bool is_dir_path(const std::string& p) {
 #endif
 }
 
-// H5b：只对「真实目录」为真。符号链接 / 重解析点即使指向目录也为假——
-// remove_tree 与目录条目落地都靠它避免顺着链接递归或创建到树外。
+// H5b
+// remove_tree 与目录条目落
 bool is_real_dir(const std::string& p) {
 #ifdef _WIN32
-    // H5b：句柄级复核。GetFileAttributesW 的属性位与后续枚举之间可被换链
-    // （TOCTOU），故以 OPEN_REPARSE_POINT 打开目录自身再判属性，不跟随链接。
+    // H5b
+    // （TOCTOU），故
     const std::wstring w = utf8_to_wstring(p);
     HANDLE h = CreateFileW(w.c_str(), FILE_READ_ATTRIBUTES,
                            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
@@ -117,8 +117,8 @@ bool file_mode_time(const std::string& p, uint32_t& mode, int64_t& mtime, uint64
     return true;
 }
 
-// 目录递归：跳过符号链接与重解析点，避免循环与归档到目录外的东西。
-// rel 是归档内相对路径前缀（含顶层目录名，末尾不带 '/'）。
+// 目录递归
+// rel 是归档内相对路
 bool walk_dir(const std::string& fs_path, const std::string& rel,
               const std::vector<std::string>& excludes,
               std::vector<ArchiveEntry>& out, std::string& err, int depth) {
@@ -151,21 +151,21 @@ bool walk_dir(const std::string& fs_path, const std::string& rel,
     std::wstring wpattern = utf8_to_wstring(fs_path + "\\*");
     struct _wfinddata_t fd;
     intptr_t h = _wfindfirst(wpattern.c_str(), &fd);
-    if (h == -1) return true;                 // 空目录 / 不可读：不算失败
+    if (h == -1) return true;                 // 空目录 / 不可读
     std::vector<std::string> subdirs;
     do {
         if (wcscmp(fd.name, L".") == 0 || wcscmp(fd.name, L"..") == 0) continue;
         std::string name = wstring_to_utf8(fd.name);
         std::string child = fs_path + "\\" + name;
         std::string child_rel = rel + "/" + name;
-        // 重解析点（junction / 符号链接目录，属性位 0x0400）一律跳过
+        // 重解析点
         bool is_sub = (fd.attrib & _A_SUBDIR) != 0;
         bool reparse = (fd.attrib & 0x0400) != 0;
         if (is_sub) {
             if (!reparse && !excluded) subdirs.push_back(child);
             continue;
         }
-        if (reparse) continue;                // 文件形态的重解析点也不收
+        if (reparse) continue;                // 文件形态
         std::string norm;
         if (!normalize_rel(child_rel, norm)) continue;
         uint32_t m = 0; int64_t mt = 0; uint64_t sz = 0;
@@ -214,7 +214,7 @@ bool walk_dir(const std::string& fs_path, const std::string& rel,
     return true;
 }
 
-// POSIX 叫 fdopen，MSVC 叫 _fdopen；这里收口，避免 Windows 专名漏到 POSIX 构建
+// POSIX 叫 fdopen
 static inline std::FILE* fdopen_compat(int fd, const char* mode) {
 #ifdef _WIN32
     return _fdopen(fd, mode);
@@ -223,7 +223,7 @@ static inline std::FILE* fdopen_compat(int fd, const char* mode) {
 #endif
 }
 
-// 独占创建的文件：O_EXCL 保证目标此前不存在，不跟随攻击者预置的符号链接。
+// 独占创建
 class ExclFile {
 public:
     explicit ExclFile(const std::string& path) {
@@ -256,7 +256,7 @@ private:
     int err_ = 0;
 };
 
-// 只读打开（宽字符安全），供解包时读源归档
+// 只读打开
 std::FILE* open_read(const std::string& path) {
 #ifdef _WIN32
     std::wstring wpath = utf8_to_wstring(path);
@@ -270,13 +270,13 @@ bool read_exact(std::FILE* f, void* p, size_t n) { return std::fread(p, 1, n, f)
 
 void apply_mode_time(const std::string& path, uint32_t mode, int64_t mtime) {
 #ifdef _WIN32
-    // Windows 只落地只读位：权限模型与 POSIX 不同，强行套 0777 反而会去掉写权限
+    // Windows 只落
     if ((mode & 0200) == 0) _wchmod(utf8_to_wstring(path).c_str(), _S_IREAD);
-    // 用 SetFileTime 而非 _utime 系列：后者的 _utim64 要看 _USE_32BIT_TIME_T
-    // 宏与 CRT 版本，跨工具链不稳；Win32 这条路径没有这种依赖
+    // 用 SetFileTime
+    // 宏与 CRT 版本，跨工具
     if (mtime > 0) {
         ULARGE_INTEGER ft;
-        // Unix 秒 → Windows FILETIME（100ns 自 1601-01-01 起）
+        // Unix 秒 → Windows FILETIME
         ft.QuadPart = ((ULONGLONG)mtime - 11644473600ULL) * 10000000ULL;
         FILETIME t;
         t.dwLowDateTime  = ft.LowPart;
@@ -307,7 +307,7 @@ bool archive_collect(const std::vector<std::string>& inputs,
     out.clear();
     for (const auto& in : inputs) {
         if (is_dir_path(in)) {
-            // 顶层保留目录名，解包出来仍是一棵完整的树
+            // 顶层保留目录名
             std::string top = base_name_of(in);
             std::string norm;
             if (!normalize_rel(top, norm)) {
@@ -335,7 +335,7 @@ bool archive_collect(const std::vector<std::string>& inputs,
         }
     }
     if (out.empty()) { err = "nothing to archive"; return false; }
-    // 同名条目会让解包端互相覆盖，打包端直接拒
+    // 同名条目
     std::vector<std::string> seen;
     seen.reserve(out.size());
     for (const auto& e : out) {
@@ -456,8 +456,8 @@ bool archive_extract(const std::string& archive_path, const std::string& out_dir
     struct Pending { std::string path; uint32_t mode; int64_t mtime; };
     std::vector<Pending> dirs;
 
-    // 顺序处理：目录条目直接建，文件条目缺父目录时现补。
-    // 目录的权限与时间统一留到最后 —— 建子目录会改写父目录的 mtime。
+    // 顺序处理
+    // 目录
     for (uint32_t i = 0; i < count; ++i) {
         unsigned char rec[28];
         if (!read_exact(f, rec, sizeof(rec))) { err = "truncated archive"; return false; }
@@ -477,8 +477,8 @@ bool archive_extract(const std::string& archive_path, const std::string& out_dir
         std::string target = join_path(out_dir, rel);
 
         if (flags & ARCHIVE_FLAG_DIR) {
-            // M24：末级已存在且为符号链接时拒绝落地——create_directory_recursive
-            // 内部 stat 会跟随链接视为成功，后续文件条目便会经链接写到库外。
+            // M24
+            // 内部 stat
             if (path_is_symlink(target)) {
                 err = "refusing to extract directory entry over a symlink: " + target;
                 return false;
@@ -491,7 +491,7 @@ bool archive_extract(const std::string& archive_path, const std::string& out_dir
             continue;
         }
 
-        // 文件：父目录缺失就现补（归档里可能没显式收录空目录之外的父条目）
+        // 文件
         std::string pd = parent_of(target);
         if (pd != last_made) {
             if (!create_directory_recursive(pd)) {
@@ -501,8 +501,8 @@ bool archive_extract(const std::string& archive_path, const std::string& out_dir
             last_made = pd;
         }
 
-        // 已存在：-y 覆盖（先删再以 O_EXCL 建，删的是链接本身不跟到别处），
-        // 否则跳过并保持原样
+        // 已存
+        // 跳过并保持原样
         bool exists = false;
         {
             std::ifstream t;
@@ -511,7 +511,7 @@ bool archive_extract(const std::string& archive_path, const std::string& out_dir
         if (exists) {
             if (!force_overwrite) {
                 fprintf(stderr, "Skipped (exists): %s\n", target.c_str());
-                // 数据仍要读掉，保持流位置
+                // 数据仍要读掉
                 uint64_t left = size;
                 while (left > 0) {
                     size_t want = (size_t)std::min<uint64_t>(left, buf.size());
@@ -539,7 +539,7 @@ bool archive_extract(const std::string& archive_path, const std::string& out_dir
         apply_mode_time(target, mode, mtime);
     }
 
-    // 目录的属性放最后：建子目录时父目录的 mtime 会被改写
+    // 目录
     for (const auto& d : dirs) apply_mode_time(d.path, d.mode, d.mtime);
 
     unsigned char tail[16];
@@ -563,8 +563,8 @@ bool archive_make_temp(const std::string& tag, std::string& out_path, std::strin
     if (n == 0 || n > MAX_PATH) { err = "cannot locate temp directory"; return false; }
     std::string dir = wstring_to_utf8(wbuf);
 #elif defined(__ANDROID__)
-    // Android 没有全局可写 /tmp（app 沙箱内该路径通常根本不存在，直接用会 ENOENT）。
-    // 依次回退：TMPDIR（Termux / adb shell 会设）→ XDG_CACHE_HOME → /data/local/tmp。
+    // Android 没有全局可写
+    // 依次回退
     const char* e = getenv("TMPDIR");
     if (!(e && *e)) e = getenv("XDG_CACHE_HOME");
     std::string dir = (e && *e) ? std::string(e) : "/data/local/tmp";
@@ -574,9 +574,9 @@ bool archive_make_temp(const std::string& tag, std::string& out_path, std::strin
 #endif
     while (!dir.empty() && (dir.back()=='/' || dir.back()=='\\')) dir.pop_back();
 
-    // 名字可预测就能被抢先预置（符号链接 / 占位阻断），故用 16 字节随机量。
-    // 占位文件必须先关闭再删：Windows 上 _wopen 不带 FILE_SHARE_DELETE，
-    // 句柄还开着时删除会失败，于是 archive_write 的 O_EXCL 永远撞 EEXIST。
+    // 名字可预测
+    // 占位文件必须先
+    // 句柄
     for (int attempt = 0; attempt < 8; ++attempt) {
         unsigned char r[16];
         randombytes_buf(r, sizeof(r));
@@ -589,7 +589,7 @@ bool archive_make_temp(const std::string& tag, std::string& out_path, std::strin
             else e = probe.err();
         }
         if (e == 0) {
-            remove_file_utf8(cand);   // 只用来证明这个名字此刻可用
+            remove_file_utf8(cand);   // 只用来证明
             out_path = cand;
             return true;
         }
@@ -600,7 +600,7 @@ bool archive_make_temp(const std::string& tag, std::string& out_path, std::strin
 }
 
 
-// 列目录下一层条目名（不含 . 与 ..）
+// 列目录下一层条
 bool list_dir_names(const std::string& dir, std::vector<std::string>& out) {
     out.clear();
 #ifdef _WIN32
@@ -658,13 +658,13 @@ bool remove_tree(const std::string& dir) {
     if (!list_dir_names(dir, names)) return false;
     for (const auto& n : names) {
         std::string p = join_path(dir, n);
-        // 只对真实目录递归；符号链接 / 重解析点删链接本身，
-        // 跟进去就可能删到这棵树之外
+        // 只对真实目录递
+        // 跟进去
         if (is_real_dir(p)) remove_tree(p);
         else remove_file_utf8(p);
     }
-    // 目录不能用 remove_file_utf8：Windows 上 _wremove 删不了目录，
-    // 少了这步会把空暂存目录留在输出目录里
+    // 目录不能用
+    // 少了这步
 #ifdef _WIN32
     return _wrmdir(utf8_to_wstring(dir).c_str()) == 0;
 #else

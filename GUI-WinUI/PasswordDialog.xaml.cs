@@ -10,9 +10,9 @@ public sealed partial class PasswordDialog : ContentDialog
 {
     public string Password => PwdBox.Password;
 
-    // 是否二次确认。只能由构造函数传入：对象初始化器在构造之后才赋值，
-    // 用 init 属性时构造里读到的永远是默认值 true，确认框会被无条件加进面板。
-    // 解密只需输入一次：无确认框，也不做强度策略校验（既有密码可能不合现行策略）
+    // 是否二次确认。只
+    // 用 init 属性时构造里
+    // 解密只需输入一
     public bool NeedConfirm { get; }
 
     private PasswordBox PwdBox = null!;
@@ -42,7 +42,7 @@ public sealed partial class PasswordDialog : ContentDialog
         };
 
         StrengthText = new TextBlock { FontSize = 12, Text = "" };
-        MatchText = new TextBlock { FontSize = 12, Foreground = new SolidColorBrush(Colors.Red) };
+        MatchText = new TextBlock { FontSize = 12, Foreground = ThemeService.BrushFor("AppDangerBrush", RequestedTheme) };
 
         panel.Children.Add(PwdBox);
         if (NeedConfirm)
@@ -82,38 +82,19 @@ public sealed partial class PasswordDialog : ContentDialog
         var result = PasswordStrengthService.Evaluate(PwdBox.Password);
         if (result.Level == StrengthLevel.Empty) { StrengthText.Text = ""; return; }
         StrengthText.Text = L10n.F("强度：{0}", result.Label);
-        StrengthText.Foreground = new SolidColorBrush(ParseColor(result.ColorHex));
-    }
-
-    // 颜色格式校验，非法回退灰色
-    private static Windows.UI.Color ParseColor(string hex)
-    {
-        if (string.IsNullOrEmpty(hex) || hex[0] != '#') return Colors.Gray;
-        var d = hex.Substring(1);
-        if (d.Length == 6)
+        StrengthText.Foreground = result.Level switch
         {
-            if (byte.TryParse(d.Substring(0, 2), System.Globalization.NumberStyles.HexNumber, null, out var r) &&
-                byte.TryParse(d.Substring(2, 2), System.Globalization.NumberStyles.HexNumber, null, out var g) &&
-                byte.TryParse(d.Substring(4, 2), System.Globalization.NumberStyles.HexNumber, null, out var b))
-                return Windows.UI.Color.FromArgb(0xFF, r, g, b);
-            return Colors.Gray;
-        }
-        if (d.Length == 8)
-        {
-            if (byte.TryParse(d.Substring(0, 2), System.Globalization.NumberStyles.HexNumber, null, out var a) &&
-                byte.TryParse(d.Substring(2, 2), System.Globalization.NumberStyles.HexNumber, null, out var r) &&
-                byte.TryParse(d.Substring(4, 2), System.Globalization.NumberStyles.HexNumber, null, out var g) &&
-                byte.TryParse(d.Substring(6, 2), System.Globalization.NumberStyles.HexNumber, null, out var b))
-                return Windows.UI.Color.FromArgb(a, r, g, b);
-            return Colors.Gray;
-        }
-        return Colors.Gray;
+            StrengthLevel.Weak => ThemeService.BrushFor("AppDangerBrush", RequestedTheme),
+            StrengthLevel.Medium => ThemeService.BrushFor("AppCautionBrush", RequestedTheme),
+            StrengthLevel.Strong => ThemeService.BrushFor("AppSuccessBrush", RequestedTheme),
+            _ => ThemeService.BrushFor("AppTextSecondaryBrush", RequestedTheme),
+        };
     }
 
     private void ValidateMatch()
     {
         var pwd = PwdBox.Password;
-        // 解密：只校验非空。既有密码可能不满足现行强度策略，据此拒绝会锁死用户自己的文件
+        // 解密
         if (!NeedConfirm)
         {
             MatchText.Text = "";
@@ -124,7 +105,7 @@ public sealed partial class PasswordDialog : ContentDialog
         if (pwd.Length < 6) { MatchText.Text = ""; IsPrimaryButtonEnabled = false; return; }
         if (string.IsNullOrEmpty(confirm)) { MatchText.Text = ""; IsPrimaryButtonEnabled = false; return; }
         if (pwd != confirm) { MatchText.Text = L10n.T("两次输入的密码不一致"); IsPrimaryButtonEnabled = false; return; }
-        // 确认密码同走策略校验
+        // 确认密码同走策
         if (!PasswordStrengthService.MeetsPolicy(pwd, out var reason))
         {
             MatchText.Text = reason;

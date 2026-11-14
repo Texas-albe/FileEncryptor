@@ -1,0 +1,60 @@
+﻿<metadata>
+	<!-- Rename Namespaces -->
+	<attr path="/api/package[@name='com.google.firebase']" name="managedName">Firebase</attr>
+	<attr path="/api/package[@name='com.google.firebase.functions']" name="managedName">Firebase.Functions</attr>
+
+    <remove-node path="/api/package[@name='com.google.firebase.functions.a']" ></remove-node>
+        
+	<attr 
+		path="/api/package[@name='com.google.firebase.functions']/class[@name='FunctionsComponent_MainModule_BindProjectIdFactory']/method[@name='get' and count(parameter)=0]"
+		name="managedReturn"
+		>
+		Java.Lang.Object
+	</attr>
+
+	<attr 
+		path="/api/package[@name='com.google.firebase.functions.dagger']" 
+		name="managedName"
+		>
+		Firebase.Functions.Dagger
+	</attr>
+	<attr 
+		path="/api/package[@name='com.google.firebase.functions.dagger.internal']" 
+		name="managedName"
+		>
+		Firebase.Functions.Dagger.Interal
+	</attr>
+	<attr 
+		path="/api/package[@name='com.google.firebase.functions.dagger.assisted']" 
+		name="managedName"
+		>
+		Firebase.Functions.Dagger.Assisted
+	</attr>
+	<attr 
+		path="/api/package[@name='com.google.firebase.functions.ktx']" 
+		name="managedName"
+		>
+		Firebase.Functions.Ktx
+	</attr>
+
+
+	<attr 
+		path="/api/package[@name='com.google.firebase.functions']/class[@name='FunctionsComponent_MainModule_Companion_BindProjectIdFactory']/method[@name='get' and count(parameter)=0]"
+		name="managedReturn"
+		>
+		Java.Lang.Object
+	</attr>
+	<!-- Remove duplicate methods in DoubleCheck to fix CS0111 errors -->
+    <remove-node
+        path="/api/package[@name='com.google.firebase.functions.dagger.internal']/class[@name='DoubleCheck']/method[@name='lazy' and count(parameter)=1 and parameter[1][@type='P']]"
+        />
+    <remove-node
+        path="/api/package[@name='com.google.firebase.functions.dagger.internal']/class[@name='DoubleCheck']/method[@name='provider' and count(parameter)=1 and parameter[1][@type='P']]"
+        />
+
+    <!-- Remove local jakarta.inject.Provider base from dagger.internal.Provider to fix CS0121
+         ambiguity between jakarta.inject.IProvider.Get() and javax.inject.IProvider.Get() -->
+    <remove-node
+        path="/api/package[@name='com.google.firebase.functions.dagger.internal']/interface[@name='Provider']/implements[@name='com.google.firebase.functions.jakarta.inject.Provider']"
+        />
+</metadata>

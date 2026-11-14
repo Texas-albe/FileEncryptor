@@ -1,7 +1,7 @@
-// 加密盘索引模块实现（M1）。全局命名空间；依赖 libsodium（Argon2id + secretbox）。
+// 加密盘索引模块
 #include "vault_index.hpp"
 #include "FileEncryptor.hpp"
-#include "kdf.hpp"             // derive_key KDF_OPS_LIMIT_MAX KDF_MEM_LIMIT_MAX_BYTES
+#include "kdf.hpp"             
 #include <sodium.h>
 #include <fstream>
 #include <sstream>
@@ -14,28 +14,43 @@
 #include <mutex>
 #include <map>
 #include <set>
+#include <atomic>
 #include <chrono>
 #include <filesystem>
 #ifdef _WIN32
 #  include <windows.h>
 #endif
 
-// ---- 索引密钥缓存 hook（H5 批量写优化）----
-// holder（vdisk_abi）注册自己的实现：库盐命中即省 0.25s Argon2id。
-// 放文件顶层作用域，使内部 seal_to_path/open_from_path 与外部注册函数都能访问。
+// 索引密钥缓存 hook
+// holder
+// 放文件顶层作用
 static bool (*g_index_key_hook)(const SecureBuffer&, const VaultMeta&,
                                 std::vector<unsigned char>&, std::string&) = nullptr;
 static void (*g_index_key_drop)() = nullptr;
 
 namespace fs = std::filesystem;
 
+// 保留路径判定
+bool rel_first_reserved(const std::string& rel) {
+    size_t p = rel.find('/');
+    std::string first = (p == std::string::npos) ? rel : rel.substr(0, p);
+    if (first.size() != std::strlen(VDISK_RESERVED_TRASH)) return false;
+    for (size_t i = 0; i < first.size(); ++i) {
+        char x = first[i], y = VDISK_RESERVED_TRASH[i];
+        if (x >= 'A' && x <= 'Z') x = (char)(x + 32);
+        if (y >= 'A' && y <= 'Z') y = (char)(y + 32);
+        if (x != y) return false;
+    }
+    return true;
+}
+
 namespace {
 
 const char kIdxMagic[6] = {'F','E','I','D','X','1'};
-// FEIDX2：带序号的新分片布局（magic 后 8 字节大端序号）；FEIDX1 为旧布局，按 version 0 放行
+// FEIDX2
 const char kIdxMagicV2[6] = {'F','E','I','D','X','2'};
 
-// ---- 小工具 ----
+// 小工具
 std::string normsep(const std::string& s) {
 #ifdef _WIN32
     std::string o = s;
@@ -44,6 +59,16 @@ std::string normsep(const std::string& s) {
 #else
     return s;
 #endif
+}
+
+// 绝对路径相对库
+bool path_in_reserved(const fs::path& p, const fs::path& base) {
+    std::error_code ec;
+    fs::path r = fs::relative(p, base, ec);
+    if (ec) return false;
+    std::string rel = normsep(r.u8string());
+    if (rel == "." || rel.empty()) return false;
+    return rel_first_reserved(rel);
 }
 
 std::string to_hex(const std::vector<unsigned char>& b) {
@@ -85,12 +110,12 @@ std::string jstrlit(const std::string& s) {
     return o;
 }
 
-// ---- 极简 JSON（仅覆盖本模块所需子集）----
+// 极简 JSON
 struct JVal {
     enum T { NUL, BL, NUM, ST, AR, OB } t = NUL;
     bool b = false;
     double n = 0;
-    std::string raw;        // 数字原文：避免超大整数经 double 往返失真
+    std::string raw;        // 数字原文
     std::string s;
     std::vector<JVal> a;
     std::vector<std::pair<std::string, JVal>> o;
@@ -156,11 +181,11 @@ bool jnum(const std::string& s, double& out, std::string& raw, std::string& err,
     return true;
 }
 
-// 整数取值一律走原文：double 只有 53 位尾数，超大值会饱和成 0x8000000000000000
+// 整数取值一律走
 uint64_t as_u64(const JVal* v, uint64_t def = 0) {
     if (!v || v->t != JVal::NUM) return def;
     if (!v->raw.empty()) {
-        if (v->raw[0] == '-' || v->raw[0] == '+') return def;      // 无符号字段不接受符号
+        if (v->raw[0] == '-' || v->raw[0] == '+') return def;      // 无符号字段不接
         errno = 0;
         char* end = nullptr;
         unsigned long long x = std::strtoull(v->raw.c_str(), &end, 10);
@@ -234,7 +259,7 @@ bool jval(const std::string& s, JVal& v, std::string& err, size_t& i) {
     err = "unexpected token"; return false;
 }
 
-// ---- 文件 IO ----
+// 文件 IO
 bool read_file(const std::string& p, std::string& out) {
     std::ifstream f(p, std::ios::binary);
     if (!f) return false;
@@ -249,8 +274,8 @@ bool write_file_atomic(const std::string& p, const std::string& data, std::strin
         if (!f) { err = "cannot write temp"; return false; }
         f.write(data.data(), (std::streamsize)data.size());
     }
-    // 原子替换：先 remove 再 rename 在两步间崩溃会丢失原文件（.feindex / vault.meta / .fevault
-    // 全走这里）。Windows 用 MoveFileExW(MOVEFILE_REPLACE_EXISTING) 单调用完成。
+    // 原子替换
+    // 全走这里）
 #ifdef _WIN32
     if (!MoveFileExW(utf8_to_wstring(tmp).c_str(), utf8_to_wstring(p).c_str(),
                      MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
@@ -262,7 +287,7 @@ bool write_file_atomic(const std::string& p, const std::string& data, std::strin
     return true;
 }
 
-// ---- base64（libsodium，无 OpenSSL 依赖）----
+// base64
 static std::string to_b64(const std::vector<unsigned char>& b) {
     if (b.empty()) return std::string();
     size_t need = sodium_base64_ENCODED_LEN(b.size(), sodium_base64_VARIANT_ORIGINAL);
@@ -282,11 +307,11 @@ static std::vector<unsigned char> from_b64(const std::string& s) {
     return out;
 }
 
-// ---- 序列化 ----
+// 序列化
 std::string meta_to_json(const VaultMeta& m) {
     std::ostringstream o;
     if (!m.encrypted) {
-        // 旧明文格式：root/created 明文
+        // 旧明文格式
         o << "{\"format\":1"
           << ",\"salt\":\"" << to_hex(m.salt) << "\""
           << ",\"root\":" << jstrlit(m.root)
@@ -294,16 +319,18 @@ std::string meta_to_json(const VaultMeta& m) {
           << ",\"opslimit\":" << m.opslimit
           << ",\"memlimit_kb\":" << m.memlimit_kb;
         if (!m.mount_point.empty()) o << ",\"mount_point\":" << jstrlit(m.mount_point);
-        o << "}";
+        o << ",\"default_mode\":" << m.default_mode
+          << ",\"compress_policy\":" << m.compress_policy << "}";
         return o.str();
     }
-    // format==2：root/created 移入密文，明文只留盐/KDF/mount_point/密文段
     o << "{\"format\":2"
       << ",\"salt\":\"" << to_hex(m.salt) << "\""
       << ",\"opslimit\":" << m.opslimit
       << ",\"memlimit_kb\":" << m.memlimit_kb;
     if (!m.mount_point.empty()) o << ",\"mount_point\":" << jstrlit(m.mount_point);
-    o << ",\"meta_nonce\":\"" << to_hex(m.meta_nonce) << "\""
+    o << ",\"default_mode\":" << m.default_mode
+      << ",\"compress_policy\":" << m.compress_policy
+      << ",\"meta_nonce\":\"" << to_hex(m.meta_nonce) << "\""
       << ",\"meta_enc\":\"" << to_b64(m.meta_enc) << "\"}";
     return o.str();
 }
@@ -311,7 +338,7 @@ std::string meta_to_json(const VaultMeta& m) {
 std::string entry_to_json(const VaultEntry& e) {
     std::ostringstream o;
     o << "{\"rel_path\":" << jstrlit(e.rel_path);
-    // store 仅在随机命名时写；旧条目无此字段→读取端回退 rel_path 基名
+    // store 仅在随机命名
     if (!e.store.empty()) o << ",\"store\":" << jstrlit(e.store);
     o << ",\"orig_abs\":" << jstrlit(e.orig_abs)
       << ",\"size\":" << e.size
@@ -319,15 +346,15 @@ std::string entry_to_json(const VaultEntry& e) {
       << ",\"enc_ts\":" << e.enc_ts
       << ",\"algo\":" << jstrlit(e.algo)
       << ",\"kdf\":" << jstrlit(e.kdf);
-    if (e.is_dir) o << ",\"is_dir\":1";   // 目录条目：true 时写出，旧盘缺省=文件
+    if (e.is_dir) o << ",\"is_dir\":1";   // 目录条目
     o << "}";
     return o.str();
 }
 
-// ---- 分目录索引（每文件夹一个加密索引）----
-// 存储布局：<vault>/.feindex.d/<name>.idx，name = "__root__"（根）或 hex(folder_rel)。
-// 每个 .idx = FEIDX1 + nonce + secretbox(该目录「直接子项」的 JSON 数组)。
-// 旧版单一 <vault>/.feindex（全量条目）在首次访问时透明迁移为分目录，读路径向后兼容。
+// 分目录索引
+// 存储布局
+// 每个 .idx = FEIDX1 +
+// 旧版单一 <vault>/.feindex
 std::string folder_rel_of(const std::string& rel_path) {
     size_t pos = rel_path.find_last_of('/');
     if (pos == std::string::npos) return std::string();   // 顶层 → 根目录 ""
@@ -338,15 +365,15 @@ std::string folder_index_name(const std::string& folder_rel) {
     if (folder_rel.empty()) return "__root__";
     static const char* h = "0123456789abcdef";
     std::string s; s.reserve(folder_rel.size() * 2);
-    for (unsigned char c : folder_rel) { s += h[c >> 4]; s += h[c & 0xF]; }   // hex：无分隔符/冲突，FS 安全
+    for (unsigned char c : folder_rel) { s += h[c >> 4]; s += h[c & 0xF]; }   // hex
     return s;
 }
 
 std::string shard_dir(const std::string& dir) { return dir + "/.feindex.d"; }
 
-// store 分量安全：与 rel_path_safe 同口径，拒绝路径分隔符（含反斜杠）、".."、"."、盘符前缀；store 只允许单基名
+// store 分量安全
 static bool store_name_safe(const std::string& s) {
-    if (s.empty()) return true;                 // 空=旧盘语义：按 rel_path 基名解析
+    if (s.empty()) return true;                 // 空=旧盘语义
     if (s.find('/') != std::string::npos || s.find('\\') != std::string::npos) return false;
     if (s.find("..") != std::string::npos || s == ".") return false;
 #ifdef _WIN32
@@ -361,13 +388,43 @@ std::string folder_index_path(const std::string& dir, const std::string& folder_
     return shard_dir(dir) + "/" + folder_index_name(folder_rel) + ".idx";
 }
 
-// 把明文 JSON 封存到指定路径（原子写）。dir 仅用于日志上下文。
+// 分片集合版本戳
+// 每写一次索引
+// 判定「盘上索引变
+// 靠目录 mtime
+std::string index_stamp_path(const std::string& dir) {
+    return shard_dir(dir) + "/.stamp";
+}
+
+void bump_index_stamp(const std::string& dir) {
+    static std::atomic<uint64_t> seq{0};
+    uint64_t v = (uint64_t)std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    v ^= (uint64_t)(seq.fetch_add(1) + 1) * 0x9E3779B97F4A7C15ULL;
+    if (v == 0) v = 1;                       // 0 保留给「无戳」
+    unsigned char b[8];
+    for (int i = 0; i < 8; i++) b[i] = (unsigned char)(v >> (8 * i));
+    std::string werr;
+    write_file_atomic(index_stamp_path(dir), std::string((const char*)b, 8), werr);  // best-effort
+}
+
+bool read_index_stamp(const std::string& dir, uint64_t& out) {
+    std::string s;
+    if (!read_file(index_stamp_path(dir), s) || s.size() < 8) return false;
+    uint64_t v = 0;
+    for (int i = 0; i < 8; i++) v |= (uint64_t)(unsigned char)s[i] << (8 * i);
+    if (v == 0) return false;
+    out = v;
+    return true;
+}
+
+// 把明文 JSON 封存到指
 bool seal_to_path(const std::string& path, const VaultMeta& meta,
                   const SecureBuffer& password, const std::string& plaintext, std::string& err) {
     std::vector<unsigned char> key;
     if (!(g_index_key_hook ? g_index_key_hook(password, meta, key, err)
                            : derive_index_key(password, meta, key, err))) return false;
-    // 索引 KEK 落入 SecureBuffer（mlock + 析构清零 + 强制释放），并立即擦除接口载体 vector 再归还其堆内存：杜绝同机攻击者从 freed heap 回收 32 字节 KEK
+    // 索引 KEK 落入 SecureBuffer，并
     SecureBuffer sek(key.data(), key.size());
     sodium_memzero(key.data(), key.size());
     std::vector<unsigned char>().swap(key);
@@ -382,7 +439,7 @@ bool seal_to_path(const std::string& path, const VaultMeta& meta,
     }
     std::string blob;
     blob.append(kIdxMagicV2, 6);
-    // 序号取写入时刻（秒级）：标识布局版本与分片新旧；AEAD 已防伪造，而防「旧分片整体回放」需跨会话持久的 epoch 基准（vault.meta 明文可被同机攻击者修改，故暂未做），当前仅嵌入不作强制校验
+    // 序号取写入时刻
     uint64_t seq = (uint64_t)time(nullptr);
     unsigned char seq8[8];
     for (int i = 0; i < 8; i++) seq8[i] = (unsigned char)(seq >> (56 - 8 * i));
@@ -392,24 +449,24 @@ bool seal_to_path(const std::string& path, const VaultMeta& meta,
     return write_file_atomic(path, blob, err);
 }
 
-// 从指定路径解出明文 JSON。missing_ok=true 时文件缺失 → text="[]"（空）返回 true。
+// 从指定路径解出
 bool open_from_path(const std::string& path, const VaultMeta& meta,
                     const SecureBuffer& password, std::string& text, std::string& err,
                     bool missing_ok) {
     std::string blob;
     if (!read_file(path, blob)) {
-        // 读取失败须区分「文件缺失」与「存在但不可读」：缺失才按 missing_ok 视为空索引，存在而读失败（权限/设备/竞态损坏）一律报错，绝不静默跳过
+        // 读取失败须区分「
         std::error_code fec;
         if (fs::exists(fs::u8path(path), fec)) { err = "index unreadable"; return false; }
         if (missing_ok) { text = "[]"; return true; }
         err = "index not found"; return false;
     }
-    // 分片布局版本：FEIDX1 为旧布局（magic 后直接是 nonce，无序号，按 version 0 放行）；FEIDX2 为带序号的新布局（magic 后 8 字节大端序号，再是 nonce），保证旧库透明兼容
+    // 分片布局版本
     size_t off;
     if (std::memcmp(blob.data(), kIdxMagic, 6) == 0) {
-        off = 6;                       // 旧布局（magic 后直接是 nonce）：无序号，按 version 0 放行
+        off = 6;                       // 旧布局
     } else if (std::memcmp(blob.data(), kIdxMagicV2, 6) == 0) {
-        off = 14;                      // 新布局：magic(6) + 序号(8) 之后才是 nonce
+        off = 14;                      // 新布局
     } else { err = "bad index magic"; return false; }
     if (blob.size() < off + 24 + crypto_secretbox_MACBYTES) { err = "corrupt index"; return false; }
     std::vector<unsigned char> nonce(blob.data() + off, blob.data() + off + 24);
@@ -418,7 +475,7 @@ bool open_from_path(const std::string& path, const VaultMeta& meta,
     std::vector<unsigned char> key;
     if (!(g_index_key_hook ? g_index_key_hook(password, meta, key, err)
                            : derive_index_key(password, meta, key, err))) return false;
-    // 索引 KEK 落入 SecureBuffer（mlock + 析构清零 + 强制释放），并立即擦除接口载体 vector 再归还其堆内存：杜绝同机攻击者从 freed heap 回收 32 字节 KEK
+    // 索引 KEK 落入 SecureBuffer，并
     SecureBuffer sek(key.data(), key.size());
     sodium_memzero(key.data(), key.size());
     std::vector<unsigned char>().swap(key);
@@ -443,7 +500,7 @@ bool read_folder_index(const std::string& dir, const VaultMeta& meta,
     return open_from_path(folder_index_path(dir, folder_rel), meta, password, text, err, true);
 }
 
-// 把全量条目按所属目录分片落盘，并删除旧单 .feindex（一次性迁移 / 全量覆写共用）。
+// 把全量条目
 bool shard_entries(const std::string& dir, const VaultMeta& meta,
                    const SecureBuffer& password, const std::vector<VaultEntry>& entries,
                    std::string& err) {
@@ -460,7 +517,7 @@ bool shard_entries(const std::string& dir, const VaultMeta& meta,
         o << "]";
         if (!write_folder_index(dir, meta, password, kv.first, o.str(), err)) return false;
     }
-    // 清掉不再存在的旧分片（全量覆写/迁移收敛），避免幽灵目录残留
+    // 清掉
     if (fs::exists(fs::u8path(sd), ec)) {
         for (auto& e : fs::directory_iterator(fs::u8path(sd), ec)) {
             if (ec) break;
@@ -468,7 +525,7 @@ bool shard_entries(const std::string& dir, const VaultMeta& meta,
             std::string fn = e.path().filename().u8string();
             if (fn.size() < 4 || fn.substr(fn.size() - 4) != ".idx") continue;
             std::string stem = fn.substr(0, fn.size() - 4);
-            // 反推 folder_rel：__root__ → ""；hex → 解码
+            // 反推 folder_rel
             std::string folder;
             if (stem != "__root__") {
                 bool okhex = (stem.size() % 2 == 0) && !stem.empty();
@@ -484,7 +541,7 @@ bool shard_entries(const std::string& dir, const VaultMeta& meta,
                     if (hi < 0 || lo < 0) { okhex = false; break; }
                     bytes.push_back((unsigned char)((hi << 4) | lo));
                 }
-                if (!okhex) continue;   // 非分片命名，勿动
+                if (!okhex) continue;   // 非分片命名
                 folder.assign((const char*)bytes.data(), bytes.size());
             }
             if (!by_folder.count(folder)) {
@@ -493,18 +550,34 @@ bool shard_entries(const std::string& dir, const VaultMeta& meta,
             }
         }
     }
-    // 删除旧单 .feindex（若存在），完成迁移/覆写
+    // 删除旧单 .feindex
     std::error_code rme;
     fs::remove(fs::u8path(dir + "/.feindex"), rme);
+    bump_index_stamp(dir);   // 全量覆写同样要
     return true;
 }
 
 } // namespace
 
+// 索引盘面版本戳
+// 新库读 .stamp
+uint64_t vault_index_stamp(const std::string& dir) {
+    uint64_t v = 0;
+    if (read_index_stamp(dir, v)) return v;
+    std::error_code ec;
+    auto p = fs::u8path(shard_dir(dir));
+    auto t = fs::last_write_time(p, ec);
+    if (!ec) return (uint64_t)t.time_since_epoch().count();
+    auto q = fs::u8path(dir + "/.feindex");
+    auto t2 = fs::last_write_time(q, ec);
+    if (!ec) return ((uint64_t)t2.time_since_epoch().count() << 1) | 1ULL;
+    return 0;
+}
 
-// ---- 索引密钥缓存注入点 ----
-// holder（vdisk_abi）注册缓存实现，库盐命中即省 0.25s Argon2id。
-// 用函数指针而非直接调用：跨 TU 符号会被 LTCG 剔除（实测 LNK2001）。
+
+// 索引密钥缓存注
+// holder
+// 用函数指针
 
 void set_index_key_cache_hook(
     bool (*fn)(const SecureBuffer&, const VaultMeta&, std::vector<unsigned char>&, std::string&),
@@ -516,16 +589,16 @@ static void call_index_key_drop() { if (g_index_key_drop) g_index_key_drop(); }
 
 void forget_cached_index_keys() { call_index_key_drop(); }
 
-// ---- 索引加解密 ----
-// 注：索引密钥的进程内缓存（批量写优化）放在 vdisk_abi.cpp，
-// 因为它与句柄的锁定生命周期绑定，且需要在 vdisk 入口统一加锁。
+// 索引加解密
+// 注：索引密钥
+// 它与句柄
 bool derive_index_key(const SecureBuffer& password, const VaultMeta& meta,
                       std::vector<unsigned char>& key, std::string& err) {
     key.assign(crypto_secretbox_KEYBYTES, 0);
     if (meta.salt.size() != crypto_pwhash_SALTBYTES) { err = "bad salt size"; return false; }
-    // vault.meta 的 salt/ops/mem 为明文、同机攻击者可改：与 kdf.cpp 的 derive_key 同口径设
-    // 上界（超界拒绝而非降级——降级仍会白跑一次大内存 Argon2），并复用 derive_key 内部的
-    // 进程级 KDF 信号量（同一许可池），使索引派生同样受并发内存预算限流，防 DoS。
+    // vault.meta 的 salt/ops/mem
+    // 上界
+    // 进程级 KDF 信号量
     if (meta.opslimit > KDF_OPS_LIMIT_MAX ||
         (size_t)meta.memlimit_kb * 1024 > KDF_MEM_LIMIT_MAX_BYTES) {
         err = "vault.meta 的 KDF 参数超出安全上界，库文件已损坏或被刻意构造，拒绝解锁";
@@ -540,7 +613,7 @@ bool derive_index_key(const SecureBuffer& password, const VaultMeta& meta,
     return true;
 }
 
-// ===================== 公开 API =====================
+// 公开 API
 
 std::string vault_random_store_name() {
     unsigned char b[8];
@@ -552,14 +625,14 @@ std::string vault_random_store_name() {
 }
 
 std::string vault_ptd_path(const std::string& dir, const std::string& rel, const std::string& store) {
-    // 防御：rel 含 ".." 可借 subdir 逃逸 dir；正常不会，但兜底拒绝（返回空路径→调用方打不开该文件，安全失败）
+    // 防御
     if (rel.find("..") != std::string::npos) return std::string();
     std::string subdir, base;
     size_t pos = rel.find_last_of('/');
     if (pos == std::string::npos) { base = rel; }
     else { subdir = rel.substr(0, pos); base = rel.substr(pos + 1); }
     if (!store.empty()) {
-        // store 与 rel 同口径做分量校验（store_name_safe）：非法即整体拒绝，返回空路径令调用方打不开该文件（安全失败）
+        // store 与 rel 同口径做分量
         if (!store_name_safe(store)) return std::string();
         base = store;
     }
@@ -574,7 +647,7 @@ std::string vault_mode_str(CryptoMode m) {
         case CryptoMode::XCHACHA20: return "XChaCha20";
         case CryptoMode::AEGIS256:  return "AEGIS-256";
         case CryptoMode::SM4:       return "SM4-GCM";
-        case CryptoMode::AES_GCM:   return "AES-GCM(legacy)";
+        case CryptoMode::AES_GCM:   return "AES-256-GCM";
     }
     return "unknown";
 }
@@ -616,8 +689,12 @@ bool vault_meta_load(const std::string& dir, VaultMeta& out, std::string& err) {
     out.salt = from_hex(sl->s);
     if (auto* p = v.at("opslimit")) out.opslimit = (unsigned int)as_u64(p);
     if (auto* p = v.at("memlimit_kb")) out.memlimit_kb = (uint32_t)as_u64(p);
-    if (auto* p = v.at("mount_point")) out.mount_point = p->s;   // 旧库无此字段→留空
-    // format==2：root/created 在密文内，留待 vault_meta_decrypt 用密码补全
+    if (auto* p = v.at("mount_point")) out.mount_point = p->s;   // 旧库无此字段→留
+    out.default_mode = 1;        // 旧库缺字段→沿用
+    out.compress_policy = 100;   // 旧库缺字段→自动
+    // p->n 保留符号
+    if (auto* p = v.at("default_mode")) out.default_mode = (int)p->n;
+    if (auto* p = v.at("compress_policy")) out.compress_policy = (int)p->n;
     const JVal* enc = v.at("meta_enc");
     const JVal* nonce = v.at("meta_nonce");
     if (out.format == 2 && enc && nonce) {
@@ -626,7 +703,7 @@ bool vault_meta_load(const std::string& dir, VaultMeta& out, std::string& err) {
         out.meta_enc = from_b64(enc->s);
         return true;
     }
-    // 旧明文格式：要求明文 root
+    // 旧明文格式
     const JVal* rt = v.at("root"); if (!rt) { err = "missing root"; return false; }
     out.root = rt->s;
     if (auto* p = v.at("created")) out.created = as_u64(p);
@@ -637,7 +714,7 @@ bool vault_meta_save(const std::string& dir, const VaultMeta& m, std::string& er
     return write_file_atomic(dir + "/vault.meta", meta_to_json(m), err);
 }
 
-// 用索引密钥（KEK）把 root/created 加密后回写（升到 format==2）。旧盘首次解锁即透明升级。
+// 用索引密钥
 bool vault_meta_save_encrypted(const std::string& dir, const VaultMeta& m,
                                const std::vector<unsigned char>& kek, std::string& err) {
     if (sodium_init() < 0) { err = "libsodium init failed"; return false; }
@@ -646,7 +723,7 @@ bool vault_meta_save_encrypted(const std::string& dir, const VaultMeta& m,
     e.encrypted = true;
     e.meta_nonce.resize(crypto_secretbox_NONCEBYTES);
     randombytes_buf(e.meta_nonce.data(), e.meta_nonce.size());
-    // 明文载荷仅含隐私字段 root/created（salt/ops/mem/mount_point 本就明文）
+    // 明文载荷
     std::string pt = std::string("{\"root\":") + jstrlit(m.root)
                    + ",\"created\":" + std::to_string(m.created) + "}";
     std::vector<unsigned char> ct(crypto_secretbox_MACBYTES + pt.size());
@@ -658,7 +735,6 @@ bool vault_meta_save_encrypted(const std::string& dir, const VaultMeta& m,
     return write_file_atomic(dir + "/vault.meta", meta_to_json(e), err);
 }
 
-// 用密码解密 format==2 的 root/created 回填到 meta（open 之后、有密码时调用）。
 bool vault_meta_decrypt(VaultMeta& m, const SecureBuffer& password, std::string& err) {
     if (!m.encrypted) return true;   // 明文无需解密
     if (m.meta_enc.size() < crypto_secretbox_MACBYTES ||
@@ -685,18 +761,18 @@ bool vault_derive_key(const SecureBuffer& password, const VaultMeta& meta,
     return derive_index_key(password, meta, key32, err);
 }
 
-// 防御：rel_path 必须相对、无 ".." 分量、不含绝对/盘符前缀。否则可借 vault_ptd_path
-// 逃逸库目录去读写库外的 .ptd。正常由 CLI 从卷根生成绝不会出现；索引本身 AEAD 保护（无密钥
-// 不可篡改），此处做纵深防御。
+// 防御
+// 逃逸库目录去读
+// 不可篡改），此处做
 static bool rel_path_safe(const std::string& rel) {
-    if (rel.empty()) return true;                 // 空 rel 由调用方单独处理
+    if (rel.empty()) return true;                 // 空 rel
     if (rel[0] == '/') return false;              // 绝对路径
 #ifdef _WIN32
     if (rel.size() >= 2 &&
         ((rel[0] >= 'A' && rel[0] <= 'Z') || (rel[0] >= 'a' && rel[0] <= 'z')) && rel[1] == ':')
         return false;                             // 盘符绝对路径
 #endif
-    // 保留名：库元数据 / 分目录索引存储占用这些顶层名，用户条目不得占用（否则与 .feindex.d 等冲突）
+    // 保留名
     {
         size_t slash = rel.find('/');
         std::string top = (slash == std::string::npos) ? rel : rel.substr(0, slash);
@@ -708,13 +784,13 @@ static bool rel_path_safe(const std::string& rel) {
         size_t slash = rel.find('/', start);
         size_t end = (slash == std::string::npos) ? rel.size() : slash;
         std::string comp = rel.substr(start, end - start);
-        if (comp.empty() || comp == ".." || comp == ".") return false;  // 空段 / 上溯段一律拒绝
+        if (comp.empty() || comp == ".." || comp == ".") return false;  // 空段 / 上溯段一律
         start = (slash == std::string::npos) ? rel.size() : slash + 1;
     }
     return true;
 }
 
-// 解析索引 JSON 文本（供读盘与内存镜像共用）
+// 解析索引 JSON 文本
 static bool parse_index_text(const std::string& text, std::vector<VaultEntry>& out, std::string& err) {
     JVal v; size_t i = 0;
     if (!jval(text, v, err, i)) return false;
@@ -723,18 +799,18 @@ static bool parse_index_text(const std::string& text, std::vector<VaultEntry>& o
         if (el.t != JVal::OB) continue;
         VaultEntry e;
         if (auto* p = el.at("rel_path")) e.rel_path = p->s;
-        if (auto* p = el.at("store")) e.store = p->s;   // 旧索引无此键→留空，按 rel_path 基名解析
-        // 投毒的 store 分量（含分隔符/盘符/..）一律丢弃该条目，与 rel_path 校验失败同口径
+        if (auto* p = el.at("store")) e.store = p->s;   // 旧索引无此键→留
+        // 投毒
         if (!e.store.empty() && !store_name_safe(e.store)) continue;
         if (auto* p = el.at("orig_abs")) e.orig_abs = p->s;
-    // 旧版本曾把 file_size 失败值经 double 往返写成饱和垃圾（2^63），读回时夹回 0
+    // 旧版本曾
     if (auto* p = el.at("size")) { e.size = as_u64(p); if (e.size >= ((uint64_t)1 << 63)) e.size = 0; }
     if (auto* p = el.at("mtime")) e.mtime = as_i64(p);
     if (auto* p = el.at("enc_ts")) e.enc_ts = as_u64(p);
         if (auto* p = el.at("algo")) e.algo = p->s;
         if (auto* p = el.at("kdf")) e.kdf = p->s;
         if (auto* p = el.at("is_dir")) e.is_dir = (p->t == JVal::BL) ? p->b : (as_u64(p) != 0);
-        if (!rel_path_safe(e.rel_path)) continue;   // 畸形/被投毒的 rel_path 直接丢弃该条目
+        if (!rel_path_safe(e.rel_path)) continue;   // 畸形/
         out.push_back(std::move(e));
     }
     return true;
@@ -747,7 +823,7 @@ bool vault_read_index(const std::string& dir, const VaultMeta& meta,
     std::error_code ec;
     std::string sd = shard_dir(dir);
     if (fs::exists(fs::u8path(sd), ec)) {
-        // 分目录模式：汇总所有 .idx 为全量视图
+        // 分目录模式
         for (auto& e : fs::directory_iterator(fs::u8path(sd), ec)) {
             if (ec) break;
             if (!e.is_regular_file()) continue;
@@ -755,14 +831,14 @@ bool vault_read_index(const std::string& dir, const VaultMeta& meta,
             if (fn.size() < 4 || fn.substr(fn.size() - 4) != ".idx") continue;
             std::string stem = fn.substr(0, fn.size() - 4);
             if (stem != "__root__") {
-                // 仅承认合法分片名（__root__ 或纯 hex）：与 shard_entries 的清理判定同口径；丢入的垃圾 .idx 不是分片，跳过而非令全库读取失败
+                // 仅承认合法分片
                 bool okhex = (stem.size() % 2 == 0) && !stem.empty();
                 for (size_t k = 0; okhex && k < stem.size(); ++k) {
                     char c = stem[k];
                     if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')))
                         okhex = false;
                 }
-                if (!okhex) continue;   // 非分片命名（垃圾/无关 .idx）：跳过，勿令全库读取失败
+                if (!okhex) continue;   // 非分片命名
             }
             std::string text;
             if (!open_from_path(e.path().u8string(), meta, password, text, err, true)) return false;
@@ -772,7 +848,7 @@ bool vault_read_index(const std::string& dir, const VaultMeta& meta,
         }
         return true;
     }
-    // 未分目录：旧单 .feindex → 读全量，并 best-effort 透明迁移为分目录
+    // 未分目录
     std::string legacy = dir + "/.feindex";
     if (fs::exists(fs::u8path(legacy), ec)) {
         std::string text;
@@ -781,24 +857,29 @@ bool vault_read_index(const std::string& dir, const VaultMeta& meta,
         if (!parse_index_text(text, all, err)) return false;
         out = all;
         std::string merr;
-        shard_entries(dir, meta, password, all, merr);   // 迁移失败不致命：仍返回全量视图
+        shard_entries(dir, meta, password, all, merr);   // 迁移失败不致命
         return true;
     }
-    return true;   // 既无分目录也无旧索引 → 空索引
+    return true;   // 既无分目录
 }
 
-// ---- 索引内存镜像（按目录分片）----
-// 每次 append/upsert/remove 只需解密/加密「所属目录」那一小片，避免全量加解密。
-// 写操作改内存后立即原子落盘对应目录的 .idx。
+// 索引内存镜像
+// append/upsert/remove 只需解密/加密「
+// 写操作改内存
 namespace {
 std::mutex g_mtx;
 std::string g_mir_dir;                       // 镜像所属库目录
-std::map<std::string, std::string> g_mir;    // folder_rel → 明文 JSON（内存态，非密文）
-std::set<std::string> g_mir_dirty;           // 待落盘目录集（flush=false 的批量累积）
-bool g_mir_sharded = false;                  // 当前库是否已确认分目录（免重复 exists）
+std::map<std::string, std::string> g_mir;    // folder_rel → 明文 JSON
+std::set<std::string> g_mir_dirty;           // 待落盘目录集
+// 每个目录「载入/落
+// 本进程
+std::map<std::string, uint64_t> g_mir_stamp;
+// flush=false 期间挂
+// 重载前必须先落
+std::map<std::string, std::vector<std::string>> g_mir_pending;
+bool g_mir_sharded = false;                  // 当前库是否已确
 
-// 0 = 每次改动都落盘。曾用 200ms 节流省写放大，但未调 flush 的路径会丢整批改动
-// （实测 --into-vault 后索引停在旧内容，recrypt 读到空索引）。
+// 0 = 每次改动
 const uint64_t kMirrorAutoFlushMs = 0;
 uint64_t g_mir_last_flush_ms = 0;
 
@@ -808,7 +889,15 @@ uint64_t now_ms_mirror() {
 }
 }  // namespace
 
-// 确保库已分目录（旧单 .feindex → 迁移）。caller 持有 g_mtx。
+// 前向声明
+static uint64_t folder_stamp_of(const std::string& dir, const std::string& folder);
+
+// 前向声明
+static bool mirror_load_folder_locked(const std::string& dir, const VaultMeta& meta,
+                                      const SecureBuffer& password, const std::string& folder,
+                                      std::string& err);
+
+// 库已分目录
 static bool ensure_sharded_locked(const std::string& dir, const VaultMeta& meta,
                                   const SecureBuffer& password, std::string& err) {
     if (g_mir_sharded && g_mir_dir == dir) return true;
@@ -818,7 +907,7 @@ static bool ensure_sharded_locked(const std::string& dir, const VaultMeta& meta,
     }
     std::string legacy = dir + "/.feindex";
     if (!fs::exists(fs::u8path(legacy), ec)) {
-        fs::create_directories(fs::u8path(shard_dir(dir)), ec);   // 全新库：建空分目录
+        fs::create_directories(fs::u8path(shard_dir(dir)), ec);   // 全新库
         g_mir_dir = dir; g_mir_sharded = true; return true;
     }
     std::string text;
@@ -830,28 +919,41 @@ static bool ensure_sharded_locked(const std::string& dir, const VaultMeta& meta,
     return true;
 }
 
-// 强制把脏目录落盘。锁定/卸载/进程退出前应调用，避免丢改动。
+// 强制
 bool vault_flush_index(const std::string& dir, const VaultMeta& meta,
                        const SecureBuffer& password, std::string& err) {
     std::lock_guard<std::mutex> lk(g_mtx);
     if (g_mir_dirty.empty()) return true;
-    if (g_mir_dir != dir) return true;       // 不是这个库的镜像，交给调用方
+    if (g_mir_dir != dir) return true;       // 不是这个库
+    bool wrote = false;
     for (const auto& folder : g_mir_dirty) {
         auto it = g_mir.find(folder);
         if (it == g_mir.end()) continue;
+        // 写前核对盘面戳
+        // 本进程尚未落盘
+        // 刚写入
+        if (!mirror_load_folder_locked(dir, meta, password, folder, err)) return false;
+        it = g_mir.find(folder);
+        if (it == g_mir.end()) continue;
         if (!write_folder_index(dir, meta, password, folder, it->second, err)) return false;
+        g_mir_pending.erase(folder);
+        g_mir_stamp[folder] = folder_stamp_of(dir, folder);
+        wrote = true;
     }
     g_mir_dirty.clear();
     g_mir_last_flush_ms = now_ms_mirror();
+    if (wrote) bump_index_stamp(dir);
     return true;
 }
 
-// 丢弃镜像（换库/锁定时）：下次写重新从盘面读。
-// 已在 g_mtx 内调用（内部版）
+// 丢弃镜像
+// 已在 g_mtx 内调用
 static void mirror_drop_locked() {
     for (auto& kv : g_mir) sodium_memzero(kv.second.data(), kv.second.size());
     g_mir.clear();
     g_mir_dirty.clear();
+    g_mir_stamp.clear();
+    g_mir_pending.clear();
     g_mir_dir.clear();
     g_mir_sharded = false;
 }
@@ -861,19 +963,48 @@ void vault_drop_index_mirror() {
     mirror_drop_locked();
 }
 
-// 取某目录的镜像文本（必要时从盘面载入并缓存）。caller 持有 g_mtx。
+static bool json_array_append(std::string& arr, const std::string& obj, std::string& err);
+
+// 单个分片文件
+static uint64_t folder_stamp_of(const std::string& dir, const std::string& folder) {
+    std::error_code ec;
+    auto p = fs::u8path(folder_index_path(dir, folder));
+    auto t = fs::last_write_time(p, ec);
+    if (ec) return 0;                                    // 尚不存
+    uint64_t mt = (uint64_t)t.time_since_epoch().count();
+    uint64_t sz = (uint64_t)fs::file_size(p, ec);
+    if (ec) sz = 0;
+    return mt ^ (sz * 0x9E3779B97F4A7C15ULL);
+}
+
+// 取某目录
+// 关键
+// 后续写
 static bool mirror_load_folder_locked(const std::string& dir, const VaultMeta& meta,
                                       const SecureBuffer& password, const std::string& folder,
                                       std::string& err) {
     if (g_mir_dir != dir) { mirror_drop_locked(); g_mir_dir = dir; }
-    if (g_mir.count(folder)) return true;
+    // 本进程已改脏，内存为准
+    if (g_mir.count(folder) && g_mir_dirty.count(folder)) return true;
+    const uint64_t stamp = folder_stamp_of(dir, folder);
+    auto sit = g_mir_stamp.find(folder);
+    if (g_mir.count(folder) && sit != g_mir_stamp.end() && sit->second == stamp) return true;
+
     std::string text;
     if (!read_folder_index(dir, meta, password, folder, text, err)) return false;
+    // 盘面版本重放
+    auto pit = g_mir_pending.find(folder);
+    if (pit != g_mir_pending.end()) {
+        for (const auto& obj : pit->second) {
+            if (!json_array_append(text, obj, err)) return false;
+        }
+    }
     g_mir[folder] = std::move(text);
+    g_mir_stamp[folder] = stamp;
     return true;
 }
 
-// 改动后落盘对应目录（kMirrorAutoFlushMs=0，即每次都写）。caller 持有 g_mtx。
+// 改动后落盘对应
 static bool mirror_touch_locked(const std::string& dir, const VaultMeta& meta,
                                 const SecureBuffer& password, const std::string& folder,
                                 std::string& err) {
@@ -883,11 +1014,14 @@ static bool mirror_touch_locked(const std::string& dir, const VaultMeta& meta,
     if (it == g_mir.end()) return true;
     if (!write_folder_index(dir, meta, password, folder, it->second, err)) return false;
     g_mir_dirty.erase(folder);
+    g_mir_pending.erase(folder);
+    g_mir_stamp[folder] = folder_stamp_of(dir, folder);
+    bump_index_stamp(dir);                   // 让挂载端/其它实
     g_mir_last_flush_ms = now_ms_mirror();
     return true;
 }
 
-// 往 JSON 数组末尾 O(1) 摊销追加一个条目对象
+// 往 JSON 数组末尾 O
 static bool json_array_append(std::string& arr, const std::string& obj, std::string& err) {
     if (arr == "[]" || arr.empty()) { arr = "[" + obj + "]"; return true; }
     size_t last = arr.rfind(']');
@@ -904,15 +1038,21 @@ bool vault_append_entry(const std::string& dir, const VaultMeta& meta,
     if (!ensure_sharded_locked(dir, meta, password, err)) return false;
     std::string folder = folder_rel_of(e.rel_path);
     if (!mirror_load_folder_locked(dir, meta, password, folder, err)) return false;
-    if (!json_array_append(g_mir[folder], entry_to_json(e), err)) return false;
-    if (!flush) { g_mir_dirty.insert(folder); return true; }  // 批量入盘热循环：只更新内存，末尾 flush 一次性落盘
+    const std::string obj = entry_to_json(e);
+    if (!json_array_append(g_mir[folder], obj, err)) return false;
+    if (!flush) {
+        // 批量入盘热循环
+        g_mir_pending[folder].push_back(obj);
+        g_mir_dirty.insert(folder);
+        return true;
+    }
     return mirror_touch_locked(dir, meta, password, folder, err);
 }
 
 bool vault_write_index(const std::string& dir, const VaultMeta& meta,
                        const SecureBuffer& password, const std::string& json,
                        std::string& err) {
-    // 外部整盘写入：解析 → 按目录分片落盘 → 清理旧分片与单 .feindex；并作废内存镜像
+    // 外部整盘写入
     std::vector<VaultEntry> entries;
     if (!parse_index_text(json, entries, err)) return false;
     {
@@ -922,45 +1062,191 @@ bool vault_write_index(const std::string& dir, const VaultMeta& meta,
     return shard_entries(dir, meta, password, entries, err);
 }
 
+// 容错读索引
+// 重建索引时用它
+static void read_index_tolerant(const std::string& dir, const VaultMeta& meta,
+                                const SecureBuffer& password, std::vector<VaultEntry>& out) {
+    out.clear();
+    std::error_code ec;
+    std::string sd = shard_dir(dir);
+    if (fs::exists(fs::u8path(sd), ec)) {
+        for (auto& e : fs::directory_iterator(fs::u8path(sd), ec)) {
+            if (ec) break;
+            if (!e.is_regular_file()) continue;
+            std::string fn = e.path().filename().u8string();
+            if (fn.size() < 4 || fn.substr(fn.size() - 4) != ".idx") continue;
+            std::string stem = fn.substr(0, fn.size() - 4);
+            if (stem != "__root__") {
+                bool okhex = (stem.size() % 2 == 0) && !stem.empty();
+                for (size_t k = 0; okhex && k < stem.size(); ++k) {
+                    char c = stem[k];
+                    if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')))
+                        okhex = false;
+                }
+                if (!okhex) continue;
+            }
+            std::string text, ierr;
+            if (!open_from_path(e.path().u8string(), meta, password, text, ierr, true)) continue;
+            std::vector<VaultEntry> part;
+            if (!parse_index_text(text, part, ierr)) continue;
+            for (auto& x : part) out.push_back(std::move(x));
+        }
+        return;
+    }
+    std::string legacy = dir + "/.feindex";
+    if (!fs::exists(fs::u8path(legacy), ec)) return;
+    std::string text, ierr;
+    if (!open_from_path(legacy, meta, password, text, ierr, true)) return;
+    parse_index_text(text, out, ierr);
+}
+
 bool vault_reindex(const std::string& dir, const VaultMeta& meta,
-                   const SecureBuffer& password, std::string& err) {
-    // 重扫结果必须直接落盘并作废内存镜像，否则下一次写会用旧镜像覆盖重扫结果
+                   const SecureBuffer& password, std::string& err,
+                   const std::vector<VaultEntry>* old_hint,
+                   VDiskProgressFn progress, void* user,
+                   VDiskCancelFn cancel, void* cancel_user,
+                   bool* cancelled) {
+    // 重扫结果必须直
     vault_drop_index_mirror();
     std::vector<VaultEntry> entries;
     std::error_code ec;
-    // 目录/文件名一律走 u8path：fs 的窄串按 ACP(GBK) 解释，中文名会被误解码。
+    // 名字来源链
+    // ① 内存旧索引快照
+    // ② 盘面旧索引磁盘
+    // ③ 名字信封
+    // ④ 随机 store 名
+    // 键：随机命名库用 store
+    std::map<std::string, std::string> old_name_by_store;
+    std::vector<VaultEntry> old_all;   // 旧条目全集
+    auto harvest_names = [&](const std::vector<VaultEntry>& src) {
+        for (auto& x : src) {
+            if (x.is_dir || x.rel_path.empty()) continue;
+            size_t slash = x.rel_path.find_last_of('/');
+            std::string base = (slash == std::string::npos) ? x.rel_path
+                                                            : x.rel_path.substr(slash + 1);
+            if (base.empty()) continue;
+            if (!x.store.empty()) old_name_by_store.emplace(x.store, base);
+            else old_name_by_store.emplace(base, base);   // 旧盘
+        }
+    };
+    // ① 内存快照先登记
+    if (old_hint) { harvest_names(*old_hint); old_all.insert(old_all.end(), old_hint->begin(), old_hint->end()); }
+    // ② 盘面旧索引
+    {
+        std::vector<VaultEntry> old;
+        read_index_tolerant(dir, meta, password, old);
+        harvest_names(old);
+        old_all.insert(old_all.end(), old.begin(), old.end());
+    }
+    // 目录/文件名一律
     fs::path vdir = fs::u8path(dir);
+    // 第一遍
+    uint64_t total = 0;
+    {
+        std::error_code ec2;
+        auto cnt = fs::recursive_directory_iterator(vdir, ec2);
+        if (!ec2) {
+            for (; cnt != fs::recursive_directory_iterator(); ++cnt) {
+                auto& e = *cnt;
+                // 保留子树整体跳
+                if (e.is_directory() && path_in_reserved(e.path(), vdir)) {
+                    cnt.disable_recursion_pending();
+                    continue;
+                }
+                if (!e.is_regular_file()) continue;
+                std::string ffn = e.path().filename().u8string();
+                if (ffn == ".feindex" || ffn == "vault.meta" || ffn == ".feindex.tmp") continue;
+                if (e.path().extension().u8string() != ".ptd") continue;
+                total++;
+            }
+        }
+    }
+    uint64_t done = 0;
+    if (progress) progress(0, total, user);
+
+    // 第二遍
+    // cancel 在每读头前探询
+    bool cancelled_flag = false;
     fs::recursive_directory_iterator it(vdir, ec);
     if (!ec) {
-        for (auto& e : it) {
+        for (; it != fs::recursive_directory_iterator(); ++it) {
+            auto& e = *it;
+            if (e.is_directory() && path_in_reserved(e.path(), vdir)) {
+                it.disable_recursion_pending();   // 回收站子树不重
+                continue;
+            }
             if (!e.is_regular_file()) continue;
             std::string full = e.path().u8string();              // UTF-8 全路径
             std::string fn   = e.path().filename().u8string();
             if (fn == ".feindex" || fn == "vault.meta" || fn == ".feindex.tmp") continue;
             if (e.path().extension().u8string() != ".ptd") continue;
+            if (cancel && cancel(cancel_user)) { cancelled_flag = true; break; }  // 取消
             PtdMeta m;
-            if (!read_ptd_metadata(full, m) || !m.valid) continue;
-            // 实际存储文件名（随机 hex 或旧盘原始名）→ 索引 store，供挂载按名映射回物理文件
+            if (!read_ptd_metadata(full, m) || !m.valid) {        // 头损坏
+                done++; if (progress) progress(done, total, user); continue;
+            }
+            // 实际存储文件名
             std::string stem = e.path().stem().u8string();
-            // 目录结构保留在磁盘路径里；rel_path 基名从 PTD 头内嵌原始名恢复（随机命名不再能从文件名反推）
+            // 目录结构保留
             std::string reldir;
             try {
                 reldir = normsep(fs::relative(e.path(), vdir).parent_path().u8string());
             } catch (...) { reldir.clear(); }
             if (reldir == ".") reldir.clear();
             std::string orig;
-            if (!read_original_name(full, orig, password) || orig.empty()) orig = stem;
+            auto oit = old_name_by_store.find(stem);
+            if (oit != old_name_by_store.end()) {
+                // 旧索引已有该 store
+                orig = oit->second;
+            } else {
+                // 新条目
+                if (!read_original_name(full, orig, password) || orig.empty()) orig = stem;
+            }
             VaultEntry ve;
             ve.rel_path = reldir.empty() ? orig : (reldir + "/" + orig);
             ve.store    = stem;
             ve.size = m.orig_size;
             ve.algo = vault_mode_str(m.mode);
             ve.kdf = "argon2id";
-            if (!rel_path_safe(ve.rel_path)) continue;   // 防御：被投毒的 .ptd 内嵌异常原名/目录
+            if (!rel_path_safe(ve.rel_path)) { done++; if (progress) progress(done, total, user); continue; }
             entries.push_back(std::move(ve));
+            done++; if (progress) progress(done, total, user);
         }
     }
-    // 按目录分片落盘（顺带清理旧分片 / 迁移旧单 .feindex）
+    if (cancelled_flag) {
+        if (cancelled) *cancelled = true;
+        // 取消
+        // 盘上 .feindex 分片仍是完
+        return true;
+    }
+    // 保留既有目录条
+    // 来源＝盘面旧索引 ∪
+    {
+        std::set<std::string> seen_dir;
+        for (auto& x : old_all) {
+            if (!x.is_dir || x.rel_path.empty()) continue;
+            if (!seen_dir.insert(x.rel_path).second) continue;
+            std::error_code dec;
+            if (fs::is_directory(fs::u8path(dir + "/" + x.rel_path), dec))
+                entries.push_back(x);
+        }
+    }
+    // 回收站条目
+    // 但盘面 .ptd 仍
+    // 重建后回收站内
+    {
+        std::set<std::string> have;
+        for (auto& x : entries) have.insert(x.rel_path);
+        for (auto& x : old_all) {
+            if (x.rel_path.empty() || x.is_dir || !rel_first_reserved(x.rel_path)) continue;
+            if (!have.insert(x.rel_path).second) continue;
+            std::string p = vault_ptd_path(dir, x.rel_path, x.store);
+            if (p.empty()) continue;
+            std::error_code dec;
+            if (fs::exists(fs::u8path(p), dec)) entries.push_back(x);
+        }
+    }
+    // 按目录分片落盘
     return shard_entries(dir, meta, password, entries, err);
 }
 
@@ -971,7 +1257,7 @@ std::string vault_entries_to_json(const std::vector<VaultEntry>& entries) {
     return o.str();
 }
 
-// ===================== M6 写支持：索引 upsert/remove =====================
+// M6 写支持
 bool vault_upsert_entry(const std::string& dir, const VaultMeta& meta,
                        const SecureBuffer& password, const VaultEntry& e, std::string& err) {
     std::lock_guard<std::mutex> lk(g_mtx);
@@ -1004,13 +1290,60 @@ bool vault_remove_entry(const std::string& dir, const VaultMeta& meta,
     return mirror_touch_locked(dir, meta, password, folder, err);
 }
 
-// ===================== §4.4 恢复密钥 =====================
-// 保险文件格式： "FEVLT1"(6) + salt(16) + nonce(24) + secretbox(主密码副本)
-// 密钥 = Argon2id(恢复密钥串, 该 salt)。不入索引、不随库重扫。
+// 批量删除
+// 「载入 + 解析 + 重加密
+bool vault_remove_entries(const std::string& dir, const VaultMeta& meta,
+                          const SecureBuffer& password, const std::vector<std::string>& rel_paths,
+                          std::string& err) {
+    if (rel_paths.empty()) return true;
+    std::lock_guard<std::mutex> lk(g_mtx);
+    if (!ensure_sharded_locked(dir, meta, password, err)) return false;
+    std::map<std::string, std::set<std::string>> by_folder;
+    for (const auto& r : rel_paths) by_folder[folder_rel_of(r)].insert(r);
+    for (auto& kv : by_folder) {
+        const std::string& folder = kv.first;
+        if (!mirror_load_folder_locked(dir, meta, password, folder, err)) return false;
+        std::vector<VaultEntry> v;
+        if (!parse_index_text(g_mir[folder], v, err)) return false;
+        std::vector<VaultEntry> out;
+        out.reserve(v.size());
+        for (const auto& x : v) if (!kv.second.count(x.rel_path)) out.push_back(x);
+        g_mir[folder] = vault_entries_to_json(out);
+        if (!mirror_touch_locked(dir, meta, password, folder, err)) return false;
+    }
+    return true;
+}
+
+// 只写受影响分片
+bool vault_write_index_folders(const std::string& dir, const VaultMeta& meta,
+                               const SecureBuffer& password,
+                               const std::vector<std::string>& folders,
+                               const std::vector<VaultEntry>& entries,
+                               std::string& err) {
+    std::lock_guard<std::mutex> lk(g_mtx);
+    if (!ensure_sharded_locked(dir, meta, password, err)) return false;
+    std::vector<std::string> jsons;
+    jsons.reserve(folders.size());
+    for (const auto& folder : folders) {
+        std::vector<VaultEntry> v;
+        for (const auto& e : entries)
+            if (folder_rel_of(e.rel_path) == folder) v.push_back(e);
+        jsons.push_back(vault_entries_to_json(v));
+    }
+    for (size_t i = 0; i < folders.size(); ++i) {
+        g_mir[folders[i]] = jsons[i];
+        if (!mirror_touch_locked(dir, meta, password, folders[i], err)) return false;
+    }
+    return true;
+}
+
+// §4.4 恢复密钥
+// 保险文件格式
+// 密钥 = Argon2id
 static const char* kRecoveryMagic = "FEVLT1";
 static const size_t kRecoverySaltBytes = crypto_pwhash_SALTBYTES;
 
-// 规范化：只保留数字（允许用户输入带空格/连字符的分组形式）
+// 规范化
 static std::string recovery_code_normalize(const std::string& s) {
     std::string o;
     for (char c : s) if (c >= '0' && c <= '9') o += c;
@@ -1018,7 +1351,7 @@ static std::string recovery_code_normalize(const std::string& s) {
 }
 
 std::string vault_recovery_gen_code() {
-    // 48 位十进制 ≈ 159 bit 熵（BitLocker 恢复密钥同等语义）
+    // 48 位十进制 ≈ 159 bit 熵
     std::string s;
     s.reserve(48);
     for (int i = 0; i < 48; i++) s += (char)('0' + (randombytes_uniform(10)));

@@ -1,0 +1,6 @@
+﻿<metadata>
+	
+	<!-- Rename Namespaces -->
+  	<attr path="/api/package[@name='com.google.ads']" name="managedName">Google.Ads</attr>
+ 
+</metadata>

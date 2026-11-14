@@ -1,0 +1,43 @@
+@model AndroidBinderator.BindingProjectModel
+@using System
+@using System.Linq
+@using Microsoft.AspNetCore.Html
+@{
+    var licenses = string.Join("<br/>", Model.Licenses.Select(l => string.IsNullOrWhiteSpace(l.Url) ? new HtmlString(l.Name).Value : new HtmlString($"[{l.Name}]({l.Url})").Value).ToArray());
+    var developers = string.Join("<br/>", Model.Developers.Select(d => new HtmlString(d.Name).Value).ToArray());
+}
+This package provides .NET for Android and MAUI bindings for the Java library `@(Model.MavenGroupId):@(Model.Name)`.
+
+## Java Library
+
+| | |
+|-|-|
+| **Group ID** | @(Model.MavenGroupId) |
+| **Artifact ID** | @(Model.Name) |
+| **Version** | @(Model.MavenArtifacts.FirstOrDefault ()?.MavenArtifactVersion) |
+@if (!string.IsNullOrWhiteSpace(developers))
+{
+@:| **Developer(s)** | @Raw(developers) |
+}
+@if (!string.IsNullOrWhiteSpace(licenses))
+{
+@:| **License(s)** | @Raw(licenses) |
+}
+@if (!string.IsNullOrWhiteSpace(Model.MavenUrl))
+{
+@:| **Project URL** | @(Model.MavenUrl) |
+}
+@if (!string.IsNullOrWhiteSpace(Model.MavenDescription))
+{
+@:| **Description** | @(Model.MavenDescription) |
+}
+
+## Bindings
+
+These bindings are provided by Microsoft under the [MIT License](https://opensource.org/licenses/MIT). The Java
+library may be licensed under a different license as specified above.
+
+To report issues with this package or the bindings, please visit our [GitHub repository](https://aka.ms/android-libraries).
+
+Note that Microsoft only provides support for the bindings. For support on
+usage or issues with the Java library itself, please visit the library's project page.

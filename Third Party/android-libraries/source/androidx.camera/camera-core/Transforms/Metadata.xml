@@ -1,0 +1,148 @@
+<metadata>
+    <!-- Preserve non-standard namespace remapping -->
+    <attr 
+        path="/api/package[@name='androidx.camera.core.internal.compat']" 
+        name="managedName"
+        >
+        AndroidX.Camera.Core.Internal.Utils
+    </attr>
+    
+    <attr
+        path="/api/package[@name='androidx.camera.core.impl']/class[@name='ImmediateSurface']/method[@name='provideSurface' and count(parameter)=0]"
+        name="visibility"
+        >
+        protected
+    </attr>
+    
+    
+    <remove-node 
+        path="/api/package[@name='androidx.camera.core']/class/implements[@name='androidx.camera.core.ThreadConfig']" 
+        />
+    <remove-node 
+        path="/api/package[@name='androidx.camera.core']/class/implements[@name='androidx.camera.core.UseCaseConfig.Builder']" 
+        />
+    <remove-node 
+        path="/api/package[@name='androidx.camera.core']/class/implements[@name='androidx.camera.core.TargetConfig.Builder']" 
+        />
+
+    <remove-node path="/api/package[@name='androidx.camera.core']/class/implements[@name='androidx.camera.core.ThreadConfig']" />
+    <remove-node path="/api/package[@name='androidx.camera.core']/class/implements[@name='androidx.camera.core.UseCaseConfig.Builder']" />
+    <remove-node path="/api/package[@name='androidx.camera.core']/class/implements[@name='androidx.camera.core.TargetConfig.Builder']" />
+    
+    <remove-node
+        path="/api/package[@name='androidx.camera.core.impl']/class[@name='VideoCaptureConfig.Builder']"
+        />
+
+  <remove-node
+        path="/api/package[@name='androidx.camera.core']/class[@name='CameraXConfig']/implements"
+        />
+    <remove-node
+        path="/api/package[@name='androidx.camera.core.impl']/class[@name='ImageAnalysisConfig']/implements"
+        />
+    <remove-node
+        path="/api/package[@name='androidx.camera.core.impl']/class[@name='ImageCaptureConfig']/implements"
+        />
+    <remove-node
+        path="/api/package[@name='androidx.camera.core.impl']/class[@name='VideoCaptureConfig']/implements"
+        />
+    <remove-node
+        path="/api/package[@name='androidx.camera.core.impl']/class[@name='PreviewConfig']/implements"
+        />
+    
+    <attr
+        path="/api/package[@name='androidx.camera.core.impl']/class[@name='ImmediateSurface']/method[@name='provideSurface' and count(parameter)=0]"
+        name="visibility"
+        >
+        protected
+    </attr>
+  
+    <attr
+        path="/api/package[@name='androidx.camera.core.impl.utils']/class[@name='CompareSizesByArea']/method[@name='compare' and count(parameter)=2 and parameter[1][@type='android.util.Size'] and parameter[2][@type='android.util.Size']]/parameter[1]"
+        name="managedType"
+        >
+        Java.Lang.Object
+    </attr>
+    <attr
+        path="/api/package[@name='androidx.camera.core.impl.utils']/class[@name='CompareSizesByArea']/method[@name='compare' and count(parameter)=2 and parameter[1][@type='android.util.Size'] and parameter[2][@type='android.util.Size']]/parameter[2]"
+        name="managedType"
+        >
+        Java.Lang.Object
+    </attr>
+    <attr
+        path="/api/package[@name='androidx.camera.core.impl']/class[@name='SessionProcessorSurface']/method[@name='provideSurface' and count(parameter)=0]"
+        name="visibility"
+        >
+        protected
+    </attr>
+
+    <add-node
+        path="/api/package[@name='androidx.camera.core.impl.utils']/class[@name='AspectRatioUtil.CompareAspectRatiosByDistanceToTargetRatio']"
+        >
+        <method 
+            visibility="public" static="false" abstract="false" return="int" name="Compare" 
+            native="false" synchronized="false" final="false" deprecated="not deprecated" 
+            >
+            <parameter type="java.lang.Object" name="lhs" />
+            <parameter type="java.lang.Object" name="rhs" />
+        </method>
+    </add-node>
+
+    <attr
+    path="/api/package[@name='androidx.camera.core.imagecapture']/class[@name='ProcessingNode.In']"
+        name="visibility"
+        >
+        public
+    </attr>
+    <remove-node 
+        path="/api/package[@name='androidx.camera.core.processing']/interface[@name='Node']/typeParameters"
+        />
+
+    <attr
+        path="/api/package[@name='androidx.camera.core.streamsharing']/class[@name='StreamSharing']/method[@name='getSupportedEffectTargets' and count(parameter)=0]"
+        name="visibility"
+        >
+        protected
+    </attr>
+    <attr
+        path="/api/package[@name='androidx.camera.core']/class[@name='ImageCapture']/method[@name='getSupportedEffectTargets' and count(parameter)=0]"
+        name="visibility"
+        >
+        protected
+    </attr>
+    <attr
+        path="/api/package[@name='androidx.camera.core']/class[@name='Preview']/method[@name='getSupportedEffectTargets' and count(parameter)=0]"
+        name="visibility"
+        >
+        protected
+    </attr>
+    <attr
+        path="/api/package[@name='androidx.camera.core.impl.utils']/class[@name='AspectRatioUtil.CompareAspectRatiosByMappingAreaInFullFovAspectRatioSpace']/method[@name='compare' and count(parameter)=2 and parameter[1][@type='android.util.Rational'] and parameter[2][@type='android.util.Rational']]/parameter"
+        name="managedType"
+        >
+        Java.Lang.Object
+    </attr>
+
+    <attr
+        path="/api/package[@name='androidx.camera.core.impl']/class[@name='QuirkSettingsLoader']/method[@name='apply' and count(parameter)=1 and parameter[1][@type='android.content.Context']]/parameter[1]"
+        name="managedType"
+        >
+        Java.Lang.Object
+    </attr>
+    <attr
+        path="/api/package[@name='androidx.camera.core.impl']/class[@name='QuirkSettingsLoader']/method[@name='apply' and count(parameter)=1 and parameter[1][@type='android.content.Context']]"
+        name="managedReturn"
+        >
+        Java.Lang.Object
+    </attr>
+
+    <remove-node
+        path="/api/package[@name='androidx.camera.core.imagecapture']/class[@name='DngImage2Disk']/implements"
+        />
+
+    <!-- CameraExecutor implements ScheduledExecutorService but the generated bindings don't
+         satisfy IExecutorService.InvokeAll/InvokeAny signatures; remove the interface implements -->
+    <remove-node
+        path="/api/package[@name='androidx.camera.core']/class[@name='CameraExecutor']/implements[@name='java.util.concurrent.ScheduledExecutorService']"
+        />
+
+</metadata>

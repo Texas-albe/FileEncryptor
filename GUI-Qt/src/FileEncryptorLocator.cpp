@@ -15,7 +15,7 @@ QString FileEncryptorLocator::selfDir() {
     return QCoreApplication::applicationDirPath();
 }
 
-// 按候选名探测目录
+// 按候选名探测目
 static QString findInDir(const QString& dir) {
     QDir d(dir);
     if(!d.exists()) return {};
@@ -28,13 +28,13 @@ static QString findInDir(const QString& dir) {
 }
 
 QString FileEncryptorLocator::locate() {
-    // 1) 环境变量
+    // 环境变量
     const QString envPath=qEnvironmentVariable("FILEENCRYPTOR_EXE");
     if(!envPath.isEmpty()&&isExecutable(envPath)) {
         return envPath;
     }
 
-    // 2) 同目录
+    // 同目录
     QString found=findInDir(selfDir());
     if(!found.isEmpty()) return found;
 
@@ -51,16 +51,16 @@ QString FileEncryptorLocator::locate() {
 
 // 配套 CLI 版本
 QString FileEncryptorLocator::version() {
-    return QStringLiteral("3.1.0");
+    return QStringLiteral("3.1.1");
 }
 
 // GUI 自身版本
 QString FileEncryptorLocator::guiVersion() {
-    return QStringLiteral("3.1.0");
+    return QStringLiteral("3.1.1");
 }
 
 QString FileEncryptorLocator::cliDownloadUrl() {
-    return QStringLiteral("https://github.com/Texas-albe/FileEncryptor/releases/tag/GUI3.1.0_CLI3.1.0");
+    return QStringLiteral("https://github.com/Texas-albe/FileEncryptor/releases/tag/GUI3.1.1_CLI3.1.1");
 }
 
 QStringList FileEncryptorLocator::getExpectedNames() {
@@ -68,9 +68,9 @@ QStringList FileEncryptorLocator::getExpectedNames() {
 #ifdef Q_OS_WIN
     return {
         QStringLiteral("FileEncryptorCLI-%1-cmd-Windows.exe").arg(ver),
-        // 预发布后缀：CMake project(VERSION) 只支持数值版，产物名无 -alpha.N，
-        // 但 CLI 自报版本带后缀，故两个名字都试。
-        QStringLiteral("FileEncryptorCLI-3.1.0-cmd-Windows.exe"),
+        // 预发布后缀
+        // 但 CLI 自报版本带
+        QStringLiteral("FileEncryptorCLI-3.1.1-cmd-Windows.exe"),
         QStringLiteral("FileEncryptorCLI.exe"),
         QStringLiteral("FileEncryptor.exe"),
         QStringLiteral("file-encryptor-cli.exe"),
@@ -87,7 +87,7 @@ QStringList FileEncryptorLocator::getExpectedNames() {
 #endif
 }
 
-// 加密盘挂载持有进程：与 CLI 分离的可选组件（MSI 的 VaultFeature 才装）
+// 加密盘挂载持有
 QStringList FileEncryptorLocator::getMounterExpectedNames() {
 #ifdef Q_OS_WIN
     return { QStringLiteral("FE-Mounter.exe"), QStringLiteral("fe-mounter.exe") };
@@ -96,14 +96,14 @@ QStringList FileEncryptorLocator::getMounterExpectedNames() {
 #endif
 }
 
-// 按指定候选名探测目录（先于 locateMounter 使用，故前置声明）
+// 按指定候选名探
 static QString findInDirWithNames(const QString& dir,const QStringList& names);
 
 QString FileEncryptorLocator::locateMounter() {
-    // 1) 环境变量
+    // 环境变量
     const QString envPath=qEnvironmentVariable("FE_MOUNTER_EXE");
     if(!envPath.isEmpty()&&isExecutable(envPath)) return envPath;
-    // 2) 同目录（GUI 与 FE-Mounter 同装同卸）
+    // 同目录
     QString found=findInDirWithNames(selfDir(),getMounterExpectedNames());
     if(!found.isEmpty()) return found;
     // 3) PATH
@@ -125,7 +125,7 @@ static QString findInDirWithNames(const QString& dir,const QStringList& names) {
     return {};
 }
 
-// 把 "2.7.1" 解析成三元组，认不出来返回 false
+// 把 "2.7.1" 解析成三元组
 static bool parseVersion(const QString& s,int* maj,int* min,int* pat) {
     if(s.isEmpty()) return false;
     const QStringList parts=s.split(QLatin1Char('.'));
@@ -140,19 +140,19 @@ static bool parseVersion(const QString& s,int* maj,int* min,int* pat) {
     return true;
 }
 
-// 三元组比较：a<b 返回 true
+// 三元组比较
 static bool verLess(int amaj,int amin,int apat,int bmaj,int bmin,int bpat) {
     if(amaj!=bmaj) return amaj<bmaj;
     if(amin!=bmin) return amin<bmin;
     return apat<bpat;
 }
 
-// "FileEncryptorCLI-2.7.0-cmd-Windows.exe" -> (2,7,0)；认不出来返回 false
+// "FileEncryptorCLI
 static bool cliVersionOfFile(const QString& fileName,int* maj,int* min,int* pat) {
     const QString prefix=QStringLiteral("FileEncryptorCLI-");
     if(!fileName.startsWith(prefix,Qt::CaseInsensitive)) return false;
     QString rest=fileName.mid(prefix.size());
-    // 版本号后面必跟 '-cmd-' 或 '.exe'，否则是别的文件
+    // 版本号后面必跟 '-cmd-'
     int end=rest.indexOf(QLatin1Char('-'));
     if(end<0) end=rest.indexOf(QLatin1Char('.'));
     if(end<=0) return false;
@@ -164,7 +164,7 @@ QStringList FileEncryptorLocator::cleanupOutdated(const QString& keepPath) {
     int wantMaj=0,wantMin=0,wantPat=0;
     if(!parseVersion(version(),&wantMaj,&wantMin,&wantPat)) return removed;
 
-    // 只看程序目录：别的地方（PATH、系统目录）不由我们处置
+    // 只看程序目录
     QDir dir(selfDir());
     if(!dir.exists()) return removed;
 
@@ -173,12 +173,12 @@ QStringList FileEncryptorLocator::cleanupOutdated(const QString& keepPath) {
     for(const QString& name:entries) {
         int maj=0,min=0,pat=0;
         if(!cliVersionOfFile(name,&maj,&min,&pat)) continue;
-        // 只删严格低于目标版本的：同版本与更高版本一律不动，
-        // 免得用户手动放的定制版或更新的预发布版被误删
+        // 只删严格低于目
+        // 免得用户手动放
         if(!verLess(maj,min,pat,wantMaj,wantMin,wantPat)) continue;
         if(!keepFull.isEmpty()&&QFileInfo(dir.absoluteFilePath(name)).absoluteFilePath()==keepFull) continue;
         if(QFile::remove(dir.absoluteFilePath(name))) removed<<name;
-        // 删不掉（正在运行 / 无权限）就留着，不打扰用户
+        // 删不掉
     }
     return removed;
 }
@@ -186,8 +186,8 @@ QStringList FileEncryptorLocator::cleanupOutdated(const QString& keepPath) {
 bool FileEncryptorLocator::existsWithVersion(QString* foundPath) {
     const QStringList names=getExpectedNames();
 
-    // 三条命中路径统一走这里收尾，顺手清掉目录里版本过低的 CLI：
-    // 探测在哪触发都清，不必每个调用点都记得调一次
+    // 三条命中路径统
+    // 探测
     auto finish=[foundPath](const QString& p)->bool {
         cleanupOutdated(p);
         if(foundPath) *foundPath=p;
@@ -206,7 +206,7 @@ bool FileEncryptorLocator::existsWithVersion(QString* foundPath) {
         if(!found.isEmpty()) return finish(found);
     }
 
-    // 没找到也要清：老版本堆积正是「找不到新版」最常见的原因
+    // 没找到
     cleanupOutdated(QString());
     return false;
 }

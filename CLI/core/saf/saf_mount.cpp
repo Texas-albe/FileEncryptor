@@ -1,4 +1,4 @@
-// 挂载点后端：底层仍是本地 fs，但打开前校验挂载、打开时复查存活
+// 挂载点后端
 #include "saf_mount.hpp"
 
 #ifdef _WIN32
@@ -17,7 +17,7 @@ std::string parent_dir(const std::string& p) {
     if (pos == std::string::npos) return std::string();
     if (pos == 0) return std::string(1, s[0]);        // "/xxx" → "/"
 #ifdef _WIN32
-    if (pos == 2 && s.size() == 3 && s[1] == ':') return std::string();   // "C:\" 盘根无父
+    if (pos == 2 && s.size() == 3 && s[1] == ':') return std::string();   // "C
 #endif
     return s.substr(0, pos);
 }
@@ -64,17 +64,17 @@ public:
     }
     SafStatus open(const std::string& vpath, char mode, std::shared_ptr<Stream>& out) override {
         uint64_t d = 0;
-        if (!dev_id(point_, d)) return SAF_E_GONE;                     // 挂载点已不存在
-        if (require_ && !saf_is_mount_point(point_)) return SAF_E_GONE; // 已卸载，别往空目录写
-        if (mode != 'r' && !writable_) return SAF_E_RO;   // M33：写模式打开同样要求后端可写（与 delete_file 一致）
+        if (!dev_id(point_, d)) return SAF_E_GONE;                     // 挂载点已不存
+        if (require_ && !saf_is_mount_point(point_)) return SAF_E_GONE; // 已卸载
+        if (mode != 'r' && !writable_) return SAF_E_RO;   // M33
         return inner_->open(vpath, mode, out);
     }
     SafStatus create_file(const std::string& v) override {
-        if (!writable_) return SAF_E_RO;   // M33：只读挂载点后端拒绝建文件（与 delete_file 一致）
+        if (!writable_) return SAF_E_RO;   // M33
         return inner_->create_file(v);
     }
     SafStatus mkdir(const std::string& v) override {
-        if (!writable_) return SAF_E_RO;   // M33：只读挂载点后端拒绝建目录
+        if (!writable_) return SAF_E_RO;   // M33
         return inner_->mkdir(v);
     }
     SafStatus delete_file(const std::string& v) override {
@@ -82,11 +82,11 @@ public:
         return inner_->delete_file(v);
     }
     SafStatus truncate_file(const std::string& v, uint64_t n) override {
-        if (!writable_) return SAF_E_RO;   // M33：只读挂载点后端拒绝截断
+        if (!writable_) return SAF_E_RO;   // M33
         return inner_->truncate_file(v, n);
     }
     SafStatus rename_file(const std::string& a, const std::string& b) override {
-        if (!writable_) return SAF_E_RO;   // M33：只读挂载点后端拒绝改名
+        if (!writable_) return SAF_E_RO;   // M33
         return inner_->rename_file(a, b);
     }
     SafStatus symlink(const std::string& target, const std::string& vpath) override {
@@ -130,7 +130,7 @@ bool saf_is_mount_point(const std::string& path) {
 
 bool saf_mount_alive(const std::string& path) {
     uint64_t d = 0;
-    return dev_id(path, d);            // 只判能否访问，是否仍挂载由 saf_is_mount_point 复查
+    return dev_id(path, d);            // 只判能否访问
 }
 
 SafStatus saf_open_mount_fs(const std::string& mount_point,

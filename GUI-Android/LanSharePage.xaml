@@ -1,0 +1,225 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             x:Class="FileEncryptorMobile.LanSharePage"
+             xmlns:local="clr-namespace:FileEncryptorMobile"
+             Title="{local:Zh 局域网共享}">
+
+    <Grid RowDefinitions="Auto,*,Auto" Padding="16,12,16,16">
+
+        <VerticalStackLayout Grid.Row="0" Spacing="{StaticResource SpaceSm}" Margin="0,0,0,10">
+            <Label Text="{local:Zh 局域网共享（只读）}" Style="{StaticResource DialogTitle}" />
+            <Label x:Name="LblState" Style="{StaticResource Caption}" />
+        </VerticalStackLayout>
+
+        <ScrollView Grid.Row="1">
+            <VerticalStackLayout Spacing="{StaticResource SpaceXl}">
+                <Border Style="{StaticResource Card}">
+                    <VerticalStackLayout Spacing="{StaticResource SpaceLg}">
+                        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="{StaticResource GridGap}">
+                            <VerticalStackLayout Grid.Column="0" Spacing="3">
+                                <Label Text="{local:Zh 开启共享}" Style="{StaticResource SectionTitle}" />
+                                <Label Text="{local:Zh 仅解锁时可用，锁定即停止。}"
+                                       Style="{StaticResource Caption}" />
+                            </VerticalStackLayout>
+                            <Switch x:Name="SwShare" Grid.Column="1" VerticalOptions="Center"
+                                    Toggled="OnShareToggled" />
+                        </Grid>
+
+                        <VerticalStackLayout x:Name="ShareInfo" Spacing="{StaticResource SpaceSm}" IsVisible="False">
+                            <Label Text="{local:Zh 访问地址}" Style="{StaticResource SubSectionTitle}" />
+                            <Label x:Name="LblUrl" Style="{StaticResource MutedText}" />
+                            <Label Text="{local:Zh 一次性配对码}" Style="{StaticResource SubSectionTitle}"
+                                   Margin="0,6,0,0" />
+                            <Label x:Name="LblCode" Style="{StaticResource SectionTitle}" />
+                            <VerticalStackLayout x:Name="QrBox" Spacing="{StaticResource SpaceSm}" IsVisible="False"
+                                                 HorizontalOptions="Center" Margin="0,6,0,0">
+                                <GraphicsView x:Name="QrView" WidthRequest="200" HeightRequest="200"
+                                              BackgroundColor="White" />
+                                <Label Text="{local:Zh 扫出的就是配对码，粘贴到浏览器即可。}"
+                                       Style="{StaticResource Caption}" HorizontalTextAlignment="Center" />
+                            </VerticalStackLayout>
+                            <Label Text="{local:Zh 成功使用一次后自动更换，手机会显示新码。}"
+                                   Style="{StaticResource Caption}" />
+                            <Label Text="{local:Zh 证书指纹}" Style="{StaticResource SubSectionTitle}"
+                                   Margin="0,6,0,0" />
+                            <Label x:Name="LblCert" Style="{StaticResource SectionTitle}" />
+                            <Label Text="{local:Zh 请核对浏览器证书指纹前 12 位与此处一致；不一致立即停止。}"
+                                   Style="{StaticResource Caption}" />
+                            <Label x:Name="LblSpeed" Style="{StaticResource Caption}"
+                                   Margin="0,6,0,0" IsVisible="False" />
+                        </VerticalStackLayout>
+
+                    </VerticalStackLayout>
+                </Border>
+
+                <Border Style="{StaticResource Card}">
+                    <VerticalStackLayout Spacing="{StaticResource SpaceMd}">
+                        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="{StaticResource GridGap}">
+                            <VerticalStackLayout Grid.Column="0" Spacing="3">
+                                <Label Text="{local:Zh 空闲自动锁定}" Style="{StaticResource SectionTitle}" />
+                                <Label Text="{local:Zh 超过此时长无访问，就停止共享并锁定。}"
+                                       Style="{StaticResource Caption}" />
+                            </VerticalStackLayout>
+                            <Picker x:Name="PkIdle" Grid.Column="1" WidthRequest="120"
+                                    VerticalOptions="Center" SelectedIndexChanged="OnIdleChanged">
+                                <Picker.ItemsSource>
+                                    <x:Array Type="{x:Type x:String}">
+                                        <x:String>1 分钟</x:String>
+                                        <x:String>3 分钟</x:String>
+                                        <x:String>5 分钟</x:String>
+                                        <x:String>10 分钟</x:String>
+                                        <x:String>30 分钟</x:String>
+                                        <x:String>60 分钟</x:String>
+                                    </x:Array>
+                                </Picker.ItemsSource>
+                            </Picker>
+                        </Grid>
+                        <Label Text="{local:Zh 与后台自动锁定叠加生效；有传输进度才续期，单次最长 60 分钟。}"
+                               Style="{StaticResource Caption}" />
+                    </VerticalStackLayout>
+                </Border>
+
+                <Border Style="{StaticResource Card}">
+                    <VerticalStackLayout Spacing="{StaticResource SpaceMd}">
+                        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="{StaticResource GridGap}">
+                            <VerticalStackLayout Grid.Column="0" Spacing="3">
+                                <Label Text="{local:Zh 下载限速}" Style="{StaticResource SectionTitle}" />
+                                <Label Text="{local:Zh 限制共享下载速率；不限速时零开销。}"
+                                       Style="{StaticResource Caption}" />
+                            </VerticalStackLayout>
+                            <Picker x:Name="PkRate" Grid.Column="1" WidthRequest="120"
+                                    VerticalOptions="Center" SelectedIndexChanged="OnRateChanged">
+                                <Picker.ItemsSource>
+                                    <x:Array Type="{x:Type x:String}">
+                                        <x:String>不限速</x:String>
+                                        <x:String>256 KB/s</x:String>
+                                        <x:String>1 MB/s</x:String>
+                                        <x:String>5 MB/s</x:String>
+                                        <x:String>20 MB/s</x:String>
+                                    </x:Array>
+                                </Picker.ItemsSource>
+                            </Picker>
+                        </Grid>
+                        <Label Text="{local:Zh 档位在下载开始时读取，中途切换不影响进行中的传输。}"
+                               Style="{StaticResource Caption}" />
+                    </VerticalStackLayout>
+                </Border>
+
+                <Border Style="{StaticResource Card}">
+                    <VerticalStackLayout Spacing="{StaticResource SpaceMd}">
+                        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="{StaticResource GridGap}">
+                            <VerticalStackLayout Grid.Column="0" Spacing="3">
+                                <Label Text="{local:Zh 接入设备数上限}" Style="{StaticResource SectionTitle}" />
+                                <Label Text="{local:Zh 同时可连接的设备数；超出后新设备无法配对或登录。}"
+                                       Style="{StaticResource Caption}" />
+                            </VerticalStackLayout>
+                            <Picker x:Name="PkDev" Grid.Column="1" WidthRequest="120"
+                                    VerticalOptions="Center" SelectedIndexChanged="OnDevChanged">
+                                <Picker.ItemsSource>
+                                    <x:Array Type="{x:Type x:String}">
+                                        <x:String>不限</x:String>
+                                        <x:String>1 台</x:String>
+                                        <x:String>2 台</x:String>
+                                        <x:String>3 台</x:String>
+                                        <x:String>5 台</x:String>
+                                    </x:Array>
+                                </Picker.ItemsSource>
+                            </Picker>
+                        </Grid>
+                        <Label Text="{local:Zh 已登录设备不受影响；停止共享后计数清零。}"
+                               Style="{StaticResource Caption}" />
+                    </VerticalStackLayout>
+                </Border>
+
+                <Border Style="{StaticResource Card}">
+                    <VerticalStackLayout Spacing="{StaticResource SpaceMd}">
+                        <Label Text="{local:Zh 实时日志}" Style="{StaticResource SectionTitle}" />
+                        <Label Text="{local:Zh 实时刷新；停止共享或锁定后自动清空。}"
+                               Style="{StaticResource Caption}" />
+                        <Button Text="{local:Zh 查看实时日志}" Clicked="OnLogOpen"
+                                Style="{StaticResource SecondaryButton}" />
+                    </VerticalStackLayout>
+                </Border>
+
+                <Border Style="{StaticResource Card}">
+                    <VerticalStackLayout Spacing="6">
+                        <Label Text="{local:Zh 使用说明}" Style="{StaticResource SectionTitle}" />
+                        <Label Text="{local:Zh 1. 手机与电脑连接到同一 Wi-Fi。}" Style="{StaticResource Caption}" />
+                        <Label Text="{local:Zh 2. 打开「开启共享」，倒计时 5 秒后生效；期间关掉开关即可中止。}"
+                               Style="{StaticResource Caption}" />
+                        <Label Text="{local:Zh 3. 用浏览器打开上方访问地址。}" Style="{StaticResource Caption}" />
+                        <Label Text="{local:Zh 4. 浏览器提示证书不受信任时选「继续访问」，再核对指纹前 12 位与手机一致。}"
+                               Style="{StaticResource Caption}" />
+                        <Label Text="{local:Zh 5. 先输配对码，验证通过后再输访问密码。}"
+                               Style="{StaticResource Caption}" />
+                        <Label Text="{local:Zh 6. 只读：对方只能浏览和下载，不能改动文件。}"
+                               Style="{StaticResource Caption}" />
+                        <Label Text="{local:Zh 7. 传输经 TLS 加密，密码只用于校验、不会保存。}"
+                               Style="{StaticResource Caption}" />
+                    </VerticalStackLayout>
+                </Border>
+            </VerticalStackLayout>
+        </ScrollView>
+
+        <Button Grid.Row="2" Text="{local:Zh 返回}" Clicked="OnClose"
+                Style="{StaticResource SecondaryButton}" Margin="0,10,0,0" />
+
+        <!-- 开启前的安全确 -->
+        <Grid x:Name="WarnOverlay" Grid.RowSpan="3" IsVisible="False"
+              BackgroundColor="{StaticResource Scrim}">
+            <Grid.GestureRecognizers>
+                <TapGestureRecognizer Tapped="OnWarnCancel" />
+            </Grid.GestureRecognizers>
+            <Border Style="{StaticResource DialogCard}" VerticalOptions="Center"
+                    Margin="{StaticResource DialogMarginH}" MaximumWidthRequest="420">
+                <Border.GestureRecognizers>
+                    <TapGestureRecognizer Tapped="OnWarnCardTapped" />
+                </Border.GestureRecognizers>
+                <VerticalStackLayout Spacing="{StaticResource SpaceXl}">
+                    <Label Text="{local:Zh 开启局域网共享？}" Style="{StaticResource DialogTitle}" />
+                    <Label Style="{StaticResource ErrorText}">
+                        开启后，同一 Wi-Fi/局域网内的设备都能访问本机共享地址。共享为只读，
+                        关闭开关即立即停止服务并断开所有连接。
+                    </Label>
+                    <Label x:Name="LblWarnBody" Style="{StaticResource Caption}" />
+                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="{StaticResource SpaceLg}">
+                        <Button Grid.Column="0" Text="{local:Zh 取消}" Clicked="OnWarnCancel"
+                                Style="{StaticResource SecondaryButton}" />
+                        <Button Grid.Column="1" x:Name="BtnWarnGo" Text="{local:Zh 继续}" Clicked="OnWarnContinue"
+                                Style="{StaticResource DangerOutlineButton}" />
+                    </Grid>
+                </VerticalStackLayout>
+            </Border>
+        </Grid>
+
+        <!-- 访问记录弹层 -->
+        <Grid x:Name="LogOverlay" Grid.RowSpan="3" IsVisible="False"
+              BackgroundColor="{StaticResource Scrim}">
+            <Grid.GestureRecognizers>
+                <TapGestureRecognizer Tapped="OnLogClose" />
+            </Grid.GestureRecognizers>
+            <Border Style="{StaticResource DialogCard}" VerticalOptions="Center"
+                    Margin="{StaticResource DialogMarginH}" MaximumWidthRequest="460">
+                <Border.GestureRecognizers>
+                    <TapGestureRecognizer Tapped="OnLogCardTapped" />
+                </Border.GestureRecognizers>
+                <VerticalStackLayout Spacing="{StaticResource SpaceLg}">
+                    <Label Text="{local:Zh 实时日志}" Style="{StaticResource DialogTitle}" />
+                    <Label Text="{local:Zh 仅记录本次共享，停止或锁定后清空；只显示脱敏标记。}"
+                           Style="{StaticResource Caption}" />
+                    <Label x:Name="LblLogCount" Style="{StaticResource Caption}" />
+                    <ScrollView x:Name="LogScroll" HeightRequest="300">
+                        <VerticalStackLayout x:Name="LogList" Spacing="{StaticResource SpaceXs}" />
+                    </ScrollView>
+                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="{StaticResource SpaceLg}">
+                        <Button Grid.Column="0" Text="{local:Zh 刷新}" Clicked="OnLogRefresh"
+                                Style="{StaticResource SecondaryButton}" />
+                        <Button Grid.Column="1" Text="{local:Zh 关闭}" Clicked="OnLogClose"
+                                Style="{StaticResource SecondaryButton}" />
+                    </Grid>
+                </VerticalStackLayout>
+            </Border>
+        </Grid>
+    </Grid>
+</ContentPage>

@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             xmlns:services="clr-namespace:FileEncryptorMobile.Services"
+             x:Class="FileEncryptorMobile.TrashPage"
+             xmlns:local="clr-namespace:FileEncryptorMobile"
+             Title="{local:Zh 回收站}">
+
+    <Grid RowDefinitions="Auto,*,Auto" Padding="16,12,16,12">
+
+        <VerticalStackLayout Grid.Row="0" Spacing="{StaticResource SpaceSm}" Margin="0,0,0,8">
+            <Label Text="{local:Zh 回收站}" Style="{StaticResource DialogTitle}" />
+            <Label x:Name="LblHint" Style="{StaticResource Caption}" />
+        </VerticalStackLayout>
+
+        <CollectionView Grid.Row="1" x:Name="TrashList" SelectionMode="None">
+            <CollectionView.ItemTemplate>
+                <DataTemplate x:DataType="services:TrashEntry">
+                    <Border Style="{StaticResource Card}" Margin="0,0,0,8" Padding="12">
+                        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="{StaticResource SpaceLg}">
+                            <VerticalStackLayout Grid.Column="0" Spacing="3">
+                                <Label Text="{Binding Name}" FontSize="{StaticResource FontSizeField}" FontAttributes="Bold"
+                                       LineBreakMode="TailTruncation" />
+                                <Label Text="{Binding OriginText}" Style="{StaticResource Caption}"
+                                       LineBreakMode="MiddleTruncation" />
+                                <Label Text="{Binding TimeText}" Style="{StaticResource Caption}" />
+                                <Label Text="{Binding SizeText}" Style="{StaticResource Caption}" />
+                                <Label Text="{Binding ExpireText}" Style="{StaticResource Caption}" />
+                                <Label Text="{local:Zh 即将到期，请尽快恢复}"
+                                       Style="{StaticResource ErrorText}" FontSize="{StaticResource FontSizeCaption}"
+                                       IsVisible="{Binding IsExpiring}" />
+                            </VerticalStackLayout>
+                            <HorizontalStackLayout Grid.Column="1" Spacing="{StaticResource SpaceMd}" VerticalOptions="Center">
+                                <Button Text="{local:Zh 永久删除}"
+                                        Style="{StaticResource DangerOutlineButton}"
+                                        FontSize="{StaticResource FontSizeCaption}" Padding="12,6" CornerRadius="{StaticResource RadiusChip}"
+                                        MinimumHeightRequest="{StaticResource ControlMinSmall}"
+                                        CommandParameter="{Binding .}" Clicked="OnDelete" />
+                                <Button Text="{local:Zh 恢复}"
+                                        Style="{StaticResource SmallPrimaryButton}"
+                                        CommandParameter="{Binding .}" Clicked="OnRestore" />
+                            </HorizontalStackLayout>
+                        </Grid>
+                    </Border>
+                </DataTemplate>
+            </CollectionView.ItemTemplate>
+            <CollectionView.EmptyView>
+                <VerticalStackLayout Spacing="6" Padding="24,36"
+                                     HorizontalOptions="Center" VerticalOptions="Center">
+                    <Label Text="{local:Zh 回收站为空}" Style="{StaticResource SectionTitle}"
+                           HorizontalTextAlignment="Center" HorizontalOptions="Center" />
+                    <Label Text="{local:Zh 删除的文件会先放进这里，保留一段时间后自动清理。}"
+                           Style="{StaticResource Caption}"
+                           HorizontalTextAlignment="Center" HorizontalOptions="Center" />
+                </VerticalStackLayout>
+            </CollectionView.EmptyView>
+        </CollectionView>
+
+        <Grid Grid.Row="2" ColumnDefinitions="*,Auto" ColumnSpacing="{StaticResource SpaceLg}" Margin="0,10,0,0">
+            <Button Grid.Column="0" x:Name="BtnEmpty" Text="{local:Zh 清空回收站}" Clicked="OnEmpty"
+                    Style="{StaticResource DangerOutlineButton}" />
+            <Button Grid.Column="1" Text="{local:Zh 返回}" Clicked="OnClose"
+                    Style="{StaticResource SecondaryButton}" />
+        </Grid>
+    </Grid>
+</ContentPage>

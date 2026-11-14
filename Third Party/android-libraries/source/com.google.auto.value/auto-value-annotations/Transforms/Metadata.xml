@@ -1,0 +1,6 @@
+﻿<?xml version="1.0" encoding="UTF-8"?>
+<metadata>
+  <!-- Preserve non-standard namespace renames -->
+	<attr path="/api/package[@name='com.google.auto.value']" name="managedName">Google.AutoValue.Annotations</attr>
+	<attr path="/api/package[@name='com.google.auto.value.extension.memoized']" name="managedName">Google.AutoValue.Annotations</attr>
+</metadata>

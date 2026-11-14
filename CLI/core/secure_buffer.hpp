@@ -3,11 +3,11 @@
 #include <cstring>
 #include <sodium.h>
 
-// SecureBuffer：敏感数据（密码/密钥/派生中间密钥）的 RAII 容器。构造时 mlock 防换出，
-// 析构时 memzero 清零并 munlock；禁拷贝允许移动。任何退出路径都不遗留明文密钥。
+// SecureBuffer
+// 析构时 memzero 清零并
 
-// mlock 失败告警钩子（由 FileEncryptor.cpp 提供定义，避免本头文件耦合日志模块）。
-// 仅在首次失败时提示一次，不刷屏。
+// mlock 失败告警钩子
+// 仅在首次失败
 extern void fe_report_mlock_warning_once();
 
 class SecureBuffer {
@@ -18,8 +18,8 @@ class SecureBuffer {
         if (!data_.empty()) {
             sodium_memzero(data_.data(), data_.size());
             if (locked_) sodium_munlock(data_.data(), data_.size());
-            // 强制释放底层缓冲：clear()+shrink_to_fit() 不保证归还内存，
-            // 可能保留旧明文副本；用 swap 与一个空 vector 确保立即释放。
+            // 强制释放底层缓
+            // 保留旧明文副本
             std::vector<unsigned char>().swap(data_);
         }
         locked_ = false;
@@ -33,9 +33,9 @@ public:
             data_.resize(n);
             if (sodium_mlock(data_.data(), n) == 0) locked_ = true;
 #ifndef __ANDROID__
-            // Android 的 RLIMIT_MEMLOCK 极小且不可提升，锁页失败是常态而非异常，
-            // 告警只会污染日志，故整块跳过（wipe() 仍负责清零，安全性不降）。
-            else fe_report_mlock_warning_once();  // 锁页失败：密钥可能换出到 swap
+            // Android 的 RLIMIT_MEMLOCK 极小且不可提
+            // 告警只
+            else fe_report_mlock_warning_once();  // 锁页失败
 #endif
         }
     }

@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             x:Class="FileEncryptorMobile.HomePage"
+             xmlns:local="clr-namespace:FileEncryptorMobile"
+             Title="{local:Zh 主页}">
+
+    <ScrollView>
+        <VerticalStackLayout Padding="{StaticResource PagePadding}" Spacing="{StaticResource PageSpacing}">
+
+            <VerticalStackLayout Spacing="{StaticResource SpaceSm}">
+                <Label Text="FileEncryptor" Style="{StaticResource PageTitle}" />
+                <Label Text="{local:Zh 所有加解密都在本机完成，密钥不出设备。}"
+                       Style="{StaticResource Caption}" />
+            </VerticalStackLayout>
+
+            <!-- 进行中的批量任 -->
+            <Border x:Name="TaskCard" IsVisible="False"
+                    Style="{StaticResource CardAccent}">
+                <VerticalStackLayout Spacing="{StaticResource SpaceMd}">
+                    <Label x:Name="LblTaskTitle" Style="{StaticResource SectionTitle}"
+                           TextColor="{AppThemeBinding Light={StaticResource Primary}, Dark={StaticResource PrimaryDark}}" />
+                    <Label x:Name="LblTaskInfo" Style="{StaticResource Caption}" />
+                    <Button x:Name="BtnTaskOpen" Text="{local:Zh 查看进度}" Clicked="OnOpenTask"
+                            Style="{StaticResource QuietButton}" />
+                </VerticalStackLayout>
+            </Border>
+
+            <!-- 加密库状态 -->
+            <Border Style="{StaticResource Card}">
+                <VerticalStackLayout Spacing="{StaticResource SpaceMd}">
+                    <Label Text="{local:Zh 加密库}" Style="{StaticResource SectionTitle}" />
+                    <VerticalStackLayout Spacing="{StaticResource SpaceXs}">
+                        <Label x:Name="LblVaultDir" FontSize="{StaticResource FontSizeSub}"
+                               LineBreakMode="MiddleTruncation" />
+                        <Label x:Name="LblVaultState" Style="{StaticResource Caption}" />
+                        <Label x:Name="LblVaultSpace" Style="{StaticResource Caption}" />
+                    </VerticalStackLayout>
+                </VerticalStackLayout>
+            </Border>
+
+            <Label Text="{local:Zh 常用操作}" Style="{StaticResource SectionTitle}" Margin="0,4,0,0" />
+            <Grid ColumnDefinitions="*,*" ColumnSpacing="{StaticResource GridGap}">
+                <Button Grid.Column="0" Text="{local:Zh 打开加密库}" Clicked="OnOpenVault"
+                        Style="{StaticResource PrimaryButton}" />
+                <Button Grid.Column="1" Text="{local:Zh 文件加解密}" Clicked="OnOpenCrypto"
+                        Style="{StaticResource PrimaryButton}" />
+            </Grid>
+            <Grid ColumnDefinitions="*,*" ColumnSpacing="{StaticResource GridGap}">
+                <Button Grid.Column="0" x:Name="BtnUpdate" Text="{local:Zh 检查更新}" Clicked="OnCheckUpdate"
+                        Style="{StaticResource SecondaryButton}" />
+                <Button Grid.Column="1" Text="{local:Zh 设置}" Clicked="OnOpenSettings"
+                        Style="{StaticResource SecondaryButton}" />
+            </Grid>
+
+            <Label x:Name="LblVersion" Style="{StaticResource Caption}"
+                   HorizontalOptions="Center" Margin="0,8,0,0" />
+
+        </VerticalStackLayout>
+    </ScrollView>
+
+</ContentPage>

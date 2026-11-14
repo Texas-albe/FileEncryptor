@@ -32,7 +32,7 @@ void MsgBox::showAsync(QWidget* parent, Icon icon, const QString& title,
     box->setStandardButtons(buttons);
     box->setMinimumWidth(360);
     if (parent) box->setWindowModality(Qt::WindowModal);
-    // 异步关闭后回调并销毁
+    // 异步关闭后回调
     QObject::connect(box, QOverload<int>::of(&QMessageBox::finished),
         box, [box, cb](int result) {
             if (cb) cb(static_cast<QMessageBox::StandardButton>(result));

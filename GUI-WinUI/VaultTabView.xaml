@@ -1,0 +1,63 @@
+<UserControl
+    x:Class="FileEncryptorGUI.VaultTabView"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:controls="using:Microsoft.UI.Xaml.Controls">
+
+    <Grid ColumnDefinitions="*,Auto" Margin="16,12,16,12" RowDefinitions="Auto,*" RowSpacing="12">
+        <!-- 能力状态提示：不可用时说明原因，而不是把按钮静默变哑 -->
+        <controls:InfoBar Grid.Row="0" Grid.ColumnSpan="2" x:Name="VaultHintBar"
+                          Severity="Warning" IsOpen="False" IsClosable="False" />
+
+        <controls:Border Grid.Row="1" Grid.Column="0" Style="{StaticResource AppCardBorderStyle}" Padding="0">
+            <Grid RowDefinitions="Auto,*">
+                <TextBlock Grid.Row="0" Text="已挂载加密盘" Style="{StaticResource AppSectionHeaderTextStyle}"
+                           Margin="16,16,16,8" />
+                <controls:ListView Grid.Row="1" x:Name="MountedVaultsList"
+                                   Background="Transparent" BorderThickness="0"
+                                   DoubleTapped="OnMountedVaultDoubleTapped">
+                    <controls:ListView.ItemContainerStyle>
+                        <Style TargetType="controls:ListViewItem">
+                            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                            <Setter Property="Padding" Value="16,8" />
+                        </Style>
+                    </controls:ListView.ItemContainerStyle>
+                    <controls:ListView.ItemTemplate>
+                        <DataTemplate>
+                            <StackPanel Spacing="2">
+                                <TextBlock Text="{Binding VaultDir}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                                <TextBlock Text="{Binding MountPoint}" Style="{StaticResource AppCaptionTextStyle}" TextTrimming="CharacterEllipsis" />
+                            </StackPanel>
+                        </DataTemplate>
+                    </controls:ListView.ItemTemplate>
+                </controls:ListView>
+            </Grid>
+        </controls:Border>
+
+        <controls:Border Grid.Row="1" Grid.Column="1" Style="{StaticResource AppCardBorderStyle}"
+                         Width="220" Margin="12,0,0,0">
+            <StackPanel Spacing="8">
+                <TextBlock Text="操作" Style="{StaticResource AppSectionHeaderTextStyle}" Margin="0,0,0,4" />
+                <ScrollViewer VerticalScrollBarVisibility="Auto" VerticalScrollMode="Auto">
+                    <StackPanel Spacing="8">
+                        <Button Content="刷新列表" Click="OnRefreshMounted" HorizontalAlignment="Stretch" />
+                        <Button Content="加密盘管理..." Click="OnVaultManager" HorizontalAlignment="Stretch" />
+                        <Button Content="新建加密盘..." Click="OnVaultInit" HorizontalAlignment="Stretch"
+                                Style="{StaticResource AppPrimaryButtonStyle}" />
+                        <Button Content="查看盘内文件..." Click="OnVaultList" HorizontalAlignment="Stretch" />
+                        <Button Content="修改加密盘密码..." Click="OnVaultRekey" HorizontalAlignment="Stretch" />
+                        <Button Content="生成恢复码..." Click="OnVaultRecoveryCreate" HorizontalAlignment="Stretch" />
+                        <Button Content="用恢复码找回密码..." Click="OnVaultRecoveryOpen" HorizontalAlignment="Stretch" />
+                        <Button Content="挂载为磁盘..." Click="OnVaultMount" HorizontalAlignment="Stretch" />
+                        <Button Content="已挂载的加密盘..." Click="OnMountedVaults" HorizontalAlignment="Stretch" />
+                        <Button Content="卸载磁盘..." Click="OnVaultUnmount" HorizontalAlignment="Stretch" />
+                        <Button Content="格式化加密盘..." Click="OnVaultFormat" HorizontalAlignment="Stretch"
+                                Style="{StaticResource AppDangerButtonStyle}" />
+                        <Button Content="锁定" Click="OnVaultLock" HorizontalAlignment="Stretch" />
+                        <Button Content="解锁..." Click="OnVaultUnlock" HorizontalAlignment="Stretch" />
+                    </StackPanel>
+                </ScrollViewer>
+            </StackPanel>
+        </controls:Border>
+    </Grid>
+</UserControl>

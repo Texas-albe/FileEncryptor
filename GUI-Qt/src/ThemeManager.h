@@ -1,7 +1,8 @@
-// 主题管理（浅色/深色）
+// 主题管理
 #pragma once
 #include <QObject>
 #include <QDate>
+#include <QString>
 
 class QApplication;
 class QPalette;
@@ -22,13 +23,13 @@ public:
 
     static Theme chosenTheme();
 
-    // System 档解析后的实际取值（Light/Dark）
+    // System 档解析
     static Theme effectiveTheme();
 
     // 当前是否深色
     static bool isDarkActive();
 
-    // 输出区高对比颜色
+    // 输出区高对比颜
     static unsigned int stdoutColorRGB();
     static unsigned int stderrColorRGB();
 
@@ -46,7 +47,7 @@ public:
     static const HtmlPalette& htmlPalette();
 
     // 界面配色
-    // 调色板与 QSS 共用，避免两处硬编码漂移
+    // 调色板
     struct Ui {
         const char* window;
         const char* panelRgba;
@@ -62,11 +63,28 @@ public:
         const char* highlight;
         const char* scrollHandle;
         const char* scrollHover;
+        // 操作层级
+        // 深色
+        const char* accent;
+        const char* accentHover;
+        const char* accentPressed;
+        const char* onAccent;
+        const char* danger;
+        const char* dangerHover;
+        const char* disabledText;
+        const char* warning;
+        const char* success;
     };
-    // 国庆周取国旗红，其余时间取中性色
+    // 国庆周取国旗红
     static const Ui& ui();
     // 次要说明文字色
     static const char* mutedTextHex();
+    // 状态色
+    static const char* dangerHex();
+    static const char* warningHex();
+    static const char* successHex();
+    // 全局 QSS
+    static QString styleSheet();
 
     static bool isNationalDay(const QDate& d = QDate::currentDate());
     static int nationalDayAge(const QDate& d = QDate::currentDate());

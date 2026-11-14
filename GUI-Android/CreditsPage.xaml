@@ -1,0 +1,82 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             x:Class="FileEncryptorMobile.CreditsPage"
+             xmlns:local="clr-namespace:FileEncryptorMobile"
+             Title="{local:Zh 鸣谢}">
+
+    <ScrollView>
+        <VerticalStackLayout Padding="{StaticResource PagePadding}" Spacing="{StaticResource PageSpacing}">
+
+            <Label x:Name="LblTitle" Style="{StaticResource DialogTitle}" />
+            <Label Text="{local:Zh 这个项目能一直做下去，多亏了这些朋友：}"
+                   Style="{StaticResource MutedText}" />
+
+            <Label Text="{local:Zh 开发与维护}" Style="{StaticResource SubSectionTitle}" Margin="0,4,0,0" />
+            <Label Text="{local:Zh 瑶璎珞}" FontSize="{StaticResource FontSizeBody}" />
+            <Label Text="{local:Zh 个人主页}" Style="{StaticResource LinkText}">
+                <Label.GestureRecognizers>
+                    <TapGestureRecognizer Tapped="OnLinkTapped"
+                        CommandParameter="https://space.bilibili.com/3546692557212318" />
+                </Label.GestureRecognizers>
+            </Label>
+            <Label Text="{local:Zh 赞助支持}" Style="{StaticResource LinkText}">
+                <Label.GestureRecognizers>
+                    <TapGestureRecognizer Tapped="OnLinkTapped"
+                        CommandParameter="https://afdian.com/a/yaoyingluo" />
+                </Label.GestureRecognizers>
+            </Label>
+
+            <Label Text="{local:Zh 帮忙测试}" Style="{StaticResource SubSectionTitle}" Margin="0,4,0,0" />
+            <Label Text="{local:Zh 就不错了我}" FontSize="{StaticResource FontSizeBody}" />
+            <Label Text="{local:Zh 个人主页}" Style="{StaticResource LinkText}">
+                <Label.GestureRecognizers>
+                    <TapGestureRecognizer Tapped="OnLinkTapped"
+                        CommandParameter="https://space.bilibili.com/1705671238" />
+                </Label.GestureRecognizers>
+            </Label>
+
+            <Label Text="{local:Zh 帮忙宣传}" Style="{StaticResource SubSectionTitle}" Margin="0,4,0,0" />
+            <Label Text="{local:Zh Twilight飞友}" FontSize="{StaticResource FontSizeBody}" />
+            <Label Text="{local:Zh 个人主页}" Style="{StaticResource LinkText}">
+                <Label.GestureRecognizers>
+                    <TapGestureRecognizer Tapped="OnLinkTapped"
+                        CommandParameter="https://space.bilibili.com/3546728261224829" />
+                </Label.GestureRecognizers>
+            </Label>
+
+            <BoxView Style="{StaticResource Divider}" Margin="0,6" />
+
+            <Label Text="{local:Zh 底层加密使用 libsodium（XChaCha20-Poly1305 / AEGIS-256）。}"
+                   Style="{StaticResource Caption}" />
+            <Label Text="{local:Zh 也谢谢每一位用它的朋友。}"
+                   Style="{StaticResource Caption}" />
+
+            <BoxView Style="{StaticResource Divider}" Margin="0,6" />
+
+            <Label Text="{local:Zh 本应用许可}" Style="{StaticResource SubSectionTitle}" Margin="0,4,0,0" />
+            <Label Text="{local:Zh FileEncryptor 以 GNU Affero General Public License v3.0（AGPLv3）发布，完整源码随发布仓库提供。}"
+                   Style="{StaticResource Caption}" />
+            <Label Text="https://www.gnu.org/licenses/agpl-3.0.html" Style="{StaticResource LinkText}">
+                <Label.GestureRecognizers>
+                    <TapGestureRecognizer Tapped="OnLinkTapped"
+                        CommandParameter="https://www.gnu.org/licenses/agpl-3.0.html" />
+                </Label.GestureRecognizers>
+            </Label>
+
+            <Label Text="{local:Zh 第三方组件与许可}" Style="{StaticResource SubSectionTitle}" Margin="0,4,0,0" />
+            <Label Text="{local:Zh 本应用使用了以下开源组件：}"
+                   Style="{StaticResource MutedText}" Margin="0,2,0,4" />
+            <Label Text="{local:Zh • libsodium（ISC）：核心对称加密 XChaCha20-Poly1305 / AEGIS-256}" Style="{StaticResource Caption}" />
+            <Label Text="{local:Zh • OpenSSL（Apache-2.0）：SM4-GCM / X25519·X448 / ML-KEM-768 / ML-DSA-65}" Style="{StaticResource Caption}" />
+            <Label Text="{local:Zh • zstd（BSD-3-Clause）：容器压缩}" Style="{StaticResource Caption}" />
+            <Label Text="{local:Zh • yaml-cpp（MIT）：索引与配置解析}" Style="{StaticResource Caption}" />
+            <Label Text="{local:Zh • .NET / .NET MAUI（MIT）：应用框架与运行时}" Style="{StaticResource Caption}" />
+
+            <BoxView Style="{StaticResource Divider}" Margin="0,6" />
+
+            <Button x:Name="BtnClose" Text="{local:Zh 关闭}" Clicked="OnClose"
+                    Style="{StaticResource PrimaryButton}" Margin="0,6,0,0" />
+        </VerticalStackLayout>
+    </ScrollView>
+</ContentPage>

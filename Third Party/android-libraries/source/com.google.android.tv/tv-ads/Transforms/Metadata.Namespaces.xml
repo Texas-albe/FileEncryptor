@@ -1,0 +1,14 @@
+﻿<metadata>
+    <attr 
+        path="/api/package[@name='com.google.android.tv.ads']" 
+        name="managedName"
+        >
+        Google.Android.TV.Ads
+    </attr>
+    <attr 
+        path="/api/package[@name='com.google.android.tv.ads.controls']" 
+        name="managedName"
+        >
+        Google.Android.TV.Ads.Controls
+    </attr>
+</metadata>

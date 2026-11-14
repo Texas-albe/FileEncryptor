@@ -1,13 +1,13 @@
-// 批量处理模块：目录遍历 / 输出路径构造 / KDF 参数探测 / 批量入口。
-// 从 FileEncryptor.cpp 拆分而来，保持 FileEncryptor.hpp 中 process_files / fe_path_is_directory 声明不变。
+// 批量处理模块
+// 从 FileEncryptor.cpp 拆分
 #define _CRT_SECURE_NO_WARNINGS
 #ifdef _WIN32
-#include <windows.h>    // 必须早于 C++ 头：CreateFileW / DeviceIoControl
+#include <windows.h>    // 必须早于 C++ 头
 #include <winioctl.h>   // FSCTL_GET_REPARSE_POINT
 #endif
 #include "FileEncryptor.hpp"
 #ifdef FE_WITH_ZSTD
-#include "zstd.h"   // 仅当构建集成了 zstd 预编译库时引入（third_party/zstd/include）
+#include "zstd.h"   // 仅当构建集成
 #endif
 #include <cstdio>
 #include <fcntl.h>
@@ -59,20 +59,20 @@
 
 #ifdef _WIN32
 #include <windows.h>
-#include <malloc.h>    // _aligned_malloc / _aligned_free（输入侧页对齐大缓冲）
+#include <malloc.h>    // _aligned_malloc / _aligned_free
 #include <debugapi.h>
 #include <shlobj.h>
-#include <aclapi.h>       // SetEntriesInAclW / SetNamedSecurityInfoW（密钥文件 DACL 收紧）
+#include <aclapi.h>       // SetEntriesInAclW / SetNamedSecurityInfoW
 #include <direct.h>
 #include <io.h>
 #include <process.h>
-#pragma comment(lib, "shell32.lib")   // SHFileOperationW（回收站）
+#pragma comment(lib, "shell32.lib")   // SHFileOperationW
 #else
 #include <sys/mman.h>
 #include <unistd.h>
 #include <sys/ptrace.h>
 #include <sys/resource.h>
-#include <sys/stat.h>     // chmod（密钥文件 0600）
+#include <sys/stat.h>     // chmod
 #include <pwd.h>
 #include <dirent.h>
 #include <fcntl.h>
@@ -109,8 +109,8 @@ static bool is_directory(const std::string& path) {
 bool fe_path_is_directory(const std::string& path) { return is_directory(path); }
 
 static void collect_files_from_dir(const std::string& dir,std::vector<std::string>& out_files,int depth=0) {
-    // 防御：极端深的目录嵌套（>1024 层）会耗尽调用栈导致崩溃（DoS）。
-    // 超过深度上限时跳过该子树并发出告警，而非继续递归。
+    // 防御
+    // 超过深度上限
     if(depth>1024) {
         std::cerr<<"Warning: directory nesting too deep, skipping: "<<dir<<"\n";
         return;
@@ -124,7 +124,7 @@ static void collect_files_from_dir(const std::string& dir,std::vector<std::strin
         if(wcscmp(fd.name,L".")==0||wcscmp(fd.name,L"..")==0) continue;
         std::string name=wstring_to_utf8(fd.name);
         std::string full=dir+"\\"+name;
-        // 跳过重解析点（junction/符号链接目录，属性位 0x0400），避免目录循环导致死递归
+        // 跳过重解析点
         if((fd.attrib&_A_SUBDIR)&&!(fd.attrib&0x0400)) {
             collect_files_from_dir(full,out_files,depth+1);
         }
@@ -143,7 +143,7 @@ static void collect_files_from_dir(const std::string& dir,std::vector<std::strin
         struct stat st;
         if(lstat(full.c_str(),&st)==0) {
             if(S_ISLNK(st.st_mode)) {
-                continue; // 跳过符号链接，避免目录循环
+                continue; // 跳过符号链接
             }
             if(S_ISDIR(st.st_mode)) {
                 collect_files_from_dir(full,out_files,depth+1);
@@ -164,8 +164,8 @@ static std::string build_batch_out_path(const std::string& in_path,
     std::string out_path=out_dir_clean+"/";
     std::string best_root;
     for(const auto& root:input_paths) {
-        // 前缀匹配需带边界：root 后须紧跟分隔符或与 in_path 相同，
-        // 否则 "D:\data" 会误匹配 "D:\database\x"。
+        // 前缀匹配需带边
+        // "D
         if(is_directory(root)&&in_path.length()>=root.length()&&
            in_path.compare(0,root.length(),root)==0&&
            (in_path.length()==root.length()||
@@ -176,8 +176,8 @@ static std::string build_batch_out_path(const std::string& in_path,
     if(!best_root.empty()) {
         std::string suffix=in_path.substr(best_root.length());
         if(!suffix.empty()&&(suffix[0]=='/'||suffix[0]=='\\')) suffix.erase(0,1);
-        // 加密保留输入根目录名作顶层；解密默认不附加（多输入根时即使解密也附加），
-        // 避免多 -i 同名冲突。
+        // 加密保留输入根
+        // 多 -i 同名冲突
         bool need_root_name=include_root_name||input_paths.size()>1;
         if(need_root_name) {
             size_t root_pos=best_root.find_last_of("/\\");
@@ -191,13 +191,13 @@ static std::string build_batch_out_path(const std::string& in_path,
         std::string fname=(pos!=std::string::npos) ? in_path.substr(pos+1) : in_path;
         out_path+=fname;
     }
-    // 路径穿越防御：复用 path_has_traversal 的组件法（覆盖前缀 “..” 与中间 “/..”，
+    // 路径穿越防御
     if(path_has_traversal(out_path)) return "";
     return out_path;
 }
 
-// 批量预派生用：只读文件头的 KDF 三元组（盐 + ops + mem），不做任何密钥派生。
-// 与 read_original_name 同源的版本分派，保证 v1 旧格式回落到历史固定参数。
+// 批量预派生用
+// 与 read_original_name 同源
 static bool read_header_kdf_params(const std::string& ptd_path,
     unsigned char salt[ARGON2_SALT_LEN], unsigned int& ops, uint32_t& mem_kb) {
     std::ifstream f;
@@ -220,7 +220,7 @@ static bool read_header_kdf_params(const std::string& ptd_path,
     return true;
 }
 
-// 分卷输入的 base 不在场时，各卷头部与完整件一致，取第一卷即可
+// 分卷输入
 static bool kdf_params_for_batch_input(const std::string& in_path,
     unsigned char salt[ARGON2_SALT_LEN], unsigned int& ops, uint32_t& mem_kb) {
     if(read_header_kdf_params(in_path,salt,ops,mem_kb)) return true;
@@ -241,8 +241,8 @@ bool process_files(const std::vector<std::string>& input_paths,
     int compress_level,
     const WatermarkSpec* wm,
     uint64_t split_bytes) {
-    // 批量入口兜底：main.cpp 已处理 AEGIS-256 缺 AES-NI 的降级；若仍直达传入，
-    // 不自动降级仅警告，交由调用方显式决定（避免自动化任务静默行为变更）。
+    // 批量入口兜底
+    // 不自动降级
     if(encrypt&&mode==CryptoMode::AEGIS256&&!aegis256_supported()) {
         fprintf(stderr,"Warning: AEGIS-256 unavailable on this CPU (AES-NI required); "
                        "proceeding as requested (will be very slow / side-channel weak). "
@@ -253,8 +253,8 @@ bool process_files(const std::vector<std::string>& input_paths,
     while(!out_dir_clean.empty()&&(out_dir_clean.back()=='/'||out_dir_clean.back()=='\\')) {
         out_dir_clean.pop_back();
     }
-    // 非 ASCII（UTF-8 多字节）字节必须转成 unsigned char 再传给 isalpha，
-    // 否则负 char 传入 C 字符分类函数是未定义行为（glibc 下可能越界查表）。
+    // 非 ASCII
+    // 负 char 传入 C 字符分类
     if(out_dir_clean.size()==2&&isalpha((unsigned char)out_dir_clean[0])&&out_dir_clean[1]==':') {
         out_dir_clean+='\\';
     }
@@ -273,17 +273,17 @@ bool process_files(const std::vector<std::string>& input_paths,
         }
     }
 
-    size_t non_ptd_skipped=0;   // 批量解密中被过滤掉的非 .ptd 文件数（计入 SKIP）
-    // restore_name 批量解密：预扫描派生 KEK 后缓存，worker 复用（避免每文件 3 次 Argon2id → 1 次）
+    size_t non_ptd_skipped=0;   // 批量解密
+    // restore_name 批量解密：预扫描
     std::unordered_map<std::string, std::vector<unsigned char>> kek_cache;
     if(!encrypt) {
-        // 批量解密只处理 .ptd 文件，与单文件 -d 强制 .ptd 保持一致
+        // 批量解密只处理
         std::vector<std::string> filtered;
         size_t skipped=0;
         for(const auto& f:all_files) {
             std::string lower=f;
-            // 仅对 ASCII 字节转小写：中文等 UTF-8 多字节字节值为负，
-            // 直接传给 ::tolower 是未定义行为（Windows/Linux 均可能越界查表）。
+            // 仅对 ASCII 字节转小写
+            // 传给
             std::transform(lower.begin(),lower.end(),lower.begin(),
                 [](unsigned char c){ return (char)std::tolower(c); });
             if(lower.size()>=4&&lower.compare(lower.size()-4,4,".ptd")==0) {
@@ -292,8 +292,8 @@ bool process_files(const std::vector<std::string>& input_paths,
                 ++skipped;
             }
         }
-        // 分卷归组：foo.001.ptd / foo.002.ptd 折成一份 foo.ptd。
-        // 不折的话每个卷都会被当成独立密文去解，必然失败。
+        // 分卷归组
+        // 不折
         {
             std::vector<std::string> kept;
             std::vector<std::string> groups;
@@ -304,12 +304,12 @@ bool process_files(const std::vector<std::string>& input_paths,
                     groups.push_back(base);
             }
             for(const auto& base:groups) {
-                // 完整件在场就用它（分卷是残留副本）；不在场但分卷齐全则记 base，
-                // worker 侧合并后再解
+                // 完整件
+                // worker 侧合并
                 if(fe_file_exists(base)) kept.push_back(base);
                 else if(!find_volumes(base).empty()) kept.push_back(base);
             }
-            // 保持原有顺序，避免进度与日志顺序突变
+            // 保持原有顺序
             std::vector<std::string> ordered;
             for(const auto& f:filtered) {
                 std::string base=base_ptd_of(f);
@@ -333,7 +333,7 @@ bool process_files(const std::vector<std::string>& input_paths,
     }
 
     size_t total_bytes=0;
-    // 预扫描尺寸缓存：worker 成功补进度时复用，免去每文件二次 stat（超大批量省 syscall）
+    // 预扫描尺寸缓存
     std::unordered_map<std::string,int64_t> size_cache;
     size_cache.reserve(all_files.size());
     for(const auto& f:all_files) {
@@ -343,15 +343,15 @@ bool process_files(const std::vector<std::string>& input_paths,
 
     printf("Total files: %zu, Total size: %s\n",all_files.size(),format_size((uint64_t)total_bytes).c_str());
 
-    // 并发线程数优先取自 YAML 配置（worker_threads），否则回退到 CLI/自动
+    // 并发线程数优先
     int cfg_threads=global_config().worker_threads;
     if(cfg_threads>0) num_threads=cfg_threads;
     if(num_threads<=0) {
         num_threads=std::thread::hardware_concurrency();
         if(num_threads<=0) num_threads=4;
     }
-    // 资源耗尽防御：限制同时打开的文件数。每个线程约持有 2 个句柄（输入 + 输出），
-    // 故并发线程数不超过 max_open_files/3，避免批量/高并发场景句柄耗尽导致 DoS。
+    // 资源耗尽防御
+    // 故并发线程数
     if(global_config().max_open_files>0) {
         int cap=(int)(global_config().max_open_files/3);
         if(cap<1) cap=1;
@@ -365,9 +365,9 @@ bool process_files(const std::vector<std::string>& input_paths,
          {"total_bytes",std::to_string(total_bytes)}});
 
     std::vector<std::string> files_to_process;
-    bool pre_scan_ok=true;   // 预扫描阶段的源处理失败，稍后并入 all_ok
-    // 预扫描优化：单线程循环内可安全缓存"上次已确保存在的输出子目录"，
-    // 避免数万文件逐个递归 stat 各级目录（此阶段在任何帧输出之前，曾表现为 GUI"进度停滞"）。
+    bool pre_scan_ok=true;   // 预扫描阶段
+    // 预扫描优化
+    // 数万文件逐个递
     std::string last_mkdir;
     size_t scan_idx=0;
     for(const auto& in_path:all_files) {
@@ -399,12 +399,12 @@ bool process_files(const std::vector<std::string>& input_paths,
                     out_path.substr(out_path.size()-4)==".PTD")) {
                 out_path=out_path.substr(0,out_path.size()-4);
             }
-            // 文件名还原默认关闭：开启需每文件多跑一次 Argon2id KDF，性能较差
+            // 文件名
             if(restore_name) {
                 std::vector<unsigned char> kek(ARGON2_OUTPUT_LEN);
                 std::string orig_name;
                 if(read_original_name(in_path,orig_name,password,nullptr,0,&kek)) {
-                    kek_cache[in_path]=kek;   // 缓存 KEK，worker 复用（3× → 1× Argon2id）
+                    kek_cache[in_path]=kek;   // 缓存 KEK
                     if(!orig_name.empty()) out_path=replace_basename(out_path,orig_name);
                 }
             }
@@ -421,10 +421,10 @@ bool process_files(const std::vector<std::string>& input_paths,
 
         bool skip=false;
         if(!force_overwrite && fe_file_exists(out_path)) {
-            // 先 stat 判存在再打开：对不存在的输出逐文件做失败的 CreateFile
-            // 也会经过过滤驱动（AV 实时扫描），大目录下是无谓的开销。
-            // 加密侧把「头是否有效」并入完整性检查一次 open 完成；解密侧仍先判头，
-            // 头坏就没必要再读全长。
+            // 先 stat 判存
+            // 也会经过过滤驱
+            // 加密侧
+            // 头坏
             int64_t sz_hint=-1;
             { auto _sc=size_cache.find(in_path); if(_sc!=size_cache.end()) sz_hint=_sc->second; }
             bool hdr_ok=false, complete=false;
@@ -442,8 +442,8 @@ bool process_files(const std::vector<std::string>& input_paths,
                 fprintf(stderr,"Existing file %s has unfinished progress, will resume.\n",out_path.c_str());
             }
             else if(complete) {
-                // 头部有效、无 .prs、尺寸完整即已完成，安全跳过；
-                // 但解密若带源处置(-de/--wipe-source/--recycle-source)仍须移除源 .ptd。
+                // 头部有效、无 .prs、尺寸
+                // 但解密若带源处
                 skip=true;
                 printf("Skipped: %s (already done)\n",in_path.c_str());
                 if(!encrypt && source_action!=0) {
@@ -454,8 +454,8 @@ bool process_files(const std::vector<std::string>& input_paths,
                 }
             }
             else {
-                // 头部有效但尺寸不完整且无 .prs：多半是上一轮在首个 save_progress 前被强杀，
-                // 残留下“仅头部”的半截 .ptd。当作未完成重新加密，避免解密字节不一致。
+                // 头部有效但尺寸
+                // 残留下“
                 fprintf(stderr,"Existing file %s is incomplete (no progress), will re-encrypt.\n",out_path.c_str());
             }
         }
@@ -472,17 +472,17 @@ bool process_files(const std::vector<std::string>& input_paths,
     printf("Processing %zu files (skipped %zu valid existing).\n",
         files_to_process.size(),all_files.size()-files_to_process.size());
 
-    // 帧式进度显示（v2.3.0）：1 行汇总 + 每线程 1 行，按帧原地刷新
-    // use_frame=false 时（输出被重定向到文件/管道且宿主未显式开启）回退旧的单行 \r 进度条。
+    // 帧式进度显示
+    // use_frame=false 时回退旧
     feui::BatchProgress progress_ui;
     const bool use_frame=progress_ui.begin(num_threads,total_bytes);
 
     std::atomic<size_t> file_index{0};
     std::atomic<size_t> global_processed{0};
-    // 文件级计数：帧末行 FILES ... 实时反映 完成/跳过/失败，供 GUI 等宿主解析
+    // 文件级计数
     std::atomic<size_t> files_done{0};
     std::atomic<size_t> files_failed{0};
-    std::atomic<size_t> skipped_not_ptd{0};   // worker 魔数预检发现的伪 .ptd（非加密文件）
+    std::atomic<size_t> skipped_not_ptd{0};   // worker 魔数预检发现
     const size_t files_skipped=(all_files.size()-files_to_process.size())+non_ptd_skipped;
     std::mutex error_mutex;
     std::vector<std::string> error_files;
@@ -490,7 +490,7 @@ bool process_files(const std::vector<std::string>& input_paths,
     std::atomic<bool> all_ok{pre_scan_ok};
     std::atomic<bool> display_stop{false};
 
-    // 显示线程：每 40ms 推一帧，使空闲线程行稳定刷新，不依赖 worker 回调频率。
+    // 显示线程
     std::thread display_thread;
     if(use_frame) {
         display_thread=std::thread([&]{
@@ -506,12 +506,12 @@ bool process_files(const std::vector<std::string>& input_paths,
         });
     }
 
-    // KDF 与数据阶段分离：先以 KDF 并发上限（默认 4）集中派生全部 KEK，再让数据阶段
-    // 独占全部 worker。Argon2id 是内存带宽瓶颈型，并发再高墙钟也不降；若把派生混在数据
-    // 阶段里，16 个 worker 会堵在 4 个信号量许可上，实际只有 4 路在干活。
+    // KDF 与数据阶段分离
+    // 独占全部 worker
+    // 阶段里
     std::unordered_map<std::string, std::array<unsigned char,ARGON2_SALT_LEN>> salt_cache;
     if(encrypt) {
-        // 盐先于派生随机生成：加密侧 KEK 只依赖 (密码, 盐, ops, mem)，可提前算好
+        // 盐先于派生随机
         salt_cache.reserve(files_to_process.size());
         for(const auto& f:files_to_process) {
             std::array<unsigned char,ARGON2_SALT_LEN> s;
@@ -555,7 +555,7 @@ bool process_files(const std::vector<std::string>& input_paths,
                                            ops,(size_t)memkb*1024);
                         sodium_memzero(salt,sizeof(salt));
                     }
-                    // 读头失败或密码派生失败都不缓存：worker 会自行派生并给出原样报错
+                    // 读头失败或密码
                     if(!got) continue;
                     std::lock_guard<std::mutex> lk(kdf_mu);
                     kek_cache.emplace(f,std::move(kek));
@@ -566,7 +566,7 @@ bool process_files(const std::vector<std::string>& input_paths,
     }
 
     auto worker=[&](int slot) {
-        // 线程结束时清空自己的槽位（置空闲），避免最后一帧残留已完成文件的进度
+        // 线程结束时清空
         struct SlotGuard {
             feui::BatchProgress* ui;
             int slot;
@@ -578,7 +578,7 @@ bool process_files(const std::vector<std::string>& input_paths,
             if(idx>=files_to_process.size()) break;
             const auto& in_path=files_to_process[idx];
 
-            // 分卷输入（base 不存在、只有 foo.001.ptd）先合并成完整件
+            // 分卷输入
             SplitPlan plan;
             MergedTemp merged;
             std::string src_path=in_path;
@@ -602,7 +602,7 @@ bool process_files(const std::vector<std::string>& input_paths,
             if(!out_dir_clean.empty()) {
                 out_path=build_batch_out_path(in_path,out_dir_clean,input_paths,encrypt);
                 if(out_path.empty()) {
-                    // 输出路径逃出目标目录（路径穿越）：跳过该文件，绝不回退到源路径，
+                    // 输出路径逃出目
                     std::lock_guard<std::mutex> lock(error_mutex);
                     error_files.push_back(in_path);
                     ++files_failed;
@@ -627,7 +627,7 @@ bool process_files(const std::vector<std::string>& input_paths,
                         out_path.substr(out_path.size()-4)==".PTD")) {
                     out_path=out_path.substr(0,out_path.size()-4);
                 }
-                // 还原文件名（与预扫描一致）：默认关闭以省去每文件 KDF
+                // 还原文件名
                 if(restore_name) {
                     std::string orig_name;
                     auto _kit=kek_cache.find(in_path);
@@ -642,9 +642,9 @@ bool process_files(const std::vector<std::string>& input_paths,
             size_t last_file_processed=0;
 
             bool ok=false;
-            // 原子落盘：与单文件路径同一套守卫。进程被强杀（GUI 取消=杀进程树）
-            // 或崩溃时，最终路径上不留半截密文，只留可辨识的 .fe_tmp_ 残留。
-            // 临时名按最终路径确定性派生，worker 并发处理不同源文件时互不干扰。
+            // 原子落盘
+            // 或崩溃
+            // 临时名
             std::unique_ptr<AtomicOutput> atomic_out;
             if(encrypt) atomic_out.reset(new AtomicOutput(out_path));
             const unsigned char* enc_salt=nullptr;
@@ -663,7 +663,7 @@ bool process_files(const std::vector<std::string>& input_paths,
                         last_file_processed=processed;
                         global_processed+=inc;
                         if(use_frame) {
-                            // 帧模式：只更新槽位状态，实际绘制由显示线程按帧节流完成
+                            // 帧模式
                             progress_ui.setSlot(slot,in_path,processed,total,true);
                             progress_ui.setProcessed(global_processed.load());
                         }
@@ -673,7 +673,7 @@ bool process_files(const std::vector<std::string>& input_paths,
                             print_progress(global_processed.load(),total_bytes,start_time,false);
                         }
                     },true,compress_level,false,nullptr,wm,enc_salt,enc_kek);
-                // 自校验已过才提交：此刻最终路径上要么是完整密文，要么什么都没有
+                // 自校验已过才提
                 if(ok && !atomic_out->commit()) ok=false;
                 if(ok && source_action!=0) {
                     if(!secure_handle_source(in_path, static_cast<SourceDisposition>(source_action))) {
@@ -684,8 +684,8 @@ bool process_files(const std::vector<std::string>& input_paths,
                 }
             }
             else {
-                // 伪 .ptd 预检：magic 不匹配直接按 SKIP 跳过，
-                // 避免普通文件误冠 .ptd 后白跑一次 Argon2id 再误报 Failed。
+                // 伪 .ptd 预检
+                // 普通文件误冠 .ptd
                 {
                     unsigned char m5[5];
                     std::ifstream mf;
@@ -714,11 +714,11 @@ bool process_files(const std::vector<std::string>& input_paths,
                             print_progress(global_processed.load(),total_bytes,start_time,false);
                         }
                     },true,true,nullptr,dec_kek);
-                // 解密成功后处理源 .ptd（-de 删除 / 擦除 / 回收站）；
-                // 输入来自分卷时，每一卷都要处置
+                // 解密成功后处理
+                // 输入来自分卷
                 if(ok && source_action!=0) {
-                    // 输入来自分卷时每一卷都要处置；plan.volumes 为空说明
-                    // 归一阶段没认出分卷，退回按 base 名兜底枚举
+                    // 输入来自分卷
+                    // 归一阶段没认出
                     std::vector<std::string> victims=plan.from_volumes
                         ? plan.volumes : std::vector<std::string>{in_path};
                     if(victims.size()<=1 && !plan.from_volumes) {
@@ -736,7 +736,7 @@ bool process_files(const std::vector<std::string>& input_paths,
 
             bool file_ok = ok;
             if(ok) {
-                // 仅真正成功处理的文件才补齐进度并计入 files_done；分卷失败从 file_ok 摘掉
+                // 仅真正成功处理
                 if(file_ok) {
                     int64_t fsize=-1;
                     { auto _it=size_cache.find(in_path); if(_it!=size_cache.end()) fsize=_it->second; }
@@ -750,7 +750,7 @@ bool process_files(const std::vector<std::string>& input_paths,
                     }
                 }
                 if(encrypt) {
-                    if(write_sha256_enabled()) write_sha256_sidecar(out_path); // 功能10：校验单
+                    if(write_sha256_enabled()) write_sha256_sidecar(out_path); // 功能10
                     if(split_bytes>0) {
                         std::string serr;
                         if(!finish_encrypt_split(out_path,split_bytes,
@@ -769,7 +769,7 @@ bool process_files(const std::vector<std::string>& input_paths,
             }
             if(!file_ok) {
                 ++files_failed;
-                // 单文件失败仅记录并继续（统一 Failed: 前缀供 GUI 统计），不中断整批
+                // 单文件失败
                 all_ok=false;
                 {
                     std::lock_guard<std::mutex> lock(error_mutex);
@@ -783,25 +783,25 @@ bool process_files(const std::vector<std::string>& input_paths,
 
     std::vector<std::thread> threads;
     for(int i=0; i<num_threads; ++i) {
-        threads.emplace_back(worker,i);   // 每个 worker 绑定一个显示槽位（帧的第 i+2 行）
+        threads.emplace_back(worker,i);   // 每个 worker 绑定一个显
     }
     for(auto& t:threads) {
         t.join();
     }
-    // 停止显示线程后再收尾，避免最后一帧被后台线程覆盖
+    // 停止显示线程
     display_stop.store(true);
     if(display_thread.joinable()) display_thread.join();
 
     if(error_files.empty()) {
-        // 全部成功：安全地拉满到 100%（任务中途失败文件已不会拉满）
+        // 全部成功
         global_processed=total_bytes;
     }
-    // 有失败文件：按真实已处理字节收尾，不掩盖失败/跳过情况
+    // 有失败文件
     if(use_frame) {
         progress_ui.setProcessed(global_processed.load());
         progress_ui.setFileStats(files_done.load(),files_failed.load(),
                                  files_skipped+skipped_not_ptd.load(),files_to_process.size());
-        progress_ui.finish();            // 渲染最终帧并换行收尾
+        progress_ui.finish();            // 渲染
     }
     else {
         print_progress(global_processed.load(),total_bytes,start_time,true);
@@ -827,14 +827,14 @@ bool process_files(const std::vector<std::string>& input_paths,
         fprintf(stderr,"Total %zu files failed.\n",error_files.size());
     }
 
-    // 清空中缓存的派生密钥，避免明文残留于进程内存
+    // 清空中缓存
     for(auto& kv:kek_cache) sodium_memzero(kv.second.data(), kv.second.size());
     kek_cache.clear();
 
-    // 宿主（GUI）可通过环境变量指定统计文件，批量结束时写入 JSON 供宿主解析。
-    // 不用 fopen(wb)：trunc 打开会跟随攻击者预置的符号链接，把统计内容写进别处。
-    // 目标可能已存在（Qt 侧 QTemporaryFile 会先建好空文件），故用「拒绝跟随链接」
-    // 而非 O_EXCL——后者会让宿主永远读不到统计。
+    // 宿主
+    // 不用 fopen
+    // 目标可能已存
+    // 而非 O_EXCL后者
     if(const char* stats_path=std::getenv("FILEENCRYPTOR_STATS_FILE")) {
         FILE* sf=nullptr;
         bool blocked=path_is_symlink(stats_path);
@@ -842,7 +842,7 @@ bool process_files(const std::vector<std::string>& input_paths,
             fprintf(stderr,"Refusing to write stats through a symlink: %s\n",stats_path);
         }
 #ifndef _WIN32
-        // O_NOFOLLOW：末分量是符号链接则 ELOOP，不顺着它写到别处
+        // O_NOFOLLOW
         if(!blocked) {
             int sfd=::open(stats_path,O_CREAT|O_TRUNC|O_WRONLY|O_NOFOLLOW|O_CLOEXEC,0600);
             if(sfd>=0) {
@@ -853,7 +853,7 @@ bool process_files(const std::vector<std::string>& input_paths,
             }
         }
 #else
-        // MSVC 无 O_NOFOLLOW；上面的句柄级重解析点判定已挡掉链接
+        // MSVC 无 O_NOFOLLOW；上面
         if(!blocked) sf=fopen(stats_path,"wb");
 #endif
         if(sf) {

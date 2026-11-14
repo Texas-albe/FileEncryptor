@@ -1,0 +1,20 @@
+﻿<metadata>
+    <remove-node path="/api/package[@name='androidx.room']/class[@name='EntityDeletionOrUpdateAdapter']/method[@name='createQuery' and count(parameter)=0]" />
+
+    <remove-node path="/api/package[@name='androidx.room.util']/class[@name='TableInfo.ForeignKeyWithSequence']/implements" />
+
+    <attr path="/api/package[@name='androidx.room']/class[@name='RoomOpenHelper.Delegate']" name="managedName">HelperDelegate</attr>
+
+     <!-- This field gets placed in a 'MultiInstanceInvalidationService' class which clashes with a Java class of the same name -->
+    <remove-node path="/api/package[@name='androidx.room']/interface[@name='IMultiInstanceInvalidationService']/field[@name='DESCRIPTOR']" />
+  
+    <!--    
+    <attr
+        path="//class[@visibility='']"
+        name="visibility"
+        >
+        public
+    </attr>
+    -->
+
+</metadata>

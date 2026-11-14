@@ -1,0 +1,113 @@
+trigger:
+  - main
+  - release/*
+
+pr: none
+
+schedules:
+- cron: '0 0 * * *'
+  displayName: Nightly Extended Tests
+  branches:
+    include:
+    - main
+    
+parameters:
+- name: RunExtendedTests
+  displayName: Run Extended Tests?
+  type: boolean
+  default: false
+
+- name: RunBarValidation
+  displayName: Register a BAR validation build without promotion?
+  type: boolean
+  default: false
+
+- name: BarValidationSignedBuildId
+  displayName: Official AndroidX build ID supplying nuget-signed
+  type: number
+  default: 0
+  
+variables:
+  # Variables used by both AndroidX/GPS go in the template
+  - template: build/ci/variables.yml@self
+
+resources:
+  repositories:
+    - repository: 1esPipelines
+      type: git
+      name: 1ESPipelineTemplates/MicroBuildTemplate
+
+    - repository: yaml-templates
+      type: git
+      name: DevDiv/Xamarin.yaml-templates
+      ref: refs/heads/main
+
+extends:
+  ${{ if eq(variables['Build.DefinitionName'], 'AndroidX') }}:
+    template: azure-pipelines/MicroBuild.1ES.Official.yml@1esPipelines
+  ${{ else }}:
+    template: azure-pipelines/MicroBuild.1ES.Unofficial.yml@1esPipelines
+  parameters:
+    sdl:
+      sourceRepositoriesToScan:
+        exclude:
+        - repository: yaml-templates
+    settings:
+      networkIsolationPolicy: DefaultDeny,CFSClean
+    pool:
+      name: AzurePipelines-EO
+      image: 1ESPT-Windows2022
+      os: windows
+      
+    stages:
+    - stage: build_windows
+      displayName: Build - Windows
+
+      jobs:
+      - template: build/ci/build.yml@self
+        parameters:
+          name: windows
+          buildPool:
+            name: $(windowsAgentPoolName)
+            image: $(windowsImage)
+            os: windows
+          runAPIScan: true
+
+    # Disabled: macOS lane frequently times out and its output is unused.
+    - stage: build_mac
+      displayName: Build - Mac
+      dependsOn: []
+      condition: false
+      
+      jobs:
+      - template: build/ci/build.yml@self
+        parameters:
+          name: macos
+          buildPool:
+            name: $(macosAgentPoolName)
+            os: macOS
+            demands:
+              - macOS.Name -equals Sonoma
+              - macOS.Architecture -equals x64
+
+    - template: build/ci/stage-standard-tests.yml@self
+      parameters:
+        buildPool:
+          name: $(windowsAgentPoolName)
+          image: $(windowsImage)
+          os: windows
+
+    - template: build/ci/stage-extended-tests.yml@self
+      parameters:
+        stageCondition: and(succeeded(), ne('$(skipUnitTests)', 'true'), or(eq('${{ parameters.RunExtendedTests }}', 'true'), eq(variables['Build.CronSchedule.DisplayName'], 'Nightly Extended Tests')))
+        buildPool:
+          name: $(windowsAgentPoolName)
+          image: $(windowsImage)
+          os: windows
+
+    - template: build/ci/stage-sign-artifacts.yml@self
+
+    - template: build/ci/stage-publish-signed-artifacts.yml@self
+      parameters:
+        runValidation: ${{ parameters.RunBarValidation }}
+        validationSignedBuildId: ${{ parameters.BarValidationSignedBuildId }}

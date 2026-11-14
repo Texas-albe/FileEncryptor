@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<ContentView xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             x:Class="FileEncryptorMobile.MusicPlayerView"
+             xmlns:local="clr-namespace:FileEncryptorMobile">
+
+    <VerticalStackLayout Spacing="{StaticResource SpaceMd}">
+
+        <!-- 横向一条 -->
+        <Grid ColumnDefinitions="Auto,*,Auto,Auto,Auto" ColumnSpacing="4">
+
+            <Border Grid.Column="0" WidthRequest="44" HeightRequest="44"
+                    Padding="0" StrokeThickness="0" StrokeShape="RoundRectangle 8"
+                    VerticalOptions="Center"
+                    BackgroundColor="{AppThemeBinding Light={StaticResource PrimarySoftLight}, Dark={StaticResource PrimarySoftDark}}">
+                <Grid>
+                    <Label x:Name="CoverFallback" Text="♪" FontSize="{StaticResource FontSizeTitle}"
+                           HorizontalOptions="Center" VerticalOptions="Center"
+                           TextColor="{AppThemeBinding Light={StaticResource Primary}, Dark={StaticResource PrimaryDark}}" />
+                    <Image x:Name="CoverArt" Aspect="AspectFill" IsVisible="False" />
+                </Grid>
+            </Border>
+
+            <Grid Grid.Column="1" RowDefinitions="Auto,Auto" RowSpacing="0" VerticalOptions="Center">
+                <!-- 曲名与时间同一 -->
+                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="6">
+                    <Label x:Name="LblTitle" Text="{local:Zh 还没有放入音乐}" FontSize="{StaticResource FontSizeCaption}"
+                           LineBreakMode="TailTruncation" MaxLines="1"
+                           VerticalOptions="Center" />
+                    <Label x:Name="LblTime" Grid.Column="1" Text="00:00/00:00"
+                           FontSize="{StaticResource FontSizeXs}" VerticalOptions="Center"
+                           HorizontalTextAlignment="End"
+                           Style="{StaticResource Caption}" />
+                </Grid>
+                <!-- 进度条横跨封面 -->
+                <Slider x:Name="Seek" Grid.Row="1" Minimum="0" Maximum="1" Value="0"
+                        HeightRequest="20" MinimumHeightRequest="20"
+                        HorizontalOptions="Fill"
+                        DragStarted="OnSeekDragStarted" DragCompleted="OnSeekDragCompleted" />
+            </Grid>
+
+            <!-- 播放/暂停 -->
+            <ImageButton x:Name="BtnPlay" Grid.Column="2" Source="ic_fe_play"
+                         WidthRequest="38" HeightRequest="38" MinimumWidthRequest="38"
+                         MinimumHeightRequest="38" Padding="9" CornerRadius="19"
+                         Aspect="AspectFit" BackgroundColor="{StaticResource Primary}"
+                         Clicked="OnPlayPause" />
+
+            <ImageButton x:Name="BtnNext" Grid.Column="3" Source="ic_fe_music_next"
+                         WidthRequest="38" HeightRequest="38" MinimumWidthRequest="38"
+                         MinimumHeightRequest="38" Padding="7" CornerRadius="19"
+                         Aspect="AspectFit" BackgroundColor="Transparent"
+                         Clicked="OnNext" />
+
+            <ImageButton x:Name="BtnMode" Grid.Column="4" Source="ic_fe_music_repeat_all"
+                         WidthRequest="38" HeightRequest="38" MinimumWidthRequest="38"
+                         MinimumHeightRequest="38" Padding="7" CornerRadius="19"
+                         Aspect="AspectFit" BackgroundColor="Transparent"
+                         Clicked="OnCycleMode" />
+        </Grid>
+
+        <BoxView Style="{StaticResource Divider}" />
+
+        <!-- 应用外播放 -->
+        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="{StaticResource GridGap}">
+            <VerticalStackLayout Spacing="{StaticResource SpaceXs}">
+                <Label Text="{local:Zh 应用外播放}" FontSize="{StaticResource FontSizeBody}" />
+                <Label Text="{local:Zh 开启后应用在后台继续播放，可从通知栏、锁屏、耳机控制。默认关闭。}"
+                       Style="{StaticResource Caption}" />
+            </VerticalStackLayout>
+            <Switch x:Name="SwBgPlay" Grid.Column="1" VerticalOptions="Center"
+                    Toggled="OnBackgroundPlayToggled" />
+        </Grid>
+
+    </VerticalStackLayout>
+</ContentView>

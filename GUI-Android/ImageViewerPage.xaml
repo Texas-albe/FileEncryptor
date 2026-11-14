@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             x:Class="FileEncryptorMobile.ImageViewerPage"
+             BackgroundColor="Black">
+
+    <Grid x:Name="Viewport" BackgroundColor="Black">
+        <!-- Border 裁剪子内容到视 -->
+        <Border x:Name="ClipBox" BackgroundColor="Black"
+                StrokeThickness="0" StrokeShape="Rectangle" Padding="0">
+            <!-- 窗口化三单元 -->
+            <AbsoluteLayout x:Name="Pages"
+                            VerticalOptions="Fill" HorizontalOptions="Fill" />
+        </Border>
+        <!-- 顶/底栏是独立原 -->
+    </Grid>
+</ContentPage>

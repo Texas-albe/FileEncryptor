@@ -20,8 +20,8 @@
 
 namespace {
 
-// 尺寸后缀→乘数。用 1024 进制（与 FAT32 限值、邮件附件的惯用口径一致），
-// KiB/MiB 写法也接受，免得用户以为是 1000 进制。
+// 尺寸后缀→乘数
+// KiB/MiB 写法
 struct Unit { const char* suffix; uint64_t mul; };
 
 const Unit kUnits[] = {
@@ -31,13 +31,13 @@ const Unit kUnits[] = {
     {"B",   1ull},
 };
 
-// 单卷下限：容器头约 256 字节，再加至少一个数据块。
+// 单卷下限
 const uint64_t kMinVolume = 1ull << 20;      // 1 MiB
 const uint32_t kMaxVolumes = 99999;          // 枚举兜底
 const size_t   kIoBufMax  = 16u << 20;      // 16 MiB
 
-// 低危（D 组）：窄字符 ifstream 在 Windows 上按 ACP 解析，中文/非 ASCII 卷名会
-// 静默判不存在；改走宽字符通道（fe_file_exists -> open_stream/_wstat64）。
+// 低危
+// 静默判不存
 bool file_exists(const std::string& p) {
     return fe_file_exists(p);
 }
@@ -73,7 +73,7 @@ std::string base_name_of(const std::string& p) {
     return (pos == std::string::npos) ? p : p.substr(pos + 1);
 }
 
-// POSIX 叫 fdopen，MSVC 叫 _fdopen；这里收口，避免 Windows 专名漏到 POSIX 构建
+// POSIX 叫 fdopen
 static inline std::FILE* fdopen_compat(int fd, const char* mode) {
 #ifdef _WIN32
     return _fdopen(fd, mode);
@@ -82,11 +82,10 @@ static inline std::FILE* fdopen_compat(int fd, const char* mode) {
 #endif
 }
 
-// 独占创建的文件：O_EXCL 要求目标此前不存在，
-// 因此既不会跟随攻击者预置的符号链接，也不会截断它指向的文件。
-//
-// 为什么不用 ofstream(path, trunc)：trunc 打开会走已有的符号链接，
-// 攻击者在目标目录预置 "foo.merge.ptd" -> 任意可写文件，解密就会把它截断。
+// 独占创建
+// 因此既
+// 为什么不用 ofstream
+// 攻击者
 class ExclusiveFile {
 public:
     explicit ExclusiveFile(const std::string& path) {
@@ -113,7 +112,7 @@ public:
     ExclusiveFile& operator=(const ExclusiveFile&) = delete;
 
     bool ok() const { return fp_ != nullptr; }
-    // 打开失败时的 errno（构造时抓定，后续调用会覆盖全局 errno）
+    // 打开失败
     int err() const { return err_; }
     bool write(const char* p, size_t n) { return std::fwrite(p, 1, n, fp_) == n; }
 
@@ -122,8 +121,8 @@ private:
     int err_ = 0;
 };
 
-// 合并临时件名：带随机后缀。O_EXCL 只保证「创建那一刻」没人抢先，
-// 名字可预测的话仍能被抢在前面预置（DoS 与符号链接覆盖的前提），故加随机段。
+// 合并临时件名
+// 名字可预测
 std::string merged_temp_path(const std::string& base) {
     unsigned char r[8];
     randombytes_buf(r, sizeof(r));
@@ -148,8 +147,8 @@ std::string base_ptd_of(const std::string& volume_file) {
     if (digits.size() < 3) return "";                 // 序号至少 3 位
     for (char c : digits)
         if (!std::isdigit((unsigned char)c)) return "";
-    // 只认规范宽度：3 位（001~999）或 4 位起的自然数（1000~）。
-    // "01"、"007" 这类一律不算，否则 foo.007.txt 之类会被误判成卷。
+    // 只认规范宽度
+    // "01"、"007" 这类一律不算，否
     if (digits.size() > 3 && digits[0] == '0') return "";
     return stem.substr(0, dot) + ".ptd";
 }
@@ -181,7 +180,7 @@ bool parse_split_size(const std::string& spec, uint64_t& out_bytes, std::string&
         }
     }
 
-    // 手算定点数，避开 strtod 的 locale 与精度问题
+    // 手算定点数
     uint64_t whole = 0, frac_num = 0, frac_den = 1;
     size_t dot = num.find('.');
     auto parse_uint = [](const std::string& t, uint64_t& v) -> bool {
@@ -208,9 +207,9 @@ bool parse_split_size(const std::string& spec, uint64_t& out_bytes, std::string&
     if (frac_num > UINT64_MAX / mul) { err = "size overflow"; return false; }
 
     uint64_t base = whole * mul;
-    // 向上取整要先加上 frac_den-1，这一步自己也会回绕。
-    // 上面那道 frac_num*mul 的检查只管住了乘法，加法得单独判，
-    // 否则 "18446744073.709551615GB" 这类输入会绕出偏小的 extra。
+    // 向上取整要先加
+    // 上面那道 frac_num*mul
+    // "18446744073.709551615GB
     if (frac_num > (UINT64_MAX - (frac_den - 1)) / mul) { err = "size overflow"; return false; }
     uint64_t extra = (frac_num * mul + frac_den - 1) / frac_den;   // 向上取整
     if (base > UINT64_MAX - extra) { err = "size overflow"; return false; }
@@ -236,8 +235,8 @@ bool split_file(const std::string& src, uint64_t volume_bytes,
     uint32_t idx = 0;
     for (;;) {
         std::string vp = join(dir, volume_path(base + ".ptd", idx + 1));
-        // H5a：卷文件名可预测，ofstream(trunc) 会跟随预置的符号链接并截断
-        // 链接指向的任意文件；O_EXCL 对已存在的名字直接失败，不创建不跟随。
+        // H5a
+        // 链接指
         ExclusiveFile out(vp);
         if (!out.ok()) { err = "cannot write " + vp; return false; }
 
@@ -252,7 +251,7 @@ bool split_file(const std::string& src, uint64_t volume_bytes,
         }
 
         ++idx;
-        if (written < volume_bytes) break;          // 最后一卷通常不满
+        if (written < volume_bytes) break;          // 最后一卷通常
         if (idx >= kMaxVolumes) { err = "too many volumes"; return false; }
     }
 
@@ -271,9 +270,9 @@ std::vector<std::string> find_volumes(const std::string& base_ptd,
         if (!file_exists(p)) break;
         out.push_back(p);
     }
-    // 首个缺号之后再往外看 100 卷：命中就说明是「中间少了几卷」
-    // 而不是「本来就到这儿为止」。报的是空洞区间，不是命中的卷号——
-    // 用户要知道的是「我少了哪几卷」，不是「后面还剩哪几卷」。
+    // 首个缺号
+    // 而不是「本来
+    // 用户要知道
     if (out_missing) {
         uint32_t last_found = stop - 1;
         for (uint32_t k = stop; k < stop + 100 && k <= kMaxVolumes; ++k) {
@@ -307,7 +306,7 @@ bool merge_volumes(const std::string& base_ptd, const std::string& merged_path,
 
     ExclusiveFile out(merged_path);
     if (!out.ok()) {
-        // 名字已被占用（含预置的符号链接）：交给调用方换个随机名重试
+        // 名字已
         if (out_conflict && (out.err() == EEXIST || out.err() == EACCES)) {
             *out_conflict = true;
             err = "temporary file already exists: " + merged_path;
@@ -342,8 +341,8 @@ bool finish_encrypt_split(const std::string& ptd_path, uint64_t volume_bytes,
     for (uint32_t i = 1; i <= n; ++i) {
         if (sha_sidecar) write_sha256_sidecar(volume_path(ptd_path, i));
     }
-    remove_file_utf8(ptd_path);   // 留着就等于分卷没生效
-    // 整文件 sidecar 随原件一起失效，否则会指向一个不存在的文件
+    remove_file_utf8(ptd_path);   
+    // 整文件 sidecar 随原件一
     remove_file_utf8(ptd_path + ".sha256");
     return true;
 }
@@ -353,19 +352,18 @@ bool resolve_decrypt_input(const std::string& in_path, SplitPlan& plan, std::str
     plan = SplitPlan();
     plan.real_input = in_path;
 
-    // 输入是 foo.003.ptd → 同组是 foo.*.ptd；输入本身就是 foo.ptd 也一样。
-    // 完整件同时存在时优先用它（分卷多半是残留副本）；否则合并分卷。
-    // 都没有就原样返回，让后续按「打不开文件」报错。
+    // 输入是 foo.003.ptd → 同组
+    // 完整件同时存
+    // 都没有
     std::string base = base_ptd_of(in_path);
     if (base.empty()) base = in_path;
     if (file_exists(base)) return true;
 
     plan.volumes = find_volumes(base);
-    if (plan.volumes.empty()) return true;        // 没有分卷，原样返回
+    if (plan.volumes.empty()) return true;        // 没有分卷
 
-    // 随机名 + O_EXCL 独占创建：名字可预测时攻击者能抢在前面预置同名文件
-    //（符号链接会把合并内容写到别处，或直接让合并失败）。
-    // 随机段命中不了才需要重试，其余失败是真错误，直接退出。
+    // 随机名 + O_EXCL 独占创建
+    // 随机段命
     for (int attempt = 0; attempt < 8; ++attempt) {
         std::string cand = merged_temp_path(base);
         bool conflict = false;
@@ -373,8 +371,8 @@ bool resolve_decrypt_input(const std::string& in_path, SplitPlan& plan, std::str
             plan.merged_path = cand;
             break;
         }
-        if (conflict) continue;   // 名字被占：那文件不是我们的，别去动它
-        remove_file_utf8(cand);   // 自己开了口、写坏了，残留即清
+        if (conflict) continue;   // 名字
+        remove_file_utf8(cand);   // 自己开了口、写坏
         plan = SplitPlan();
         plan.real_input = in_path;
         return false;

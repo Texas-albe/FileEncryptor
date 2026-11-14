@@ -1,4 +1,4 @@
-// 视图设置对话框（背景图）
+// 视图设置对话框
 #pragma once
 #include <QDialog>
 
@@ -10,7 +10,7 @@ class ViewSettingsDialog : public QDialog {
 public:
     explicit ViewSettingsDialog(const QString& currentPath, QWidget* parent = nullptr);
 
-    // 返回最终选定路径
+    // 返回
     QString selectedImagePath() const { return m_result; }
 
 private slots:

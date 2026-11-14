@@ -3,7 +3,7 @@
 #include <vector>
 #include <cstdint>
 
-// hex 编解码工具：替代项目中分散的 hex 转换代码。
+// hex 编解码工具
 namespace fe::util {
 
 inline std::string to_hex(const unsigned char* data, size_t len) {

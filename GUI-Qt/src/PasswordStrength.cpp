@@ -1,8 +1,9 @@
 #include "PasswordStrength.h"
+#include "ThemeManager.h"
 #include <QCoreApplication>
 #include <cmath>
 
-// 强度文案面向用户展示，随界面语言翻译
+// 强度文案面向用
 namespace {
 QString ps(const char* s) {
     return QCoreApplication::translate("PasswordStrength", s);
@@ -27,7 +28,7 @@ StrengthResult PasswordStrength::evaluate(const QString& pw) {
     if (pw.isEmpty()) {
         r.level = StrengthLevel::Empty;
         r.label = ps("未输入");
-        r.colorHex = QStringLiteral("#888888");
+        r.colorHex = QString::fromLatin1(ThemeManager::mutedTextHex());
         return r;
     }
 
@@ -47,15 +48,15 @@ StrengthResult PasswordStrength::evaluate(const QString& pw) {
     if (len < 6 || entropy < 28) {
         r.level = StrengthLevel::Weak;
         r.label = ps("弱");
-        r.colorHex = QStringLiteral("#D32F2F");
+        r.colorHex = QString::fromLatin1(ThemeManager::dangerHex());
     } else if (len < 10 && entropy < 48) {
         r.level = StrengthLevel::Medium;
         r.label = ps("中");
-        r.colorHex = QStringLiteral("#F9A825");
+        r.colorHex = QString::fromLatin1(ThemeManager::warningHex());
     } else {
         r.level = StrengthLevel::Strong;
         r.label = ps("强");
-        r.colorHex = QStringLiteral("#2E7D32");
+        r.colorHex = QString::fromLatin1(ThemeManager::successHex());
     }
 
     // 详细说明
@@ -91,8 +92,7 @@ bool PasswordStrength::meetsPolicy(const QString& password, QString& reason) {
             non_ascii = true;
         }
     }
-    // 非 ASCII（CJK 等）只算一类字符：此前「含非 ASCII 即放行」会让
-    // 「的的的的的的的的」这类重复汉字被判为合格，实际熵近乎为零。
+    // 非 ASCII
     const int kinds = (lower ? 1 : 0) + (upper ? 1 : 0) +
                       (digit ? 1 : 0) + (symbol ? 1 : 0) + (non_ascii ? 1 : 0);
     if (kinds >= 2 || len >= 16) {

@@ -1,0 +1,385 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             x:Class="FileEncryptorMobile.CryptoPage"
+             xmlns:local="clr-namespace:FileEncryptorMobile"
+             xmlns:controls="clr-namespace:FileEncryptorMobile.Controls"
+             Title="{local:Zh 文件加解密}">
+
+    <!-- 外层单格 Grid -->
+    <Grid RowDefinitions="*">
+
+        <ScrollView>
+            <VerticalStackLayout Padding="{StaticResource PagePadding}" Spacing="{StaticResource PageSpacing}">
+
+                <Border Style="{StaticResource Card}">
+                    <VerticalStackLayout Spacing="{StaticResource SpaceLg}">
+                        <Label Text="{local:Zh 模式}" Style="{StaticResource SectionTitle}" />
+                        <Grid ColumnDefinitions="*,*" ColumnSpacing="{StaticResource GridGapSm}">
+                            <Button x:Name="BtnEnc" Grid.Column="0" Text="{local:Zh 加密}"
+                                    Style="{StaticResource SegmentSelected}"
+                                    Clicked="OnModeEncrypt" />
+                            <Button x:Name="BtnDec" Grid.Column="1" Text="{local:Zh 解密}"
+                                    Style="{StaticResource SegmentUnselected}"
+                                    Clicked="OnModeDecrypt" />
+                        </Grid>
+                        <Label x:Name="LblModeHint" Style="{StaticResource Caption}" />
+                    </VerticalStackLayout>
+                </Border>
+
+                <Border x:Name="GroupKeyMode" Style="{StaticResource Card}">
+                    <VerticalStackLayout Spacing="{StaticResource SpaceLg}">
+                        <Label Text="{local:Zh 加密方式}" Style="{StaticResource SectionTitle}" />
+                        <Grid ColumnDefinitions="*,*" ColumnSpacing="{StaticResource GridGapSm}">
+                            <Button x:Name="BtnKeyPwd" Grid.Column="0" Text="{local:Zh 密码}"
+                                    Style="{StaticResource SegmentSelected}"
+                                    Clicked="OnKeyPwd" />
+                            <Button x:Name="BtnKeyAsym" Grid.Column="1" Text="{local:Zh 收件人钥匙}"
+                                    Style="{StaticResource SegmentUnselected}"
+                                    Clicked="OnKeyAsym" />
+                        </Grid>
+                        <Label x:Name="LblKeyModeHint" Style="{StaticResource Caption}" />
+                    </VerticalStackLayout>
+                </Border>
+
+                <Border x:Name="GroupAlgo" Style="{StaticResource Card}">
+                    <VerticalStackLayout Spacing="{StaticResource SpaceLg}">
+                        <Label Text="{local:Zh 算法}" Style="{StaticResource SectionTitle}" />
+                        <VerticalStackLayout x:Name="AlgoChoices" Spacing="{StaticResource SpaceMd}" />
+                        <Label x:Name="LblAlgoDetail" Style="{StaticResource Caption}" />
+                        <Label x:Name="LblAlgoAuto" IsVisible="False"
+                               Text="{local:Zh 解密时按文件头自动识别算法，无需选择。}"
+                               Style="{StaticResource Caption}" />
+                    </VerticalStackLayout>
+                </Border>
+
+                <Border x:Name="GroupCompress" Style="{StaticResource Card}">
+                    <VerticalStackLayout Spacing="{StaticResource SpaceLg}">
+                        <Label Text="{local:Zh 压缩}" Style="{StaticResource SectionTitle}" />
+                        <FlexLayout x:Name="CompressChoices" Direction="Row" Wrap="Wrap"
+                                    AlignItems="Start" />
+                        <Label x:Name="LblCompressHint" Style="{StaticResource Caption}" />
+                    </VerticalStackLayout>
+                </Border>
+
+                <Border x:Name="GroupPwd" Style="{StaticResource Card}">
+                    <VerticalStackLayout Spacing="{StaticResource SpaceMd}">
+                        <Label Text="{local:Zh 密码}" Style="{StaticResource SectionTitle}" />
+                        <Border Style="{StaticResource FieldBorder}">
+                            <Grid ColumnDefinitions="*,Auto">
+                                <Entry x:Name="EntryPwd" Grid.Column="0" Style="{StaticResource FieldEntry}"
+                                       Placeholder="{local:Zh 输入密码}" IsPassword="True" />
+                                <Button x:Name="BtnShowPwd" Grid.Column="1" Text="{local:Zh 显示}"
+                                        Style="{StaticResource QuietButton}" FontSize="{StaticResource FontSizeCaption}"
+                                        VerticalOptions="Center" Clicked="OnToggleShowPwd" />
+                            </Grid>
+                        </Border>
+                        <Border x:Name="BoxPwd2" Style="{StaticResource FieldBorder}">
+                            <Entry x:Name="EntryPwd2" Style="{StaticResource FieldEntry}"
+                                   Placeholder="{local:Zh 确认密码}" IsPassword="True" />
+                        </Border>
+                    </VerticalStackLayout>
+                </Border>
+
+                <Border x:Name="GroupAsym" Style="{StaticResource Card}" IsVisible="False">
+                    <VerticalStackLayout Spacing="{StaticResource SpaceMd}">
+                        <Label Text="{local:Zh 收件人的钥匙 / 我的钥匙}" Style="{StaticResource SectionTitle}" />
+                        <Editor x:Name="EdtRecips" Placeholder="{local:Zh 每行一把收件人的钥匙}"
+                                HeightRequest="110" AutoSize="Disabled" FontSize="{StaticResource FontSizeCaption}" />
+                        <Entry x:Name="EdtIdentity" Placeholder="{local:Zh 粘贴我的钥匙}"
+                               IsVisible="False" FontSize="{StaticResource FontSizeCaption}" />
+                        <Grid ColumnDefinitions="*,*" ColumnSpacing="{StaticResource SpaceLg}">
+                            <Button Grid.Column="0" Text="{local:Zh 生成一对钥匙…}"
+                                    Style="{StaticResource QuietButton}" FontSize="{StaticResource FontSizeCaption}"
+                                    Clicked="OnGenerateKeypair" />
+                            <Button Grid.Column="1" Text="{local:Zh 清空输入}"
+                                    Style="{StaticResource QuietButton}" FontSize="{StaticResource FontSizeCaption}"
+                                    Clicked="OnClearAsym" />
+                        </Grid>
+                        <Label x:Name="LblAsymCap" Style="{StaticResource Caption}" />
+                    </VerticalStackLayout>
+                </Border>
+
+                <Border Style="{StaticResource Card}">
+                    <VerticalStackLayout Spacing="{StaticResource SpaceXl}">
+                        <Label Text="{local:Zh 选项}" Style="{StaticResource SectionTitle}" />
+                        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="{StaticResource GridGap}">
+                            <VerticalStackLayout Spacing="{StaticResource SpaceXs}">
+                                <Label Text="{local:Zh 处理完成后删除原文件}" FontSize="{StaticResource FontSizeBody}" />
+                                <Label Text="{local:Zh 删除后无法恢复。}" Style="{StaticResource Caption}" />
+                            </VerticalStackLayout>
+                            <Switch x:Name="SwDelSrc" Grid.Column="1" VerticalOptions="Center" />
+                        </Grid>
+                        <BoxView Style="{StaticResource Divider}" />
+                        <Grid x:Name="RowForce" ColumnDefinitions="*,Auto" ColumnSpacing="{StaticResource GridGap}"
+                              IsVisible="False">
+                            <VerticalStackLayout Spacing="{StaticResource SpaceXs}">
+                                <Label Text="{local:Zh 忽略完整性校验}" FontSize="{StaticResource FontSizeBody}" />
+                                <Label Text="{local:Zh 仅解密时可用，输出可能不完整。}"
+                                       Style="{StaticResource Caption}" />
+                            </VerticalStackLayout>
+                            <Switch x:Name="SwForce" Grid.Column="1" VerticalOptions="Center" />
+                        </Grid>
+                        <Grid x:Name="RowRestore" ColumnDefinitions="*,Auto" ColumnSpacing="{StaticResource GridGap}"
+                              IsVisible="False">
+                            <VerticalStackLayout Spacing="{StaticResource SpaceXs}">
+                                <Label Text="{local:Zh 恢复容器内的原始文件名}" FontSize="{StaticResource FontSizeBody}" />
+                                <Label Text="{local:Zh 每个文件多一次密钥派生，批量会变慢。}"
+                                       Style="{StaticResource Caption}" />
+                            </VerticalStackLayout>
+                            <Switch x:Name="SwRestore" Grid.Column="1" VerticalOptions="Center" />
+                        </Grid>
+                        <Grid x:Name="RowSha" ColumnDefinitions="*,Auto" ColumnSpacing="{StaticResource GridGap}">
+                            <VerticalStackLayout Spacing="{StaticResource SpaceXs}">
+                                <Label Text="{local:Zh 生成 SHA256 校验单}" FontSize="{StaticResource FontSizeBody}" />
+                                <Label Text="{local:Zh 加密后写出同名 .sha256 文件。}"
+                                       Style="{StaticResource Caption}" />
+                            </VerticalStackLayout>
+                            <Switch x:Name="SwSha" Grid.Column="1" VerticalOptions="Center" />
+                        </Grid>
+                        <Grid x:Name="RowPack" ColumnDefinitions="*,Auto" ColumnSpacing="{StaticResource GridGap}">
+                            <VerticalStackLayout Spacing="{StaticResource SpaceXs}">
+                                <Label Text="{local:Zh 打包为单个 .ptd}" FontSize="{StaticResource FontSizeBody}" />
+                                <Label Text="{local:Zh 多个文件合成一个归档，保留相对目录结构。}"
+                                       Style="{StaticResource Caption}" />
+                            </VerticalStackLayout>
+                            <Switch x:Name="SwPack" Grid.Column="1" VerticalOptions="Center" />
+                        </Grid>
+                        <Grid x:Name="RowSplit" ColumnDefinitions="*,*" ColumnSpacing="{StaticResource GridGap}">
+                            <VerticalStackLayout Spacing="{StaticResource SpaceXs}">
+                                <Label Text="{local:Zh 分卷大小}" FontSize="{StaticResource FontSizeBody}" />
+                                <Label Text="{local:Zh 切出的每卷可单独校验；解密时自动合并。}"
+                                       Style="{StaticResource Caption}" />
+                            </VerticalStackLayout>
+                            <Picker x:Name="PkSplit" Grid.Column="1" Title="{local:Zh 不分卷}"
+                                    VerticalOptions="Center" FontSize="{StaticResource FontSizeSub}" />
+                        </Grid>
+                    </VerticalStackLayout>
+                </Border>
+
+                <Border Style="{StaticResource Card}">
+                    <VerticalStackLayout Spacing="{StaticResource SpaceLg}">
+                        <Label Text="{local:Zh 要处理的文件}" Style="{StaticResource SectionTitle}" />
+                        <Grid ColumnDefinitions="*,*" ColumnSpacing="{StaticResource SpaceLg}">
+                            <Button Grid.Column="0" Text="{local:Zh 选择文件…}"
+                                    Style="{StaticResource SecondaryButton}"
+                                    Clicked="OnPickFiles" />
+                            <Button Grid.Column="1" Text="{local:Zh 选择目录…}"
+                                    Style="{StaticResource SecondaryButton}"
+                                    Clicked="OnPickDir" />
+                        </Grid>
+                        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="{StaticResource SpaceLg}">
+                            <Label x:Name="LblInputs" Grid.Column="0" Text="{local:Zh 未选择文件}"
+                                   Style="{StaticResource Caption}" VerticalOptions="Center" />
+                            <Button x:Name="BtnManageInputs" Grid.Column="1" Text="{local:Zh 查看 / 移除}"
+                                    Style="{StaticResource QuietButton}" FontSize="{StaticResource FontSizeCaption}"
+                                    Clicked="OnManageInputs" />
+                        </Grid>
+                    </VerticalStackLayout>
+                </Border>
+
+                <Border Style="{StaticResource Card}">
+                    <VerticalStackLayout Spacing="{StaticResource SpaceMd}">
+                        <Label Text="{local:Zh 输出位置}" Style="{StaticResource SectionTitle}" />
+                        <Label x:Name="LblOut" Style="{StaticResource Caption}"
+                               LineBreakMode="MiddleTruncation" />
+                        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="{StaticResource SpaceLg}">
+                            <Button Grid.Column="0" Text="{local:Zh 更改目录…}"
+                                    Style="{StaticResource QuietButton}" FontSize="{StaticResource FontSizeCaption}"
+                                    Clicked="OnChangeOutDir" />
+                            <Button Grid.Column="1" Text="{local:Zh 恢复默认}"
+                                    Style="{StaticResource QuietButton}" FontSize="{StaticResource FontSizeCaption}"
+                                    Clicked="OnResetOutDir" />
+                        </Grid>
+                    </VerticalStackLayout>
+                </Border>
+
+                <Border Style="{StaticResource Card}">
+                    <VerticalStackLayout Spacing="{StaticResource SpaceLg}">
+                        <Label Text="{local:Zh 工具}" Style="{StaticResource SectionTitle}" />
+                        <Grid ColumnDefinitions="*,*" ColumnSpacing="{StaticResource SpaceLg}">
+                            <Button Grid.Column="0" Text="{local:Zh 密文信息…}"
+                                    Style="{StaticResource SecondaryButton}" FontSize="{StaticResource FontSizeSub}"
+                                    Clicked="OnInspect" />
+                            <Button Grid.Column="1" Text="{local:Zh 明文哈希…}"
+                                    Style="{StaticResource SecondaryButton}" FontSize="{StaticResource FontSizeSub}"
+                                    Clicked="OnHash" />
+                        </Grid>
+                        <Grid ColumnDefinitions="*,*" ColumnSpacing="{StaticResource SpaceLg}">
+                            <Button Grid.Column="0" Text="{local:Zh 修改 .ptd 密码…}"
+                                    Style="{StaticResource SecondaryButton}" FontSize="{StaticResource FontSizeSub}"
+                                    Clicked="OnRewrap" />
+                            <Button Grid.Column="1" Text="{local:Zh 输出文件管理…}"
+                                    Style="{StaticResource SecondaryButton}" FontSize="{StaticResource FontSizeSub}"
+                                    Clicked="OnManageOutputs" />
+                        </Grid>
+                        <Grid ColumnDefinitions="*,*" ColumnSpacing="{StaticResource SpaceLg}">
+                            <Button Grid.Column="0" Text="{local:Zh 钥匙保管…}"
+                                    Style="{StaticResource SecondaryButton}" FontSize="{StaticResource FontSizeSub}"
+                                    Clicked="OnFekw" />
+                        </Grid>
+                    </VerticalStackLayout>
+                </Border>
+
+                <Button x:Name="BtnRun" Text="{local:Zh 开始加密}" Clicked="OnRun"
+                        Style="{StaticResource PrimaryButton}" Margin="0,4,0,0" />
+                <Button x:Name="BtnVerify" Text="{local:Zh 校验密文完整性…}" Clicked="OnVerify"
+                        Style="{StaticResource SecondaryButton}" />
+
+                <Label x:Name="LblMsg" Style="{StaticResource ErrorText}" IsVisible="False" />
+
+            </VerticalStackLayout>
+        </ScrollView>
+
+        <!-- 已选文件 -->
+        <Grid x:Name="InputsOverlay" RowDefinitions="*" IsVisible="False">
+            <Grid RowDefinitions="*" BackgroundColor="{StaticResource Scrim}">
+                <Grid.GestureRecognizers>
+                    <TapGestureRecognizer Tapped="OnInputsBackdropTapped" />
+                </Grid.GestureRecognizers>
+            </Grid>
+            <Border Style="{StaticResource DialogCard}" VerticalOptions="Center" Margin="{StaticResource DialogMargin}">
+                <Grid RowDefinitions="Auto,Auto,Auto,Auto">
+                    <Label Grid.Row="0" Text="{local:Zh 已选文件}" Style="{StaticResource DialogTitle}" />
+                    <ScrollView Grid.Row="1" MaximumHeightRequest="340" Margin="0,6">
+                        <VerticalStackLayout x:Name="InputsList" Spacing="{StaticResource SpaceXs}" />
+                    </ScrollView>
+                    <Button Grid.Row="2" Text="{local:Zh 清空全部}" Style="{StaticResource DangerOutlineButton}"
+                            Margin="0,8,0,0" Clicked="OnClearInputs" />
+                    <Button Grid.Row="3" Text="{local:Zh 关闭}" Style="{StaticResource QuietButton}"
+                            Margin="0,2,0,0" Clicked="OnCloseInputs" />
+                </Grid>
+            </Border>
+        </Grid>
+
+        <!-- 密文信息 / 明文哈 -->
+        <Grid x:Name="InfoOverlay" RowDefinitions="*" IsVisible="False">
+            <Grid RowDefinitions="*" BackgroundColor="{StaticResource Scrim}">
+                <Grid.GestureRecognizers>
+                    <TapGestureRecognizer Tapped="OnInfoBackdropTapped" />
+                </Grid.GestureRecognizers>
+            </Grid>
+            <Border Style="{StaticResource DialogCard}" VerticalOptions="Center" Margin="{StaticResource DialogMargin}">
+                <Grid RowDefinitions="Auto,Auto,Auto">
+                    <Label x:Name="InfoTitle" Grid.Row="0" Text="{local:Zh 密文信息}"
+                           Style="{StaticResource DialogTitle}" />
+                    <ScrollView Grid.Row="1" MaximumHeightRequest="420" Margin="0,8">
+                        <Label x:Name="InfoText" Style="{StaticResource Caption}" FontSize="{StaticResource FontSizeSub}" />
+                    </ScrollView>
+                    <Button Grid.Row="2" Text="{local:Zh 关闭}" Style="{StaticResource QuietButton}"
+                            Margin="0,8,0,0" Clicked="OnCloseInfo" />
+                </Grid>
+            </Border>
+        </Grid>
+
+        <!-- 输出文件管理 -->
+        <Grid x:Name="OutputsOverlay" RowDefinitions="*" IsVisible="False">
+            <Grid RowDefinitions="*" BackgroundColor="{StaticResource Scrim}">
+                <Grid.GestureRecognizers>
+                    <TapGestureRecognizer Tapped="OnOutputsBackdropTapped" />
+                </Grid.GestureRecognizers>
+            </Grid>
+            <Border Style="{StaticResource DialogCard}" VerticalOptions="Center" Margin="{StaticResource DialogMargin}">
+                <Grid RowDefinitions="Auto,Auto,Auto,Auto">
+                    <Label Grid.Row="0" Text="{local:Zh 输出文件}" Style="{StaticResource DialogTitle}" />
+                    <Label x:Name="OutputsHint" Grid.Row="1" Style="{StaticResource Caption}" />
+                    <ScrollView Grid.Row="2" MaximumHeightRequest="340" Margin="0,8">
+                        <VerticalStackLayout x:Name="OutputsList" Spacing="{StaticResource SpaceXs}" />
+                    </ScrollView>
+                    <Grid Grid.Row="3" ColumnDefinitions="*,*" ColumnSpacing="{StaticResource SpaceLg}" Margin="0,8,0,0">
+                        <Button Grid.Column="0" Text="{local:Zh 全部删除}" Style="{StaticResource DangerOutlineButton}"
+                                Clicked="OnDeleteAllOutputs" />
+                        <Button Grid.Column="1" Text="{local:Zh 关闭}" Style="{StaticResource QuietButton}"
+                                Clicked="OnCloseOutputs" />
+                    </Grid>
+                </Grid>
+            </Border>
+        </Grid>
+
+        <!-- 修改 .ptd 密码 -->
+        <Grid x:Name="RewrapOverlay" RowDefinitions="*" IsVisible="False">
+            <Grid RowDefinitions="*" BackgroundColor="{StaticResource Scrim}">
+                <Grid.GestureRecognizers>
+                    <TapGestureRecognizer Tapped="OnRewrapBackdropTapped" />
+                </Grid.GestureRecognizers>
+            </Grid>
+            <Border Style="{StaticResource DialogCard}" VerticalOptions="Center" Margin="{StaticResource DialogMargin}">
+                <Grid RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto">
+                    <Label Grid.Row="0" Text="{local:Zh 修改 .ptd 密码}" Style="{StaticResource DialogTitle}" />
+                    <Label Grid.Row="1" Text="{local:Zh 仅支持 v6 容器；文件原地更新，数据密文不变。}"
+                           Style="{StaticResource Caption}" Margin="0,4,0,8" />
+                    <Border Grid.Row="2" Style="{StaticResource FieldBorder}">
+                        <Entry x:Name="RwOld" Style="{StaticResource FieldEntry}"
+                               Placeholder="{local:Zh 旧密码}" IsPassword="True" />
+                    </Border>
+                    <Border Grid.Row="3" Style="{StaticResource FieldBorder}" Margin="0,6,0,0">
+                        <Entry x:Name="RwNew" Style="{StaticResource FieldEntry}"
+                               Placeholder="{local:Zh 新密码}" IsPassword="True" />
+                    </Border>
+                    <Border Grid.Row="4" Style="{StaticResource FieldBorder}" Margin="0,6,0,0">
+                        <Entry x:Name="RwNew2" Style="{StaticResource FieldEntry}"
+                               Placeholder="{local:Zh 确认新密码}" IsPassword="True" />
+                    </Border>
+                    <Grid Grid.Row="5" ColumnDefinitions="*,*" ColumnSpacing="{StaticResource SpaceLg}" Margin="0,12,0,0">
+                        <Button Grid.Column="0" Text="{local:Zh 取消}" Style="{StaticResource QuietButton}"
+                                Clicked="OnRewrapCancel" />
+                        <Button Grid.Column="1" Text="{local:Zh 确定}" Style="{StaticResource SmallPrimaryButton}"
+                                Clicked="OnRewrapApply" />
+                    </Grid>
+                </Grid>
+            </Border>
+        </Grid>
+
+        <!-- FEKW 密钥包装 / 解包 -->
+        <Grid x:Name="FekwOverlay" RowDefinitions="*" IsVisible="False">
+            <Grid RowDefinitions="*" BackgroundColor="{StaticResource Scrim}">
+                <Grid.GestureRecognizers>
+                    <TapGestureRecognizer Tapped="OnFekwBackdropTapped" />
+                </Grid.GestureRecognizers>
+            </Grid>
+            <Border Style="{StaticResource DialogCard}" VerticalOptions="Center" Margin="{StaticResource DialogMargin}">
+                <ScrollView MaximumHeightRequest="560">
+                    <Grid RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto" RowSpacing="{StaticResource GridGapSm}">
+                        <Label Grid.Row="0" Text="{local:Zh 钥匙保管}" Style="{StaticResource DialogTitle}" />
+                        <Label Grid.Row="1" Text="{local:Zh 把钥匙存成小文件，或者取回来。}"
+                               Style="{StaticResource Caption}" />
+                        <Grid Grid.Row="2" ColumnDefinitions="*,*" ColumnSpacing="{StaticResource SpaceLg}">
+                            <Picker x:Name="PkFekwMode" Grid.Column="0" Title="{local:Zh 操作}"
+                                    FontSize="{StaticResource FontSizeSub}" SelectedIndexChanged="OnFekwModeChanged" />
+                            <Picker x:Name="PkFekwAlg" Grid.Column="1" Title="{local:Zh 算法}"
+                                    FontSize="{StaticResource FontSizeSub}" />
+                        </Grid>
+                        <Border Grid.Row="3" Style="{StaticResource FieldBorder}">
+                            <Entry x:Name="EdtFekwKey" Style="{StaticResource FieldEntry}"
+                                   Placeholder="{local:Zh 钥匙内容（64 位字符，留空自动生成）}"
+                                   FontSize="{StaticResource FontSizeCaption}" />
+                        </Border>
+                        <Border Grid.Row="4" Style="{StaticResource FieldBorder}">
+                            <Entry x:Name="EdtFekwSecret" Style="{StaticResource FieldEntry}"
+                                   Placeholder="{local:Zh 密码或钥匙}" FontSize="{StaticResource FontSizeCaption}" />
+                        </Border>
+                        <Grid Grid.Row="5" ColumnDefinitions="*,Auto" ColumnSpacing="{StaticResource GridGapSm}">
+                            <Label x:Name="LblFekwPath" Grid.Column="0" Text="{local:Zh 还没有选择钥匙文件}"
+                                   Style="{StaticResource Caption}" VerticalOptions="Center"
+                                   LineBreakMode="MiddleTruncation" />
+                            <Button x:Name="BtnFekwPick" Grid.Column="1" Text="{local:Zh 选择…}"
+                                    Style="{StaticResource QuietButton}" FontSize="{StaticResource FontSizeCaption}"
+                                    IsVisible="False" Clicked="OnFekwPick" />
+                        </Grid>
+                        <Label x:Name="LblFekwHint" Grid.Row="6" Style="{StaticResource Caption}" />
+                        <Grid Grid.Row="7" ColumnDefinitions="*,*" ColumnSpacing="{StaticResource SpaceLg}" Margin="0,4,0,0">
+                            <Button Grid.Column="0" Text="{local:Zh 取消}" Style="{StaticResource QuietButton}"
+                                    Clicked="OnFekwCancel" />
+                            <Button Grid.Column="1" Text="{local:Zh 确定}" Style="{StaticResource SmallPrimaryButton}"
+                                    Clicked="OnFekwApply" />
+                        </Grid>
+                    </Grid>
+                </ScrollView>
+            </Border>
+        </Grid>
+
+        <controls:MenuSheet x:Name="Sheet" />
+
+    </Grid>
+
+</ContentPage>

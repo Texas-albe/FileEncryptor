@@ -1,10 +1,10 @@
 #pragma once
 #include <cstdint>
 
-// 字节序转换工具：编译期判断端序，提供 host<->le/be 转换。
+// 字节序转换工具
 namespace fe::util {
 
-// 编译期检测字节序；常见编译器宏覆盖主流平台，缺省回退小端（x86/ARM 默认）
+// 编译期检测字节
 #if defined(__BYTE_ORDER__) && defined(__ORDER_LITTLE_ENDIAN__)
 constexpr bool is_little_endian() {
     return __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__;

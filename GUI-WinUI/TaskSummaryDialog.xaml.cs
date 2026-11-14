@@ -10,7 +10,7 @@ public sealed partial class TaskSummaryDialog : ContentDialog
 {
     public TaskSummaryDialog(string title, string duration, string avgSpeed, string encryptedSize, int done, int skip, int fail)
     {
-        // 跟随用户在「视图」菜单里的选择，不再写死深色
+        // 跟随用户
         RequestedTheme = App.Settings.Current.Theme switch
         {
             AppTheme.Light => ElementTheme.Light,
@@ -45,10 +45,10 @@ public sealed partial class TaskSummaryDialog : ContentDialog
                 grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
 
             var card = new StackPanel { Margin = new Thickness(0, 0, 8, 8) };
-            var label = new TextBlock { Text = items[i].label, FontSize = 11, Opacity = 0.6 };
+            var label = new TextBlock { Text = items[i].label, FontSize = 11, Foreground = ThemeService.BrushFor("AppTextSecondaryBrush", RequestedTheme) };
             var value = new TextBlock { Text = items[i].value, FontSize = 14, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold };
             if (items[i].label == L10n.T("失败") && fail > 0)
-                value.Foreground = new SolidColorBrush(Colors.OrangeRed);
+                value.Foreground = ThemeService.BrushFor("AppDangerBrush", RequestedTheme);
             card.Children.Add(label);
             card.Children.Add(value);
             Grid.SetRow(card, row);

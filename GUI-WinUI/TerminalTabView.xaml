@@ -1,0 +1,20 @@
+<UserControl
+    x:Class="FileEncryptorGUI.TerminalTabView"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <!-- 整页就是输出框：不留给边距、不加工具栏按钮，清空走右键菜单 -->
+    <ScrollViewer x:Name="TerminalScroll"
+                  VerticalScrollBarVisibility="Auto" VerticalScrollMode="Auto"
+                  HorizontalScrollBarVisibility="Disabled"
+                  Background="{ThemeResource LayerFillColorDefaultBrush}"
+                  Padding="16,12">
+        <!-- 右键菜单在构造函数里建：XAML 里给 MenuFlyoutItem 起 x:Name 会让
+             XamlCompiler 静默崩溃（exit 1、无日志），且菜单不在视觉树上，
+             LocalizeTree 也遍历不到，文案必须按当前语言现写 -->
+        <RichTextBlock x:Name="TerminalOutput" FontFamily="Consolas" FontSize="12.5"
+                       LineHeight="18" IsTextSelectionEnabled="True" TextWrapping="Wrap">
+            <Paragraph x:Name="TerminalParagraph" />
+        </RichTextBlock>
+    </ScrollViewer>
+</UserControl>

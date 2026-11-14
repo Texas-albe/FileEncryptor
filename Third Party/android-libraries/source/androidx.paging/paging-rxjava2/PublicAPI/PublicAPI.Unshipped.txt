@@ -1,0 +1,10 @@
+﻿#nullable enable
+AndroidX.Paging.RxJava2.PagingRx
+AndroidX.Paging.RxPagedListBuilder
+AndroidX.Paging.RxPagedListBuilder.SetFetchScheduler(ReactiveX.Scheduler! scheduler) -> AndroidX.Paging.RxPagedListBuilder!
+AndroidX.Paging.RxPagedListBuilder.SetInitialLoadKey(Java.Lang.Object? key) -> AndroidX.Paging.RxPagedListBuilder!
+AndroidX.Paging.RxPagedListBuilder.SetNotifyScheduler(ReactiveX.Scheduler! scheduler) -> AndroidX.Paging.RxPagedListBuilder!
+AndroidX.Paging.RxPagedListKt
+override AndroidX.Paging.RxJava2.PagingRx.JniPeerMembers.get -> Java.Interop.JniPeerMembers!
+override AndroidX.Paging.RxPagedListBuilder.JniPeerMembers.get -> Java.Interop.JniPeerMembers!
+override AndroidX.Paging.RxPagedListKt.JniPeerMembers.get -> Java.Interop.JniPeerMembers!

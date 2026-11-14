@@ -1,6 +1,7 @@
 ﻿using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
+using Microsoft.UI.Xaml.Media.Animation;
 using Microsoft.UI.Xaml.Media.Imaging;
 using Microsoft.UI.Dispatching;
 using System;
@@ -27,10 +28,10 @@ public sealed partial class MainWindow : Window
 {
     public MainViewModel ViewModel { get; } = new();
     private readonly ImageBrush _backgroundBrush = new();
-    // 锁定盘访问事件轮询（FE-Mounter 写 fe_locked_*.event → 拉起 GUI 前台弹单密码解锁框）
+    // 锁定盘访问事件
     private DispatcherQueueTimer? _lockTimer;
-    private bool _unlockPromptActive;   // 防止解锁框重复弹出
-    // 同 vault 解锁弹窗节流记录（键=盘目录，值=上次弹窗时间）
+    private bool _unlockPromptActive;   // 解锁框重复弹出
+    // 同 vault 解锁弹窗节流
     private readonly Dictionary<string, DateTime> _unlockPromptTimes = new();
 
     [DllImport("user32.dll")]
@@ -46,16 +47,114 @@ public sealed partial class MainWindow : Window
         Services.AppTheme.Dark => ElementTheme.Dark,
         _ => ElementTheme.Default
     };
+    // 设置/加密盘标签
+    private readonly List<SettingsTabView> _settingsTabs = new();
+    private readonly List<VaultTabView> _vaultTabs = new();
+    private readonly List<HomeTabView> _homeTabs = new();
+    private readonly List<TerminalTabView> _terminalTabs = new();
+
+    // 主页工作区初值
+    internal void InitHomeView(HomeTabView v)
+    {
+        v.ChkForce.IsChecked = true;
+        v.ChkPqc.IsChecked = true;
+        v.RbEncrypt.IsChecked = true;
+        v.FileCipherCombo.SelectedIndex = 0;
+        v.ModeCombo.SelectedIndex = 0;
+        v.SourceCombo.SelectedIndex = 0;
+        v.WrapAlgCombo.SelectedIndex = 0;
+        // 加密盘目录默认
+        var lastVault = (App.Settings.Current.LastVaultDir ?? "").Trim();
+        if (lastVault.Length > 0 && Directory.Exists(lastVault)) v.VaultDirEdit.Text = lastVault;
+    }
+
+
+    // 主页工作区
+    // 既有代码
+    public HomeTabView ActiveHome { get; private set; } = null!;
+
+    private Border LeftPanel => ActiveHome.LeftPanel;
+    private ListView FileList => ActiveHome.FileList;
+    private Border CenterPanel => ActiveHome.CenterPanel;
+    private ScrollViewer MainScroll => ActiveHome.MainScroll;
+    private StackPanel ActionRow => ActiveHome.ActionRow;
+    private RadioButton RbEncrypt => ActiveHome.RbEncrypt;
+    private RadioButton RbDecrypt => ActiveHome.RbDecrypt;
+    private RadioButton RbBatchEncrypt => ActiveHome.RbBatchEncrypt;
+    private RadioButton RbBatchDecrypt => ActiveHome.RbBatchDecrypt;
+    private StackPanel KeyMgmtRow => ActiveHome.KeyMgmtRow;
+    private RadioButton RbKeyGen => ActiveHome.RbKeyGen;
+    private RadioButton RbDerive => ActiveHome.RbDerive;
+    private RadioButton RbPubKey => ActiveHome.RbPubKey;
+    private StackPanel WrapRow => ActiveHome.WrapRow;
+    private RadioButton RbWrapKey => ActiveHome.RbWrapKey;
+    private RadioButton RbUnwrapKey => ActiveHome.RbUnwrapKey;
+    private StackPanel WrapPanel => ActiveHome.WrapPanel;
+    private TextBlock WrapFileLabel => ActiveHome.WrapFileLabel;
+    private TextBox WrapFileEdit => ActiveHome.WrapFileEdit;
+    private TextBlock WrapOutLabel => ActiveHome.WrapOutLabel;
+    private TextBox WrapOutEdit => ActiveHome.WrapOutEdit;
+    private TextBlock WrapAlgLabel => ActiveHome.WrapAlgLabel;
+    private ComboBox WrapAlgCombo => ActiveHome.WrapAlgCombo;
+    private TextBlock WrapIntroText => ActiveHome.WrapIntroText;
+    private Grid EncryptModeRow => ActiveHome.EncryptModeRow;
+    private ComboBox ModeCombo => ActiveHome.ModeCombo;
+    private Grid FileCipherCell => ActiveHome.FileCipherCell;
+    private TextBlock FileCipherLabel => ActiveHome.FileCipherLabel;
+    private ComboBox FileCipherCombo => ActiveHome.FileCipherCombo;
+    private Grid CompressionRow => ActiveHome.CompressionRow;
+    private CheckBox ChkCompress => ActiveHome.ChkCompress;
+    private NumberBox CompressLevel => ActiveHome.CompressLevel;
+    private Grid OutDirRow => ActiveHome.OutDirRow;
+    private TextBox OutDirEdit => ActiveHome.OutDirEdit;
+    private Grid VaultRow => ActiveHome.VaultRow;
+    private CheckBox ChkIntoVault => ActiveHome.ChkIntoVault;
+    private TextBox VaultDirEdit => ActiveHome.VaultDirEdit;
+    private Button BtnVaultBrowse => ActiveHome.BtnVaultBrowse;
+    private TextBox KeyfileEdit => ActiveHome.KeyfileEdit;
+    private StackPanel OptionsRow => ActiveHome.OptionsRow;
+    private ComboBox SourceCombo => ActiveHome.SourceCombo;
+    private CheckBox ChkForce => ActiveHome.ChkForce;
+    private CheckBox ChkPack => ActiveHome.ChkPack;
+    private CheckBox ChkSplit => ActiveHome.ChkSplit;
+    private CheckBox ChkSha256 => ActiveHome.ChkSha256;
+    private CheckBox ChkPqc => ActiveHome.ChkPqc;
+    private CheckBox ChkX448 => ActiveHome.ChkX448;
+    private CheckBox ChkWatermark => ActiveHome.ChkWatermark;
+    private Grid SplitSizeRow => ActiveHome.SplitSizeRow;
+    private NumberBox SplitSizeBox => ActiveHome.SplitSizeBox;
+    private ComboBox SplitUnitCombo => ActiveHome.SplitUnitCombo;
+    private Grid WatermarkKeyRow => ActiveHome.WatermarkKeyRow;
+    private PasswordBox WatermarkKeyEdit => ActiveHome.WatermarkKeyEdit;
+    private Button BtnRewrap => ActiveHome.BtnRewrap;
+    private Button BtnRun => ActiveHome.BtnRun;
+    private Button BtnCancel => ActiveHome.BtnCancel;
+    private StackPanel RecipientPanel => ActiveHome.RecipientPanel;
+    private TextBlock RecipientLabel => ActiveHome.RecipientLabel;
+    private TextBox RecipientEdit => ActiveHome.RecipientEdit;
+    private StackPanel IdentityPanel => ActiveHome.IdentityPanel;
+    private TextBlock IdentityLabel => ActiveHome.IdentityLabel;
+    private TextBox IdentityEdit => ActiveHome.IdentityEdit;
+    private CheckBox ChkRestoreName => ActiveHome.ChkRestoreName;
+    private Border BirthdayBar => ActiveHome.BirthdayBar;
+    private TextBlock BirthdayText => ActiveHome.BirthdayText;
+
+    // 设置/加密盘标签
+    internal static MainWindow? Instance { get; private set; }
+
     public MainWindow()
     {
+        // UserControl 标签页通过它拿
+        Instance = this;
         InitializeComponent();
+        // 代理属性要指
+        ActiveHome = HomeView;
 
-        // M41: 启动即清理上个进程残留的陈旧口令文件（崩溃/被强杀时退出钩子来不及跑）
+        // M41
         CleanupStaleTempPasses();
 
-        // 主题要在控件加载前定死：控件模板里的 {ThemeResource} 只在解析那一刻取值，
-        // 事后再改 RequestedTheme 只影响之后创建的控件，
-        // 表现就是「一部分控件换了配色，另一部分还是旧的」。
+        // 主题要
+        // 表现
         RootGrid.RequestedTheme = App.Settings.Current.Theme switch
         {
             Services.AppTheme.Light => ElementTheme.Light,
@@ -63,58 +162,57 @@ public sealed partial class MainWindow : Window
             _ => ThemeService.IsSystemDark() ? ElementTheme.Dark : ElementTheme.Light
         };
 
-        // 先初始化语言再翻译界面
+        // 先初始化语言
         L10n.Init();
         ApplyLocalization();
 
         Title = $"FileEncryptorGUI {FileEncryptorLocator.GuiVersion}";
-        TitleText.Text = Title;
 
         ExtendsContentIntoTitleBar = true;
-        SetTitleBar(DragRegion);
+        // 标题栏
+        // SetTitleBar 只指定「标签条右
+        // 精确拖拽区
+        // 默认整条标题栏
+        SetTitleBar(TitleBarDragRegion);
         var tb = AppWindow.TitleBar;
-        // 标题栏必须整体透明，否则 SystemBackdrop 的Acrylic 只在内容区生效，
-        // 顶部会留一条不透明带，看起来就像「没生效」
+        // 标题栏必须整体
+        // 顶部
         tb.ButtonBackgroundColor = Microsoft.UI.Colors.Transparent;
         tb.ButtonInactiveBackgroundColor = Microsoft.UI.Colors.Transparent;
-        tb.ButtonHoverBackgroundColor = Windows.UI.Color.FromArgb(0x20, 0, 0, 0);
-        tb.ButtonPressedBackgroundColor = Windows.UI.Color.FromArgb(0x30, 0, 0, 0);
         UpdateTitleBarButtonColors();
 
-        // 轮询锁定盘访问事件（FE-Mounter 写 fe_locked_*.event → 拉起 GUI 前台弹单密码解锁框）
+        // 轮询锁定盘访问
         _lockTimer = DispatcherQueue.CreateTimer();
         _lockTimer.Interval = TimeSpan.FromSeconds(2);
         _lockTimer.Tick += PollLockedAccess;
         _lockTimer.Start();
-        // 启动即处理一次待解锁事件：本就是因「双击锁定盘」被拉起时，立刻弹解锁框，不必等首拍轮询
+        // 启动即处理一次
         PollLockedAccess(_lockTimer, null);
 
-        // 16:9 窗口比例。横向加宽给功能区更多余量，英文/俄文选项不再挤成滚动条
+        // 16
         const int kWinW = 1440;
         const int kWinH = kWinW * 9 / 16;
         AppWindow.Resize(new Windows.Graphics.SizeInt32(kWinW, kWinH));
 
-        // 勾选框初值一律在代码里设：XAML 里写 IsChecked="..." 会让 XamlCompiler 生成
-        // 对 Primitives.ToggleButton.IsChecked 的赋值，运行时对 CheckBox 赋值抛
-        // XamlParseException，InitializeComponent 阶段直接把进程干掉（0xC000027B）。
-        ChkForce.IsChecked = true;
-        ChkPqc.IsChecked = true;
-        RbEncrypt.IsChecked = true;
-        FileCipherCombo.SelectedIndex = 0;
+        // 勾选框初值一律
+        // 对 Primitives.ToggleButto
+        // XamlParseException，Initi
+        InitHomeView(ActiveHome);
 
-        // 背景优先级：图片 > Acrylic
+        // 背景优先级
         RootGrid.Background = _backgroundBrush;
         ApplySavedBackground();
+        // 终端观察器
+        CliProcessService.GlobalOutput += OnCliGlobalOutput;
+        CliProcessService.RunStarted += OnCliRunStarted;
+        CliProcessService.RunEnded += OnCliRunEnded;
+        // 启动只登记主页
+        _homeTabs.Add(HomeView);
+        // 标签条尺寸变
+        MainTabView.SizeChanged += OnTabViewSizeChanged;
 
-        // 国庆配色不在这里刷：面板 Acrylic 依赖窗口 backdrop，
-        // 构造函数阶段还没就绪，交给 ApplyBackdrop() 在 Activate() 之后统一做。
-        ModeCombo.SelectedIndex = 0;
-        SourceCombo.SelectedIndex = 0;
-        WrapAlgCombo.SelectedIndex = 0;
-
-        // 加密盘目录默认填上次用的那块盘：挂载/锁定/解锁菜单与「入加密盘」都指向它
-        var lastVault = (App.Settings.Current.LastVaultDir ?? "").Trim();
-        if (lastVault.Length > 0 && Directory.Exists(lastVault)) VaultDirEdit.Text = lastVault;
+        // 国庆配色
+        // 构造函数阶段
 
         try {
             var iconPath = System.IO.Path.Combine(AppContext.BaseDirectory, "Assets", "app.ico");
@@ -145,15 +243,18 @@ public sealed partial class MainWindow : Window
             }
         };
 
-        // 加密盘能力探测完成（VaultAvailable 变化）后重算可见性，免得入加密盘选项要切模式才出现
+        // 加密盘能力探测
         ViewModel.PropertyChanged += (_, e) =>
         {
             if (e.PropertyName == nameof(ViewModel.VaultAvailable) ||
                 e.PropertyName == nameof(ViewModel.VaultRwAvailable))
+            {
                 UpdateVisibility();
+                RefreshVaultHint();
+            }
         };
 
-        // 旧 CLI 不支持包装动作时禁用两个单选，并把停用原因写进提示
+        // 旧 CLI 不支持包装动
         ViewModel.PropertyChanged += (_, e) =>
         {
             if (e.PropertyName != nameof(ViewModel.KeywrapAvailable)) return;
@@ -161,7 +262,7 @@ public sealed partial class MainWindow : Window
             RbUnwrapKey.IsEnabled = ViewModel.KeywrapAvailable;
             if (ViewModel.KeywrapAvailable)
             {
-                // 可用时保留说明性提示（随语言切换由 LocalizeTree 翻译）
+                // 可用时保留说明
                 ToolTipService.SetToolTip(RbWrapKey, L10n.T("将一份 32 字节数据密钥单独封装进 .fekw 文件，用密码或收件人公钥保护"));
                 ToolTipService.SetToolTip(RbUnwrapKey, L10n.T("将 .fekw 中的数据密钥还原为 32 字节文件"));
             }
@@ -171,7 +272,6 @@ public sealed partial class MainWindow : Window
                 ToolTipService.SetToolTip(RbWrapKey, tip);
                 ToolTipService.SetToolTip(RbUnwrapKey, tip);
             }
-            // 勾中的那个要主动切走，否则界面停用却仍能点运行
             if (!ViewModel.KeywrapAvailable && (RbWrapKey.IsChecked == true || RbUnwrapKey.IsChecked == true))
             {
                 RbWrapKey.IsChecked = false;
@@ -184,30 +284,36 @@ public sealed partial class MainWindow : Window
         ViewModel.ConfirmPromptRequested += OnConfirmPromptRequested;
         ViewModel.TaskCompleted += OnTaskCompleted;
         ViewModel.TaskSummary += OnTaskSummary;
-        this.Closed += (_, _) => App.Settings.Save();
+        this.Closed += (_, _) =>
+        {
+            CliProcessService.GlobalOutput -= OnCliGlobalOutput;
+            CliProcessService.RunStarted -= OnCliRunStarted;
+            CliProcessService.RunEnded -= OnCliRunEnded;
+            App.Settings.Save();
+        };
     }
 
-    // ===== 多语言 =====
+    // 多语言
 
     private void ApplyLocalization()
     {
         ApplyMenuLocalization();
-        // 中文时 T() 原样返回，遍历无害；保证从英文切回也能还原
+        // 中文时 T 原样返回
         LocalizeTree(RootGrid);
         ApplyRowOrientation();
         RefreshBirthdayText();
         ViewModel.RefreshRuntimeTexts();
     }
 
-    // 祝福语带 {0} 年龄占位，LocalizeTree 只能翻译出模板，
-    // 这里在遍历之后再把年龄填回去，否则界面会露出 {0}
+    // 祝福语带 {0} 年龄占
+    // 在遍历
     private void RefreshBirthdayText()
     {
         BirthdayText.Text = NationalDayTheme.BirthdayMessage();
     }
 
-    // 同一行控件在英/俄文下比中文长得多，横排时给容器开横向滚动而不是改成竖排：
-// 竖排会把选项挤成一条长列，比被裁更难看。中文窄文本下不会有滚动条。
+    // 同一行控件
+// 竖排
     private void ApplyRowOrientation()
     {
         var h = Microsoft.UI.Xaml.Controls.Orientation.Horizontal;
@@ -219,36 +325,20 @@ public sealed partial class MainWindow : Window
 
     private void ApplyMenuLocalization()
     {
-        MenuEdit.Title = L10n.T("编辑");
-        MenuView.Title = L10n.T("视图");
-        MenuTools.Title = L10n.T("工具");
-        MenuAbout.Title = L10n.T("关于");
-        MenuEditConfig.Text = L10n.T("编辑 CLI 配置");
-        MenuViewSettings.Text = L10n.T("背景设置...");
-        MenuRetryCli.Text = L10n.T("重新检测 CLI 程序");
-        MenuCheckUpdate.Text = L10n.T("检查更新...");
-        MenuCredits.Text = L10n.T("鸣谢...");
-        MenuReadme.Text = L10n.T("README 摘要...");
-        MenuLangZh.IsChecked = L10n.Current == L10n.Zh;
-        MenuLangEn.IsChecked = L10n.Current == L10n.En;
-        MenuLangRu.IsChecked = L10n.Current == L10n.Ru;
-        MenuTheme.Text = L10n.T("主题");
-        MenuThemeLight.Text = L10n.T("浅色");
-        MenuThemeDark.Text = L10n.T("深色");
-        MenuThemeSystem.Text = L10n.T("跟随系统");
-        MenuVault.Text = L10n.T("加密盘");
-        MenuVaultInit.Text = L10n.T("新建加密盘...");
-        MenuVaultList.Text = L10n.T("查看盘内文件...");
-        MenuVaultRekey.Text = L10n.T("修改加密盘密码...");
-        MenuVaultRecoveryCreate.Text = L10n.T("生成恢复码...");
-        MenuVaultRecoveryOpen.Text = L10n.T("用恢复码找回密码...");
-        MenuVaultMount.Text = L10n.T("挂载为磁盘...");
-        MenuVaultLock.Text = L10n.T("暂时锁定");
-        MenuVaultUnlock.Text = L10n.T("重新解锁...");
+        // 标签
+        foreach (var it in MainTabView.TabItems)
+        {
+            if (it is not TabViewItem tvi) continue;
+            if (tvi.Content is SettingsTabView) tvi.Header = L10n.T("设置");
+            else if (tvi.Content is VaultTabView) tvi.Header = L10n.T("加密盘管理");
+            else if (tvi.Content is HomeTabView) tvi.Header = L10n.T("主页");
+            else if (tvi.Content is TerminalTabView) tvi.Header = L10n.T("终端");
+        }
         SyncThemeMenuState();
+        SyncLangRadioState();
     }
 
-    // 视觉树走不到折叠元素，需按逻辑树下钻，否则英文下重启会中英混杂
+    // 视觉树走不到折
     private static void LocalizeTree(Microsoft.UI.Xaml.DependencyObject root)
     {
         LocalizeElement(root);
@@ -295,7 +385,7 @@ public sealed partial class MainWindow : Window
                 case Microsoft.UI.Xaml.Controls.ContentControl cc when cc.Content is string s:
                     cc.Content = L10n.T(s);
                     break;
-                // 下拉项未展开时不在视觉树中，需单独遍历 Items
+                // 下拉项未展开
                 case Microsoft.UI.Xaml.Controls.ComboBox cb:
                     foreach (var item in cb.Items)
                     {
@@ -304,9 +394,9 @@ public sealed partial class MainWindow : Window
                     }
                     break;
         }
-        // 悬停提示是附加属性，所有 FrameworkElement 统一兜底翻译。
-        // 不能放进上面 switch —— ComboBox/ContentControl 等命中自己的 case 后 break，
-        // 会跳过最后的 FrameworkElement 分支，导致它们的 tooltip 一直漏翻。
+        // 悬停提示是附加
+        // 不能放进上面 switch  ComboBox/
+        // 会跳
         if (child is Microsoft.UI.Xaml.FrameworkElement fe)
         {
             var tip = fe.GetValue(Microsoft.UI.Xaml.Controls.ToolTipService.ToolTipProperty);
@@ -315,39 +405,45 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private void OnLangZh(object sender, RoutedEventArgs e) => ChangeLanguage(L10n.Zh);
-    private void OnLangEn(object sender, RoutedEventArgs e) => ChangeLanguage(L10n.En);
-    private void OnLangRu(object sender, RoutedEventArgs e) => ChangeLanguage(L10n.Ru);
+    internal void OnLangZh(object sender, RoutedEventArgs e) => ChangeLanguage(L10n.Zh);
+    internal void OnLangEn(object sender, RoutedEventArgs e) => ChangeLanguage(L10n.En);
+    internal void OnLangRu(object sender, RoutedEventArgs e) => ChangeLanguage(L10n.Ru);
 
-    // 两个面板用 AcrylicBrush 做底：TintOpacity 比窗口底高，
-    // 面板之间与窗口之间才有层次，但整体仍然通透。
-    // 两个面板必须各拿一个独立实例：共用同一个 Brush 会被资源系统按共享引用处理，
-    // 第二个面板拿不到自己的 Acrylic 采样，看起来就是「只有左panel 生效」。
+    // 两个面板用 AcrylicBrush
+    // 面板
+    // 两个面板必须各
+    // 第二个面板拿
     private void ApplyPanelBackdrops()
     {
-        LeftPanel.Background = NationalDayTheme.PanelBackdropBrush();
-        CenterPanel.Background = NationalDayTheme.PanelBackdropBrush();
+        if (NationalDayTheme.IsActive())
+        {
+            LeftPanel.Background = NationalDayTheme.PanelBackdropBrush();
+            CenterPanel.Background = NationalDayTheme.PanelBackdropBrush();
+        }
+        else
+        {
+            // 平时交给 Fluent 卡片样
+            LeftPanel.ClearValue(Microsoft.UI.Xaml.Controls.Border.BackgroundProperty);
+            CenterPanel.ClearValue(Microsoft.UI.Xaml.Controls.Border.BackgroundProperty);
+        }
     }
 
-    // 标题红条：节日窗口上国旗红，平时透明
+    // 标题红条
     private void ApplyTitleAccent()
     {
-        TitleAccentBar.Background = NationalDayTheme.IsActive()
-            ? new Microsoft.UI.Xaml.Media.SolidColorBrush(NationalDayTheme.AccentBar)
-            : new Microsoft.UI.Xaml.Media.SolidColorBrush(Microsoft.UI.Colors.Transparent);
     }
 
-    // ===== 主题 =====
-    private void OnThemeLight(object sender, RoutedEventArgs e) => ChangeTheme(Services.AppTheme.Light);
-    private void OnThemeDark(object sender, RoutedEventArgs e) => ChangeTheme(Services.AppTheme.Dark);
-    private void OnThemeSystem(object sender, RoutedEventArgs e) => ChangeTheme(Services.AppTheme.System);
+    // 主题
+    internal void OnThemeLight(object sender, RoutedEventArgs e) => ChangeTheme(Services.AppTheme.Light);
+    internal void OnThemeDark(object sender, RoutedEventArgs e) => ChangeTheme(Services.AppTheme.Dark);
+    internal void OnThemeSystem(object sender, RoutedEventArgs e) => ChangeTheme(Services.AppTheme.System);
 
     private void ChangeTheme(Services.AppTheme theme)
     {
         if (App.Settings.Current.Theme == theme) { SyncThemeMenuState(); return; }
         App.Settings.Current.Theme = theme;
         App.Settings.Save();
-        // 国庆配色按深浅档取值，切主题要重新覆盖资源并重刷按钮
+        // 国庆配色
         NationalDayTheme.Refresh();
         if (NationalDayTheme.IsActive())
         {
@@ -355,12 +451,12 @@ public sealed partial class MainWindow : Window
             ApplyTitleAccent();
             NationalDayTheme.ApplyControlColors(RootGrid);
         }
-        // 面板与窗口底都随深浅档换tint
+        // 面板
         ApplyPanelBackdrops();
         if (_backgroundBrush.ImageSource == null)
             RootGrid.Background = NationalDayTheme.WindowBackdropBrush();
         App.Theme.ApplyTheme(theme);
-        // 预览窗是独立 Window，得单独跟着换（对话框都是新建时传 RequestedTheme，不受影响）
+        // 预览窗是独立 Window
         _previewWindow?.ApplyTheme(CurrentTheme);
         SyncThemeMenuState();
         UpdateTitleBarButtonColors();
@@ -368,10 +464,410 @@ public sealed partial class MainWindow : Window
 
     private void SyncThemeMenuState()
     {
+        PruneTabInstances();
         var cur = App.Settings.Current.Theme;
-        MenuThemeLight.IsChecked = cur == Services.AppTheme.Light;
-        MenuThemeDark.IsChecked = cur == Services.AppTheme.Dark;
-        MenuThemeSystem.IsChecked = cur == Services.AppTheme.System;
+        foreach (var s in _settingsTabs) s.SyncTheme(cur);
+    }
+
+    private void SyncLangRadioState()
+    {
+        PruneTabInstances();
+        foreach (var s in _settingsTabs) s.SyncLang(L10n.Current);
+    }
+
+    // 终端
+    // 终端不进「+」菜单
+    // 只在执行期间存
+    private TabViewItem? _terminalTab;
+
+    private void OpenTerminal()
+    {
+        if (_terminalTab != null && MainTabView.TabItems.IndexOf(_terminalTab) >= 0)
+        {
+            MainTabView.SelectedItem = _terminalTab;
+            return;
+        }
+        var view = new TerminalTabView();
+        _terminalTabs.Add(view);
+        var item = NewTabItem(L10n.T("终端"), view, closable: false);
+        _terminalTab = item;
+        MainTabView.TabItems.Add(item);
+        MainTabView.SelectedItem = item;
+        LocalizeTree(view);
+        UpdateTitleBarDragRegion();
+    }
+
+    private void CloseTerminal()
+    {
+        if (_terminalTab == null) return;
+        int idx = MainTabView.TabItems.IndexOf(_terminalTab);
+        if (idx >= 0) MainTabView.TabItems.RemoveAt(idx);
+        if (_terminalTab.Content is TerminalTabView v) _terminalTabs.Remove(v);
+        _terminalTab = null;
+        UpdateTitleBarDragRegion();
+    }
+
+    // 收起前留一拍
+    private async void CloseTerminalSoon()
+    {
+        await Task.Delay(1200);
+        DispatcherQueue?.TryEnqueue(CloseTerminal);
+    }
+
+    // 有 CLI 开跑
+    private void OnCliRunStarted() => DispatcherQueue?.TryEnqueue(() =>
+    {
+        foreach (var t in _terminalTabs) t.Clear();
+        OpenTerminal();
+    });
+
+    // 最后一个 CLI 退完
+    private void OnCliRunEnded() => DispatcherQueue?.TryEnqueue(CloseTerminalSoon);
+
+    private void OnCliGlobalOutput(string text)
+    {
+        DispatcherQueue?.TryEnqueue(() =>
+        {
+            foreach (var t in _terminalTabs) t.Append(text + "\n");
+        });
+    }
+
+    private void OnTermClear(object sender, RoutedEventArgs e)
+    {
+        foreach (var t in _terminalTabs) t.Clear();
+    }
+
+    // 设置
+    // 供设置标签页
+    internal async Task<string?> PickBackgroundImageAsync()
+    {
+        var picker = new FileOpenPicker();
+        WinRT.Interop.InitializeWithWindow.Initialize(picker, WinRT.Interop.WindowNative.GetWindowHandle(this));
+        picker.FileTypeFilter.Add(".png");
+        picker.FileTypeFilter.Add(".jpg");
+        picker.FileTypeFilter.Add(".jpeg");
+        picker.FileTypeFilter.Add(".bmp");
+        picker.FileTypeFilter.Add(".webp");
+        var file = await picker.PickSingleFileAsync();
+        return file?.Path;
+    }
+
+    internal void ApplyCustomBackground(string? path)
+    {
+        path = string.IsNullOrWhiteSpace(path) ? null : path.Trim();
+        App.Settings.Current.CustomBackgroundPath = path;
+        App.Settings.Save();
+        if (path == null || !File.Exists(path))
+        {
+            _backgroundBrush.ImageSource = null;
+        }
+        else
+        {
+            try
+            {
+                var uri = new Uri(path);
+                if (uri.IsFile)
+                {
+                    var bitmap = new BitmapImage();
+                    bitmap.UriSource = uri;
+                    _backgroundBrush.ImageSource = bitmap;
+                    _backgroundBrush.Stretch = Stretch.UniformToFill;
+                    _backgroundBrush.Opacity = 1.0;
+                }
+            }
+            catch { }
+        }
+        ApplyBackdrop();
+        if (_backgroundBrush.ImageSource == null && NationalDayTheme.IsActive())
+            RootGrid.Background = NationalDayTheme.WindowBackdropBrush();
+        else if (_backgroundBrush.ImageSource != null)
+            RootGrid.Background = _backgroundBrush;
+    }
+
+    // 加密盘管理
+    private void OnTabSelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        // 全部标签
+        if (MainTabView.TabItems.Count == 0)
+        {
+            var view = new HomeTabView();
+            ActiveHome = view;
+            InitHomeView(view);
+            _homeTabs.Add(view);
+            var item = NewTabItem(L10n.T("主页"), view);
+            MainTabView.TabItems.Add(item);
+            MainTabView.SelectedItem = item;
+            LocalizeTree(view);
+            UpdateTitleBarDragRegion();
+            return;
+        }
+        // 切到主页标签
+        if (MainTabView.SelectedItem is TabViewItem tvi && tvi.Content is HomeTabView h)
+        {
+            ActiveHome = h;
+        }
+        // 淡入淡出
+        // 用户看到
+        var outgoing = e.RemovedItems.Count > 0
+            ? (e.RemovedItems[0] as TabViewItem)?.Content as FrameworkElement
+            : null;
+        FadeContent(outgoing, 0);
+        FadeContent((MainTabView.SelectedItem as TabViewItem)?.Content as FrameworkElement, 1);
+
+        if ((MainTabView.SelectedItem as TabViewItem)?.Content is VaultTabView)
+            RefreshMountedVaults();
+    }
+
+    // 标签切换动画
+    // 下次切回来
+    private static void FadeContent(FrameworkElement? el, double to)
+    {
+        if (el == null) return;
+        if (to >= 1) el.Opacity = 0;
+        var anim = new DoubleAnimation
+        {
+            From = el.Opacity,
+            To = to,
+            Duration = new Duration(TimeSpan.FromMilliseconds(150)),
+            EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut },
+            EnableDependentAnimation = true,
+        };
+        var sb = new Storyboard();
+        Storyboard.SetTarget(anim, el);
+        Storyboard.SetTargetProperty(anim, "Opacity");
+        sb.Children.Add(anim);
+        if (to < 1) sb.Completed += (_, _) => el.Opacity = 1;
+        sb.Begin();
+    }
+
+    private void OnRefreshMounted(object sender, RoutedEventArgs e) => RefreshMountedVaults();
+
+    // 加密盘能力
+    private async Task<bool> EnsureVaultAvailableAsync()
+    {
+        if (ViewModel.VaultAvailable) return true;
+        await ShowMessageAsync(L10n.T("加密盘管理"), VaultUnavailableReason());
+        return false;
+    }
+
+    internal string VaultUnavailableReason()
+    {
+        return string.IsNullOrEmpty(ViewModel.CliPath)
+            ? L10n.T("未检测到 FileEncryptor CLI，请先在「设置 → 程序」中重新检测 CLI 程序。")
+            : L10n.T("当前 CLI 不支持加密盘功能，需要 FileEncryptor CLI 3.0.1 或更高版本。");
+    }
+
+    // 加密盘页顶部
+    private void RefreshVaultHint()
+    {
+        foreach (var v in _vaultTabs) v.RefreshHint();
+    }
+
+    private void RefreshMountedVaults()
+    {
+        PruneTabInstances();
+        foreach (var v in _vaultTabs) v.RefreshList();
+    }
+
+    // 标签页
+
+    // Explorer 式标题栏
+    // WinUI 开启
+    // 输入命中全
+    // 用 SetDragRectangles
+    // 其余区域
+    private void UpdateTitleBarDragRegion()
+    {
+        if (AppWindow == null) return;
+        if (TitleBarDragRegion == null || TitleBarDragRegion.ActualWidth <= 0) return;
+
+        var t = TitleBarDragRegion.TransformToVisual(null);
+        var origin = t.TransformPoint(new Windows.Foundation.Point(0, 0));
+        int x = (int)Math.Round(origin.X);
+        int y = (int)Math.Round(origin.Y);
+        int w = (int)Math.Round(TitleBarDragRegion.ActualWidth);
+        int h = (int)Math.Round(TitleBarDragRegion.ActualHeight);
+        if (w <= 0 || h <= 0) return;
+
+        // 系统
+        const int captionW = 140;
+        int maxW = Math.Max(0, (int)AppWindow.Size.Width - captionW - x);
+        w = Math.Min(w, maxW);
+        if (w <= 0) return;
+
+        AppWindow.TitleBar.SetDragRectangles(new[] { new Windows.Graphics.RectInt32(x, y, w, h) });
+    }
+
+    // 标签条宽度随标
+    private void OnTabViewSizeChanged(object sender, SizeChangedEventArgs e) => UpdateTitleBarDragRegion();
+
+    // 内置「+」
+    private void OnAddTabButtonClick(TabView sender, object args)
+    {
+        // 某些版本
+        for (int i = MainTabView.TabItems.Count - 1; i >= 0; i--)
+        {
+            if (MainTabView.TabItems[i] is TabViewItem t &&
+                string.IsNullOrEmpty(t.Header as string) && t.Content == null)
+                MainTabView.TabItems.RemoveAt(i);
+            else break;
+        }
+        ShowNewTabMenu();
+    }
+
+    private void ShowNewTabMenu()
+    {
+        var menu = new MenuFlyout();
+        menu.Placement = Microsoft.UI.Xaml.Controls.Primitives.FlyoutPlacementMode.BottomEdgeAlignedLeft;
+        // 终端是全局唯一
+        menu.Items.Add(NewTabMenuItem(L10n.T("主页"), "\uE80F", OnNewHomeTab));
+        menu.Items.Add(NewTabMenuItem(L10n.T("设置"), "\uE713", OnNewSettingsTab));
+        menu.Items.Add(NewTabMenuItem(L10n.T("加密盘管理"), "\uE8B7", OnNewVaultTab));
+
+        // 锚点优先用内置
+        // 绝不能退到整
+        FrameworkElement? anchor = FindAddTabButton();
+        if (anchor == null && MainTabView.TabItems.Count > 0)
+            anchor = MainTabView.TabItems[MainTabView.TabItems.Count - 1] as FrameworkElement;
+        if (anchor == null) anchor = MainTabView;
+        menu.ShowAt(anchor);
+    }
+
+    private static MenuFlyoutItem NewTabMenuItem(string text, string glyph, Action action)
+    {
+        var item = new MenuFlyoutItem { Text = text, Icon = new FontIcon { Glyph = glyph } };
+        item.Click += (_, _) => action();
+        return item;
+    }
+
+    // 内置加号
+    // 取「标签条高度内
+    private Button? FindAddTabButton()
+    {
+        var buttons = new List<Button>();
+        CollectButtons(MainTabView, buttons);
+        if (buttons.Count == 0) return null;
+
+        // 最后一个标签
+        double bandTop = 0, bandBottom = 0, lastRight = 0;
+        bool any = false;
+        for (int i = 0; i < MainTabView.TabItems.Count; i++)
+        {
+            if (MainTabView.TabItems[i] is not TabViewItem t) continue;
+            var o = t.TransformToVisual(MainTabView).TransformPoint(new Windows.Foundation.Point(0, 0));
+            var e = t.TransformToVisual(MainTabView).TransformPoint(new Windows.Foundation.Point(t.ActualWidth, t.ActualHeight));
+            bandTop = any ? Math.Min(bandTop, o.Y) : o.Y;
+            bandBottom = any ? Math.Max(bandBottom, e.Y) : e.Y;
+            lastRight = Math.Max(lastRight, e.X);
+            any = true;
+        }
+        if (!any) return null;
+
+        // 取最靠左
+        Button? best = null;
+        double bestX = double.MaxValue;
+        foreach (var b in buttons)
+        {
+            if (b.ActualWidth <= 0) continue;
+            var p = b.TransformToVisual(MainTabView).TransformPoint(new Windows.Foundation.Point(0, 0));
+            if (p.Y < bandTop - 2 || p.Y > bandBottom + 2) continue;   // 不在标签条高度
+            if (p.X < lastRight - 2) continue;                          
+            if (p.X < bestX) { bestX = p.X; best = b; }
+        }
+        return best;
+    }
+
+    private static void CollectButtons(DependencyObject root, List<Button> acc)
+    {
+        int n = Microsoft.UI.Xaml.Media.VisualTreeHelper.GetChildrenCount(root);
+        for (int i = 0; i < n; i++)
+        {
+            var child = Microsoft.UI.Xaml.Media.VisualTreeHelper.GetChild(root, i);
+            if (child is Button b) acc.Add(b);
+            CollectButtons(child, acc);
+        }
+    }
+
+    // 标签「×」
+    // 统一兜底
+    private void OnTabCloseRequested(TabView sender, TabViewTabCloseRequestedEventArgs args)
+    {
+        if (args.Tab is not TabViewItem item) return;
+        if (item.Content is SettingsTabView s) _settingsTabs.Remove(s);
+        if (item.Content is VaultTabView v) _vaultTabs.Remove(v);
+        if (item.Content is HomeTabView h) _homeTabs.Remove(h);
+        if (item.Content is TerminalTabView t) _terminalTabs.Remove(t);
+        int idx = MainTabView.TabItems.IndexOf(item);
+        if (idx >= 0) MainTabView.TabItems.RemoveAt(idx);
+        UpdateTitleBarDragRegion();
+    }
+
+    // 新建标签
+    private TabViewItem NewTabItem(string header, object content, bool closable = true)
+        => new()
+        {
+            Header = header,
+            Content = content,
+            IsClosable = closable,
+            HorizontalContentAlignment = HorizontalAlignment.Stretch,
+            VerticalContentAlignment = VerticalAlignment.Stretch,
+        };
+
+    // 主页
+    private void OnNewHomeTab(object sender, RoutedEventArgs e) => OnNewHomeTab();
+    private void OnNewHomeTab()
+    {
+        var view = new HomeTabView();
+        // 先把代理指向新
+        ActiveHome = view;
+        InitHomeView(view);
+        _homeTabs.Add(view);
+        var item = NewTabItem(L10n.T("主页"), view);
+        MainTabView.TabItems.Add(item);
+        MainTabView.SelectedItem = item;
+        LocalizeTree(view);
+        UpdateTitleBarDragRegion();
+    }
+
+    private void OnNewSettingsTab(object sender, RoutedEventArgs e) => OnNewSettingsTab();
+    private void OnNewSettingsTab()
+    {
+        var view = new SettingsTabView();
+        _settingsTabs.Add(view);
+        var item = NewTabItem(L10n.T("设置"), view);
+        MainTabView.TabItems.Add(item);
+        MainTabView.SelectedItem = item;
+        // 按需新开
+        view.SyncTheme(App.Settings.Current.Theme);
+        view.SyncLang(L10n.Current);
+        LocalizeTree(view);
+        UpdateTitleBarDragRegion();
+    }
+
+    private void OnNewVaultTab(object sender, RoutedEventArgs e) => OnNewVaultTab();
+    private void OnNewVaultTab()
+    {
+        var view = new VaultTabView();
+        _vaultTabs.Add(view);
+        var item = NewTabItem(L10n.T("加密盘管理"), view);
+        MainTabView.TabItems.Add(item);
+        MainTabView.SelectedItem = item;
+        view.RefreshHint();   // 能力提示不依赖
+        LocalizeTree(view);
+        UpdateTitleBarDragRegion();
+    }
+
+    // 标签
+    // 不依赖 TabClosed 事件
+    private void PruneTabInstances()
+    {
+        var alive = new HashSet<object>();
+        foreach (var t in MainTabView.TabItems)
+            if (t is TabViewItem tvi && tvi.Content != null) alive.Add(tvi.Content);
+        _settingsTabs.RemoveAll(v => !alive.Contains(v));
+        _vaultTabs.RemoveAll(v => !alive.Contains(v));
+        _homeTabs.RemoveAll(v => !alive.Contains(v));
+        _terminalTabs.RemoveAll(v => !alive.Contains(v));
     }
 
     private async void ChangeLanguage(string lang)
@@ -394,17 +890,19 @@ public sealed partial class MainWindow : Window
     private void OnFirstLoaded(object sender, RoutedEventArgs e)
     {
         RootGrid.Loaded -= OnFirstLoaded;
+        // 首帧布局完成
+        UpdateTitleBarDragRegion();
         if (!ViewModel.DetectCli(out _))
             ShowCliNotFoundDialog();
         else
             ViewModel.RefreshCommandPreview();
-        // 能力探测是异步的（--features 子进程），其结果决定「入加密盘」等选项的可见性。
-        // 除 PropertyChanged 订阅外，窗口激活后再兜底刷几次可见性：
-        // 探测完成时刻可能早于/晚于 XAML 初始布局，只靠事件容易漏一次重算。
+        // 能力探测是异步
+        // 除 PropertyChanged 订阅外，窗口
+        // 探测完成时刻
         _ = RefreshVisibilityAfterProbeAsync();
     }
 
-    // 启动后按固定间隔重算几次可见性，探测出 vault 能力后即收工。
+    // 启动
     private async Task RefreshVisibilityAfterProbeAsync()
     {
         var dq = this.DispatcherQueue;
@@ -419,9 +917,9 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    // ===== 动作 / 密钥管理 =====
-    // 三组单选的 GroupName 各不相同，WinUI 只在同组内互斥，跨组要手工取消。
-    // 被点亮的那组绝不能碰，否则调用方刚勾上的会被这里清掉。
+    // 动作 / 密钥管理
+    // 三组单选
+    // 被点亮
     private const int GroupAction = 0;
     private const int GroupKeyMgmt = 1;
     private const int GroupWrap = 2;
@@ -443,7 +941,7 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private void OnKeyMgmtRadioChecked(object sender, RoutedEventArgs e)
+    internal void OnKeyMgmtRadioChecked(object sender, RoutedEventArgs e)
     {
         if (RbKeyGen.IsChecked != true && RbDerive.IsChecked != true && RbPubKey.IsChecked != true) return;
         ExclusiveGroup(GroupKeyMgmt);
@@ -453,7 +951,7 @@ public sealed partial class MainWindow : Window
         UpdateVisibility();
     }
 
-    private void OnWrapRadioChecked(object sender, RoutedEventArgs e)
+    internal void OnWrapRadioChecked(object sender, RoutedEventArgs e)
     {
         if (RbWrapKey.IsChecked != true && RbUnwrapKey.IsChecked != true) return;
         ExclusiveGroup(GroupWrap);
@@ -461,32 +959,46 @@ public sealed partial class MainWindow : Window
         UpdateVisibility();
     }
 
-    private void OnWrapAlgChanged(object sender, SelectionChangedEventArgs e)
+    internal void OnWrapAlgChanged(object sender, SelectionChangedEventArgs e)
     {
         if (WrapAlgCombo.SelectedIndex >= 0) ViewModel.WrapAlgIndex = WrapAlgCombo.SelectedIndex;
         UpdateVisibility();
     }
 
-    private void OnWrapInputChanged(object sender, TextChangedEventArgs e) => ViewModel.WrapInput = WrapFileEdit.Text;
-    private void OnWrapOutputChanged(object sender, TextChangedEventArgs e) => ViewModel.WrapOutput = WrapOutEdit.Text;
+    internal void OnWrapInputChanged(object sender, TextChangedEventArgs e) => ViewModel.WrapInput = WrapFileEdit.Text;
+    internal void OnWrapOutputChanged(object sender, TextChangedEventArgs e) => ViewModel.WrapOutput = WrapOutEdit.Text;
 
     private void UpdateTitleBarButtonColors()
     {
+        // 标题栏叠
         var tb = AppWindow.TitleBar;
-        tb.ButtonForegroundColor = Microsoft.UI.Colors.White;
-        tb.ButtonInactiveForegroundColor = Microsoft.UI.Colors.LightGray;
-        tb.ButtonHoverForegroundColor = Microsoft.UI.Colors.White;
-        tb.ButtonPressedForegroundColor = Microsoft.UI.Colors.White;
+        var dark = CurrentTheme != ElementTheme.Light;
+        var fg = dark ? Microsoft.UI.Colors.White : Microsoft.UI.Colors.Black;
+        var fgInactive = dark
+            ? Windows.UI.Color.FromArgb(255, 0xC8, 0xC8, 0xC8)
+            : Windows.UI.Color.FromArgb(255, 0x5D, 0x5D, 0x5D);
+        tb.ButtonForegroundColor = fg;
+        tb.ButtonInactiveForegroundColor = fgInactive;
+        tb.ButtonHoverForegroundColor = fg;
+        tb.ButtonPressedForegroundColor = fg;
+        var hover = dark
+            ? Windows.UI.Color.FromArgb(0x20, 0xFF, 0xFF, 0xFF)
+            : Windows.UI.Color.FromArgb(0x20, 0, 0, 0);
+        var pressed = dark
+            ? Windows.UI.Color.FromArgb(0x30, 0xFF, 0xFF, 0xFF)
+            : Windows.UI.Color.FromArgb(0x30, 0, 0, 0);
+        tb.ButtonHoverBackgroundColor = hover;
+        tb.ButtonPressedBackgroundColor = pressed;
     }
 
-    // ===== 任务完成通知 =====
+    // 任务完成通知
     private void OnTaskCompleted(string message)
     {
         var notif = new TaskNotificationWindow(message);
         notif.Activate();
     }
 
-    // ===== 任务汇总弹窗 =====
+    // 任务汇总弹窗
     private void OnTaskSummary(TaskSummaryInfo summary)
     {
         DispatcherQueue.TryEnqueue(() =>
@@ -495,14 +1007,14 @@ public sealed partial class MainWindow : Window
             {
                 XamlRoot = Content.XamlRoot
             };
-            // 观测 ShowAsync 返回的 Task：对话框在 XamlRoot 失效等场景抛异常时不落入 UnhandledException
+            // 观测 ShowAsync 返回
             _ = dlg.ShowAsync().AsTask().ContinueWith(static t => { _ = t.Exception; },
                 TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously);
         });
     }
 
 
-    // ===== CLI 未找到 =====
+    // CLI 未找到
     private int _cliNotFoundRetries;
     private async void ShowCliNotFoundDialog()
     {
@@ -517,21 +1029,21 @@ public sealed partial class MainWindow : Window
         var nameList = string.Join("\n", names.Select(n => "  • " + n));
         var panel = new StackPanel();
         var infoText = new TextBlock { Text = L10n.F("无法找到 FileEncryptor CLI 可执行文件\n\n程序需要 FileEncryptorCLI 命令行工具来执行加密/解密操作。\n\n预期文件名：\n{0}\n\n当前程序目录：{1}", nameList, AppContext.BaseDirectory), TextWrapping = TextWrapping.Wrap, IsTextSelectionEnabled = true };
-        var statusText = new TextBlock { Text = "", Margin = new Thickness(0,8,0,0), Foreground = new SolidColorBrush(Microsoft.UI.Colors.Gray) };
+        var statusText = new TextBlock { Text = "", Margin = new Thickness(0,8,0,0), Foreground = ThemeService.BrushFor("AppTextSecondaryBrush", CurrentTheme) };
         var progress = new ProgressBar { Minimum = 0, Maximum = 100, Value = 0, Visibility = Visibility.Collapsed, Margin = new Thickness(0,4,0,0) };
         panel.Children.Add(infoText); panel.Children.Add(statusText); panel.Children.Add(progress);
-        // 三键：重试 / 下载 CLI / 关闭。ContentDialog 的排列固定是
-        // Primary → Secondary → Close，所以下载键自然落在重试与关闭中间。
+        // 三键
+        // Primary → Secondary → Close
         var dlg = new ContentDialog { Title = L10n.T("FileEncryptor CLI 未找到"), Content = panel, PrimaryButtonText = L10n.T("重试"), SecondaryButtonText = L10n.T("下载 CLI"), CloseButtonText = L10n.T("关闭"), XamlRoot = Content.XamlRoot, RequestedTheme = CurrentTheme };
         var result = await dlg.ShowAsync();
         if (result == ContentDialogResult.Primary) { if (ViewModel.DetectCli(out _)) ViewModel.RefreshCommandPreview(); else ShowCliNotFoundDialog(); }
         else if (result == ContentDialogResult.Secondary) { await ShowDownloadCliDialog(); }
     }
 
-    // 下载对话框：下载中不给任何按钮，装完自己关。
+    // 下载对话框
     private async System.Threading.Tasks.Task ShowDownloadCliDialog()
     {
-        var statusText = new TextBlock { Text = L10n.T("准备下载…"), TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 8, 0, 0), Foreground = new SolidColorBrush(Microsoft.UI.Colors.Gray) };
+        var statusText = new TextBlock { Text = L10n.T("准备下载…"), TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 8, 0, 0), Foreground = ThemeService.BrushFor("AppTextSecondaryBrush", CurrentTheme) };
         var progress = new ProgressBar { Minimum = 0, Maximum = 100, Value = 0, Visibility = Visibility.Collapsed, Margin = new Thickness(0, 4, 0, 0) };
         var panel = new StackPanel();
         panel.Children.Add(statusText); panel.Children.Add(progress);
@@ -545,8 +1057,7 @@ public sealed partial class MainWindow : Window
         };
         var downloading = DownloadCliFromGithub(statusText, progress);
         await dlg.ShowAsync();
-        // 关窗往往早于下载完成，这里只顺手补一次检测：
-        // 赶上了就刷新命令预览，没赶上用户再点一次「重新检测 CLI 程序」
+        // 关窗往往早于
         if (ViewModel.DetectCli(out var path))
         {
             ViewModel.SetStatus("已检测到 CLI：{0}", path);
@@ -555,7 +1066,7 @@ public sealed partial class MainWindow : Window
         _ = downloading;
     }
 
-    // 在tag 列表中定位精确 tag：命中返回索引，未找到返回 -1
+    // 在tag 列表中定位精
     private static int IndexOfTag(System.Text.Json.JsonElement tags, string want)
     {
         var i = 0;
@@ -568,8 +1079,8 @@ public sealed partial class MainWindow : Window
         return -1;
     }
 
-    // 从 GitHub 拉取配套 CLI 并落到程序目录：
-    // 精确 tag → 平台匹配 → 域名白名单 → 文件名净化 → SHA256 → 落盘
+    // 从 GitHub 拉取配套 CLI 并落
+    // 精确 tag → 平台匹配 → 域
     private async System.Threading.Tasks.Task DownloadCliFromGithub(TextBlock statusText, ProgressBar progress)
     {
         string? tempPath = null;
@@ -580,7 +1091,7 @@ public sealed partial class MainWindow : Window
             http.DefaultRequestHeaders.UserAgent.ParseAdd("FileEncryptorGUI");
             var tagsJson = await http.GetStringAsync("https://api.github.com/repos/Texas-albe/FileEncryptor/tags");
             using var tagsDoc = System.Text.Json.JsonDocument.Parse(tagsJson);
-            // 只接受与预期版本精确配套的 tag；取「最大版本」会下到不匹配的 CLI
+            // 只接受
             var guiVer = FileEncryptorLocator.GuiVersion;
             var cliVer = FileEncryptorLocator.ExpectedCliVersion;
             var want = $"GUI{guiVer}_CLI{cliVer}";
@@ -608,7 +1119,7 @@ public sealed partial class MainWindow : Window
                 return;
             }
 
-            // URL 不可信，文件名只取末段并查非法字符
+            // URL 不可信
             var safeName = Path.GetFileName(fileName.Trim());
             if (string.IsNullOrEmpty(safeName) || safeName.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0)
             {
@@ -620,8 +1131,8 @@ public sealed partial class MainWindow : Window
             statusText.Text = L10n.F("下载中：{0}", fileName);
             progress.Visibility = Visibility.Visible;
             tempPath = Path.Combine(Path.GetTempPath(), $"fe_cli_{Guid.NewGuid():N}.tmp");
-            // 边下边写盘：几百 MB 的 CLI 全塞内存没必要，
-            // 顺带让进度条是真的而不是先跳到 60% 再一次性到 100%
+            // 边下边写盘
+            // 顺带让进度条
             using (var resp = await http.GetAsync(downloadUrl, System.Net.Http.HttpCompletionOption.ResponseHeadersRead))
             {
                 resp.EnsureSuccessStatusCode();
@@ -668,7 +1179,7 @@ public sealed partial class MainWindow : Window
             }
             catch (UnauthorizedAccessException)
             {
-                // 装在 Program Files 下时没管理员权限就是这个异常
+                // 装在 Program Files 下时没管理
                 statusText.Text = L10n.F("安装失败：程序目录不可写，请以管理员身份运行，或手动将文件放置到：{0}", savePath);
                 return;
             }
@@ -684,7 +1195,7 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    // ===== 密码请求 =====
+    // 密码请求
     private async void OnPasswordRequested()
     {
         var dlg = new PasswordDialog(ViewModel.PasswordNeedsConfirm)
@@ -699,8 +1210,19 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    // ===== 文件操作 =====
-    private async void OnAddFiles(object sender, RoutedEventArgs e)
+    // 文件操作
+    // 文件关联
+    internal void AddFilesFromCommandLine(IEnumerable<string> paths)
+    {
+        var files = paths
+            .Where(p => p.EndsWith(".ptd", StringComparison.OrdinalIgnoreCase) && File.Exists(p))
+            .ToList();
+        if (files.Count == 0) return;
+        ViewModel.AddInputPaths(files);
+        ViewModel.SetStatus("已从文件关联打开 {0} 个 .ptd 文件", files.Count);
+    }
+
+    internal async void OnAddFiles(object sender, RoutedEventArgs e)
     {
         try
         {
@@ -716,7 +1238,7 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private async void OnAddDir(object sender, RoutedEventArgs e)
+    internal async void OnAddDir(object sender, RoutedEventArgs e)
     {
         try
         {
@@ -732,11 +1254,11 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private void OnClearFiles(object sender, RoutedEventArgs e) => ViewModel.ClearInputPaths();
+    internal void OnClearFiles(object sender, RoutedEventArgs e) => ViewModel.ClearInputPaths();
 
     private PreviewWindow? _previewWindow;
 
-    private async void OnPreviewClicked(object sender, RoutedEventArgs e)
+    internal async void OnPreviewClicked(object sender, RoutedEventArgs e)
     {
         if (FileList.SelectedItem is null)
         {
@@ -765,7 +1287,7 @@ public sealed partial class MainWindow : Window
             return;
         }
 
-        // 预览是解密行为：加密/密钥动作下没有预览语义
+        // 预览是解密行
         if (ViewModel.ActionIndex is not (1 or 3))
         {
             await new ContentDialog
@@ -779,12 +1301,12 @@ public sealed partial class MainWindow : Window
             return;
         }
 
-        // 与 Qt 侧同一判据：解密时填了私钥文件即非对称，不需要密码
+        // 与 Qt 侧同一判据
         var identity = ViewModel.Identity?.Trim();
         byte[] password = Array.Empty<byte>();
         if (string.IsNullOrEmpty(identity))
         {
-            // 预览恒为解密：单次输入
+            // 预览恒
             var pwd = new PasswordDialog(false)
             {
                 XamlRoot = Content.XamlRoot,
@@ -808,19 +1330,19 @@ public sealed partial class MainWindow : Window
 
     private void PreviewNextFile()
     {
-        // 选中下一项再预览，让列表高亮跟着走
+        // 选中下一项
         var idx = FileList.SelectedIndex;
         if (idx < 0 || idx + 1 >= FileList.Items.Count) return;
         FileList.SelectedIndex = idx + 1;
         OnPreviewClicked(this, new RoutedEventArgs());
     }
 
-    private void OnFileListDragOver(object sender, DragEventArgs e)
+    internal void OnFileListDragOver(object sender, DragEventArgs e)
     {
         e.AcceptedOperation = Windows.ApplicationModel.DataTransfer.DataPackageOperation.Copy;
     }
 
-    private async void OnFileListDrop(object sender, DragEventArgs e)
+    internal async void OnFileListDrop(object sender, DragEventArgs e)
     {
         if (e.DataView.Contains(Windows.ApplicationModel.DataTransfer.StandardDataFormats.StorageItems))
         {
@@ -829,12 +1351,12 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    // ===== 选项变更 =====
-    private void OnActionRadioChecked(object sender, RoutedEventArgs e)
+    // 选项变
+    internal void OnActionRadioChecked(object sender, RoutedEventArgs e)
     {
         if (RbEncrypt.IsChecked != true && RbDecrypt.IsChecked != true
             && RbBatchEncrypt.IsChecked != true && RbBatchDecrypt.IsChecked != true) return;
-        // 互斥只取消另外两组，本组的勾选状态由本次 Checked 决定，不受影响
+        // 互斥只取消另外
         ExclusiveGroup(GroupAction);
         if (RbEncrypt.IsChecked == true) ViewModel.ActionIndex = 0;
         else if (RbDecrypt.IsChecked == true) ViewModel.ActionIndex = 1;
@@ -843,28 +1365,28 @@ public sealed partial class MainWindow : Window
         UpdateVisibility();
     }
 
-    private void OnModeChanged(object sender, SelectionChangedEventArgs e)
+    internal void OnModeChanged(object sender, SelectionChangedEventArgs e)
     {
         ViewModel.ModeIndex = ModeCombo.SelectedIndex;
         UpdateVisibility();
     }
 
-    private void OnFileCipherChanged(object sender, SelectionChangedEventArgs e)
+    internal void OnFileCipherChanged(object sender, SelectionChangedEventArgs e)
     {
         ViewModel.FileCipherIndex = FileCipherCombo.SelectedIndex;
         UpdateVisibility();
     }
 
-    private void OnSourceChanged(object sender, SelectionChangedEventArgs e)
+    internal void OnSourceChanged(object sender, SelectionChangedEventArgs e)
     {
         if (SourceCombo.SelectedIndex >= 0) ViewModel.SourceIndex = SourceCombo.SelectedIndex;
     }
 
     private bool _optionSyncing;
 
-    private void OnOptionChanged(object sender, RoutedEventArgs e)
+    internal void OnOptionChanged(object sender, RoutedEventArgs e)
     {
-        // 下面的可见性同步会改勾选状态，会再次触发本回调
+        // 下面
         if (_optionSyncing) return;
         _optionSyncing = true;
         try
@@ -884,43 +1406,43 @@ public sealed partial class MainWindow : Window
         finally { _optionSyncing = false; }
     }
 
-    // 文件列表勾选框：DataContext 即 SelectablePath 项，不走 {x:Bind} 以免触发附加属性赋值崩溃
-    private void OnItemCheckedChanged(object sender, RoutedEventArgs e)
+    // 文件列表勾选框
+    internal void OnItemCheckedChanged(object sender, RoutedEventArgs e)
     {
         if (sender is CheckBox cb && cb.DataContext is Models.SelectablePath sp)
             sp.IsSelected = cb.IsChecked == true;
     }
 
-    // 列表项加载时把视觉勾选态同步到数据（IsSelected 默认 true，但 CheckBox 未绑 IsChecked，需手动对齐）
-    private void OnItemLoaded(object sender, RoutedEventArgs e)
+    // 列表项加载
+    internal void OnItemLoaded(object sender, RoutedEventArgs e)
     {
         if (sender is CheckBox cb && cb.DataContext is Models.SelectablePath sp)
             cb.IsChecked = sp.IsSelected;
     }
 
-    private void OnCompressLevelChanged(NumberBox sender, NumberBoxValueChangedEventArgs args)
+    internal void OnCompressLevelChanged(NumberBox sender, NumberBoxValueChangedEventArgs args)
     {
         ViewModel.CompressLevel = (int)sender.Value;
     }
 
-    private void OnSplitSizeChanged(NumberBox sender, NumberBoxValueChangedEventArgs args)
+    internal void OnSplitSizeChanged(NumberBox sender, NumberBoxValueChangedEventArgs args)
     {
         if (_optionSyncing) return;
         ViewModel.SplitSize = sender.Value;
     }
 
-    private void OnSplitUnitChanged(object sender, SelectionChangedEventArgs e)
+    internal void OnSplitUnitChanged(object sender, SelectionChangedEventArgs e)
     {
         if (_optionSyncing) return;
         if (sender is ComboBox cb) ViewModel.SplitUnitIndex = cb.SelectedIndex < 0 ? 0 : cb.SelectedIndex;
     }
 
-    private void OnOutDirChanged(object sender, TextChangedEventArgs e) => ViewModel.OutputDir = OutDirEdit.Text;
-    private void OnKeyfileChanged(object sender, TextChangedEventArgs e) => ViewModel.Keyfile = KeyfileEdit.Text;
-    private void OnRecipientChanged(object sender, TextChangedEventArgs e) => ViewModel.Recipient = RecipientEdit.Text;
-    private void OnIdentityChanged(object sender, TextChangedEventArgs e) => ViewModel.Identity = IdentityEdit.Text;
+    internal void OnOutDirChanged(object sender, TextChangedEventArgs e) => ViewModel.OutputDir = OutDirEdit.Text;
+    internal void OnKeyfileChanged(object sender, TextChangedEventArgs e) => ViewModel.Keyfile = KeyfileEdit.Text;
+    internal void OnRecipientChanged(object sender, TextChangedEventArgs e) => ViewModel.Recipient = RecipientEdit.Text;
+    internal void OnIdentityChanged(object sender, TextChangedEventArgs e) => ViewModel.Identity = IdentityEdit.Text;
 
-    private async void OnBrowseOutDir(object sender, RoutedEventArgs e)
+    internal async void OnBrowseOutDir(object sender, RoutedEventArgs e)
     {
         try {
             var picker = new FolderPicker();
@@ -931,8 +1453,8 @@ public sealed partial class MainWindow : Window
         } catch (Exception ex) { ViewModel.SetStatus("[输出目录] 错误：{0}", ex.Message); }
     }
 
-    // 加密盘：勾选才启用目录输入，取消勾选要把路径一起清掉，否则残留值仍会被下发
-    private void OnIntoVaultChanged(object sender, RoutedEventArgs e)
+    // 加密盘
+    internal void OnIntoVaultChanged(object sender, RoutedEventArgs e)
     {
         bool on = ChkIntoVault.IsChecked == true;
         VaultDirEdit.IsEnabled = on;
@@ -940,9 +1462,9 @@ public sealed partial class MainWindow : Window
         if (!on) { VaultDirEdit.Text = ""; ViewModel.IntoVault = ""; }
         else ViewModel.IntoVault = VaultDirEdit.Text;
     }
-    private void OnVaultDirChanged(object sender, TextChangedEventArgs e)
+    internal void OnVaultDirChanged(object sender, TextChangedEventArgs e)
         => ViewModel.IntoVault = ChkIntoVault.IsChecked == true ? VaultDirEdit.Text : "";
-    private async void OnBrowseVaultDir(object sender, RoutedEventArgs e)
+    internal async void OnBrowseVaultDir(object sender, RoutedEventArgs e)
     {
         try {
             var picker = new FolderPicker();
@@ -953,13 +1475,13 @@ public sealed partial class MainWindow : Window
         } catch (Exception ex) { ViewModel.SetStatus("[加密盘] 错误：{0}", ex.Message); }
     }
 
-    // ===== 加密盘库管理：与 Qt 前端同源，砍掉普通用户用不到的重建索引/库内重加密 =====
+    // 加密盘库管理
 
-    // 新建：vault.meta 只是个带随机盐的明文文件，密码到第一次往盘里放文件时才生效，
-    // 所以这里不问密码，只在成功后告诉用户「以后放文件时用的密码就是盘密码」
-    private async void OnVaultInit(object sender, RoutedEventArgs e)
+    // 新建
+    // 这里不问密码
+    internal async void OnVaultInit(object sender, RoutedEventArgs e)
     {
-        if (!ViewModel.VaultAvailable) return;
+        if (!await EnsureVaultAvailableAsync()) return;
         var dir = await PickVaultPathAsync(L10n.T("新建加密盘"), false);
         if (dir == null) return;
         if (File.Exists(Path.Combine(dir, "vault.meta")))
@@ -972,10 +1494,10 @@ public sealed partial class MainWindow : Window
             L10n.T("加密盘已创建。此后向该盘存入文件时使用的密码即为该盘密码，请妥善保管。"));
     }
 
-    // 查看盘内文件：解密索引后列出条目
-    private async void OnVaultList(object sender, RoutedEventArgs e)
+    // 查看盘内文件
+    internal async void OnVaultList(object sender, RoutedEventArgs e)
     {
-        if (!ViewModel.VaultAvailable) return;
+        if (!await EnsureVaultAvailableAsync()) return;
         var dir = await PickVaultPathAsync(L10n.T("查看盘内文件"), true);
         if (dir == null) return;
         var pw = await AskPasswordAsync(L10n.T("加密盘密码"), false);
@@ -985,10 +1507,10 @@ public sealed partial class MainWindow : Window
             scrollable: true);
     }
 
-    // 修改盘密码：旧密码走 -k 临时文件，新密码走 stdin（stdin 只能被一个来源占用）
-    private async void OnVaultRekey(object sender, RoutedEventArgs e)
+    // 修改盘密码
+    internal async void OnVaultRekey(object sender, RoutedEventArgs e)
     {
-        if (!ViewModel.VaultAvailable) return;
+        if (!await EnsureVaultAvailableAsync()) return;
         var dir = await PickVaultPathAsync(L10n.T("修改加密盘密码"), true);
         if (dir == null) return;
         var oldPw = await AskPasswordAsync(L10n.T("请输入当前加密盘密码"), false);
@@ -1010,10 +1532,10 @@ public sealed partial class MainWindow : Window
             tmp);
     }
 
-    // 生成恢复码：忘密码时的第二把钥匙，泄露恢复码 = 泄露整块盘
-    private async void OnVaultRecoveryCreate(object sender, RoutedEventArgs e)
+    // 生成恢复码
+    internal async void OnVaultRecoveryCreate(object sender, RoutedEventArgs e)
     {
-        if (!ViewModel.VaultAvailable) return;
+        if (!await EnsureVaultAvailableAsync()) return;
         var dir = await PickVaultPathAsync(L10n.T("生成恢复码"), true);
         if (dir == null) return;
         var pw = await AskPasswordAsync(L10n.T("加密盘密码"), false);
@@ -1024,10 +1546,10 @@ public sealed partial class MainWindow : Window
             L10n.T("请将上方恢复码抄录至纸张并离线保存；持有该恢复码即可打开此加密盘。"));
     }
 
-    // 用恢复码找回密码
-    private async void OnVaultRecoveryOpen(object sender, RoutedEventArgs e)
+    // 用恢复码找回密
+    internal async void OnVaultRecoveryOpen(object sender, RoutedEventArgs e)
     {
-        if (!ViewModel.VaultAvailable) return;
+        if (!await EnsureVaultAvailableAsync()) return;
         var dir = await PickVaultPathAsync(L10n.T("用恢复码找回密码"), true);
         if (dir == null) return;
         var code = await PromptTextAsync(L10n.T("用恢复码找回密码"),
@@ -1038,8 +1560,8 @@ public sealed partial class MainWindow : Window
             L10n.T("上方显示的是原密码。找回后请尽快修改密码并重新生成恢复码。"));
     }
 
-    // 选加密盘目录：默认填上次用的那块盘，可直接改路径，也可点「浏览…」用系统选择器。
-    // FolderPicker 不支持自定义起始目录，所以做成小对话框；requireVault 为真时不是盘就拒掉。
+    // 选加密盘目录
+    // FolderPicker 不支持自定义起
     private async Task<string?> PickVaultPathAsync(string title, bool requireVault)
     {
         var box = new TextBox
@@ -1094,13 +1616,13 @@ public sealed partial class MainWindow : Window
                 L10n.F("该文件夹尚未成为加密盘：{0}\n请先用「加密盘 → 新建加密盘」创建。", dir));
             return null;
         }
-        // 记住这块盘：下次各菜单项默认就是它
+        // 记住这块盘
         App.Settings.Current.LastVaultDir = dir;
         App.Settings.Save();
         return dir;
     }
 
-    // 密码弹窗；取消或空密码返回 null
+    // 密码弹窗
     private async Task<string?> AskPasswordAsync(string purpose, bool needConfirm)
     {
         var dlg = new PasswordDialog(needConfirm)
@@ -1113,7 +1635,7 @@ public sealed partial class MainWindow : Window
         return string.IsNullOrEmpty(dlg.Password) ? null : dlg.Password;
     }
 
-    // 单行文本输入弹窗（恢复码）；取消返回 null
+    // 单行文本输入弹
     private async Task<string?> PromptTextAsync(string title, string desc, string placeholder)
     {
         var box = new TextBox { PlaceholderText = placeholder, Width = 360 };
@@ -1135,10 +1657,10 @@ public sealed partial class MainWindow : Window
         return t.Length == 0 ? null : t;
     }
 
-    // 密码转 stdin 字节：CLI 按原始字节当密钥材料，不做编码转换
+    // 密码转 stdin 字节
     private static byte[] ToStdin(string pw) => Encoding.UTF8.GetBytes(pw);
 
-    // 跑一次 CLI 加密盘命令并回显结果；hint 为追加的中文说明，deleteAfter 为用完即删的临时密码文件
+    // 跑一次 CLI 加密盘命
     private async Task RunVaultCliAsync(string title, List<string> args, byte[]? stdin,
                                         string? hint = null, string? deleteAfter = null,
                                         bool scrollable = false)
@@ -1164,7 +1686,7 @@ public sealed partial class MainWindow : Window
         var result = await tcs.Task;
 
         if (deleteAfter != null)
-            // M40: 旧密码临时文件同样先零填充再删（P2-3 策略，与 DeleteTempPass 一致）
+            // M40
             _ = Task.Run(async () => { await Task.Delay(1500); DeleteTempPass(deleteAfter); });
 
         string detail = sb.ToString().Trim();
@@ -1187,10 +1709,10 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    // ===== 加密盘控制端（M3/M4 未完项）：挂载由 FE-Mounter 常驻持有，锁定/解锁经受限 IPC =====
-    private async void OnVaultMount(object sender, RoutedEventArgs e)
+    // 加密盘控制端
+    internal async void OnVaultMount(object sender, RoutedEventArgs e)
     {
-        if (!ViewModel.VaultAvailable) return;
+        if (!await EnsureVaultAvailableAsync()) return;
         var mounter = FileEncryptorLocator.LocateMounter();
         if (mounter == null)
         {
@@ -1198,9 +1720,9 @@ public sealed partial class MainWindow : Window
                 L10n.T("未找到挂载组件 FE-Mounter。请重新安装并勾选「加密盘挂载」，或将 FE-Mounter 放在本程序同目录。"));
             return;
         }
-        // WinFSP 用户态 DLL 必须与 FE-Mounter 同目录（静态导入，缺了进程都起不来）。
-        // 但 WinFSP 也可由安装包装到系统目录（C:\Program Files (x86)\WinFsp\bin），
-        // 此处两者任一存在即放行，避免「已装系统 WinFSP 却误报缺运行时」。
+        // WinFSP 用户态 DLL 必须
+        // 但 WinFSP
+        // 此处两者任一存
         var wfsp = Path.Combine(Path.GetDirectoryName(mounter) ?? "", "winfsp-x64.dll");
         var wfspSys = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86) ?? @"C:\Program Files (x86)",
@@ -1224,15 +1746,15 @@ public sealed partial class MainWindow : Window
         if (string.IsNullOrEmpty(point)) return;
         var pw = dlg.Password;
 
-        // 记住这次的盘：下次挂载/锁定/解锁默认就是它
+        // 记住这次
         App.Settings.Current.LastVaultDir = dir;
         App.Settings.Current.LastMountPoint = point;
         App.Settings.Save();
 
-        // 登记到多库注册表：管理页（加密盘管理）才能列出已挂载盘并给出「本机免密」开关
+        // 登记到多库注册
         try { await RunMounterAsync(mounter, "vaults", "add", dir); } catch { }
 
-        // 挂载前格式化（可选）：先用密码清空该盘再挂载，得到空盘
+        // 挂载前格式化
         if (dlg.FormatVault)
         {
             if (string.IsNullOrEmpty(ViewModel.CliPath))
@@ -1267,13 +1789,13 @@ public sealed partial class MainWindow : Window
             }
         }
 
-        // 记录挂载点进 vault.meta（fire-and-forget，失败不阻断挂载）
+        // 记录挂载点进 vault.meta
         var cli = ViewModel.CliPath;
         if (!string.IsNullOrEmpty(cli))
         {
             try
             {
-                // M38: 逐项传参：point/dir 含引号即可突破引号边界注入额外 CLI 参数，全库统一走 ArgumentList
+                // M38: 逐项传参
                 var psi = new ProcessStartInfo(cli)
                 {
                     UseShellExecute = false,
@@ -1295,7 +1817,7 @@ public sealed partial class MainWindow : Window
             return;
         }
 
-        // winmount <挂载点> --vault <dir> [--rw] --idle-timeout 60 --pass-file <临时密码>
+        // winmount <挂载点> --vault <dir> [-
         var args = new List<string> { "winmount", point, "--vault", dir };
         if (dlg.ReadWrite) args.Add("--rw");
         args.Add("--idle-timeout");
@@ -1304,7 +1826,7 @@ public sealed partial class MainWindow : Window
         args.Add(tmp);
 
         bool ok = LaunchMounterDetached(mounter, args);
-        // FE-Mounter 启动时即读取并关闭密码文件，稍后删除临时件
+        // FE-Mounter 启动时即读取并
         _ = Task.Run(async () => { await Task.Delay(2000); DeleteTempPass(tmp); });
 
         if (ok)
@@ -1318,11 +1840,11 @@ public sealed partial class MainWindow : Window
                 L10n.T("无法启动挂载组件。请确认 FE-Mounter 存在，且未被安全软件拦截。"));
     }
 
-    // 卸载磁盘：让持有盘符的后台进程收尾退出（停服务 → 释放盘符）。
-    // 走 IPC eject 而不是直接杀进程：杀进程会跳过解锁/卸载收尾，索引镜像可能来不及落盘。
-    private async void OnVaultUnmount(object sender, RoutedEventArgs e)
+    // 卸载磁盘
+    // 走 IPC eject
+    internal async void OnVaultUnmount(object sender, RoutedEventArgs e)
     {
-        if (!ViewModel.VaultAvailable) return;
+        if (!await EnsureVaultAvailableAsync()) return;
         var mounter = FileEncryptorLocator.LocateMounter();
         if (mounter == null)
         {
@@ -1351,7 +1873,7 @@ public sealed partial class MainWindow : Window
         ForgetMount(dir);
     }
 
-    // 记录 / 清除已挂载加密盘（供「已挂载加密盘」列表与双击解锁）
+    // 记录 / 清除已挂载
     private void RecordMount(string dir, string point)
     {
         try
@@ -1374,10 +1896,10 @@ public sealed partial class MainWindow : Window
         catch { }
     }
 
-    // 格式化：清空盘内全部内容（索引置空 + 删除所有 .ptd），保留盘身份与密码。不可撤销。
-    private async void OnVaultFormat(object sender, RoutedEventArgs e)
+    // 格式化
+    internal async void OnVaultFormat(object sender, RoutedEventArgs e)
     {
-        if (!ViewModel.VaultAvailable) return;
+        if (!await EnsureVaultAvailableAsync()) return;
         var dir = await PickVaultPathAsync(L10n.T("格式化加密盘"), true);
         if (dir == null) return;
         var warn = new ContentDialog
@@ -1387,6 +1909,7 @@ public sealed partial class MainWindow : Window
             Title = L10n.T("格式化加密盘"),
             Content = L10n.F("将清空该加密盘内的全部文件（{0}）。\n\n盘的身份与密码保留，格式化后仍可用原密码继续入盘；但盘内原有文件无法恢复。\n\n若该盘正被挂载，请先执行「卸载磁盘」。", dir),
             PrimaryButtonText = L10n.T("格式化"),
+            PrimaryButtonStyle = ThemeService.StyleFor("AppDangerButtonStyle"),
             CloseButtonText = L10n.T("取消"),
             DefaultButton = ContentDialogButton.Close,
         };
@@ -1398,63 +1921,63 @@ public sealed partial class MainWindow : Window
             L10n.T("加密盘已成功清空，可继续存入文件。"));
     }
 
-    private async void OnVaultLock(object sender, RoutedEventArgs e)
+    internal async void OnVaultLock(object sender, RoutedEventArgs e)
     {
-        if (!ViewModel.VaultAvailable) return;
+        if (!await EnsureVaultAvailableAsync()) return;
         var mounter = FileEncryptorLocator.LocateMounter();
         if (mounter == null)
         {
-            await ShowMessageAsync(L10n.T("暂时锁定"),
+            await ShowMessageAsync(L10n.T("锁定"),
                 L10n.T("未找到挂载组件 FE-Mounter。"));
             return;
         }
-        var dir = await PickVaultPathAsync(L10n.T("暂时锁定"), true);
+        var dir = await PickVaultPathAsync(L10n.T("锁定"), true);
         if (dir == null) return;
-        await RunVaultIpcAsync(mounter, dir, new List<string> { "lock" }, null, L10n.T("暂时锁定"));
+        await RunVaultIpcAsync(mounter, dir, new List<string> { "lock" }, null, L10n.T("锁定"));
     }
 
-    private async void OnVaultUnlock(object sender, RoutedEventArgs e)
+    internal async void OnVaultUnlock(object sender, RoutedEventArgs e)
     {
-        if (!ViewModel.VaultAvailable) return;
-        var dir = await PickVaultPathAsync(L10n.T("重新解锁"), true);
+        if (!await EnsureVaultAvailableAsync()) return;
+        var dir = await PickVaultPathAsync(L10n.T("解锁"), true);
         if (dir == null) return;
         await UnlockVaultDir(dir);
     }
 
-    // 用单次输入的密码解锁指定加密盘（程序内列表双击 / 菜单均复用）
-    // P2-1：若该盘已绑定本机设备密钥（DPAPI），直接用它解锁，不再询问库密码。
-    private async Task UnlockVaultDir(string dir)
+    // 用单次输入
+    // P2-1
+    internal async Task UnlockVaultDir(string dir)
     {
         var mounter = FileEncryptorLocator.LocateMounter();
         if (mounter == null)
         {
-            await ShowMessageAsync(L10n.T("重新解锁"),
+            await ShowMessageAsync(L10n.T("解锁"),
                 L10n.T("未找到挂载组件 FE-Mounter。"));
             return;
         }
 
-        // 免密路径：本机已绑定则直接用解出的库密码解锁（对用户完全无感）
-        // M42: 取 byte[] 消费，用完立即清零，避免 string 副本长驻托管堆
-        // DPAPI 缺程序集时 JIT 在调用点抛 FileNotFoundException（绕过方法内 try），
-        // 此处兜底降级到手动输密码，避免未处理异常中断解锁
+        // 免密路径
+        // M42
+        // DPAPI 缺程序集时 JIT
+        // 此处兜底降级到
         byte[]? boundPw = null;
         try { boundPw = DeviceKeyService.TryGetPasswordBytes(dir); }
         catch { boundPw = null; }
         if (boundPw is { Length: > 0 })
         {
             var tmpDk = WriteTempPass(boundPw);
-            // 字节已落临时文件，本地副本立即清零
+            // 字节已落临时文
             CryptographicOperations.ZeroMemory(boundPw);
             if (tmpDk != null)
             {
                 await RunVaultIpcAsync(mounter, dir,
-                    new List<string> { "unlock", "--pass-file", tmpDk }, tmpDk, L10n.T("重新解锁"));
+                    new List<string> { "unlock", "--pass-file", tmpDk }, tmpDk, L10n.T("解锁"));
                 return;
             }
         }
 
-        // 常规路径：询问库密码。解锁只需输入一次；标题写清用途，
-        // 便于与「设置新密码」类弹窗区分
+        // 常规路径
+        // 便于
         var pwd = new PasswordDialog(false)
         {
             XamlRoot = Content.XamlRoot,
@@ -1467,19 +1990,19 @@ public sealed partial class MainWindow : Window
         var tmp = WriteTempPass(pwd.Password);
         if (tmp == null)
         {
-            await ShowMessageAsync(L10n.T("重新解锁"), L10n.T("无法写入临时密码文件。"));
+            await ShowMessageAsync(L10n.T("解锁"), L10n.T("无法写入临时密码文件。"));
             return;
         }
         await RunVaultIpcAsync(mounter, dir,
-            new List<string> { "unlock", "--pass-file", tmp }, tmp, L10n.T("重新解锁"));
+            new List<string> { "unlock", "--pass-file", tmp }, tmp, L10n.T("解锁"));
     }
 
-    // P1-1 设备加密管理页：对标 BitLocker「管理 BitLocker」的一屏视图。
-    // 数据源 FE-Mounter `vaults status`（P1-2 聚合 JSON），非本地 settings 记录——
-    // 后者只反映「本 GUI 挂过什么」，跨会话/换机不准。
-    private async void OnVaultManager(object sender, RoutedEventArgs e)
+    // P1-1 设备加密管理页
+    // 数据源 FE-Mounter `vaults
+    // 后者只反映「本 GUI 挂
+    internal async void OnVaultManager(object sender, RoutedEventArgs e)
     {
-        if (!ViewModel.VaultAvailable) return;
+        if (!await EnsureVaultAvailableAsync()) return;
         var mounter = FileEncryptorLocator.LocateMounter();
         if (mounter == null)
         {
@@ -1491,8 +2014,8 @@ public sealed partial class MainWindow : Window
             mounter,
             mount: async (dir, point) => await MountVaultDir(dir, point),
             unlock: async dir => await UnlockVaultDir(dir),
-            doLock: async dir => await RunVaultIpcAsync(mounter, dir, new List<string> { "lock" }, null, L10n.T("暂时锁定")),
-            refreshHost: _ => { })   // 登记由 MountVaultDir 内的 vaults add 负责，无需回写本地记录
+            doLock: async dir => await RunVaultIpcAsync(mounter, dir, new List<string> { "lock" }, null, L10n.T("锁定")),
+            refreshHost: _ => { })   // 登记
         {
             XamlRoot = Content.XamlRoot,
             RequestedTheme = CurrentTheme,
@@ -1500,7 +2023,7 @@ public sealed partial class MainWindow : Window
         await dlg.ShowAsync();
     }
 
-    // P1-1：管理页「挂载」按钮复用（不需要再次弹 VaultMountDialog，盘符已由对话框给出）
+    // P1-1
     private async Task MountVaultDir(string dir, string point)
     {
         var mounter = FileEncryptorLocator.LocateMounter();
@@ -1509,7 +2032,7 @@ public sealed partial class MainWindow : Window
             await ShowMessageAsync(L10n.T("挂载为磁盘"), L10n.T("未找到挂载组件 FE-Mounter。"));
             return;
         }
-        // 登记到多库注册表，聚合视图才看得到这个盘
+        // 登记到多库注册
         await RunMounterAsync(mounter, "vaults", "add", dir);
 
         var pwd = new PasswordDialog(false)
@@ -1551,10 +2074,10 @@ public sealed partial class MainWindow : Window
         await tcs.Task;
     }
 
-    // 已挂载加密盘列表：双击锁定的盘即解锁
-    private async void OnMountedVaults(object sender, RoutedEventArgs e)
+    // 已挂载加密盘列
+    internal async void OnMountedVaults(object sender, RoutedEventArgs e)
     {
-        if (!ViewModel.VaultAvailable) return;
+        if (!await EnsureVaultAvailableAsync()) return;
         var mounter = FileEncryptorLocator.LocateMounter();
         if (mounter == null)
         {
@@ -1570,18 +2093,18 @@ public sealed partial class MainWindow : Window
         await dlg.ShowAsync();
     }
 
-    // 写临时密码文件（创建时即带限制性 DACL：仅当前用户读写），用完即删；失败返回 null
+    // 写临时密码文件
     private string? WriteTempPass(string pw)
         => WriteTempPass(new UTF8Encoding(false).GetBytes(pw));
 
-    // M42: byte[] overload ：免密路径解出的库口令不经不可变 string，直接写盘
+    // M42
     private string? WriteTempPass(byte[] pwBytes)
     {
         try
         {
             var tmp = Path.Combine(Path.GetTempPath(),
                 $"fe_mountpw_{Convert.ToHexString(RandomNumberGenerator.GetBytes(8)).ToLowerInvariant()}.tmp");
-            // M39: 创建句柄时即传 FileSecurity（等价 SECURITY_ATTRIBUTES），消除「先按 %TEMP% 继承 ACL 落盘、再收紧 DACL」之间的可读窗口
+            // M39
             var sec = new FileSecurity();
             sec.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
             var sid = WindowsIdentity.GetCurrent().User;
@@ -1590,14 +2113,14 @@ public sealed partial class MainWindow : Window
                 sid, FileSystemRights.FullControl, AccessControlType.Allow));
             using (var fs = new FileInfo(tmp).Create(FileMode.CreateNew, FileSystemRights.Write, FileShare.None, 4096, FileOptions.None, sec))
                 fs.Write(pwBytes, 0, pwBytes.Length);
-            // M41: 登记在册，进程退出钩子据此兜底清理
+            // M41
             lock (_tempPassGate) _liveTempPasses.Add(tmp);
             return tmp;
         }
         catch { return null; }
     }
 
-    // M41: 在册临时口令文件与退出钩子：GUI 被 Kill/崩溃时延迟删除来不及跑，明文口令会永留 %TEMP%
+    // M41
     private static readonly List<string> _liveTempPasses = new();
     private static readonly object _tempPassGate = new();
 
@@ -1613,7 +2136,7 @@ public sealed partial class MainWindow : Window
         };
     }
 
-    // M41: 启动时清理陈旧口令文件（命名规则同 WriteTempPass）
+    // M41
     private static void CleanupStaleTempPasses()
     {
         try
@@ -1624,8 +2147,8 @@ public sealed partial class MainWindow : Window
         catch { }
     }
 
-    // P2-3：临时口令文件必须先零填充再删除。
-    // 只 Delete 的话明文口令仍留在磁盘可恢复区，取证/恢复工具能读出来。
+    // P2-3
+    // 只 Delete
     private static void DeleteTempPass(string? path)
     {
         try
@@ -1634,7 +2157,7 @@ public sealed partial class MainWindow : Window
             var n = new FileInfo(path).Length;
             if (n > 0)
             {
-                // WriteThrough 绕开操作系统缓存：零字节必须先于 Delete 落盘，否则只写进缓存就删文件，明文仍留在磁盘可恢复区
+                // WriteThrough 绕开操作系统缓
                 using var fs = new FileStream(path, FileMode.Open, FileAccess.Write,
                     FileShare.None, 4096, FileOptions.WriteThrough);
                 fs.Write(new byte[n]);
@@ -1646,7 +2169,7 @@ public sealed partial class MainWindow : Window
         catch { }
     }
 
-    // detached 启动 FE-Mounter（长驻，不随 GUI 退出而结束）
+    // detached 启动 FE-Mounter
     private bool LaunchMounterDetached(string mounter, List<string> args)
     {
         try
@@ -1659,7 +2182,7 @@ public sealed partial class MainWindow : Window
                 RedirectStandardError = false,
                 CreateNoWindow = true,
             };
-            // 告知 mounter 自身路径：锁定访问需拉起 GUI 时使用（回退安装目录）
+            // 告知 mounter 自身路径
             try { psi.EnvironmentVariables["FE_GUI_PATH"] = Process.GetCurrentProcess().MainModule!.FileName; }
             catch { }
             foreach (var a in args) psi.ArgumentList.Add(a);
@@ -1669,10 +2192,10 @@ public sealed partial class MainWindow : Window
         catch { return false; }
     }
 
-    // 轮询 FE-Mounter 写的锁定访问事件文件：检测到「锁定且被访问」→ 拉起 GUI 前台并弹单密码解锁框
+    // 轮询 FE-Mounter 写
     private async void PollLockedAccess(DispatcherQueueTimer sender, object? args)
     {
-        if (_unlockPromptActive) return;   // 已有解锁框在，避免叠加
+        if (_unlockPromptActive) return;   // 已有解锁框
         try
         {
             var dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
@@ -1692,13 +2215,13 @@ public sealed partial class MainWindow : Window
                 }
                 catch { }
                 try { File.Delete(f); } catch { }
-                // 内容校验：任何同用户进程都能按命名模式伪造事件文件，必须是 vault= 与 mount= 均非空的完整内容才弹窗
+                // 内容校验
                 if (string.IsNullOrEmpty(vault) || string.IsNullOrEmpty(mount)) continue;
-                // 同 vault 短时间去重节流：伪造/抖动不会诱导反复弹密码框、抢焦点
+                // 同 vault 短时间去重节
                 var now = DateTime.UtcNow;
                 lock (_unlockPromptTimes)
                 {
-                    // 顺手清理 5 分钟前的陈旧记录，避免字典无界增长
+                    // 顺手清理 5 分钟
                     List<string> stale = new();
                     foreach (var kv in _unlockPromptTimes)
                         if (now - kv.Value > TimeSpan.FromMinutes(5)) stale.Add(kv.Key);
@@ -1708,35 +2231,35 @@ public sealed partial class MainWindow : Window
                         continue;
                     _unlockPromptTimes[vault] = now;
                 }
-                // 已解锁（解锁竞态）则跳过，避免误弹
+                // 已解锁
                 if (!await IsVaultLockedAsync(vault)) continue;
                 _unlockPromptActive = true;
                 BringToForeground();
                 _ = UnlockVaultDir(vault).ContinueWith(_ => _unlockPromptActive = false,
                     TaskScheduler.FromCurrentSynchronizationContext());
-                break;   // 一次只处理一个，避免刷屏
+                break;   // 一次只处理一
             }
         }
         catch { }
     }
 
-    // 锁定访问后让解锁框可见：解锁提示是用户真正需要的操作，必须把它带到最前。
-    // 最小化时还原；否则（后台可见/刚被拉起）直接置前+激活，否则密码框会落在其他窗口后面，
-    // 表现为「拉起 GUI 却没弹密码框」。仅此一处调用，不影响加密等后台任务的焦点。
+    // 锁定访问后让解
+    // 最小化
+    // 「拉起 GUI 却没弹密码
     private void BringToForeground()
     {
         try
         {
             var hwnd = WindowNative.GetWindowHandle(this);
             if (IsIconic(hwnd))
-                ShowWindow(hwnd, 9);        // SW_RESTORE：还原最小化窗口
+                ShowWindow(hwnd, 9);        // SW_RESTORE
             SetForegroundWindow(hwnd);
             Activate();
         }
         catch { }
     }
 
-    // 查询该加密盘当前是否仍锁定；无法确认时按「锁定」处理（宁可弹，不漏弹）
+    // 查询该加密盘当
     private async Task<bool> IsVaultLockedAsync(string dir)
     {
         try
@@ -1760,7 +2283,7 @@ public sealed partial class MainWindow : Window
         catch { return true; }
     }
 
-    // 经 FE-Mounter ipc-call 执行短命令（lock/unlock），回显结果
+    // 经 FE-Mounter ipc-call 执行
     private async Task RunVaultIpcAsync(string mounter, string dir, List<string> extraArgs, string? passFile, string title)
     {
         var cli = new CliProcessService();
@@ -1783,7 +2306,7 @@ public sealed partial class MainWindow : Window
                 await Task.Delay(2000);
                 try
                 {
-                    // 删除前先清零文件内容，避免明文密码在磁盘上残留
+                    // 删除前先清零文
                     var len = new FileInfo(passFile).Length;
                     if (len > 0) File.WriteAllBytes(passFile, new byte[len]);
                 }
@@ -1807,7 +2330,7 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private async void OnBrowseKeyfile(object sender, RoutedEventArgs e)
+    internal async void OnBrowseKeyfile(object sender, RoutedEventArgs e)
     {
         try {
             var picker = new FileOpenPicker();
@@ -1818,7 +2341,7 @@ public sealed partial class MainWindow : Window
         } catch (Exception ex) { ViewModel.SetStatus("[密钥文件] 错误：{0}", ex.Message); }
     }
 
-    private async void OnBrowseRecipient(object sender, RoutedEventArgs e)
+    internal async void OnBrowseRecipient(object sender, RoutedEventArgs e)
     {
         try {
             var picker = new FileOpenPicker();
@@ -1829,7 +2352,7 @@ public sealed partial class MainWindow : Window
         } catch (Exception ex) { ViewModel.SetStatus("[收件人] 错误：{0}", ex.Message); }
     }
 
-    private async void OnBrowseIdentity(object sender, RoutedEventArgs e)
+    internal async void OnBrowseIdentity(object sender, RoutedEventArgs e)
     {
         try {
             var picker = new FileOpenPicker();
@@ -1840,7 +2363,7 @@ public sealed partial class MainWindow : Window
         } catch (Exception ex) { ViewModel.SetStatus("[身份文件] 错误：{0}", ex.Message); }
     }
 
-    private async void OnBrowseWrapFile(object sender, RoutedEventArgs e)
+    internal async void OnBrowseWrapFile(object sender, RoutedEventArgs e)
     {
         try {
             var picker = new FileOpenPicker();
@@ -1852,7 +2375,7 @@ public sealed partial class MainWindow : Window
         } catch (Exception ex) { ViewModel.SetStatus("[密钥文件] 错误：{0}", ex.Message); }
     }
 
-    private async void OnBrowseWrapOut(object sender, RoutedEventArgs e)
+    internal async void OnBrowseWrapOut(object sender, RoutedEventArgs e)
     {
         try {
             var picker = new FileSavePicker();
@@ -1864,7 +2387,7 @@ public sealed partial class MainWindow : Window
         } catch (Exception ex) { ViewModel.SetStatus("[输出路径] 错误：{0}", ex.Message); }
     }
 
-    private async void OnBrowseWatermarkKey(object sender, RoutedEventArgs e)
+    internal async void OnBrowseWatermarkKey(object sender, RoutedEventArgs e)
     {
         try {
             var picker = new FileOpenPicker();
@@ -1872,7 +2395,7 @@ public sealed partial class MainWindow : Window
             picker.FileTypeFilter.Add(".pem");
             var file = await picker.PickSingleFileAsync();
             if (file == null) return;
-            // 密钥内容直接进密码框，界面不回显明文
+            // 密钥内容直接进
             WatermarkKeyEdit.Password = await FileIO.ReadTextAsync(file);
             ViewModel.SetStatus("[水印私钥] 已载入：{0}", file.Name);
         } catch (Exception ex) { ViewModel.SetStatus("[水印私钥] 错误：{0}", ex.Message); }
@@ -1887,75 +2410,75 @@ public sealed partial class MainWindow : Window
         bool isWrapKey = ViewModel.IsWrapKeyMode;
         bool wrapPubkey = isWrap && ViewModel.WrapUsesPublicKey;
 
-        // 非对称（X25519 / X448）模式下「文件算法」与曲线开关才有意义
+        // 非对称
         bool asymMode = ModeCombo.SelectedIndex == 4;
-        bool isKeyGenOnly = ViewModel.ActionIndex == 4;   // -x448 只对「生成密钥对」有意义
+        bool isKeyGenOnly = ViewModel.ActionIndex == 4;   // x448 只对「生成密钥对」
 
-        // 加密模式整行只服务加密动作，其余动作连左侧标签一起收起
+        // 加密模式整行只
         EncryptModeRow.Visibility = (isEncrypt && !isKeyGen) ? Visibility.Visible : Visibility.Collapsed;
-        // 文件算法只在非对称模式露出；露出时模式下拉退回半宽，两个选择框等分同一行
+        // 文件算法只
         var fileCipherVisible = asymMode && isEncrypt && !isKeyGen;
         FileCipherCell.Visibility = fileCipherVisible ? Visibility.Visible : Visibility.Collapsed;
         FileCipherLabel.Visibility = fileCipherVisible ? Visibility.Visible : Visibility.Collapsed;
         ModeCombo.SetValue(Microsoft.UI.Xaml.Controls.Grid.ColumnSpanProperty, fileCipherVisible ? 1 : 2);
-        // 曲线开关：非对称模式下控制封装曲线；生成密钥对时控制 -x448（CLI 只认这条）
+        // 曲线开关
         ChkX448.Visibility = (asymMode || isKeyGenOnly) ? Visibility.Visible : Visibility.Collapsed;
 
-        // 加密专属选项：密钥管理与密钥包装动作下一律不出现
+        // 加密专属选项
         bool encOptionVisible = isEncrypt && !isKeyGen && !isWrap;
-        // 藏起来的开关先取消勾选，免得 CLI 收到对当前动作无意义的开关
+        // 藏起来
         if (!encOptionVisible)
         {
             if (ChkCompress.IsChecked == true) ChkCompress.IsChecked = false;
             if (ChkWatermark.IsChecked == true) ChkWatermark.IsChecked = false;
             if (ChkPack.IsChecked == true) ChkPack.IsChecked = false;
             if (ChkSplit.IsChecked == true) ChkSplit.IsChecked = false;
-            // PQC 只影响载荷封装与水印签名，包装路线不经过这两步
+            // PQC 只影响载荷封装
             if (ChkPqc.IsChecked == true) ChkPqc.IsChecked = false;
         }
         SourceCombo.Visibility = encOptionVisible ? Visibility.Visible : Visibility.Collapsed;
         ChkPack.Visibility = encOptionVisible ? Visibility.Visible : Visibility.Collapsed;
         ChkSplit.Visibility = encOptionVisible ? Visibility.Visible : Visibility.Collapsed;
-        // 分卷大小行只在「加密动作 + 勾选分卷」时露出
+        // 分卷大小行只
         SplitSizeRow.Visibility = (encOptionVisible && ChkSplit.IsChecked == true)
             ? Visibility.Visible : Visibility.Collapsed;
-        // 压缩整行（含标签与级别输入）同样只在加密动作出现，解密 / 批量解密 / 密钥管理下连行一起收起
+        // 压缩整行
         CompressionRow.Visibility = encOptionVisible ? Visibility.Visible : Visibility.Collapsed;
         ChkSha256.Visibility = encOptionVisible ? Visibility.Visible : Visibility.Collapsed;
-        // 签名水印只服务于加密动作
+        // 签名水印只服务
         ChkWatermark.Visibility = encOptionVisible ? Visibility.Visible : Visibility.Collapsed;
-        // 后量子开关同样只在加密动作出现，包装路线用不上
+        // 后量子开关同样
         ChkPqc.Visibility = encOptionVisible ? Visibility.Visible : Visibility.Collapsed;
-        // 公钥路线没有 KEK，密钥文件行对它无意义
+        // 公钥路线没有 KEK
         KeyfileEdit.Visibility = (!isAsym && !isKeyGen && !wrapPubkey) ? Visibility.Visible : Visibility.Collapsed;
-        // 产物路径由包装区块的输出行决定
+        // 产物路径
         OutDirRow.Visibility = isWrap ? Visibility.Collapsed : Visibility.Visible;
-        // 加密盘：只有加密动作 + CLI 报了 vault=1 才露出（旧 CLI 不认 --into-vault）
+        // 加密盘
         var vaultVisible = encOptionVisible && ViewModel.VaultAvailable;
         VaultRow.Visibility = vaultVisible ? Visibility.Visible : Visibility.Collapsed;
         if (!vaultVisible) ChkIntoVault.IsChecked = false;
-        // 包装动作复用收件人 / 身份这两组输入框
+        // 包装动作复用收
         RecipientPanel.Visibility = (isAsym && isEncrypt) || (isWrapKey && wrapPubkey)
             ? Visibility.Visible : Visibility.Collapsed;
         IdentityPanel.Visibility = (isAsym && !isEncrypt) || (ViewModel.IsUnwrapMode && wrapPubkey)
             ? Visibility.Visible : Visibility.Collapsed;
-        // 同一面板在包装动作下装的是另一种密钥，标签跟着改
+        // 同一面板
         RecipientLabel.Text = L10n.T(isWrapKey ? "收件人公钥：" : "收件人：");
         RecipientEdit.PlaceholderText = L10n.T(isWrapKey ? "公钥或公钥文件路径（--wrap-to）" : "公钥或公钥文件路径");
         IdentityLabel.Text = L10n.T(ViewModel.IsUnwrapMode ? "身份私钥：" : "身份文件：");
         ChkRestoreName.Visibility = ViewModel.ActionIndex == 3 ? Visibility.Visible : Visibility.Collapsed;
-        // PQC 在密钥生成时仍有意义（CLI 的 -g 读 --no-pqc），X448 由上一行单独控制；
-        // 签名水印只在加密动作下露出（见上）。
+        // PQC 在密钥生成时仍
+        // 签名水印只
         UpdateWatermarkKeyRow();
         BtnRewrap.Visibility = isEncrypt ? Visibility.Visible : Visibility.Collapsed;
         UpdateWrapPanel();
 
-        // 切动作会成批改子控件 Visibility，ScrollViewer 有时不立刻重算滚动区，
-        // 表现是滚动条莫名消失（再切一次又好了）。强制走一次布局把它算回来。
+        // 切动作
+        // 表现是滚动条莫
         MainScroll.UpdateLayout();
     }
 
-    // 包装区块的措辞随动作与算法切换
+    // 包装区块
     private void UpdateWrapPanel()
     {
         bool isWrap = ViewModel.IsWrapMode;
@@ -1971,7 +2494,7 @@ public sealed partial class MainWindow : Window
         WrapOutEdit.PlaceholderText = L10n.T(wrapKey
             ? "留空则用 <密钥文件>.fekw"
             : "留空则用 <包装文件>.dek");
-        // 解包时算法写在 blob 头里，下拉只决定「密码还是私钥」，标题随之改口
+        // 解包时算法写
         WrapAlgLabel.Text = L10n.T(wrapKey ? "包装算法" : "解密方式");
         WrapIntroText.Text = L10n.T(wrapKey
             ? (pubkey
@@ -1982,27 +2505,27 @@ public sealed partial class MainWindow : Window
                 : "从 .fekw 中取回 32 字节数据密钥，需要包装时使用的密码。"));
     }
 
-    // 水印私钥行：勾选「签名水印」后才显示（该行不改变动作语义，任何加密模式都可用）
+    // 水印私钥行
     private void UpdateWatermarkKeyRow()
         => WatermarkKeyRow.Visibility =
             (ChkWatermark.IsChecked == true && ViewModel.IsEncryptMode) ? Visibility.Visible : Visibility.Collapsed;
 
-    // ===== 运行 =====
-    private async void OnRunClicked(object sender, RoutedEventArgs e)
+    // 运行
+    internal async void OnRunClicked(object sender, RoutedEventArgs e)
     {
         if (ViewModel.CliPath == null)
         {
             ShowCliNotFoundDialog();
             return;
         }
-        // 目录 + 删除类源处置：整棵树都会被清掉，动手前必须确认一次。
-        // 确认通过后下发 --source-delete-ok，免得 CLI 再问一遍（问第二遍用户会懵）。
+        // 目录 + 删除类源处
+        // 确认通过后下发 --source
         if (ViewModel.IsEncryptMode && !ViewModel.Pack && ViewModel.SourceIndex != 0)
         {
             var dirs = ViewModel.InputPaths.Where(p => p.IsSelected && Directory.Exists(p.Path)).ToList();
             if (dirs.Count > 0)
             {
-                // ContentDialog 不在 XAML 视觉树里，L10n.T 不会覆盖，手工翻译
+                // ContentDialog 不在 XAML 视觉树里，L10n.T
                 string how = ViewModel.SourceIndex switch
                 {
                     2 => L10n.T("安全擦除（多次覆写）"),
@@ -2010,7 +2533,7 @@ public sealed partial class MainWindow : Window
                     _ => L10n.T("删除"),
                 };
                 var show = dirs.Take(5).Select(d => d.Path).ToList();
-                // 与 CLI 行为对齐：-de 只逐个删除目录树里的文件，空目录壳保留
+                // 与 CLI 行
                 string msg = L10n.F("加密完成后，以下源目录中的文件将被{0}（目录本身保留），此操作不可撤销：\n\n{1}",
                                     how, string.Join("\n", show));
                 if (dirs.Count > show.Count)
@@ -2022,6 +2545,7 @@ public sealed partial class MainWindow : Window
                     Title = L10n.T("确认删除源目录"),
                     Content = msg,
                     PrimaryButtonText = L10n.T("继续"),
+                    PrimaryButtonStyle = ThemeService.StyleFor("AppDangerButtonStyle"),
                     CloseButtonText = L10n.T("取消"),
                     DefaultButton = ContentDialogButton.Close,
                 };
@@ -2030,7 +2554,7 @@ public sealed partial class MainWindow : Window
                 ViewModel.SourceDeleteOk = true;
             }
         }
-        // 入盘：支持直接指定已有盘，或指定一个目录由 CLI 自动初始化为新盘
+        // 入盘
         if (ViewModel.IsEncryptMode && ChkIntoVault.IsChecked == true)
         {
             var vd = (ViewModel.IntoVault ?? "").Trim();
@@ -2040,8 +2564,8 @@ public sealed partial class MainWindow : Window
                 VaultDirEdit.Focus(FocusState.Programmatic);
                 return;
             }
-            // 盘符根（Z / Z: / Z:\）已移除支持：CLI 会拒盘符根，这里提前拦并说清要填什么。
-            // 仅「去掉尾部斜杠后长度为 1 或 2 的 X / X:」算盘符根；D:\Vault 这类真实目录不能误判。
+            // 盘符根
+            // 仅「去掉尾部斜杠
             string vdNoSlash = vd.TrimEnd('\\', '/');
             bool isDrive = vdNoSlash.Length >= 1 && char.IsLetter(vdNoSlash[0])
                 && (vdNoSlash.Length == 1 || (vdNoSlash.Length == 2 && vdNoSlash[1] == ':'));
@@ -2058,7 +2582,7 @@ public sealed partial class MainWindow : Window
                 VaultDirEdit.Focus(FocusState.Programmatic);
                 return;
             }
-            // 非空且无 vault.meta：多半选错目录，先问一句再让 CLI 自动初始化
+            // 非空且无 vault.meta
             if (!isDrive && !File.Exists(Path.Combine(vd, "vault.meta"))
                 && Directory.EnumerateFileSystemEntries(vd).Any())
             {
@@ -2079,7 +2603,7 @@ public sealed partial class MainWindow : Window
                 }
             }
         }
-        // 包装动作的前置校验：CLI 能力、输入路径、公钥材料三样缺一不可
+        // 包装动作
         if (ViewModel.IsWrapMode)
         {
             if (!ViewModel.KeywrapAvailable)
@@ -2088,7 +2612,7 @@ public sealed partial class MainWindow : Window
                     L10n.T("配套的命令行程序没有密钥包装能力，无法包装或解包密钥。\n请更换带 OpenSSL 的 CLI。"));
                 return;
             }
-            // 包装输入是单个文件，不走文件清单；缺路径或路径不存在在这里拦下
+            // 包装输入是单
             var wrapIn = ViewModel.WrapInput ?? "";
             if (string.IsNullOrEmpty(wrapIn))
             {
@@ -2122,15 +2646,15 @@ public sealed partial class MainWindow : Window
         ViewModel.Run();
     }
 
-    // ===== CLI 确认询问 =====
-    // CLI 遇到 y/n 询问时把问题写进握手文件，这里弹窗询问，答完写回让 CLI 继续
+    // CLI 确认询问
+    // CLI 遇到 y/n 询问
     private async void OnConfirmPromptRequested(string text)
     {
         var dlg = new ContentDialog
         {
             XamlRoot = Content.XamlRoot,
             RequestedTheme = CurrentTheme,
-            // 问题文本来自 CLI（英文），标题与按钮走三语
+            // 问题文本来自 CLI
             Title = L10n.T("需要确认"),
             Content = text,
             PrimaryButtonText = L10n.T("是"),
@@ -2140,9 +2664,9 @@ public sealed partial class MainWindow : Window
         bool yes = await dlg.ShowAsync() == ContentDialogResult.Primary;
         ViewModel.AnswerConfirm(yes);
     }
-    private void OnCancelClicked(object sender, RoutedEventArgs e) => ViewModel.Cancel();
+    internal void OnCancelClicked(object sender, RoutedEventArgs e) => ViewModel.Cancel();
 
-    private async void OnRewrapClicked(object sender, RoutedEventArgs e)
+    internal async void OnRewrapClicked(object sender, RoutedEventArgs e)
     {
         var dlg = new ContentDialog
         {
@@ -2166,8 +2690,8 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    // ===== 菜单 =====
-    private void OnEditConfig(object sender, RoutedEventArgs e)
+    // 菜单
+    internal void OnEditConfig(object sender, RoutedEventArgs e)
     {
         var configPath = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
@@ -2180,7 +2704,7 @@ public sealed partial class MainWindow : Window
 
     private void OnExit(object sender, RoutedEventArgs e) => Close();
 
-    // 自动更新
+    // 自动
     private string? LocateUpdater()
     {
         string dir = AppContext.BaseDirectory;
@@ -2198,7 +2722,7 @@ public sealed partial class MainWindow : Window
         return null;
     }
 
-    private async void OnCheckForUpdate(object sender, RoutedEventArgs e)
+    internal async void OnCheckForUpdate(object sender, RoutedEventArgs e)
     {
         var updater = LocateUpdater();
         if (updater == null)
@@ -2209,7 +2733,7 @@ public sealed partial class MainWindow : Window
         try
         {
             var curVer = $"GUI {FileEncryptorLocator.GuiVersion} / CLI {FileEncryptorLocator.ExpectedCliVersion}";
-            // 参数逐项传，避免拼字符串时空格/引号把命令行截断
+            // 参数逐项传
             var start = new ProcessStartInfo(updater)
             {
                 RedirectStandardOutput = true,
@@ -2234,7 +2758,6 @@ public sealed partial class MainWindow : Window
             var finished = await System.Threading.Tasks.Task.WhenAny(readTask, doneTask, Task.Delay(TimeSpan.FromSeconds(60)));
             if (finished != readTask)
             {
-                // 超时或更新器起不来：读不到 JSON 就别拿空串去解析
                 try { proc.Kill(); } catch { }
                 try { await doneTask; } catch { }
                 await ShowMessageAsync(L10n.T("检查更新"), L10n.T("检查更新未返回结果（可能已超时）。请稍后再试。"));
@@ -2297,7 +2820,7 @@ public sealed partial class MainWindow : Window
         if (size > 0) args.AddRange(new[] { "--size", size.ToString() });
         if (!string.IsNullOrEmpty(sig)) args.AddRange(new[] { "--sig-url", sig });
 
-        var statusText = new TextBlock { Text = L10n.T("准备下载…"), TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 8, 0, 0), Foreground = new SolidColorBrush(Microsoft.UI.Colors.Gray) };
+        var statusText = new TextBlock { Text = L10n.T("准备下载…"), TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 8, 0, 0), Foreground = ThemeService.BrushFor("AppTextSecondaryBrush", CurrentTheme) };
         var progress = new ProgressBar { Minimum = 0, Maximum = 100, Value = 0, Margin = new Thickness(0, 4, 0, 0) };
         var panel = new StackPanel(); panel.Children.Add(statusText); panel.Children.Add(progress);
         var dlg = new ContentDialog
@@ -2370,7 +2893,7 @@ public sealed partial class MainWindow : Window
         await dlg.ShowAsync();
     }
 
-    private async void OnCredits(object sender, RoutedEventArgs e)
+    internal async void OnCredits(object sender, RoutedEventArgs e)
     {
         var panel = new StackPanel();
         panel.Children.Add(new TextBlock { Text = "FileEncryptor v" + FileEncryptorLocator.GuiVersion + " — " + L10n.T("鸣谢"), FontWeight = Microsoft.UI.Text.FontWeights.Bold, FontSize = 18, Margin = new Thickness(0,0,0,12) });
@@ -2396,16 +2919,16 @@ public sealed partial class MainWindow : Window
             }
         }
         AddRow(0, L10n.T("代码开发"), L10n.T("瑶璎珞"), "https://space.bilibili.com/3546692557212318");
-        // 瑶璎珞额外加赞助链接
+        // 瑶璎珞额外加赞
         var sponsorLink = new HyperlinkButton { Content = L10n.T("赞助支持"), NavigateUri = new Uri("https://afdian.com/a/yaoyingluo"), Padding = new Thickness(0), Margin = new Thickness(16,0,0,0) };
         Grid.SetColumn(sponsorLink, 3); Grid.SetRow(sponsorLink, 0); grid.Children.Add(sponsorLink);
         AddRow(1, L10n.T("测试"), L10n.T("就不错了我"), "https://space.bilibili.com/1705671238");
         AddRow(2, L10n.T("宣传"), L10n.T("Twilight飞友"), "https://space.bilibili.com/3546728261224829");
         panel.Children.Add(grid);
 
-        panel.Children.Add(new TextBlock { Text = L10n.T("\n本项目基于 libsodium 实现文件加密（XChaCha20-Poly1305 / AEGIS-256），采用 C++17 编写，跨平台运行于 Windows / Linux / macOS。"), TextWrapping = TextWrapping.Wrap, Foreground = new Microsoft.UI.Xaml.Media.SolidColorBrush(Microsoft.UI.Colors.Gray), FontSize = 12 });
+        panel.Children.Add(new TextBlock { Text = L10n.T("\n本项目基于 libsodium 实现文件加密（XChaCha20-Poly1305 / AEGIS-256），采用 C++17 编写，跨平台运行于 Windows / Linux / macOS。"), TextWrapping = TextWrapping.Wrap, Foreground = ThemeService.BrushFor("AppTextSecondaryBrush", CurrentTheme), FontSize = 12 });
 
-        // 国庆节窗口内追加祝福语（主窗功能区底部也有一处常驻展示）
+        // 国庆节窗口内追
         if (NationalDayTheme.IsActive())
         {
             panel.Children.Add(new TextBlock
@@ -2424,7 +2947,7 @@ public sealed partial class MainWindow : Window
         await dlg.ShowAsync();
     }
 
-    private async void OnReadme(object sender, RoutedEventArgs e)
+    internal async void OnReadme(object sender, RoutedEventArgs e)
     {
         var panel = new StackPanel();
         panel.Children.Add(new TextBlock { Text = "FileEncryptor v" + FileEncryptorLocator.GuiVersion + " " + L10n.T("— 项目摘要"), FontWeight = Microsoft.UI.Text.FontWeights.Bold, FontSize = 18, Margin = new Thickness(0,0,0,12) });
@@ -2440,8 +2963,9 @@ public sealed partial class MainWindow : Window
         panel.Children.Add(new TextBlock { Text = "FileEncryptor -e/-d <FileName> [-o <Path>] [-de] [-m xchacha20|aegis256|aes-gcm|sm4] [-y]\nFileEncryptor -be/-bd <Path> [-o <Path>] [-de] [-m xchacha20|aegis256|aes-gcm|sm4] [-y]", FontFamily = new Microsoft.UI.Xaml.Media.FontFamily("Consolas"), Margin = new Thickness(0,0,0,8) });
         panel.Children.Add(new TextBlock { Text = L10n.T("密钥来源优先级"), FontWeight = Microsoft.UI.Text.FontWeights.Bold, Margin = new Thickness(0,8,0,4) });
         panel.Children.Add(new TextBlock { Text = L10n.T("-k <keyfile>（密钥文件） > --key-stdin（stdin 管道） > ENCRYPTOR_KEY（环境变量） > 交互式输入；非对称模式用 X25519 身份私钥 > 交互式输入"), TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0,0,0,8) });
-        panel.Children.Add(new TextBlock { Text = L10n.T("许可证：GPLv3"), Margin = new Thickness(0,8,0,0) });
-        panel.Children.Add(new TextBlock { Text = L10n.T("本窗口为 README 摘要，完整文档请见项目根目录 README.md"), Foreground = new Microsoft.UI.Xaml.Media.SolidColorBrush(Microsoft.UI.Colors.Gray), FontSize = 12, Margin = new Thickness(0,8,0,0) });
+        panel.Children.Add(new TextBlock { Text = L10n.T("许可证：AGPLv3（GNU Affero General Public License v3.0）"), TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0,8,0,0) });
+        panel.Children.Add(new HyperlinkButton { Content = L10n.T("https://www.gnu.org/licenses/agpl-3.0.html"), NavigateUri = new Uri("https://www.gnu.org/licenses/agpl-3.0.html"), Padding = new Thickness(0), Margin = new Thickness(0,2,0,0) });
+        panel.Children.Add(new TextBlock { Text = L10n.T("本窗口为 README 摘要，完整文档请见项目根目录 README.md"), Foreground = ThemeService.BrushFor("AppTextSecondaryBrush", CurrentTheme), FontSize = 12, Margin = new Thickness(0,8,0,0) });
 
         var dlg = new ContentDialog { Title = L10n.T("README 摘要"), Content = new ScrollViewer { Content = panel, MaxHeight = 480, VerticalScrollBarVisibility = ScrollBarVisibility.Hidden }, CloseButtonText = L10n.T("关闭"), XamlRoot = Content.XamlRoot, RequestedTheme = CurrentTheme };
         await dlg.ShowAsync();
@@ -2458,8 +2982,8 @@ public sealed partial class MainWindow : Window
 
     private void RestoreTask(Models.TaskRecord rec)
     {
-        // M18：该条落盘时已抹去完整路径（隐私默认），拿只剩下文件名的残缺记录回放
-        // 会拼出指向错误位置的命令行。明确提示并指出开启方式，而不是默默回放。
+        // M18
+        // 会拼出指向错误
         if (rec.PathsStripped)
         {
             ViewModel.SetStatus(L10n.T(
@@ -2490,7 +3014,7 @@ public sealed partial class MainWindow : Window
             "asymmetric" => 4,
             _ => ViewModel.ModeIndex
         };
-        // 非对称模式的文件算法一并回填，否则下拉会停在默认项却回放出对应的 -m
+        // 非对称模式
         ModeCombo.SelectedIndex = ViewModel.ModeIndex;
         FileCipherCombo.SelectedIndex = rec.FileCipher switch
         {
@@ -2520,7 +3044,7 @@ public sealed partial class MainWindow : Window
         if (!string.IsNullOrEmpty(rec.Recipient)) RecipientEdit.Text = rec.Recipient;
         if (!string.IsNullOrEmpty(rec.Identity)) IdentityEdit.Text = rec.Identity;
         ChkRestoreName.IsChecked = rec.RestoreName;
-        // 算法下拉先设，动作切过去时 PropertyChanged 会顺带刷可见性
+        // 算法下拉先设
         if (!string.IsNullOrEmpty(rec.WrapAlg))
             WrapAlgCombo.SelectedIndex = rec.WrapAlg switch { "kwp" => 0, "aes-kw" => 1, "pubkey" => 2, _ => WrapAlgCombo.SelectedIndex };
         if (!string.IsNullOrEmpty(rec.WrapInput)) WrapFileEdit.Text = rec.WrapInput;
@@ -2530,11 +3054,11 @@ public sealed partial class MainWindow : Window
         ChkCompress.IsChecked = rec.Compress;
         CompressLevel.Value = rec.CompressionLevel;
         SourceCombo.SelectedIndex = rec.SourceIndex;
-        // 历史里只存占位符，私钥需重新输入
+        // 历史里只存占位
         var wmKey = rec.WatermarkKey ?? "";
         WatermarkKeyEdit.Password = wmKey.StartsWith("<") ? "" : wmKey;
         ViewModel.WatermarkKey = WatermarkKeyEdit.Password;
-        // 打包为一个文件 / 入加密盘：控件可用时才回填，否则 UpdateVisibility 会把它清掉
+        // 打包
         ChkPack.IsChecked = rec.Pack;
         ViewModel.Pack = rec.Pack;
         if (!string.IsNullOrEmpty(rec.IntoVault))
@@ -2552,7 +3076,7 @@ public sealed partial class MainWindow : Window
         ViewModel.SetStatus("已恢复任务：{0}", rec.ActionLabel);
     }
 
-    private void OnRetryCliDetection(object sender, RoutedEventArgs e)
+    internal void OnRetryCliDetection(object sender, RoutedEventArgs e)
     {
         if (ViewModel.DetectCli(out var path))
         {
@@ -2566,23 +3090,23 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    // 窗口背景：Mica。
-    // 注意两处都要动：
-    // 1) 只设托管属性 SystemBackdrop 时DWM 侧读出来仍是 0(NONE)，
-    //    WinUI 的 setter 没递交到 DWM，窗口会全不透明，必须 P/Invoke 补一刀；
-    // 2) DWM 的 Mica tint 跟随**系统**深浅，不跟随应用主题。
-    //    深色系统 + 浅色应用时，系统给的是暗 Mica，叠上浅色遮罩就成了
-    //    「黑白不一」。所以浅色档干脆不用系统 Mica，改纯色底。
+    // 窗口背景
+    // 注意两处
+    // 只设托管属性 SystemBackdrop
+    // WinUI 的 setter 没递交到 DWM，窗口
+    // DWM 的 Mica tint 跟随**系统**深浅
+    // 深色系统 + 浅色应
+    // 「黑白不一」
     public void ApplyBackdrop()
     {
         var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
         var mode = App.Settings.Current.BackgroundMode;
-        // 应用实际生效的深浅（System 档看注册表）
+        // 应用实际生效
         var dark = CurrentTheme != ElementTheme.Light;
 
         if (_backgroundBrush.ImageSource != null)
         {
-            // 有背景图就不开系统背景，图片自己铺满
+            // 有背景图
             SystemBackdrop = null;
         }
         else if (mode == BackgroundMode.Flat)
@@ -2591,8 +3115,8 @@ public sealed partial class MainWindow : Window
         }
         else
         {
-            // MicaBackdrop.Kind 只读且跟随系统深浅：Dark 用默认档，
-            // Light 强制 MicaKind.Base（浅色 Mica），这样浅色应用不会拿到暗 Mica。
+            // MicaBackdrop.Kind 只读且跟随系统
+            // Light 强制 MicaKind.Base，这样浅色应
             var mica = new MicaBackdrop();
             if (!dark) mica.Kind = Microsoft.UI.Composition.SystemBackdrops.MicaKind.Base;
             SystemBackdrop = mica;
@@ -2600,14 +3124,14 @@ public sealed partial class MainWindow : Window
             Debug.WriteLine($"DwmSetWindowAttribute(Mica) hr={hr} readback={DwmBackdrop.Query(hwnd)}");
         }
 
-        // 背景就绪后再上节日配色：面板的 Mica 依赖窗口底这层采样源已就绪
+        // 背景
         ApplyNationalDayVisuals();
     }
 
-    // 国庆主题的界面配色：底色染色、面板 Mica、按钮、控件、祝福语
+    // 国庆主题
     private void ApplyNationalDayVisuals()
     {
-        // 窗口底：非国庆也走同一套，按背景模式分派
+        // 窗口底
         if (_backgroundBrush.ImageSource == null)
             RootGrid.Background = NationalDayTheme.WindowBackdropBrush();
         else
@@ -2615,18 +3139,18 @@ public sealed partial class MainWindow : Window
 
         if (!NationalDayTheme.IsActive())
         {
-            // 非国庆：面板跟着窗口走同样那层 Mica，保证整体一致
+            // 非国庆
             ApplyPanelBackdrops();
             return;
         }
-        // 运行/取消按钮也走红系，否则绿色运行键是杂色
+        // 运行/取消
         NationalDayTheme.ApplyButtonColors(BtnRun, BtnCancel);
         ApplyTitleAccent();
-        // 浅色下按钮/输入框沿用系统浅灰会看不见，逐个下压配色
+        // 浅色
         NationalDayTheme.ApplyControlColors(RootGrid);
-        // 功能区 / 文件选择区：换成自身的 Mica 底，与窗口底两层采样叠出层次
+        // 功能区 / 文件选择
         ApplyPanelBackdrops();
-        // 祝福语常驻功能区底部
+        // 祝福语常驻功能
         BirthdayBar.Visibility = Visibility.Visible;
         RefreshBirthdayText();
     }
@@ -2635,7 +3159,7 @@ public sealed partial class MainWindow : Window
     {
         var dlg = new ViewSettingsDialog(_backgroundBrush) { XamlRoot = Content.XamlRoot, RequestedTheme = CurrentTheme };
         await dlg.ShowAsync();
-        // 换过背景后要重刷：ApplyBackdrop 内部按有无图片决定开不开系统背景
+        // 换过背景后要重
         ApplyBackdrop();
         if (_backgroundBrush.ImageSource == null && NationalDayTheme.IsActive())
             RootGrid.Background = NationalDayTheme.WindowBackdropBrush();
@@ -2660,13 +3184,13 @@ public sealed partial class MainWindow : Window
         catch {  }
     }
 
-    // 更新源白名单，与 Updater/src/updater.cpp 的 kGitHubHosts 保持一致
+    // 更新源白名单
     private static readonly string[] s_allowedHosts = {
         "github.com", "api.github.com",
         "objects.githubusercontent.com", "codeload.github.com"
     };
 
-    // 仅 GitHub 官方域名（精确匹配，不做后缀模糊）
+    // 仅 GitHub 官方域名
     private static bool IsAllowedDownloadHost(string url)
     {
         try

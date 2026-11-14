@@ -1,6 +1,6 @@
-// asym_crypto 实现：基于 OpenSSL EVP_PKEY 的 X25519/X448 密钥对与 DEK 封装。
-// 密钥串格式：X25519 沿用 age 的 Bech32（age1... / AGE-SECRET-KEY-...）；
-// X448 用 "X448-<b64>" / "X448SEC-<b64>"。DEK 包装用 XChaCha20-Poly1305（零 nonce）。
+// asym_crypto 实现
+// 密钥串格式
+// X448 用 "X448-<b64>" /
 #include "asym_crypto.hpp"
 
 #include <sodium.h>
@@ -13,19 +13,19 @@
 #include <string>
 #include <vector>
 
-// ECDH 共享密钥 → 32 字节 KEK 的提取盐（HMAC-SHA256 的 key 角色）。
+// ECDH 共享密钥 → 32 字节 KEK
 static const unsigned char kRecipInfoKey[32] = {
     'F','E','R','E','C','I','P','-','W','R','A','P','-','K','E','K',
     '-','v','1','-','0','0','0','0','0','0','0','0','0','0','0','1' };
 
-// 混合 KEM（X25519 + ML-KEM-768）的 KEK 提取盐与域分隔串。
-// 域串刻意与古典 ECDH 不同，保证同一种子不会同时开出两套 KEK。
+// 混合 KEM
+// 域串刻意
 static const unsigned char kPqcKekKey[32] = {
     'F','E','R','E','C','I','P','-','W','R','A','P','-','K','E','K',
     '-','v','2','-','p','q','c','-','x','2','5','5','1','9','+','k' };
 static const char kPqcDomain[] = "PQKEM1-X25519-MLKEM768-hybrid";
 
-// Bech32 编解码定义在本文件后半段（同一无名命名空间），此处提前声明供 encode_key/decode_key 调用。
+// Bech32 编解码定义
 namespace {
 bool bech32_encode(std::string& out, const std::string& hrp,
                    const unsigned char* data, size_t len);
@@ -35,7 +35,7 @@ bool bech32_decode(const std::string& str, std::string& hrp,
 
 namespace {
 
-// base64 编码（OpenSSL，尾部按长度补 '='）
+// base64 编码
 bool b64_encode(const unsigned char* raw, size_t rawlen, std::string& out) {
     std::string s((rawlen+2)/3*4, '\0');
     int n = EVP_EncodeBlock(reinterpret_cast<unsigned char*>(&s[0]), raw, (int)rawlen);
@@ -45,8 +45,8 @@ bool b64_encode(const unsigned char* raw, size_t rawlen, std::string& out) {
     return true;
 }
 
-// base64 解码。EVP_DecodeBlock 对末尾 '=' 填充的计数不可靠（可能多算 1~2 字节），
-// 这里按标准 base64 规则先算真实长度，再取二者较小值截断，避免长度校验误判。
+// base64 解码
+// 按标准 base64 规
 bool b64_decode(const std::string& s, std::vector<unsigned char>& out) {
     if(s.empty()) return false;
     size_t want = s.size()/4*3;
@@ -61,7 +61,7 @@ bool b64_decode(const std::string& s, std::vector<unsigned char>& out) {
     return true;
 }
 
-// 把 X25519/X448 原始密钥编成用户串：X25519→Bech32；X448→"X448-"/"X448SEC-"+base64。
+// 把 X25519/X448 原始密钥编成
 bool encode_key(uint8_t algo, const unsigned char* raw, size_t rawlen,
                 bool is_private, std::string& out) {
     if(algo==RECIP_ALGO_MLKEM) {
@@ -92,7 +92,7 @@ bool encode_key(uint8_t algo, const unsigned char* raw, size_t rawlen,
     return false;
 }
 
-// 解析用户串 → (algo, 原始密钥字节)。is_private 仅影响前缀期望。
+// 解析用户串 →
 bool decode_key(const std::string& s, bool is_private, uint8_t& algo,
                std::vector<unsigned char>& raw) {
     if(!is_private && s.rfind("age1",0)==0) {
@@ -120,8 +120,8 @@ bool decode_key(const std::string& s, bool is_private, uint8_t& algo,
     const std::string& pfx = is_private ? priv_pfx : pub_pfx;
     if(s.rfind(pfx,0)==0) {
         std::string b = s.substr(pfx.size());
-        // EVP_DecodeBlock 对末尾 '=' 填充的计数随版本而异（可能多算 1~2 字节），
-        // 这里按标准 base64 规则自行算出真实长度后再截断，避免长度校验误判。
+        // EVP_DecodeBlock 对末尾 '=' 填充
+        // 按标准 base64 规
         size_t want = b.size()/4*3;
         if(want>0 && !b.empty() && b[b.size()-1]=='=') --want;
         if(want>0 && b.size()>=2 && b[b.size()-2]=='=') --want;
@@ -130,7 +130,7 @@ bool decode_key(const std::string& s, bool is_private, uint8_t& algo,
             reinterpret_cast<const unsigned char*>(b.data()), (int)b.size());
         if(n<=0) return false;
         size_t got=(size_t)n;
-        if(got>want) got=want;          // 剔除填充多算的字节
+        if(got>want) got=want;          // 剔除填充多算
         buf.resize(got);
         if(buf.size()!=RECIP_KEY_X448) return false;
         algo=RECIP_ALGO_X448; raw.swap(buf); return true;
@@ -138,7 +138,7 @@ bool decode_key(const std::string& s, bool is_private, uint8_t& algo,
     return false;
 }
 
-// ECDH（OpenSSL）：共享密钥 = DH(priv_raw, pub_raw)。algo 决定曲线。
+// ECDH
 bool ecdh(uint8_t algo, const unsigned char* priv_raw, size_t priv_len,
           const unsigned char* pub_raw, size_t pub_len,
           std::vector<unsigned char>& shared) {
@@ -159,12 +159,12 @@ bool ecdh(uint8_t algo, const unsigned char* priv_raw, size_t priv_len,
     return ok;
 }
 
-// 共享密钥 → 32 字节 KEK（HMAC-SHA256 提取，key=kRecipInfoKey）。
+// 共享密钥 → 32 字节 KEK
 void shared_to_kek(const unsigned char* shared, size_t slen, unsigned char kek[32]) {
     crypto_auth(kek, shared, (unsigned long long)slen, kRecipInfoKey);
 }
 
-// 用 KEK 把 DEK(32) 包装为 48 字节箱（零 nonce，XChaCha20-Poly1305）。
+// 用 KEK
 bool wrap_dek_recip(const unsigned char* dek, const unsigned char* kek,
                     unsigned char box[48]) {
     unsigned char nonce[24]={0};
@@ -174,7 +174,7 @@ bool wrap_dek_recip(const unsigned char* dek, const unsigned char* kek,
     return (rc==0 && clen==48);
 }
 
-// 用 KEK 解裹 48 字节箱 → DEK(32)。
+// 用 KEK 解裹 48 字节箱 →
 bool unwrap_dek_recip(const unsigned char* box, const unsigned char* kek,
                       unsigned char dek[32]) {
     unsigned char nonce[24]={0};
@@ -184,8 +184,8 @@ bool unwrap_dek_recip(const unsigned char* box, const unsigned char* kek,
     return (rc==0 && mlen==32);
 }
 
-// ML-KEM-768 封装。注意 OpenSSL 4.x 的参数序是「密文在前、共享密钥在后」，
-// 与 3.x 相反；写反会得到 output buffer too small。
+// ML-KEM-768 封装
+// 与 3.x 相反
 bool mlkem_encapsulate(const unsigned char* pub, size_t publen,
                        std::vector<unsigned char>& ct,
                        std::vector<unsigned char>& shared) {
@@ -196,14 +196,14 @@ bool mlkem_encapsulate(const unsigned char* pub, size_t publen,
     if(c && EVP_PKEY_encapsulate_init(c,nullptr)==1 &&
        EVP_PKEY_encapsulate(c,nullptr,&ctl,nullptr,&shl)==1 && ctl>0 && shl>0) {
         ct.assign(ctl,0); shared.assign(shl,0);
-        size_t a=ctl, b=shl;   // 先按探测长度分配，再按返回长度校验
+        size_t a=ctl, b=shl;   // 先按探测长度分
         ok = EVP_PKEY_encapsulate(c, ct.data(), &a, shared.data(), &b)==1 && a==ctl && b==shl;
     }
     EVP_PKEY_CTX_free(c); EVP_PKEY_free(k);
     return ok;
 }
 
-// ML-KEM-768 解裹：用收件人私钥消化 stanza 里的封装密文。
+// ML-KEM-768 解裹
 bool mlkem_decapsulate(const unsigned char* priv, size_t privlen,
                        const unsigned char* ct, size_t ctlen,
                        std::vector<unsigned char>& shared) {
@@ -220,8 +220,8 @@ bool mlkem_decapsulate(const unsigned char* priv, size_t privlen,
     return ok;
 }
 
-// 混合 KEK = HMAC-SHA256(kPqcKekKey, domain || ML-KEM 共享 || ECDH 共享 || KEM 密文)。
-// 密文参与提取，使同一密钥下换一份密文也开不出同一个 KEK（绑定封装）。
+// 混合 KEK = HMAC
+// 密文参
 void hybrid_kek(const unsigned char* ml_shared, size_t n1,
                 const unsigned char* ecdh_shared, size_t n2,
                 const unsigned char* ct, size_t n3, unsigned char kek[32]) {
@@ -239,7 +239,7 @@ void hybrid_kek(const unsigned char* ml_shared, size_t n1,
 
 namespace {
 
-// 取原始密钥对字节（OpenSSL keygen → get_raw_*）；失败时 out 内容不保留。
+// 取原始密钥对字
 bool raw_keypair(int type, std::vector<unsigned char>& pub_raw,
                  std::vector<unsigned char>& priv_raw) {
     EVP_PKEY_CTX* kctx = EVP_PKEY_CTX_new_id(type, nullptr);
@@ -249,7 +249,7 @@ bool raw_keypair(int type, std::vector<unsigned char>& pub_raw,
         return false;
     }
     EVP_PKEY_CTX_free(kctx);
-    // get_raw_* 的返回值与 rlen 必须逐次校验：探测调用成功而取值失败时缓冲区保持全零，全零私钥一旦被当作有效密钥输出，用户资产将永久丢失且公钥可被推算冒充；失败即清零退出
+    // get_raw_* 的返回值
     size_t rlen=0;
     if(EVP_PKEY_get_raw_private_key(pkey,nullptr,&rlen)!=1 || rlen==0) {
         EVP_PKEY_free(pkey); return false;
@@ -276,7 +276,7 @@ bool raw_keypair(int type, std::vector<unsigned char>& pub_raw,
     return true;
 }
 
-// 混合密钥对：X25519 与 ML-KEM-768 各生成一份，按「X25519 || ML-KEM」拼接后整体编码。
+// 混合密钥
 bool hybrid_keypair(std::vector<unsigned char>& pub_raw,
                     std::vector<unsigned char>& priv_raw) {
     std::vector<unsigned char> x_pub, x_priv, m_pub, m_priv;
@@ -320,12 +320,12 @@ AsymOutcome fe_generate_keypair(uint8_t algo, std::string& pub, std::string& pri
     o.ok=true; return o;
 }
 
-// 混合（algo=3）封装：ML-KEM 封装密文 + ECDH 共享密钥合流出 KEK，密文随 stanza 下发。
-// 临时 X25519 用于 ECDH，ML-KEM 侧无需临时密钥（封装内部自取随机数）。
+// 混合封装
+// 临时 X25519 用于 ECDH，ML
 static bool pqc_wrap_dek(const unsigned char* dek, const unsigned char* recip_pub,
                          std::vector<unsigned char>& eph_pub, unsigned char box[48]) {
-    const unsigned char* x_pub = recip_pub;                            // 32
-    const unsigned char* ml_pub = recip_pub + RECIP_KEY_X25519;        // 1184
+    const unsigned char* x_pub = recip_pub;                            
+    const unsigned char* ml_pub = recip_pub + RECIP_KEY_X25519;        
     std::vector<unsigned char> ct, ml_shared;
     if(!mlkem_encapsulate(ml_pub, RECIP_KEY_MLKEM_PUB - RECIP_KEY_X25519, ct, ml_shared)) return false;
 
@@ -351,7 +351,7 @@ static bool pqc_wrap_dek(const unsigned char* dek, const unsigned char* recip_pu
     return true;
 }
 
-// 混合（algo=3）恢复：身份私钥 = X25519(32) || ML-KEM(2400)，stanza 临时区 = X25519(32) || 密文(1088)。
+// 混合恢复
 static bool pqc_recover_dek(const std::vector<unsigned char>& id_priv,
                             const std::vector<unsigned char>& eph_pub,
                             const unsigned char* box, unsigned char dek[32]) {
@@ -401,7 +401,7 @@ AsymOutcome fe_wrap_dek_to_recipients(const unsigned char* dek,
             stanzas.push_back(std::move(s));
             continue;
         }
-        // 生成临时密钥对做 ECDH
+        // 生成临时密钥
         int type = (algo==RECIP_ALGO_X448) ? EVP_PKEY_X448 : EVP_PKEY_X25519;
         EVP_PKEY_CTX* kctx = EVP_PKEY_CTX_new_id(type, nullptr);
         EVP_PKEY* eph = nullptr;
@@ -409,7 +409,7 @@ AsymOutcome fe_wrap_dek_to_recipients(const unsigned char* dek,
             EVP_PKEY_CTX_free(kctx); o.error="ephemeral keygen failed"; return o;
         }
         EVP_PKEY_CTX_free(kctx);
-        // 临时密钥的原始字节导出同样校验返回值与长度：全零临时私钥会产出可预测的 ECDH 共享密钥，使 DEK 包装失效或被推导
+        // 临时密钥
         size_t elen=0;
         if(EVP_PKEY_get_raw_public_key(eph,nullptr,&elen)!=1 || elen==0) {
             EVP_PKEY_free(eph); o.error="ephemeral public key export failed"; return o;
@@ -420,7 +420,7 @@ AsymOutcome fe_wrap_dek_to_recipients(const unsigned char* dek,
         }
 
         std::vector<unsigned char> shared;
-        // ECDH: 临时私钥 × 收件人公钥
+        // ECDH
         {
             size_t prlen=0;
             if(EVP_PKEY_get_raw_private_key(eph,nullptr,&prlen)!=1 || prlen==0) {
@@ -474,11 +474,11 @@ AsymOutcome fe_recover_dek_from_stanzas(const std::vector<RecipientStanza>& stan
                 sodium_memzero(id_priv.data(), id_priv.size());
                 o.ok=true; return o;
             }
-            continue;   // 逐条试，一条失败不代表整批失败
+            continue;   // 逐条试
         }
         if(s.recip_pub.size() != id_priv.size()) continue;
-        // 身份公钥应等于 stanza.recip_pub；用本地 bech32 反推校验（X25519）
-        // 直接比对 ECDH 结果更稳：shared = DH(id_priv, eph_pub)
+        // 身份公钥应等于
+        // 比对 ECDH 结果
         std::vector<unsigned char> shared;
         if(!ecdh(algo, id_priv.data(), id_priv.size(),
                  s.eph_pub.data(), s.eph_pub.size(), shared)) continue;
@@ -495,8 +495,7 @@ AsymOutcome fe_recover_dek_from_stanzas(const std::vector<RecipientStanza>& stan
     o.error="no matching recipient / wrong identity"; return o;
 }
 
-// 以下为纯本地实现（不依赖 OpenSSL）：Bech32（BIP-173）编解码 + X25519 + Argon2id。
-// 收件人公钥 hrp="age"；身份私钥 hrp="AGE-SECRET-KEY-"，编码后整体转大写。
+// 收件人公钥 hrp="age"
 namespace {
 
 const char kBech32Charset[] = "qpzry9x8gf2tvdw0s3jn54khce6mua7l";
@@ -525,7 +524,7 @@ std::vector<unsigned char> bech32_hrp_expand(const std::string& hrp) {
     return out;
 }
 
-// from/to 位宽转换。pad=true 时补齐残余位；pad=false 时残余位必须为零。
+// from/to 位宽转换
 bool bech32_convert_bits(std::vector<unsigned char>& out,
                          const unsigned char* data, size_t len,
                          int from, int to, bool pad) {
@@ -545,13 +544,13 @@ bool bech32_convert_bits(std::vector<unsigned char>& out,
     if(pad) {
         if(bits) out.push_back((unsigned char)((acc << (to - bits)) & maxv));
     } else if(bits >= from || ((acc << (to - bits)) & maxv)) {
-        return false;   // 非填充模式不允许非零残余位
+        return false;   // 非填充模式不允
     }
     return true;
 }
 
-// 校验和须按小写 HRP 展开计算（Bech32 规范）；X25519 私钥串编码后整体转大写，
-// 但校验和仍按小写 HRP 计算，按大写展开会得到无效串。
+// 校验和须
+// 但校验和仍
 std::string bech32_lower(const std::string& s) {
     std::string r = s;
     for(char& c: r) {
@@ -611,15 +610,14 @@ bool bech32_decode(const std::string& str, std::string& hrp,
 inline void wipe(std::vector<unsigned char>& v) {
     if(!v.empty()) {
         sodium_memzero(v.data(),v.size());
-        // 强制释放底层缓冲：clear()/shrink_to_fit() 不保证归还内存，
-        // 可能残留旧私钥副本；用 swap 与一个空 vector 确保立即释放（对齐 SecureBuffer）。
+        // 强制释放底层缓
+        // 残留旧私钥副本
         std::vector<unsigned char>().swap(v);
     }
 }
 inline void wipe(std::string& s) {
     if(!s.empty()) {
         sodium_memzero((void*)s.data(),s.size());
-        // 同上：擦除后强制释放缓冲，避免旧明文（身份私钥）残留在 std::string 容量中。
         std::string().swap(s);
     }
 }
@@ -627,7 +625,7 @@ inline void wipe(std::string& s) {
 }
 
 namespace {
-// ML-KEM 段（纯原始私钥）→ 原始公钥；失败时 pub_raw 内容不保留。
+// ML-KEM 段
 bool mlkem_pub_from_priv(const unsigned char* priv_raw, size_t len,
                          std::vector<unsigned char>& pub_raw) {
     EVP_PKEY* pkey = EVP_PKEY_new_raw_private_key(NID_ML_KEM_768, nullptr,
@@ -643,11 +641,11 @@ bool mlkem_pub_from_priv(const unsigned char* priv_raw, size_t len,
     return got;
 }
 
-// 由原始私钥推出收件人公钥；成功时把结果编成用户串写入 out。
+// 由原始私钥推出
 bool derive_pub_from_raw(uint8_t algo, const std::vector<unsigned char>& priv_raw,
                          std::string& out) {
     if(algo==RECIP_ALGO_MLKEM) {
-        // 混合串是「X25519(32) ‖ ML-KEM」拼接，两端各推对应公钥后按原布局拼回
+        // 混合串
         if(priv_raw.size()!=RECIP_KEY_MLKEM_PRIV) return false;
         unsigned char xpub[32];
         if(crypto_scalarmult_base(xpub, priv_raw.data())!=0) return false;
@@ -679,7 +677,7 @@ bool derive_pub_from_raw(uint8_t algo, const std::vector<unsigned char>& priv_ra
 
 AsymOutcome fe_identity_to_recipient(const std::string& identity, std::string& pub) {
     AsymOutcome o;
-    // 混合密钥（MLKEM1SEC-...）与 X448SEC-... 不走 bech32，先按原始密钥识别
+    // 混合密钥
     uint8_t algo = 0;
     std::vector<unsigned char> raw;
     if(decode_key(identity, true, algo, raw)) {
@@ -750,7 +748,7 @@ AsymOutcome fe_derive_keypair(const char* pw, size_t pw_len,
         sodium_memzero(seed,sizeof(seed));
         return o;
     }
-    // 规范成 X25519 钳位（clamp）形式，与标准 X25519 表示一致
+    // 规范成 X25519 钳位
     seed[0]  &= 248;
     seed[31] &= 127;
     seed[31] |= 64;

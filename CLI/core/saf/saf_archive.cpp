@@ -1,4 +1,4 @@
-// 归档后端：FEPK1 布局读写（与既有归档格式一致），只读访问归档内文件树
+// 归档后端
 #include "saf_archive.hpp"
 
 #include <algorithm>
@@ -14,7 +14,7 @@ constexpr uint32_t kFlagDir = 1u;
 constexpr uint32_t kMaxEntries = 1000000;
 constexpr uint32_t kMaxPath = 4096;
 constexpr size_t kCopyBuf = 64u * 1024u;
-constexpr size_t kEntryHead = 28;   // path_len(4)/flags(4)/size(8)/mode(4)/mtime(8)
+constexpr size_t kEntryHead = 28;   
 
 void put_u32(uint8_t* p, uint32_t v) { for (int i = 0; i < 4; ++i) p[i] = (uint8_t)(v >> (8 * i)); }
 void put_u64(uint8_t* p, uint64_t v) { for (int i = 0; i < 8; ++i) p[i] = (uint8_t)(v >> (8 * i)); }
@@ -40,14 +40,14 @@ struct PackEnt {
     uint32_t mode = 0;
 };
 
-// 顺序扫描建成员索引；路径含 ".." 或绝对路径一律拒绝
+// 顺序扫描建成员
 SafStatus scan_index(Stream& s, std::vector<Member>& out) {
-    uint8_t magic[8];   // 先单独验魔数：短文件也应报 BADARG 而不是 IO
+    uint8_t magic[8];   // 先单独验魔数
     uint64_t got = sizeof(magic);
     if (s.seek(0) != SAF_OK) return SAF_E_IO;
     if (s.read(magic, &got) != SAF_OK || got != sizeof(magic)) return SAF_E_IO;
     if (std::memcmp(magic, kMagic, 8) != 0) return SAF_E_BADARG;
-    uint8_t hdr[24];    // version/entry_count/total_raw_size/reserved
+    uint8_t hdr[24];    
     got = sizeof(hdr);
     if (s.read(hdr, &got) != SAF_OK || got != sizeof(hdr)) return SAF_E_IO;
     uint32_t ver = get_u32(hdr);
@@ -84,7 +84,7 @@ SafStatus scan_index(Stream& s, std::vector<Member>& out) {
     return SAF_OK;
 }
 
-// 递归收集目录树（readdir 已跳过符号链接）
+// 递归收集目录树
 SafStatus collect_tree(StorageBackend& be, const std::string& dir, std::vector<PackEnt>& out) {
     std::vector<SafEntry> es;
     SafStatus st = be.readdir(dir, es);
@@ -109,7 +109,7 @@ SafStatus collect_tree(StorageBackend& be, const std::string& dir, std::vector<P
     return SAF_OK;
 }
 
-// 区间流：把底层流的 [begin, begin+len) 暴露成一个独立流
+// 区间流
 class BoundStream final : public Stream {
 public:
     BoundStream(std::shared_ptr<Stream> base, uint64_t begin, uint64_t len)
@@ -120,7 +120,7 @@ public:
         uint64_t remain = len_ - pos_;
         if (remain == 0) { *len = 0; return SAF_OK; }
         uint64_t want = (*len < remain) ? *len : remain;
-        if (base_->seek(begin_ + pos_) != SAF_OK) return SAF_E_IO;   // 共享底层流，每次重定位
+        if (base_->seek(begin_ + pos_) != SAF_OK) return SAF_E_IO;   // 共享底层流
         uint64_t got = want;
         if (base_->read(out, &got) != SAF_OK) return SAF_E_IO;
         pos_ += got;
@@ -153,7 +153,7 @@ public:
     SafStatus init() { return scan_index(*raw_, members_); }
 
     const char* scheme() const override { return "archive"; }
-    bool can_write() const override { return false; }   // 改写 = 整体重打，见 saf_archive_pack
+    bool can_write() const override { return false; }   // 改写 = 整体重打
     bool can_list() const override { return true; }
 
     SafStatus stat(const std::string& vpath, uint64_t* out_size,
@@ -164,7 +164,7 @@ public:
         if (!saf_path_normalize(vpath, rel)) return SAF_E_BADARG;
         if (out_is_symlink) *out_is_symlink = false;
         if (out_mode) *out_mode = 0;
-        if (rel.empty()) {   // 根
+        if (rel.empty()) {   
             if (out_size) *out_size = 0;
             if (out_mtime) *out_mtime = 0;
             if (out_is_dir) *out_is_dir = true;
@@ -179,7 +179,7 @@ public:
                 return SAF_OK;
             }
         }
-        std::string pfx = rel + "/";   // 无精确匹配但有子树 → 目录
+        std::string pfx = rel + "/";   // 无精确匹配但有
         for (const auto& m : members_) {
             if (m.path.size() > pfx.size() && m.path.compare(0, pfx.size(), pfx) == 0) {
                 if (out_size) *out_size = 0;
@@ -210,7 +210,7 @@ public:
         std::string rel;
         if (!saf_path_normalize(vpath, rel)) return SAF_E_BADARG;
         std::string pfx = rel.empty() ? "" : rel + "/";
-        std::map<std::string, SafEntry> acc;   // 目录条目与其成员会撞名，按名合并去重
+        std::map<std::string, SafEntry> acc;   // 目录条目
         for (const auto& m : members_) {
             if (m.path.size() <= pfx.size()) continue;
             if (m.path.compare(0, pfx.size(), pfx) != 0) continue;
@@ -227,7 +227,7 @@ public:
             } else {
                 SafEntry e;
                 e.name = rest.substr(0, slash);
-                e.is_dir = true;                 // 目录优先，覆盖同名文件式条目
+                e.is_dir = true;                 // 目录优先
                 acc[e.name] = std::move(e);
             }
         }
@@ -242,7 +242,7 @@ private:
     std::vector<Member> members_;
 };
 
-// 递归展开归档条目到目标后端
+// 递归展开归档条
 SafStatus unpack_dir(StorageBackend& arc, StorageBackend& dst, const std::string& dir) {
     std::vector<SafEntry> es;
     SafStatus st = arc.readdir(dir, es);
@@ -319,7 +319,7 @@ SafStatus saf_archive_pack(StorageBackend& src, Stream& out) {
             left -= got;
         }
         in->close();
-        if (!ok || left != 0) return SAF_E_IO;   // 源文件在读期间变短
+        if (!ok || left != 0) return SAF_E_IO;   // 源文件
     }
 
     uint8_t tr[16] = {0};

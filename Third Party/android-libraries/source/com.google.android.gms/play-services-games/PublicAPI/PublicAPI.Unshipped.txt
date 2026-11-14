@@ -1,0 +1,7 @@
+﻿#nullable enable
+Android.Gms.Games.GamesStub
+Android.Gms.Games.GamesStub.GamesStub() -> void
+Android.Gms.Games.GamesStub.GamesStub(nint javaReference, Android.Runtime.JniHandleOwnership transfer) -> void
+override Android.Gms.Games.GamesStub.JniPeerMembers.get -> Java.Interop.JniPeerMembers!
+override Android.Gms.Games.GamesStub.ThresholdClass.get -> nint
+override Android.Gms.Games.GamesStub.ThresholdType.get -> System.Type!

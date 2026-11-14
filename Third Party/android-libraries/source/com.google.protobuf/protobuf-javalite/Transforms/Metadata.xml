@@ -1,0 +1,456 @@
+﻿<metadata>
+
+    <attr
+        path="/api/package[@name='com.google.protobuf']/class[@name='GeneratedMessageLite']/method[@name='getDefaultInstanceForType' and count(parameter)=0]"
+        name="return"
+        >
+        com.google.protobuf.MessageLite
+    </attr>
+
+    <attr
+        path="/api/package[@name='com.google.protobuf']/class[@name='GeneratedMessageLite.Builder']/method[@name='getDefaultInstanceForType' and count(parameter)=0]"
+        name="return"
+        >
+        com.google.protobuf.MessageLite
+    </attr>
+
+    <attr
+        path="/api/package[@name='com.google.protobuf']/class[@name='GeneratedMessageLite']/method[@name='newBuilderForType' and count(parameter)=0]"
+        name="return"
+        >
+        com.google.protobuf.MessageLite.Builder
+    </attr>
+
+
+    <attr
+        path="/api/package[@name='com.google.protobuf']/class[@name='GeneratedMessageLite']/method[@name='toBuilder' and count(parameter)=0]"
+        name="return"
+        >
+        com.google.protobuf.MessageLite.Builder
+    </attr>
+
+
+    <attr
+        path="/api/package[@name='com.google.protobuf']/class[@name='GeneratedMessageLite.Builder']/method[@name='build' and count(parameter)=0]"
+        name="return"
+        >
+        com.google.protobuf.MessageLite
+    </attr>
+
+    <attr
+        path="/api/package[@name='com.google.protobuf']/class[@name='GeneratedMessageLite.Builder']/method[@name='buildPartial' and count(parameter)=0]"
+        name="return"
+        >
+        com.google.protobuf.MessageLite
+    </attr>
+
+    <attr
+        path="/api/package[@name='com.google.protobuf']/class[@name='GeneratedMessageLite.Builder']/method[@name='clear' and count(parameter)=0]"
+        name="return"
+        >
+        com.google.protobuf.MessageLite.Builder
+    </attr>
+
+
+    <attr
+        path="/api/package[@name='com.google.protobuf']/class[@name='ByteString']/method[@name='iterator' and count(parameter)=0]"
+        name="managedReturn"
+        >
+        Java.Lang.Object
+    </attr>
+    <attr
+        path="/api/package[@name='com.google.protobuf']/class[@name='Internal.MapAdapter']/method[@name='entrySet' and count(parameter)=0]"
+        name="return"
+        >
+        java.util.Set
+    </attr>
+    <!--
+    <attr
+        path="/api/package[@name='com.google.protobuf']/class[@name='Internal.MapAdapter']/method[@name='entrySet' and count(parameter)=0]"
+        name="managedReturn"
+        >
+        System.Collections.ICollection
+    </attr>
+    <attr
+        path="/api/package[@name='com.google.protobuf']/class[@name='MapFieldLite']/method[@name='entrySet' and count(parameter)=0]"
+        name="managedName"
+        >
+        EntrySetImplementation
+    </attr>
+    <attr
+        path="/api/package[@name='com.google.protobuf']/class[@name='MapFieldLite']/method[@name='entrySet' and count(parameter)=0]"
+        name="final"
+        >
+        true
+    </attr>
+    -->
+
+    <attr
+        path="/api/package[@name='com.google.protobuf']/class[@name='FieldSet']"
+        name="visibility"
+        >
+        public
+    </attr>
+
+    <attr
+        path="/api/package[@name='com.google.protobuf']/class[@name='CodedOutputStream']/method[@name='write' and count(parameter)=1 and parameter[1][@type='byte']]"
+        name="abstract"
+        >
+        false
+    </attr>
+    <attr
+        path="/api/package[@name='com.google.protobuf']/class[@name='CodedOutputStream']/method[@name='write' and count(parameter)=3 and parameter[1][@type='byte[]'] and parameter[2][@type='int'] and parameter[3][@type='int']]"        name="abstract"
+        >
+        false
+    </attr>
+    <attr
+        path="/api/package[@name='com.google.protobuf']/class[@name='CodedOutputStream']/method[@name='write' and count(parameter)=1 and parameter[1][@type='java.nio.ByteBuffer']]"
+        name="abstract"
+        >
+        false
+    </attr>
+    <attr
+        path="/api/package[@name='com.google.protobuf']/class[@name='CodedOutputStream']/method[@name='writeLazy' and count(parameter)=3 and parameter[1][@type='byte[]'] and parameter[2][@type='int'] and parameter[3][@type='int']]"
+        name="abstract"
+        >
+        false
+    </attr>
+    <attr
+        path="/api/package[@name='com.google.protobuf']/class[@name='CodedOutputStream']/method[@name='writeLazy' and count(parameter)=1 and parameter[1][@type='java.nio.ByteBuffer']]"
+        name="abstract"
+        >
+        false
+    </attr>
+
+    <attr
+        path="/api/package[@name='com.google.protobuf']/class[@name='UnmodifiableLazyStringList']/method[@name='get' and count(parameter)=1 and parameter[1][@type='int']]"
+        name="managedName"
+        >
+        GetString
+    </attr>
+
+    <attr
+        path="/api/package[@name='com.google.protobuf']/class[@name='ExtensionLite']/method[@name='getDefaultValue' and count(parameter)=0]"
+        name="abstract"
+        >
+        false
+    </attr>
+    <attr
+        path="/api/package[@name='com.google.protobuf']/class[@name='LazyStringArrayList']/method[@name='addAll' and count(parameter)=2 and parameter[1][@type='int'] and parameter[2][@type='java.util.Collection&lt;? extends java.lang.String&gt;']]"
+        name="visibility"
+        >
+        public new
+    </attr>
+    <attr
+        path="/api/package[@name='com.google.protobuf']/class[@name='LazyStringArrayList']/method[@name='addAll' and count(parameter)=1 and parameter[1][@type='java.util.Collection&lt;? extends java.lang.String&gt;']]"
+        name="visibility"
+        >
+        public new
+    </attr>
+
+    <attr
+        path="/api/package[@name='com.google.protobuf']/class[@name='LazyStringArrayList']/method[@name='get' and count(parameter)=1 and parameter[1][@type='int']]"
+        name="managedReturn"
+        >
+        Java.Lang.Object
+    </attr>
+
+<!--
+    <attr
+        path="/api/package[@name='com.google.protobuf']/class[@name='AbstractParser']/method[@name='parsePartialFrom' and count(parameter)=2 and parameter[1][@type='java.io.InputStream'] and parameter[2][@type='com.google.protobuf.ExtensionRegistryLite']]/parameter[1]"
+        name="managedType"
+        >
+        Xamarin.Protobuf.Lite.CodedInputStream
+    </attr>
+-->
+
+    <attr
+        path="/api/package[@name='com.google.protobuf']/class[@name='NullValue']/field[@name='NULL_VALUE']"
+        name="managedName"
+        >
+        NullValueData
+    </attr>
+
+    <attr
+        path="/api/package[@name='com.google.protobuf']/class[@name='LazyStringArrayList']/method[@name='addAll']"
+        name="visibility"
+        >
+        public
+    </attr>
+    <attr
+        path="/api/package[@name='com.google.protobuf']/class[@name='LazyStringArrayList']/method[@name='getRaw' and count(parameter)=1 and parameter[1][@type='int']]"
+        name="managedName"
+        >
+        Get
+    </attr>
+    <attr
+        path="/api/package[@name='com.google.protobuf']/class[@name='UnmodifiableLazyStringList']/method[@name='getRaw' and count(parameter)=1 and parameter[1][@type='int']]"
+        name="managedName"
+        >
+        Get
+    </attr>
+    <attr
+        path="/api/package[@name='com.google.protobuf']/interface[@name='LazyStringList']/method[@name='getRaw' and count(parameter)=1 and parameter[1][@type='int']]"
+        name="managedName"
+        >
+        Get
+    </attr>
+
+    <attr
+        path="/api/package[@name='com.google.protobuf']/class[@name='DescriptorProtos.FeatureSet.EnforceNamingStyle']"
+        name="managedName"
+        >
+        EnforceNamingStyleData
+    </attr>
+
+    <!-- 
+    error XA4215: The Java type 
+        `com.google.protobuf.DescriptorProtos$ServiceOptionsOrBuilder` 
+    is generated by more than one managed type. 
+
+    DescriptorProtos appears in:
+
+    https://maven.google.com/web/index.html?q=well#com.google.firebase:protolite-well-known-types:18.0.0
+
+        2021
+
+    https://mvnrepository.com/artifact/com.google.protobuf/protobuf-javalite/4.27.1
+
+        2024-06
+    - ->
+
+    <remove-node
+        path="/api/package[@name='com.google.protobuf']/class[@name='DescriptorProtos']"
+        />
+    -->
+
+    <attr
+        path="/api/package[@name='com.google.protobuf']/interface[@name='Internal.BooleanList']/method[@name='mutableCopyWithCapacity' and count(parameter)=1 and parameter[1][@type='int']]"
+        name="managedReturn"
+        >
+        Xamarin.Protobuf.Lite.Internal.IProtobufList
+    </attr>
+    <attr
+        path="/api/package[@name='com.google.protobuf']/interface[@name='Internal.DoubleList']/method[@name='mutableCopyWithCapacity' and count(parameter)=1 and parameter[1][@type='int']]"
+        name="managedReturn"
+        >
+        Xamarin.Protobuf.Lite.Internal.IProtobufList
+    </attr>
+    <attr
+        path="/api/package[@name='com.google.protobuf']/interface[@name='Internal.FloatList']/method[@name='mutableCopyWithCapacity' and count(parameter)=1 and parameter[1][@type='int']]"
+        name="managedReturn"
+        >
+        Xamarin.Protobuf.Lite.Internal.IProtobufList
+    </attr>
+    <attr
+        path="/api/package[@name='com.google.protobuf']/interface[@name='Internal.LongList']/method[@name='mutableCopyWithCapacity' and count(parameter)=1 and parameter[1][@type='int']]"
+        name="managedReturn"
+        >
+        Xamarin.Protobuf.Lite.Internal.IProtobufList
+    </attr>
+    <attr
+        path="/api/package[@name='com.google.protobuf']/interface[@name='Internal.IntList']/method[@name='mutableCopyWithCapacity' and count(parameter)=1 and parameter[1][@type='int']]"
+        name="managedReturn"
+        >
+        Xamarin.Protobuf.Lite.Internal.IProtobufList
+    </attr>
+
+    <attr
+        path="/api/package[@name='com.google.protobuf']/class[@name='AbstractMessageLite']/method[@name='mergeFrom']"
+        name="managedReturn"
+        >
+        Java.Lang.Object
+    </attr>
+    <attr
+        path="/api/package[@name='com.google.protobuf']/class[@name='GeneratedMessageLite']/method[@name='mergeFrom']"
+        name="managedReturn"
+        >
+        Java.Lang.Object
+    </attr>
+    <attr
+        path="/api/package[@name='com.google.protobuf']/interface[@name='MessageLite.Builder']/method[@name='mergeFrom']"
+        name="managedReturn"
+        >
+        Java.Lang.Object
+    </attr>
+    <attr
+        path="/api/package[@name='com.google.protobuf']/class/method[@name='clone']"
+        name="managedReturn"
+        >
+        Xamarin.Protobuf.Lite.IMessageLiteBuilder
+    </attr>
+    <attr
+        path="/api/package[@name='com.google.protobuf']/interface[@name='MessageLite.Builder']/method[@name='clone' and count(parameter)=0]"
+        name="managedReturn"
+        >
+        Java.Lang.Object
+    </attr>
+    <attr
+        path="/api/package[@name='com.google.protobuf']/class[@name='AbstractMessageLite.Builder']/method[@name='clone']"
+        name="managedReturn"
+        >
+        Java.Lang.Object
+    </attr>
+    <attr
+        path="/api/package[@name='com.google.protobuf']/class[@name='GeneratedMessageLite.Builder']/method[@name='clone']"
+        name="managedReturn"
+        >
+        Java.Lang.Object
+    </attr>
+    <attr
+        path="/api/package[@name='com.google.protobuf']/class[@name='LazyStringArrayList']/method[@name='addAll']"
+        name="managedReturn"
+        >
+        bool
+    </attr>
+    <attr
+        path="/api/package[@name='com.google.protobuf']/class[@name='LazyStringArrayList']/method[@name='addAll' and count(parameter)=2 and parameter[1][@type='int'] and parameter[2][@type='java.util.Collection&lt;? extends java.lang.String&gt;']]/parameter[2]"
+        name="type"
+        >
+        java.util.Collection
+    </attr>
+    <remove-node
+        path="/api/package[@name='com.google.protobuf']/class[@name='LazyStringArrayList']/method[@name='addAll' and count(parameter)=1 ]"
+        />
+    <attr
+        path="/api/package[@name='com.google.protobuf']/class[@name='LazyStringArrayList']/method[@name='get' and count(parameter)=1 and parameter[1][@type='int']]"
+        name="return"
+        >
+        java.lang.Object
+    </attr>
+    <remove-node
+        path="/api/package[@name='com.google.protobuf']/class[@name='LazyStringArrayList']/method[@name='remove' and count(parameter)=1 and parameter[1][@type='int' and @name='p0']]"
+        >        
+    </remove-node>
+    <attr
+        path="/api/package[@name='com.google.protobuf']/class[@name='ByteString']/method[@name='iterator' and count(parameter)=0]"
+        name="managedReturn"
+        >
+        Java.Util.IIterator
+    </attr>
+    <attr
+        path="/api/package[@name='com.google.protobuf']/class[@name='AbstractParser']/method[@name='parsePartialFrom' and count(parameter)=1 and parameter[1][@type='byte[]']]"
+        name="managedOverride"
+        >
+        none
+    </attr>
+    <remove-node
+        path="/api/package[@name='com.google.protobuf']/class[@name='LazyStringArrayList']/method[@name='removeAll' and count(parameter)=1 and parameter[1][@type='java.util.Collection']]"
+        />
+    <remove-node
+        path="/api/package[@name='com.google.protobuf']/class[@name='LazyStringArrayList']/method[@name='retainAll' and count(parameter)=1 and parameter[1][@type='java.util.Collection']]"
+        />
+    <remove-node
+        path="/api/package[@name='com.google.protobuf']/class[@name='LazyStringArrayList']/method[@name='remove' and @return='java.lang.String' and count(parameter)=1 and parameter[1][@type='int']]"
+        />
+    <remove-node
+        path="/api/package[@name='com.google.protobuf']/class[@name='LazyStringArrayList']/method[@name='getRaw' and count(parameter)=1 and parameter[1][@type='int']]"
+        />
+
+    <add-node
+        path="/api/package[@name='com.google.protobuf']/class[@name='AbstractParser']"
+        >
+        <method abstract="false" deprecated="not deprecated" final="false" name="parsePartialFrom"
+         bridge="false" native="false" return="java.lang.Object" static="false" synchronized="false" synthetic="false" visibility="public">
+            <parameter name="input" type="com.google.protobuf.CodedInputStream" >
+            </parameter>
+            <parameter name="extensionRegistry" type="com.google.protobuf.ExtensionRegistryLite" >
+            </parameter>
+        </method>
+    </add-node>
+
+    <attr
+        path="/api/package[@name='com.google.protobuf']/class[@name='Field.Builder']/method[@name='getKind' and count(parameter)=0]"
+        name="managedOverride"
+        >
+        none
+    </attr>
+    <attr
+        path="/api/package[@name='com.google.protobuf']/class[@name='Value']/method[@name='getKindCase' and count(parameter)=0]"
+        name="propertyName"
+        >
+        KindCase
+    </attr>
+
+    <!--
+        inner class and property with the same name
+    -->
+    <attr
+        path="/api/package[@name='com.google.protobuf']/interface[@name='FieldOrBuilder']/method[@name='getCardinality' and count(parameter)=0]"
+        name="propertyName"
+        >
+        CardinalityData
+    </attr>
+    <attr
+        path="/api/package[@name='com.google.protobuf']/class[@name='Field.Builder']/method[@name='getCardinality' and count(parameter)=0]"
+        name="propertyName"
+        >
+        CardinalityData
+    </attr>
+    <attr
+        path="/api/package[@name='com.google.protobuf']/class[@name='Field.Builder']/method[@name='getCardinality' and count(parameter)=0]"
+        name="managedOverride"
+        >
+        new
+    </attr>
+    <attr
+        path="/api/package[@name='com.google.protobuf']/class[@name='Field.Builder']/method[@name='setCardinality' and count(parameter)=1 and parameter[1][@type='com.google.protobuf.Field.Cardinality']]"
+        name="propertyName"
+        >
+        CardinalityData
+    </attr>
+    <attr
+        path="/api/package[@name='com.google.protobuf']/class[@name='Field']/method[@name='getCardinality' and count(parameter)=0]"    
+        name="propertyName"
+        >
+        CardinalityData
+    </attr>
+
+
+    <attr
+        path="/api/package[@name='com.google.protobuf']/interface[@name='FieldOrBuilder']/method[@name='getKind' and count(parameter)=0]"
+        name="propertyName"
+        >
+        KindData
+    </attr>
+    <attr
+        path="/api/package[@name='com.google.protobuf']/class[@name='Field.Builder']/method[@name='getKind' and count(parameter)=0]"
+        name="managedOverride"
+        >
+        new
+    </attr>
+    <attr
+        path="/api/package[@name='com.google.protobuf']/class[@name='Field']/method[@name='getKind' and count(parameter)=0]"
+        name="propertyName"
+        >
+        KindData
+    </attr>
+    <attr
+        path="/api/package[@name='com.google.protobuf']/class[@name='Field.Builder']/method[@name='getKind' and count(parameter)=0]"
+        name="propertyName"
+        >
+        KindData
+    </attr>
+
+    <attr
+        path="/api/package[@name='com.google.protobuf']/interface[@name='ValueOrBuilder']/method[@name='getKindCase' and count(parameter)=0]"
+        name="propertyName"
+        >
+        KindCaseData
+    </attr>
+    <attr
+        path="/api/package[@name='com.google.protobuf']/class[@name='Value.Builder']/method[@name='getKindCase' and count(parameter)=0]"
+        name="propertyName"
+        >
+        KindCaseData
+    </attr>
+    <attr
+        path="/api/package[@name='com.google.protobuf']/class[@name='Value']/method[@name='getKindCase' and count(parameter)=0]"
+        name="propertyName"
+        >
+        KindCaseData
+    </attr>
+
+
+
+</metadata>

@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 自适应图标底色：圆角矩形 + 品牌色。
+     启动器只做蒙版裁切，蒙版是方形时靠这里的圆角 + 透明四角保留观感。
+     108dp 画布取 24dp 圆角约等于 22%。 -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+       android:shape="rectangle">
+    <solid android:color="#4A72C8" />
+    <corners android:radius="24dp" />
+</shape>

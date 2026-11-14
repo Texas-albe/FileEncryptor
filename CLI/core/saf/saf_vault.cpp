@@ -1,4 +1,4 @@
-// 加密盘后端：把宿主能力包装成标准 StorageBackend（免挂载访问库内文件）
+// 加密盘后端
 #include "saf_vault.hpp"
 #include "saf_secure.hpp"
 
@@ -14,7 +14,7 @@ namespace {
 
 constexpr uint64_t kMaxChunk = 1u << 30;
 
-// 读流：顺序读 + 定位，底层走宿主的随机读
+// 读流
 class VaultReadStream final : public Stream {
 public:
     VaultReadStream(std::shared_ptr<VaultHost> host, std::string vpath)
@@ -23,10 +23,10 @@ public:
     SafStatus read(uint8_t* out, uint64_t* len) override {
         if (!out || !len) return SAF_E_BADARG;
         if (*len == 0) return SAF_OK;
-        host_->note_activity();                       // M5 续期下沉：读即活动
+        host_->note_activity();                       // M5 续期下沉
         uint64_t remaining = *len;
         uint64_t written = 0;
-        constexpr uint64_t kW = 1u << 20;             // 锁定窗口 1MiB，大读循环切分
+        constexpr uint64_t kW = 1u << 20;             // 锁定窗口 1MiB
         SecureBuf buf(kW);
         while (remaining > 0) {
             uint64_t chunk = (remaining > kW) ? kW : remaining;
@@ -34,7 +34,7 @@ public:
             SafStatus st = host_->read(vpath_, off_ + written, buf.data(), &got);
             if (st != SAF_OK) { buf.zero(); *len = written; return st; }
             if (got == 0) { buf.zero(); *len = written; return SAF_OK; }   // EOF
-            if (got > chunk) { buf.zero(); *len = written; return SAF_E_IO; }  // 宿主越界写=内部错
+            if (got > chunk) { buf.zero(); *len = written; return SAF_E_IO; }  // 宿主越界写=内部
             std::memcpy(out + written, buf.data(), (size_t)got);
             buf.zero();
             written += got;
@@ -64,7 +64,7 @@ private:
     uint64_t                   off_ = 0;
 };
 
-// 写流：顺序写，底层按偏移就地加密
+// 写流
 class VaultWriteStream final : public Stream {
 public:
     VaultWriteStream(std::shared_ptr<VaultHost> host, std::string vpath, uint64_t off)
@@ -105,8 +105,8 @@ public:
     const char* scheme() const override { return "vault"; }
     bool can_write() const override { return host_->writable(); }
     bool can_list() const override { return true; }
-    bool can_integrity_check() const override { return true; }    // 底层 AEAD 逐块校验，读到即已校验
-    bool can_secure_wipe() const override { return false; }        // 明文擦除语义由上层策略负责
+    bool can_integrity_check() const override { return true; }    // 底层 AEAD 逐块校验
+    bool can_secure_wipe() const override { return false; }        // 明文擦除语义
 
     SafStatus stat(const std::string& vpath, uint64_t* out_size,
                    uint64_t* out_mtime, bool* out_is_dir,
@@ -114,7 +114,7 @@ public:
                    uint32_t* out_mode = nullptr) override {
         std::string p;
         if (!norm(vpath, p)) return SAF_E_BADARG;
-        if (out_is_symlink) *out_is_symlink = false;   // 加密盘无符号链接语义
+        if (out_is_symlink) *out_is_symlink = false;   // 加密盘无符号链
         if (out_mode) *out_mode = 0;
         return host_->getattr(p, out_size, out_mtime, out_is_dir);
     }
@@ -126,7 +126,7 @@ public:
         std::vector<SafEntry> raw;
         SafStatus st = host_->readdir(p, raw);
         if (st != SAF_OK) return st;
-        // 纵深防御：库内条目名不得含分隔符 / 上溯分量 / 空名（否则可越界指向库外路径），一律丢弃
+        // 纵深防御
         for (auto& e : raw) {
             if (e.name.empty()) continue;
             if (e.name.find('/') != std::string::npos) continue;
@@ -142,7 +142,7 @@ public:
         out.reset();
         std::string p;
         if (!norm(vpath, p)) return SAF_E_BADARG;
-        if (p.empty()) return SAF_E_BADARG;                 // 盘根不能当文件开
+        if (p.empty()) return SAF_E_BADARG;                 // 盘根不能当文件
 
         if (mode == 'r') {
             bool is_dir = false;
@@ -175,7 +175,7 @@ public:
         return host_->create_file(p);
     }
 
-    SafStatus mkdir(const std::string&) override { return SAF_E_NOTIMPL; }   // 盘内目录随条目存在
+    SafStatus mkdir(const std::string&) override { return SAF_E_NOTIMPL; }   // 盘内目录随条目
 
     SafStatus delete_file(const std::string& vpath) override {
         std::string p;

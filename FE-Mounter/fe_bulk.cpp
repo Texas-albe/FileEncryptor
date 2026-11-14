@@ -1,11 +1,9 @@
-// P1-2 多盘批量操作：对注册表里的全部加密盘做统一 status / lock / unlock。
-//
-// 现状是「每盘一个独立 FE-Mounter 进程」，故批量= 客户端扇出：对每个已注册 vault
-// 各发一次 IPC，聚合结果。本模块不改变进程模型，只是把扇出逻辑收在一处，
-// 供 CLI 与 GUI 共用，避免两端各写一遍。
-//
-// 输出为逐行 JSON 行（每盘一行对象），便于 GUI 直接解析（此前 GUI 只能靠
-// Contains("unlocked=1") 子串匹配，是最脆弱的一环）。
+// P1-2 多盘批量操作
+// 现状是「每盘一
+// 各发一次 IPC，聚合结
+// 供 CLI
+// 输出
+// Contains
 #include "fe_common.h"
 
 #include <cstdio>
@@ -20,9 +18,9 @@
 #include <windows.h>
 #endif
 
-// 挂载状态文件目录（跨平台）。Windows: %LOCALAPPDATA%/FileEncryptor/mount；
-// POSIX: $XDG_DATA_HOME/FileEncryptor/mount 或 $HOME/.local/share/FileEncryptor/mount。
-// Linux 下 mounter 经 FUSE3 挂载、不写该状态文件，discover 自然返回空（等价原行为）。
+// 挂载状态文件目
+// POSIX
+// Linux 下 mounter 经 FUSE3 挂载、不写
 static std::string mount_state_dir() {
 #if defined(_WIN32)
     const char* la = getenv("LOCALAPPDATA");
@@ -43,7 +41,7 @@ static std::string mount_state_dir() {
 
 namespace {
 
-// 读取某盘的实际挂载盘符（P0-2 状态文件）。未挂载返回空串。
+// 读取某盘
 std::string read_actual_mount(const std::string& vault) {
     std::string dir = mount_state_dir();
     if (dir.empty()) return "";
@@ -64,7 +62,7 @@ std::string read_actual_mount(const std::string& vault) {
     return mount;
 }
 
-// JSON 字符串转义（路径含反斜杠与空格）
+// JSON 字符串转义
 std::string jesc(const std::string& s) {
     std::string o;
     o.reserve(s.size() + 8);
@@ -83,11 +81,11 @@ std::string jesc(const std::string& s) {
     return o;
 }
 
-// 解析 IPC status 响应 "OK unlocked=1 [idle=N]" / "OK unlocked=0" / "ERR ..."
 struct OneStatus {
     bool        reachable=false;
     bool        unlocked=false;
-    long long   idle=-1;          // 剩余秒数，未解锁时无意义
+    long long   idle=-1;          // 剩余秒数
+    long long   suspend=-1;       // 暂时不锁定剩余
     std::string raw;
 };
 OneStatus parse_status(const std::string& resp) {
@@ -98,15 +96,17 @@ OneStatus parse_status(const std::string& resp) {
     if (p != std::string::npos) s.unlocked = (resp[p + 9] == '1');
     size_t q = resp.find("idle=");
     if (q != std::string::npos) s.idle = atoll(resp.c_str() + q + 5);
+    size_t r = resp.find("suspend=");
+    if (r != std::string::npos) s.suspend = atoll(resp.c_str() + r + 8);
     return s;
 }
 
 } // namespace
 
-// 发现当前真实挂载的盘：扫描 mount_state_dir() 下 vault_*.txt 状态文件。
-// mounter 挂载成功时写入这些文件（含 vault= / mount= 行），即便 GUI 漏登记也能据此列出。
-// Windows(WinFSP) 会写；Linux(FUSE3) 不写，故 Linux 下返回空（等价原行为）。
-// 返回 (vault路径, mount点) 列表。
+// 发现当前真实挂
+// mounter 挂载成功时写入
+// Windows
+// 返回
 std::vector<std::pair<std::string,std::string>> discover_mounted() {
     std::vector<std::pair<std::string,std::string>> out;
     std::string dir = mount_state_dir();
@@ -132,13 +132,13 @@ std::vector<std::pair<std::string,std::string>> discover_mounted() {
             else if (s.rfind("pid=", 0) == 0) pid = strtol(s.c_str() + 4, nullptr, 10);
         }
         fclose(f);
-        // 低危 C 组：状态文件内容无认证，同用户可伪造「已挂载」误导 GUI 与 status 聚合；写入方记录了 mounter 自身 pid，读取方校验其存活，否则忽略该文件（PID 重用窗口内仍可能误判，与 M20 同源）。
+        // 低危 C 组
         if (!vault.empty() && fe_pid_alive(pid)) out.push_back({vault, mount});
     }
     return out;
 }
 
-// vaults status：已注册盘 + 真实挂载盘 合并去重（以 vault 路径为键），每盘一行 JSON
+// vaults status
 int vaults_status_json() {
     std::map<std::string, std::string> byVault;   // vault -> mount
     std::vector<std::string> order;
@@ -146,7 +146,7 @@ int vaults_status_json() {
         if (byVault.find(v) == byVault.end()) order.push_back(v);
         if (byVault[v].empty()) byVault[v] = m;
     };
-    for (auto& v : vaults_list()) add(v, "");          // 注册表（可能含未挂载盘）
+    for (auto& v : vaults_list()) add(v, "");          // 注册表
     for (auto& p : discover_mounted()) add(p.first, p.second);  // 真实挂载盘
 
     printf("{\n  \"count\": %zu,\n  \"vaults\": [\n", order.size());
@@ -157,13 +157,14 @@ int vaults_status_json() {
                jesc(v).c_str(), jesc(byVault[v]).c_str(),
                st.reachable ? "true" : "false", st.unlocked ? "true" : "false");
         if (st.idle >= 0) printf(",\"idle\":%lld", st.idle);
+        if (st.suspend >= 0) printf(",\"suspend\":%lld", st.suspend);
         printf("}%s\n", (i + 1 < order.size()) ? "," : "");
     }
     printf("  ]\n}\n");
     return 0;
 }
 
-// vaults batch <lock|eject>：对全部已注册盘扇出该命令，聚合成功/失败
+// vaults batch <lock|eject>：对全部已注
 int vaults_batch(const std::string& cmd) {
     if (cmd != "lock" && cmd != "eject") {
         fprintf(stderr, "vaults batch: only 'lock' and 'eject' supported\n");

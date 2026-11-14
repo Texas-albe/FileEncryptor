@@ -8,6 +8,80 @@
             <ResourceDictionary.MergedDictionaries>
                 <XamlControlsResources xmlns="using:Microsoft.UI.Xaml.Controls" />
             </ResourceDictionary.MergedDictionaries>
+
+            <!-- ===== 语义色 =====
+                 只放系统调色板没有、但业务需要明确区分的少数几个语义色。
+                 Light / Dark 成对，取色沿用 WinUI 系统色（SystemFillColorSuccess / Critical / Caution）。 -->
+            <ResourceDictionary.ThemeDictionaries>
+                <ResourceDictionary x:Key="Default">
+                    <SolidColorBrush x:Key="AppTextSecondaryBrush" Color="#C8C8C8" />
+                    <SolidColorBrush x:Key="AppTextTertiaryBrush" Color="#9E9E9E" />
+                    <SolidColorBrush x:Key="AppSuccessBrush" Color="#6CCB5F" />
+                    <SolidColorBrush x:Key="AppDangerBrush" Color="#FF99A4" />
+                    <SolidColorBrush x:Key="AppCautionBrush" Color="#FCE100" />
+                </ResourceDictionary>
+                <ResourceDictionary x:Key="Light">
+                    <SolidColorBrush x:Key="AppTextSecondaryBrush" Color="#5D5D5D" />
+                    <SolidColorBrush x:Key="AppTextTertiaryBrush" Color="#8A8A8A" />
+                    <SolidColorBrush x:Key="AppSuccessBrush" Color="#0F7B0F" />
+                    <SolidColorBrush x:Key="AppDangerBrush" Color="#C42B1C" />
+                    <SolidColorBrush x:Key="AppCautionBrush" Color="#9D5D00" />
+                </ResourceDictionary>
+                <ResourceDictionary x:Key="Dark">
+                    <SolidColorBrush x:Key="AppTextSecondaryBrush" Color="#C8C8C8" />
+                    <SolidColorBrush x:Key="AppTextTertiaryBrush" Color="#9E9E9E" />
+                    <SolidColorBrush x:Key="AppSuccessBrush" Color="#6CCB5F" />
+                    <SolidColorBrush x:Key="AppDangerBrush" Color="#FF99A4" />
+                    <SolidColorBrush x:Key="AppCautionBrush" Color="#FCE100" />
+                </ResourceDictionary>
+            </ResourceDictionary.ThemeDictionaries>
+
+            <!-- ===== 文字层级 =====
+                 直接基于 WinUI 自带排版样式，字号/字重跟随系统规范。 -->
+            <Style x:Key="AppPageTitleTextStyle" TargetType="TextBlock" BasedOn="{StaticResource TitleTextBlockStyle}" />
+            <Style x:Key="AppSectionHeaderTextStyle" TargetType="TextBlock" BasedOn="{StaticResource SubtitleTextBlockStyle}">
+                <Setter Property="FontSize" Value="18" />
+            </Style>
+            <Style x:Key="AppSubSectionTextStyle" TargetType="TextBlock" BasedOn="{StaticResource BodyStrongTextBlockStyle}" />
+            <Style x:Key="AppCaptionTextStyle" TargetType="TextBlock" BasedOn="{StaticResource CaptionTextBlockStyle}">
+                <Setter Property="Foreground" Value="{ThemeResource AppTextSecondaryBrush}" />
+            </Style>
+            <Style x:Key="AppSecondaryTextStyle" TargetType="TextBlock" BasedOn="{StaticResource BodyTextBlockStyle}">
+                <Setter Property="Foreground" Value="{ThemeResource AppTextSecondaryBrush}" />
+            </Style>
+
+            <!-- 表单行标签：统一宽度与次级色，让右侧控件成为视觉主体 -->
+            <Style x:Key="AppFieldLabelTextStyle" TargetType="TextBlock">
+                <Setter Property="Width" Value="120" />
+                <Setter Property="VerticalAlignment" Value="Center" />
+                <Setter Property="TextWrapping" Value="Wrap" />
+                <Setter Property="Foreground" Value="{ThemeResource AppTextSecondaryBrush}" />
+            </Style>
+
+            <!-- ===== 表面 =====
+                 圆角沿用 WinUI 卡片规范（8），描边/底色全部走系统主题画刷。 -->
+            <Style x:Key="AppCardBorderStyle" TargetType="Border">
+                <Setter Property="Background" Value="{ThemeResource CardBackgroundFillColorDefaultBrush}" />
+                <Setter Property="BorderBrush" Value="{ThemeResource CardStrokeColorDefaultBrush}" />
+                <Setter Property="BorderThickness" Value="1" />
+                <Setter Property="CornerRadius" Value="8" />
+                <Setter Property="Padding" Value="16" />
+            </Style>
+            <Style x:Key="AppInsetBorderStyle" TargetType="Border" BasedOn="{StaticResource AppCardBorderStyle}">
+                <Setter Property="Background" Value="{ThemeResource LayerFillColorDefaultBrush}" />
+            </Style>
+
+            <!-- ===== 按钮层级 =====
+                 主要操作走系统强调色（AccentButtonStyle）；危险操作用描边+告警色，绝不占主按钮。 -->
+            <Style x:Key="AppPrimaryButtonStyle" TargetType="Button" BasedOn="{StaticResource AccentButtonStyle}">
+                <Setter Property="MinWidth" Value="96" />
+            </Style>
+            <Style x:Key="AppDangerButtonStyle" TargetType="Button">
+                <Setter Property="Background" Value="Transparent" />
+                <Setter Property="BorderBrush" Value="{ThemeResource SystemFillColorCriticalBrush}" />
+                <Setter Property="BorderThickness" Value="1" />
+                <Setter Property="Foreground" Value="{ThemeResource SystemFillColorCriticalBrush}" />
+            </Style>
         </ResourceDictionary>
     </Application.Resources>
 </Application>

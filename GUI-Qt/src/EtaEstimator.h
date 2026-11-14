@@ -1,4 +1,4 @@
-// 批量任务剩余时间预估
+// 批量任务剩余
 #pragma once
 #include <QString>
 #include <QVector>
@@ -15,11 +15,11 @@ public:
         bool    fromProgress=false;
     };
 
-    // 按历史样本预估耗时
+    // 按历史样本预估
     static Estimate estimate(qint64 bytes,const QString& action,const QString& mode,
                              const QVector<TaskRecord>& history);
 
-    // 运行中外推剩余时间
+    // 运行中外推剩余
     static Estimate fromProgress(int done,int total,qint64 elapsedMs,const Estimate& hist);
 
     static QString formatDuration(qint64 ms);

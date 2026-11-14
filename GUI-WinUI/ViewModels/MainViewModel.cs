@@ -1,4 +1,5 @@
 ﻿using System.Collections.ObjectModel;
+using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
 using System.Text;
@@ -25,34 +26,34 @@ public class MainViewModel : ObservableObject
     private string? _cliPath;
     private bool _zstdAvailable = true;
     private bool _aegisAvailable = true;
-    // AES-GCM 依赖 AES-NI：--features 缺 aesgcm=1 的旧 CLI 不认 -m aes-gcm
+    // AES-GCM 依赖 AES-NI：--features 缺
     private bool _aesGcmAvailable;
-    // 后量子能力：缺 pqc= 字段的旧 CLI 视为不支持（fail-closed，同 Qt 侧 m_pqcAvailable）
+    // 后量子能力
     private bool _pqcAvailable;
-    // 打包能力：默认乐观，仅当 --features 里没有 pack=1（旧 CLI 不认 -p）才置 false
+    // 打包能力
     private bool _packAvailable = true;
-    // 密钥包装能力：--features 缺 keywrap=1 的旧 CLI 不认 --wrap-key（fail-closed）
+    // 密钥包装能力
     private bool _keywrapAvailable;
-    // 加密盘能力：--features 缺 vault=1 的旧 CLI 不认 --into-vault（fail-closed）
+    // 加密盘能力
     private bool _vaultAvailable;
     private readonly Stopwatch _runTimer = new();
     private int _doneFiles, _skipFiles, _failFiles, _totalFiles;
     private string _currentFile = "";
-    private ShellOptions? _runOptions;   // 本次运行的参数，任务结束用它删对应的临时私钥
+    private ShellOptions? _runOptions;   // 本次运行
 
     public MainViewModel()
     {
         _dispatcher = DispatcherQueue.GetForCurrentThread();
         _cli.Finished += OnFinished;
-        // 进度计数来源（控制台模式下不触发）
+        // 进度计数来源
         _cli.OutputLine += OnOutputLine;
         _cli.ConfirmPrompt += OnConfirmPrompt;
     }
 
-    // ===== 输入 =====
+    // 输入
     public ObservableCollection<SelectablePath> InputPaths { get; } = new();
 
-    // ===== 选项 =====
+    // 选项
     private int _actionIndex;
     public int ActionIndex
     {
@@ -71,30 +72,35 @@ public class MainViewModel : ObservableObject
         }
     }
 
-    // 模式索引与 ModeCombo 对齐：0=XChaCha20 1=AEGIS-256 2=AES-256-GCM 3=SM4-GCM 4=X25519 非对称
+    // 模式索引
     private int _modeIndex;
     public int ModeIndex { get => _modeIndex; set { SetProperty(ref _modeIndex, value); OnPropertyChanged(nameof(IsAsymmetric)); RefreshCommandPreview(); } }
 
-    // 非对称模式下文件载荷的对称算法（0=XChaCha20 1=AEGIS-256 2=AES-256-GCM 3=SM4-GCM）
+    // 非对称模式下文
     private int _fileCipherIndex;
     public int FileCipherIndex { get => _fileCipherIndex; set { SetProperty(ref _fileCipherIndex, value); RefreshCommandPreview(); } }
 
     public bool IsAsymmetric => ModeIndex == 4;
     public bool IsEncryptMode => ActionIndex is 0 or 2;
     public bool IsKeyGenMode => ActionIndex is 4 or 5 or 6;
-    // 密钥包装：7=包装 8=解开
+    // 密钥包装
     public bool IsWrapMode => ActionIndex is 7 or 8;
     public bool IsWrapKeyMode => ActionIndex == 7;
     public bool IsUnwrapMode => ActionIndex == 8;
-    // 公钥路线没有 KEK，不需要密码
+    // 公钥路线没有 KEK
     public bool WrapUsesPublicKey => WrapAlgIndex == 2;
-    // 解密与解包只需输入一次密码（1=解密 / 3=批解密 / 8=解包）。
-    // 入加密盘且该盘已初始化（vault.meta 存在 = 已设过密码）时同样只输一次：
-    // 此时填的是既有盘密码，不是新建密码，无需二次确认。
+    // 二次确认密码
+    // 例外
+    // 策略
+    // 解密/解包维持只
     public bool PasswordNeedsConfirm =>
-        ActionIndex is not (1 or 3 or 8) && !VaultAlreadyInitialized;
+        (ActionIndex == 2 && !IsAsymmetric
+         && !(!string.IsNullOrEmpty(IntoVault) && VaultAlreadyInitialized))
+        || (!string.IsNullOrEmpty(IntoVault) && !VaultAlreadyInitialized)
+        || ActionIndex == 5                   // 密钥派生
+        || ActionIndex == 7;                  // 包装密钥
 
-    // 目标加密盘是否已初始化：vault.meta 存在即视为已设过密码
+    // 目标加密盘是否
     public bool VaultAlreadyInitialized
     {
         get
@@ -106,7 +112,7 @@ public class MainViewModel : ObservableObject
         }
     }
 
-    // 包装算法：0=KWP 1=AES-KW 2=收件人公钥，与 WrapAlgCombo 索引对齐
+    // 包装算法
     private int _wrapAlgIndex;
     public int WrapAlgIndex { get => _wrapAlgIndex; set { SetProperty(ref _wrapAlgIndex, value); OnPropertyChanged(nameof(WrapUsesPublicKey)); RefreshCommandPreview(); } }
 
@@ -116,7 +122,7 @@ public class MainViewModel : ObservableObject
     private string _wrapOutput = "";
     public string WrapOutput { get => _wrapOutput; set { SetProperty(ref _wrapOutput, value); RefreshCommandPreview(); } }
 
-    // 包装能力探测：--features 缺 keywrap=1 的旧 CLI 会把 --wrap-key 当未知参数
+    // 包装能力探测
     public bool KeywrapAvailable
     {
         get => _keywrapAvailable;
@@ -134,11 +140,11 @@ public class MainViewModel : ObservableObject
     private bool _force = true;
     public bool Force { get => _force; set { SetProperty(ref _force, value); RefreshCommandPreview(); } }
 
-    // 加密压缩包：目录树 / 多文件打成单个 .ptd（--pack）
+    // 加密压缩包
     private bool _pack;
     public bool Pack { get => _pack; set { SetProperty(ref _pack, value); RefreshCommandPreview(); } }
 
-    // 打包能力探测：--features 缺 pack=1 的旧 CLI 会把 -p 当未知参数，这里自动关掉勾选框
+    // 打包能力探测
     public bool PackAvailable
     {
         get => _packAvailable;
@@ -146,16 +152,16 @@ public class MainViewModel : ObservableObject
         {
             if (_packAvailable == value) return;
             SetProperty(ref _packAvailable, value);
-            if (!value) Pack = false;   // 不支持就别让用户以为已启用
+            if (!value) Pack = false;   // 不支持
             RefreshCommandPreview();
         }
     }
 
-    // 加密盘：勾选后产物入该目录并登记进加密索引（CLI --into-vault）
+    // 加密盘
     private string _intoVault = "";
     public string IntoVault { get => _intoVault; set { SetProperty(ref _intoVault, value); OnPropertyChanged(nameof(PasswordNeedsConfirm)); RefreshCommandPreview(); } }
 
-    // 加密盘能力探测：--features 缺 vault=1 的旧 CLI 不认 --into-vault
+    // 加密盘能力探测
     public bool VaultAvailable
     {
         get => _vaultAvailable;
@@ -163,12 +169,12 @@ public class MainViewModel : ObservableObject
         {
             if (_vaultAvailable == value) return;
             SetProperty(ref _vaultAvailable, value);
-            if (!value) IntoVault = "";   // 不支持就清掉，免得残留路径又被下发
+            if (!value) IntoVault = "";   // 不支持
             RefreshCommandPreview();
         }
     }
 
-    // 可写挂载能力：--features 缺 vault_rw=1 的旧 CLI / 不装 M6 时不出现「可写挂载」（fail-closed）
+    // 可写挂载能力
     private bool _vaultRwAvailable;
     public bool VaultRwAvailable
     {
@@ -181,7 +187,7 @@ public class MainViewModel : ObservableObject
         }
     }
 
-    // 分卷输出：默认不勾选；勾选后由 CliArgBuilder 下发 --split <size>
+    // 分卷输出
     private bool _split;
     public bool Split { get => _split; set { SetProperty(ref _split, value); RefreshCommandPreview(); } }
 
@@ -191,7 +197,7 @@ public class MainViewModel : ObservableObject
     private int _splitUnitIndex;
     public int SplitUnitIndex { get => _splitUnitIndex; set { SetProperty(ref _splitUnitIndex, value); RefreshCommandPreview(); } }
 
-    // 目录 + 删除类源处置已由界面弹窗确认
+    // 目录 + 删除类源处
     private bool _sourceDeleteOk;
     public bool SourceDeleteOk { get => _sourceDeleteOk; set => SetProperty(ref _sourceDeleteOk, value); }
 
@@ -204,11 +210,11 @@ public class MainViewModel : ObservableObject
     private int _compressLevel = 1;
     public int CompressLevel { get => _compressLevel; set { SetProperty(ref _compressLevel, value); RefreshCommandPreview(); } }
 
-    // 生成密钥对时的曲线选择（默认 X25519）
+    // 生成密钥
     private bool _useX448;
     public bool UseX448 { get => _useX448; set { SetProperty(ref _useX448, value); RefreshCommandPreview(); } }
 
-    // 后量子：默认开启，取消勾选时 CliArgBuilder 才下发 --no-pqc
+    // 后量子
     private bool _pqc = true;
     public bool Pqc { get => _pqc; set { SetProperty(ref _pqc, value); RefreshCommandPreview(); } }
 
@@ -219,7 +225,7 @@ public class MainViewModel : ObservableObject
         {
             if (_pqcAvailable == value) return;
             SetProperty(ref _pqcAvailable, value);
-            // CLI 不支持时把勾选框一并关掉，避免用户以为后量子已启用
+            // CLI 不支持
             if (!value) Pqc = false;
             RefreshCommandPreview();
         }
@@ -246,11 +252,11 @@ public class MainViewModel : ObservableObject
     private bool _restoreName;
     public bool RestoreName { get => _restoreName; set { SetProperty(ref _restoreName, value); RefreshCommandPreview(); } }
 
-    // ===== 状态 =====
+    // 状态
     private string _statusText = L10n.T("就绪");
     public string StatusText { get => _statusText; set => SetProperty(ref _statusText, value); }
 
-    // 记下键与参数，切换语言后可原样重翻译
+    // 记下键
     private string _statusKey = "就绪";
     private object?[] _statusArgs = Array.Empty<object?>();
     public void SetStatus(string key, params object?[] args)
@@ -275,11 +281,11 @@ public class MainViewModel : ObservableObject
 
     public string? CliPath => _cliPath;
 
-    // ===== 命令 =====
+    // 命令
     public ICommand RunCommand => new RelayCommand(_ => Run(), _ => !IsRunning && (InputPaths.Any(p => p.IsSelected) || IsKeyGenMode || IsWrapMode));
     public ICommand CancelCommand => new RelayCommand(_ => Cancel(), _ => IsRunning);
 
-    // ===== CLI 探测 =====
+    // CLI 探测
     public bool DetectCli(out string? path)
     {
         path = FileEncryptorLocator.Locate();
@@ -329,20 +335,20 @@ public class MainViewModel : ObservableObject
                 OnPropertyChanged(nameof(KeywrapAvailable));
                 OnPropertyChanged(nameof(VaultAvailable));
                 OnPropertyChanged(nameof(VaultRwAvailable));
-                if (!_packAvailable) Pack = false;   // 旧 CLI 不支持打包，强制取消勾选
+                if (!_packAvailable) Pack = false;   // 旧 CLI 不支持打包
             });
         }
         catch (OperationCanceledException) { try { p?.Kill(); } catch { } }
         catch {  }
     }
 
-    // ===== 运行 =====
-    // 默认走系统控制台：进度与密码交互都在控制台完成
+    // 运行
+    // 默认走系统控制
     public bool UseSystemConsole { get; set; } = true;
 
     public void RunWithPassword(string password)
     {
-        // 与 Qt / 交互式一致：原样发送密码字节，不追加换行
+        // 与 Qt / 交互式一致
         StartCli(Encoding.UTF8.GetBytes(password), UseSystemConsole);
     }
 
@@ -352,11 +358,11 @@ public class MainViewModel : ObservableObject
         var opts = CollectOptions();
         _runOptions = opts;
         var args = CliArgBuilder.BuildArguments(opts);
-        // --source-delete-ok 仅本次任务有效：弹窗确认一遍，下发就清掉，别保留到下次
+        // -source-delete-ok
         opts.SourceDeleteOk = false;
         SourceDeleteOk = false;
         string? workDir = null;
-        // 包装动作的输入不走文件清单，取 WrapInput 推工作目录
+        // 包装动作
         var firstInput = opts.Action is CryptoAction.WrapKey or CryptoAction.UnwrapKey
             ? opts.WrapInput : opts.InputPaths.FirstOrDefault();
         if (!string.IsNullOrEmpty(firstInput))
@@ -369,7 +375,7 @@ public class MainViewModel : ObservableObject
         if (string.IsNullOrEmpty(workDir))
             workDir = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
 
-        // 确认握手：CLI 把 y/n 询问写进这个文件，界面读到后弹窗，再把答案写回去
+        // 确认握手
         var confirmDir = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "FileEncryptor", "GUI");
@@ -387,7 +393,7 @@ public class MainViewModel : ObservableObject
             ConfirmFile = confirmFile,
         };
         req.ExtraEnv["FILEENCRYPTOR_CONFIRM_FILE"] = confirmFile;
-        // 批量（含入加密盘）开帧式进度：哨兵帧可被界面整帧解析后原地重绘
+        // 批量开帧式进度
         if (opts.Action is CryptoAction.BatchEncrypt or CryptoAction.BatchDecrypt)
         {
             req.ExtraEnv["FILEENCRYPTOR_PROGRESS_FRAME"] = "1";
@@ -442,7 +448,7 @@ public class MainViewModel : ObservableObject
             RestoreName = RestoreName,
             Pqc = Pqc,
             Watermark = Watermark,
-            // 私钥明文不落盘任务历史，只留占位（恢复任务时提示重新输入）
+            // 私钥明文不落盘
             WatermarkKey = CliArgBuilder.IsPrivateKeyMaterial(WatermarkKey) ? "<protected>" : (WatermarkKey ?? ""),
             Pack = opts.Pack,
             IntoVault = opts.IntoVault ?? "",
@@ -455,15 +461,15 @@ public class MainViewModel : ObservableObject
 
     public void Run()
     {
-        // 需要密码时先由 GUI 采集，再传给 CLI
+        // 密码时先
         if (NeedsPassword()) PasswordRequested?.Invoke();
         else StartCli(Array.Empty<byte>(), UseSystemConsole);
     }
 
-    // 对称模式且未指定密钥文件/身份时才需要密码
+    // 对称模式且未指
     private bool NeedsPassword()
     {
-        // 公钥路线没有 KEK，密码与身份都不参与
+        // 公钥路线没有 KEK
         if (IsWrapMode) return !WrapUsesPublicKey && string.IsNullOrEmpty(Keyfile);
         if (IsAsymmetric) return false;
         if (!string.IsNullOrEmpty(Keyfile)) return false;
@@ -472,13 +478,13 @@ public class MainViewModel : ObservableObject
 
     public event Action? PasswordRequested;
 
-    // CLI 请求确认：text 为完整问题（已含 y/N 提示）
+    // CLI 请求确认
     public event Action<string>? ConfirmPromptRequested;
 
     private void OnConfirmPrompt(string text)
         => _dispatcher.TryEnqueue(() => ConfirmPromptRequested?.Invoke(text));
 
-    // 回答 CLI 的 y/n 询问
+    // 回答 CLI
     public void AnswerConfirm(bool yes) => _cli.AnswerConfirm(yes);
     public event Action<string>? TaskCompleted;
     public event Action<TaskSummaryInfo>? TaskSummary;
@@ -490,7 +496,7 @@ public class MainViewModel : ObservableObject
 
     private void OnOutputLine(string text)
     {
-        // 仅解析进度计数，输出本身显示在系统控制台
+        // 仅解析进度计数
         _dispatcher.TryEnqueue(() => ParseProgress(text));
     }
     private void OnFinished(CommandResult result)
@@ -534,7 +540,7 @@ public class MainViewModel : ObservableObject
                 summary.AvgSpeed = EtaEstimatorService.FormatRate(bps);
             }
             else summary.AvgSpeed = "-";
-            // 加密后大小后台统计
+            // 加密后大小后台
             summary.EncryptedSize = "-";
 
             TaskCompleted?.Invoke(StatusText);
@@ -545,7 +551,7 @@ public class MainViewModel : ObservableObject
                 string sizeText = "-";
                 try
                 {
-                    // 入加密盘模式 OutputDir 为空，改用 IntoVault 根目录统计盘内密文体积
+                    // 入加密盘模式 OutputDir
                     if (string.IsNullOrEmpty(outDir)) outDir = IntoVault;
                     if (!string.IsNullOrEmpty(outDir) && Directory.Exists(outDir))
                     {
@@ -584,7 +590,7 @@ public class MainViewModel : ObservableObject
             _currentFile, _doneFiles, _skipFiles, _failFiles, _totalFiles);
     }
 
-    // 切换语言后刷新尚未重算的运行态文本
+    // 切换语言后刷新
     public void RefreshRuntimeTexts()
     {
         StatusText = L10n.F(_statusKey, _statusArgs);
@@ -615,7 +621,7 @@ public class MainViewModel : ObservableObject
             4 => CryptoMode.Asymmetric,
             _ => CryptoMode.XChaCha20
         };
-        // 非对称模式下会话密钥由文件算法产生，非对称部分只负责包裹它
+        // 非对称模式
         var fileMode = FileCipherIndex switch
         {
             1 => CryptoMode.Aegis256,
@@ -630,7 +636,7 @@ public class MainViewModel : ObservableObject
             FileMode = fileMode,
             InputPaths = new List<string>(InputPaths.Where(p => p.IsSelected).Select(p => p.Path)),
             OutputDir = OutputDir,
-            // 加密盘：不支持或未勾选时为空，CLI 侧就看不出这是入盘任务
+            // 加密盘
             IntoVault = VaultAvailable ? (IntoVault ?? "") : "",
             SourceDisposition = (SourceDisposition)SourceIndex,
             Pack = Pack,
@@ -661,7 +667,7 @@ public class MainViewModel : ObservableObject
     {
         var opts = CollectOptions();
         var args = CliArgBuilder.BuildArguments(opts);
-        // 预览只拼参数不真正跑 CLI，落盘的临时私钥立刻清掉
+        // 预览只拼参数
         if (opts.WatermarkTempKeyPath != null)
         {
             try { File.Delete(opts.WatermarkTempKeyPath); } catch { }
@@ -679,7 +685,7 @@ public class MainViewModel : ObservableObject
         {
             CommandPreview = "\"" + _cliPath + "\"" + (string.IsNullOrEmpty(argStr) ? "" : " " + argStr);
         }
-        // 预览写入独立区域
+        // 预览写入独立区
     }
 
     public void AddInputPaths(IEnumerable<string> paths)
@@ -687,8 +693,14 @@ public class MainViewModel : ObservableObject
         foreach (var path in paths)
         {
             if (!InputPaths.Any(x => x.Path == path))
-                InputPaths.Add(new SelectablePath { Path = path, IsSelected = true });
-            // 单文件加目录转批量
+            {
+                var sp = new SelectablePath { Path = path, IsSelected = true };
+                // 勾选态变
+                // 看起来
+                sp.PropertyChanged += OnInputSelectionChanged;
+                InputPaths.Add(sp);
+            }
+            // 单文件加目录转
             if (Directory.Exists(path))
             {
                 if (ActionIndex == 0) ActionIndex = 2;
@@ -698,8 +710,16 @@ public class MainViewModel : ObservableObject
         RefreshCommandPreview();
     }
 
+    // 列表项勾选状态
+    private void OnInputSelectionChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(SelectablePath.IsSelected))
+            _dispatcher.TryEnqueue(RefreshCommandPreview);
+    }
+
     public void ClearInputPaths()
     {
+        foreach (var sp in InputPaths) sp.PropertyChanged -= OnInputSelectionChanged;
         InputPaths.Clear();
         RefreshCommandPreview();
     }

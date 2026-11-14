@@ -1,0 +1,77 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<metadata>
+
+    <!-- These namespaces are weird enough that we'll just keep them here rather than <AndroidNamespaceReplacement> -->
+    <attr
+        path="/api/package[@name='j']"
+        name="managedName"
+        >
+        Xamarin.Chromium.CroNet.J
+    </attr>
+    <attr
+        path="/api/package[@name='J']"
+        name="managedName"
+        >
+        Xamarin.Chromium.J
+    </attr>
+    <attr
+        path="/api/package[@name='gen._base._base_java__assetres.srcjar']"
+        name="managedName"
+        >
+        Xamarin.Chromium.Gen.Base.BaseJavaAsstRes.SrcJAR
+    </attr>
+    <attr
+        path="/api/package[@name='gen._net._android._net_java__assetres.srcjar']"    
+        name="managedName"
+        >
+        Xamarin.Chromium.Gen.Net.Android.NetJavaAsstRes.SrcJAR
+    </attr>
+    <attr
+        path="/api/package[@name='org.jni_zero']"
+        name="managedName"
+        >
+        Xamarin.Chromium.Jni.Zero
+    </attr>
+    
+    <!-- This one removes the "net" part -->
+    <attr
+        path="/api/package[@name='org.chromium.net.httpflags']"
+        name="managedName"
+        >
+        Xamarin.Chromium.HttpFlags
+    </attr>
+
+    <attr
+        path="/api/package[@name='internal.j']"
+        name="managedName"
+        >
+        Xamarin.Chromium.CroNet.Internal.J
+    </attr>
+    <attr
+        path="/api/package[@name='internal.org.jni_zero']"
+        name="managedName"
+        >
+        Xamarin.Chromium.Jni.Zero
+    </attr>
+    <attr
+        path="/api/package[@name='internal.org.jni_zero.internal']"
+        name="managedName"
+        >
+        Xamarin.Chromium.Jni.Zero.Internal
+    </attr>
+
+    <attr
+        path="/api/package[@name='internal.org.chromium.build']"
+        name="managedName"
+        >
+        Xamarin.Chromium.Internal.Build
+    </attr>
+    <attr
+        path="/api/package[@name='internal.org.chromium.build.annotations']"
+        name="managedName"
+        >
+        Xamarin.Chromium.Internal.Build.Annotations
+    </attr>
+
+
+</metadata>

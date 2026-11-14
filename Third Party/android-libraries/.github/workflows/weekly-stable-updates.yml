@@ -1,0 +1,93 @@
+name: "Weekly Stable Updates"
+
+permissions:
+  issues: write
+
+on:
+  schedule:
+    # Run every Monday at 9:00 AM UTC
+    - cron: '0 9 * * 1'
+  workflow_dispatch: # Allow manual triggering for testing
+
+jobs:
+  create-weekly-issue:
+    runs-on: ubuntu-latest
+    environment: weekly-stable-updates
+
+    steps:
+    - name: Get current date
+      id: date
+      run: echo "date=$(date +'%Y%m%d')" >> $GITHUB_OUTPUT
+    
+    - name: Create weekly stable updates issue
+      id: create-issue
+      uses: actions/github-script@v7
+      with:
+        github-token: ${{ secrets.GITHUB_TOKEN }}
+        script: |
+          const date = '${{ steps.date.outputs.date }}';
+          const title = `Stable Updates ${date}`;
+          const body = `Run the following commands:
+          \`\`\`
+          dotnet cake -t:update-config
+          dotnet cake utilities.cake -t=generate-component-governance
+          dotnet cake utilities.cake -t=list-artifacts
+          \`\`\`
+
+          Commit the changes.
+
+          Build the repo and commit any changes to \`PublicApi.*.txt\` files.
+
+          After the build completes, run:
+          \`\`\`
+          dotnet cake utilities.cake -t=generate-namespace-file
+          \`\`\`
+
+          Commit the updated \`published-namespaces.txt\` file.
+
+          Lastly, run:
+          \`\`\`
+          dotnet cake utilities.cake -t=api-diff-markdown-info-pr
+          \`\`\`
+
+          And put the contents from this command in the PR description and commit messages.`;
+
+          // Check for existing issues with the same title
+          const existingIssues = await github.rest.issues.listForRepo({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            state: 'open',
+            per_page: 100
+          });
+          const duplicateIssue = existingIssues.data.find(issue => /^Stable Updates \d{8}$/.test(issue.title));
+          if (duplicateIssue) {
+            console.log(`Issue with title "${duplicateIssue.title}" already exists: #${duplicateIssue.number}`);
+            return;
+          }
+
+          const response = await github.rest.issues.create({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            title: title,
+            body: body,
+          });
+          
+          console.log(`Created issue #${response.data.number}: ${response.data.title}`);
+          core.setOutput('issue-number', response.data.number);
+
+    - name: Assign issue to Copilot
+      if: steps.create-issue.outputs.issue-number && steps.create-issue.outputs.issue-number != ''
+      run: |
+        gh api \
+          --method POST \
+          -H "Accept: application/vnd.github+json" \
+          -H "X-GitHub-Api-Version: 2022-11-28" \
+          /repos/${{ github.repository }}/issues/${{ steps.create-issue.outputs.issue-number }}/assignees \
+          --input - <<< '{
+          "assignees": ["copilot-swe-agent[bot]"],
+          "agent_assignment": {
+            "model": "gpt-5.6-sol"
+          }
+        }'
+      env:
+        GH_TOKEN: ${{ secrets.ANDROID_TEAM_PAT }}

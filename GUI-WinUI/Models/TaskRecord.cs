@@ -20,18 +20,18 @@ public class TaskRecord
     [JsonPropertyName("cancelled")] public bool Cancelled { get; set; }
     [JsonPropertyName("error")] public string Error { get; set; } = "";
     [JsonPropertyName("status")] public string Status { get; set; } = "";
-    // 完整参数快照，用于任务还原
+    // 完整参数快照
     [JsonPropertyName("sourceIndex")] public int SourceIndex { get; set; }
     [JsonPropertyName("force")] public bool Force { get; set; }
     [JsonPropertyName("sha256")] public bool Sha256 { get; set; }
     [JsonPropertyName("compress")] public bool Compress { get; set; }
     [JsonPropertyName("compressionLevel")] public int CompressionLevel { get; set; }
-    // 非对称模式下的文件载荷对称算法（xchacha20 / aegis256 / sm4）
+    // 非对称模式
     [JsonPropertyName("fileCipher")] public string FileCipher { get; set; } = "";
     [JsonPropertyName("keyfile")] public string Keyfile { get; set; } = "";
     [JsonPropertyName("recipient")] public string Recipient { get; set; } = "";
     [JsonPropertyName("identity")] public string Identity { get; set; } = "";
-    // 密钥包装：待包装/待解开的文件、产物路径与算法（kwp / aes-kw / pubkey）
+    // 密钥包装
     [JsonPropertyName("wrapInput")] public string WrapInput { get; set; } = "";
     [JsonPropertyName("wrapOutput")] public string WrapOutput { get; set; } = "";
     [JsonPropertyName("wrapAlg")] public string WrapAlg { get; set; } = "";
@@ -39,10 +39,10 @@ public class TaskRecord
     [JsonPropertyName("pqc")] public bool Pqc { get; set; } = true;
     [JsonPropertyName("watermark")] public bool Watermark { get; set; }
     [JsonPropertyName("watermarkKey")] public string WatermarkKey { get; set; } = "";
-    // 打包为一个文件（--pack）与入加密盘（--into-vault）：任务还原时一并回填
+    // 打包
     [JsonPropertyName("pack")] public bool Pack { get; set; }
     [JsonPropertyName("intoVault")] public string IntoVault { get; set; } = "";
-    // M18：为 true 表示本条落盘时已抹去完整路径（只留文件名），不可用于双击回放。
-    // 读取侧据此提示用户，而不是拿残缺路径去拼命令行。
+    // M18
+    // 读取侧据此提示
     [JsonPropertyName("pathsStripped")] public bool PathsStripped { get; set; }
 }

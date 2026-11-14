@@ -12,7 +12,7 @@ public static class L10n
 
     private static readonly Dictionary<string, string> EnMap = new()
     {
-        // 菜单栏（Title 经代码应用）
+        // 菜单栏
         ["编辑"] = "Edit",
         ["视图"] = "View",
         ["预览解密"] = "Preview decryption",
@@ -32,6 +32,9 @@ public static class L10n
         ["文件：{0}"] = "File: {0}",
         ["仅查看密文内容，不写出解密文件"] = "Look inside without writing a decrypted file",
         ["主题"] = "Theme",
+        ["背景"] = "Background",
+        ["语言"] = "Language",
+        ["程序"] = "Program",
         ["浅色"] = "Light",
         ["深色"] = "Dark",
         ["跟随系统"] = "Follow system",
@@ -43,11 +46,13 @@ public static class L10n
         ["检查更新..."] = "Check for updates...",
         ["鸣谢..."] = "Credits...",
         ["README 摘要..."] = "README summary...",
-        // XAML 静态文本（视觉树遍历应用）
+        // XAML 静态文本
         ["文件选择"] = "File selection",
+        ["任务设置"] = "Task settings",
         ["添加文件..."] = "Add files...",
         ["添加目录..."] = "Add folder...",
         ["清空"] = "Clear",
+        ["复制全部"] = "Copy all",
         ["操作"] = "Actions",
         ["加密"] = "Encrypt",
         ["解密"] = "Decrypt",
@@ -113,10 +118,15 @@ public static class L10n
         ["不支持使用盘符"] = "Drive letters are not supported",
         ["「入加密盘」需要填写加密盘的存储目录，而不是挂载盘符。\n\n盘符（如 Z:）只是加密盘挂载后的访问视图，数据并不存放在那里。请填写数据实际所在的目录，例如 D:\\Vault。"] =
             "For \"Put into vault\", enter the vault's storage folder, not a mounted drive letter.\n\nA drive letter (such as Z:) is only a view of the mounted vault — the data is not stored there. Enter the folder that actually holds the data, for example D:\\Vault.",
-        // 加密盘菜单（库管理 + 挂载控制端）
+        // 加密盘菜单
         ["新建加密盘..."] = "Create a vault...",
         ["新建加密盘"] = "Create a vault",
         ["查看盘内文件..."] = "View vault files...",
+        ["重建索引..."] = "Rebuild index...",
+        ["重建索引"] = "Rebuild index",
+        ["重建"] = "Rebuild",
+        ["将扫描该加密盘内的全部 .ptd 文件，从其文件头重建索引（{0}）。\n\n用于找回因索引写入失败、索引与盘面不一致而“看不见”的文件；已登记的文件不受影响。\n\n若该盘正被挂载，请先执行「卸载磁盘」。"] = "This will scan every .ptd file in the vault and rebuild the index from their headers ({0}).\n\nUse it to recover files that went missing because of a failed index write or an index/disk mismatch; already-registered files are unaffected.\n\nIf the vault is currently mounted, unmount it first.",
+        ["索引已从盘内 .ptd 文件头重建。此前未登记在索引中的文件，现已恢复可见。"] = "The index has been rebuilt from the .ptd headers. Files that were not registered in the index are now visible again.",
         ["查看盘内文件"] = "View vault files",
         ["修改加密盘密码..."] = "Change vault password...",
         ["修改加密盘密码"] = "Change vault password",
@@ -133,13 +143,22 @@ public static class L10n
         ["挂载后 1 分钟无操作将自动锁定。"] = "It locks itself after 1 minute of inactivity.",
         ["密码"] = "Password",
         ["可写挂载（需 vault_rw）"] = "Writable mount (needs vault_rw)",
-        ["暂时锁定"] = "Lock temporarily",
-        ["重新解锁"] = "Unlock again",
+        ["锁定"] = "Lock",
         ["解锁加密盘"] = "Unlock the vault",
-        // 已挂载加密盘列表 / 锁定访问提示
+        // 已挂载加密盘列
         ["已挂载加密盘"] = "Mounted vaults",
-        // P1-1 加密盘管理页 + P2-1 设备绑定免密
+        ["已挂载的加密盘..."] = "Mounted vaults...",
+        // P1-1 加密盘管理页 + P2-1 设
         ["加密盘管理"] = "Vault management",
+        // 标签页标题
+        ["主页"] = "Home",
+        ["终端"] = "Terminal",
+        ["设置"] = "Settings",
+        // 加密盘能力
+        ["未检测到 FileEncryptor CLI，请先在「设置 → 程序」中重新检测 CLI 程序。"] =
+            "FileEncryptor CLI was not detected. Re-detect the CLI program under Settings → Program.",
+        ["当前 CLI 不支持加密盘功能，需要 FileEncryptor CLI 3.0.1 或更高版本。"] =
+            "The current CLI does not support the vault feature; FileEncryptor CLI 3.0.1 or later is required.",
         ["设备绑定"] = "Device binding",
         ["全部锁定"] = "Lock all",
         ["挂载"] = "Mount",
@@ -149,7 +168,7 @@ public static class L10n
         ["共 {0} 个加密盘：已解锁 {1}，已锁定 {2}，未挂载 {3}"] = "{0} vaults total: {1} unlocked, {2} locked, {3} not mounted",
         ["尚未注册任何加密盘。可先用「新建加密盘」创建，或用「挂载为磁盘」登记已有盘。"] = "No vault registered yet. Create one with \"New vault\", or register an existing one with \"Mount as disk\".",
         ["无法获取加密盘状态，请确认挂载组件可用。"] = "Cannot read vault status. Check that the mount component is available.",
-        // P2 调试检测（仅告警）
+        // P2 调试检测
         ["检测到调试器"] = "Debugger detected",
         ["检测到有调试器附加到本程序。若非你本人操作，请立即退出并检查系统安全；程序功能不受影响。"] = "A debugger is attached to this program. If this was not you, exit now and check your system's security. Program functionality is unaffected.",
         ["无法启用本机免密，系统加密服务不可用。"] = "Cannot enable password-free unlock on this device: the system encryption service is unavailable.",
@@ -213,8 +232,7 @@ public static class L10n
         ["私钥 PEM（在密码框中输入，不回显明文）"] = "Private key PEM (typed into the password box, never shown in plain text)",
         ["留空 = 只写水印记录不签名"] = "Leave empty = write the watermark record without signing",
         ["密钥轮换"] = "Key rotation",
-        ["▶ 运行"] = "▶ Run",
-        ["■ 取消"] = "■ Cancel",
+        ["运行"] = "Run",
         ["收件人："] = "Recipients:",
         ["公钥或公钥文件路径"] = "Public key or a public-key file path",
         ["身份文件："] = "Identity file:",
@@ -222,14 +240,14 @@ public static class L10n
         ["还原完整原始文件名（批量解密，较慢）"] = "Restore full original file names (batch decrypt, slower)",
         ["命令预览"] = "Command preview",
         ["任务历史..."] = "Task history...",
-        // MainWindow：浏览器错误提示
+        // MainWindow
         ["[添加文件] 错误：{0}"] = "[Add files] error: {0}",
         ["[添加目录] 错误：{0}"] = "[Add folder] error: {0}",
         ["[输出目录] 错误：{0}"] = "[Output directory] error: {0}",
         ["[密钥文件] 错误：{0}"] = "[Key file] error: {0}",
         ["[收件人] 错误：{0}"] = "[Recipient] error: {0}",
         ["[身份文件] 错误：{0}"] = "[Identity file] error: {0}",
-        // MainWindow：CLI 检测与下载
+        // MainWindow
         ["FileEncryptor CLI 未找到"] = "FileEncryptor CLI not found",
         ["无法找到 FileEncryptor CLI 可执行文件\n\n程序需要 FileEncryptorCLI 命令行工具来执行加密/解密操作。\n\n预期文件名：\n{0}\n\n当前程序目录：{1}"] =
             "The FileEncryptor CLI executable could not be found\n\nThis program needs the FileEncryptorCLI command-line tool to encrypt and decrypt.\n\nExpected file names:\n{0}\n\nCurrent program directory: {1}",
@@ -257,7 +275,7 @@ public static class L10n
         ["[密钥文件] 错误："] = "[Key file] error: ",
         ["[收件人] 错误："] = "[Recipients] error: ",
         ["[身份文件] 错误："] = "[Identity file] error: ",
-        // MainWindow：密钥轮换 / 配置
+        // MainWindow
         ["密钥轮换（v6 容器）"] = "Key rotation (v6 container)",
         ["选择一个已加密的 .ptd 文件，用旧密码解密后用新密码重新包裹 DEK。\n文件内容不变，仅更换密码。"] =
             "Choose an encrypted .ptd file to decrypt with the old password and re-wrap its DEK with a new one.\nFile content unchanged; only the password is replaced.",
@@ -265,7 +283,7 @@ public static class L10n
         ["取消"] = "Cancel",
         ["密钥轮换功能开发中"] = "Key rotation is being implemented",
         ["配置文件不存在（首次运行 CLI 后生成）"] = "Configuration file does not exist (generated on first CLI run)",
-        // MainWindow：检查更新 / 更新
+        // MainWindow
         ["检查更新"] = "Check for updates",
         ["未找到更新器（Updater.exe）。请确认程序安装完整，或前往 GitHub 手动获取新版本。"] =
             "Updater (Updater.exe) not found. Please verify the installation is complete, or get the new version from GitHub manually.",
@@ -317,14 +335,14 @@ public static class L10n
         ["密钥来源优先级"] = "Key source priority",
         ["-k <keyfile>（密钥文件） > --key-stdin（stdin 管道） > ENCRYPTOR_KEY（环境变量） > 交互式输入；非对称模式用 X25519 身份私钥 > 交互式输入"] =
             "-k <keyfile> (key file) > --key-stdin (stdin pipe) > ENCRYPTOR_KEY (environment variable) > interactive input; asymmetric mode uses an X25519 identity private key > interactive input",
-        ["许可证：GPLv3"] = "License: GPLv3",
+        ["许可证：AGPLv3（GNU Affero General Public License v3.0）"] = "License: AGPLv3 (GNU Affero General Public License v3.0)",
         ["本窗口为 README 摘要，完整文档请见项目根目录 README.md"] = "This is a README summary; see README.md in the project root for full documentation",
         ["README 摘要"] = "README summary",
-        // 任务回填 / CLI 检测状态
+        // 任务回填 / CLI 检测状
         ["已恢复任务：{0}"] = "Task restored: {0}",
         ["已检测到 CLI：{0}"] = "CLI detected: {0}",
         ["未检测到 FileEncryptor CLI"] = "FileEncryptor CLI not detected",
-        // 运行时状态（切换语言即时刷新）
+        // 运行时状态
         ["就绪"] = "Ready",
         ["正在运行"] = "Running...",
         ["已取消"] = "Cancelled",
@@ -361,6 +379,7 @@ public static class L10n
         ["保存"] = "Save",
         ["自定义背景图"] = "Custom background image",
         ["图片路径"] = "Image path",
+        ["背景图片路径（留空使用亚克力效果）"] = "Background image path (leave empty for acrylic)",
         ["清除背景"] = "Clear background",
         ["支持 PNG / JPG / BMP / WebP 格式。"] = "PNG / JPG / BMP / WebP formats are supported.",
         // TaskHistoryService 动作标签
@@ -385,10 +404,10 @@ public static class L10n
             "Password too weak: please avoid repeated characters.",
         // CliArgBuilder
         ["  # 密钥经 stdin 管道注入"] = "  # key injected via stdin pipe",
-        // 语言切换提示（双语合成串，按语言分别给出）
+        // 语言切换提示
         ["语言 / Language"] = "Language",
         ["语言已切换，界面已立即刷新。\nLanguage switched; the UI has been refreshed."] = "Language switched; the UI has been refreshed.",
-        // 更新检查（Updater 返回的错误码）
+        // 更新检查
         ["网络连接不可用，请检查网络后重试。"] = "Network unreachable; check your connection and retry.",
         ["无法解析服务器地址，请检查网络后重试。"] = "Could not resolve the server; check your connection and retry.",
         ["检查更新超时，请稍后再试。"] = "The update check timed out. Please try again later.",
@@ -399,7 +418,7 @@ public static class L10n
         ["检查更新未返回结果（可能已超时）。请稍后再试。"] = "The update check returned nothing (possibly timed out). Please try again later.",
         ["更新器未返回任何结果（可能已超时）。"] = "The updater returned nothing (possibly timed out).",
         ["无法启动更新器，请确认程序安装完整。"] = "Could not launch the updater; make sure the installation is complete.",
-        // 密钥包装（--wrap-key / --unwrap-key）
+        // 密钥包装
         ["包装密钥"] = "Wrap key",
         ["解包密钥"] = "Unwrap key",
         ["包装文件"] = "Wrapped file",
@@ -449,20 +468,54 @@ public static class L10n
         ["任务历史保存完整路径"] = "Store full paths in task history",
         ["开启后任务历史会记录完整文件路径（便于双击回放）；关闭则只记录文件名，不把「保护了哪些文件」明文留在磁盘上。"] =
             "When enabled, task history stores full file paths (enables double-click replay). When disabled only file names are kept, so which files you protected is never written to disk in plaintext.",
+        // 本机免密
+        ["本机免密（今后在本机解锁此盘不再输密码）"] =
+            "No password here (unlocking this vault on this device no longer needs a password)",
+        ["已启用本机免密：今后在本机解锁此盘无需输入密码。"] =
+            "Password-free unlock enabled: unlocking this vault on this device no longer needs a password.",
+        ["已关闭本机免密：此盘今后需输入密码解锁。"] =
+            "Password-free unlock disabled: unlocking this vault requires the password again.",
+        // 暂时不锁定
+        ["暂不锁"] = "Suspend lock",
+        ["暂时不锁定"] = "Suspend auto-lock",
+        ["暂停自动锁的时长："] = "Duration to suspend auto-lock:",
+        ["自定义"] = "Custom",
+        ["请输入加密盘密码以确认："] = "Enter the vault password to confirm:",
+        ["密码不能为空。"] = "Password cannot be empty.",
+        ["确认在接下来的 {0} 分钟内不自动锁定该加密盘？\n（仍可由「锁定」手动上锁）"] =
+            "Suspend auto-lock for the next {0} minutes? (You can still lock it manually.)",
+        ["已暂停自动锁 {0} 分钟（到点自动恢复）。"] = "Auto-lock suspended for {0} minutes (auto-resumes when it expires).",
+        ["该盘已开启本机免密，无需重复输入密码。"] = "This vault has device-bound unlock enabled; no password needed again.",
+        ["已顺带为该盘开启本机免密：暂停期间若仍被锁定，将自动用本机凭据恢复解锁。"] =
+            "Device-bound unlock is now enabled for this vault: if it still gets locked during suspension, it will be re-unlocked automatically with the local credential.",
+        ["已暂停自动锁（{0} 秒后恢复）"] = "Auto-lock suspended ({0}s remaining)",
+        ["{0} 分钟"] = "{0} min",
+        ["操作失败："] = "Operation failed: ",
     };
 
-    // 俄文译文（zh -> ru）
+    // 俄文译文
     private static readonly Dictionary<string, string> RuMap = new()
     {
         ["编辑"] = "Правка",
-        // P1-1 加密盘管理页 + P2-1 设备绑定免密
+        // P1-1 加密盘管理页 + P2-1 设
         ["加密盘管理"] = "Управление хранилищами",
+        ["已挂载加密盘"] = "Подключённые хранилища",
+        ["已挂载的加密盘..."] = "Подключённые хранилища...",
+        // 标签页标题
+        ["主页"] = "Главная",
+        ["终端"] = "Терминал",
+        ["设置"] = "Настройки",
+        // 加密盘能力
+        ["未检测到 FileEncryptor CLI，请先在「设置 → 程序」中重新检测 CLI 程序。"] =
+            "CLI FileEncryptor не обнаружен. Повторите обнаружение в разделе «Настройки → Программа».",
+        ["当前 CLI 不支持加密盘功能，需要 FileEncryptor CLI 3.0.1 或更高版本。"] =
+            "Текущий CLI не поддерживает хранилища; требуется FileEncryptor CLI 3.0.1 или новее.",
         ["设备绑定"] = "Привязка к устройству",
         ["全部锁定"] = "Заблокировать все",
         ["挂载"] = "Подключить",
         ["本机免密"] = "Без пароля",
         ["未挂载"] = "Не подключено",
-        // P2 调试检测（仅告警）
+        // P2 调试检测
         ["检测到调试器"] = "Обнаружен отладчик",
         ["检测到有调试器附加到本程序。若非你本人操作，请立即退出并检查系统安全；程序功能不受影响。"] = "К программе подключён отладчик. Если это не вы, немедленно выйдите и проверьте безопасность системы. Функции программы не затрагиваются.",
         ["已解锁（{0} 秒后自动锁）"] = "Разблокировано (автоблокировка через {0} с)",
@@ -490,6 +543,9 @@ public static class L10n
         ["文件：{0}"] = "Файл: {0}",
         ["仅查看密文内容，不写出解密文件"] = "Посмотреть содержимое, не создавая расшифрованный файл",
         ["主题"] = "Тема",
+        ["背景"] = "Фон",
+        ["语言"] = "Язык",
+        ["程序"] = "Программа",
         ["浅色"] = "Светлая",
         ["深色"] = "Тёмная",
         ["跟随系统"] = "Как в системе",
@@ -502,9 +558,11 @@ public static class L10n
         ["鸣谢..."] = "Благодарности…",
         ["README 摘要..."] = "Краткое описание README…",
         ["文件选择"] = "Выбор файлов",
+        ["任务设置"] = "Параметры задачи",
         ["添加文件..."] = "Добавить файлы…",
         ["添加目录..."] = "Добавить каталог…",
         ["清空"] = "Очистить",
+        ["复制全部"] = "Копировать всё",
         ["操作"] = "Действия",
         ["加密"] = "Зашифровать",
         ["解密"] = "Расшифровать",
@@ -571,10 +629,15 @@ public static class L10n
         ["不支持使用盘符"] = "Буквы дисков не поддерживаются",
         ["「入加密盘」需要填写加密盘的存储目录，而不是挂载盘符。\n\n盘符（如 Z:）只是加密盘挂载后的访问视图，数据并不存放在那里。请填写数据实际所在的目录，例如 D:\\Vault。"] =
             "Для «Поместить в хранилище» укажите папку хранения хранилища, а не букву подключённого диска.\n\nБуква диска (например, Z:) — лишь представление подключённого хранилища; данные там не хранятся. Укажите папку, где данные находятся на самом деле, например D:\\Vault.",
-        // 加密盘菜单（库管理 + 挂载控制端）
+        // 加密盘菜单
         ["新建加密盘..."] = "Создать хранилище…",
         ["新建加密盘"] = "Создать хранилище",
         ["查看盘内文件..."] = "Файлы в хранилище…",
+        ["重建索引..."] = "Пересобрать индекс…",
+        ["重建索引"] = "Пересобрать индекс",
+        ["重建"] = "Пересобрать",
+        ["将扫描该加密盘内的全部 .ptd 文件，从其文件头重建索引（{0}）。\n\n用于找回因索引写入失败、索引与盘面不一致而“看不见”的文件；已登记的文件不受影响。\n\n若该盘正被挂载，请先执行「卸载磁盘」。"] = "Будут просканированы все .ptd-файлы хранилища, и индекс будет пересобран из их заголовков ({0}).\n\nИспользуйте для восстановления файлов, пропавших из-за сбоя записи индекса или расхождения индекса с диском; уже зарегистрированные файлы не затрагиваются.\n\nЕсли хранилище смонтировано, сначала отключите его.",
+        ["索引已从盘内 .ptd 文件头重建。此前未登记在索引中的文件，现已恢复可见。"] = "Индекс пересобран из заголовков .ptd. Файлы, отсутствовавшие в индексе, снова видны.",
         ["查看盘内文件"] = "Файлы в хранилище",
         ["修改加密盘密码..."] = "Сменить пароль хранилища…",
         ["修改加密盘密码"] = "Сменить пароль хранилища",
@@ -591,8 +654,8 @@ public static class L10n
         ["挂载后 1 分钟无操作将自动锁定。"] = "Через минуту бездействия диск заблокируется сам.",
         ["密码"] = "Пароль",
         ["可写挂载（需 vault_rw）"] = "Монтирование с записью (нужен vault_rw)",
-        ["暂时锁定"] = "Временно заблокировать",
-        ["重新解锁"] = "Разблокировать снова",
+        ["锁定"] = "Заблокировать",
+        ["解锁"] = "Разблокировать",
         ["解锁加密盘"] = "Разблокировать хранилище",
         // 卸载磁盘 / 格式化
         ["卸载磁盘..."] = "Размонтировать диск…",
@@ -639,8 +702,7 @@ public static class L10n
         ["私钥 PEM（在密码框中输入，不回显明文）"] = "Закрытый ключ PEM (вводится в поле пароля, не показывается в открытом виде)",
         ["留空 = 只写水印记录不签名"] = "Пусто = записать водяной знак без подписи",
         ["密钥轮换"] = "Ротация ключей",
-        ["▶ 运行"] = "▶ Запустить",
-        ["■ 取消"] = "■ Отмена",
+        ["运行"] = "Запустить",
         ["收件人："] = "Получатели:",
         ["公钥或公钥文件路径"] = "Публичный ключ или путь к файлу публичного ключа",
         ["身份文件："] = "Файл удостоверения:",
@@ -726,7 +788,7 @@ public static class L10n
         ["命令行用法"] = "Использование в командной строке",
         ["密钥来源优先级"] = "Приоритет источников ключа",
         ["-k <keyfile>（密钥文件） > --key-stdin（stdin 管道） > ENCRYPTOR_KEY（环境变量） > 交互式输入；非对称模式用 X25519 身份私钥 > 交互式输入"] = "-k <keyfile> (файл ключа) > --key-stdin (канал stdin) > ENCRYPTOR_KEY (переменная среды) > интерактивный ввод; в асимметричном режиме используется закрытый ключ X25519 > интерактивный ввод",
-        ["许可证：GPLv3"] = "Лицензия: GPLv3",
+        ["许可证：AGPLv3（GNU Affero General Public License v3.0）"] = "Лицензия: AGPLv3 (GNU Affero General Public License v3.0)",
         ["本窗口为 README 摘要，完整文档请见项目根目录 README.md"] = "Это краткое описание README; полную документацию см. в README.md в корне проекта",
         ["README 摘要"] = "Краткое описание README",
         ["已恢复任务：{0}"] = "Задача восстановлена: {0}",
@@ -763,6 +825,7 @@ public static class L10n
         ["保存"] = "Сохранить",
         ["自定义背景图"] = "Своя фоновая картинка",
         ["图片路径"] = "Путь к изображению",
+        ["背景图片路径（留空使用亚克力效果）"] = "Путь к фоновому изображению (пусто = акрил)",
         ["清除背景"] = "Очистить фон",
         ["支持 PNG / JPG / BMP / WebP 格式。"] = "Поддерживаются форматы PNG / JPG / BMP / WebP.",
         ["密码派生密钥对"] = "Производная пара ключей от пароля",
@@ -783,7 +846,7 @@ public static class L10n
         ["  # 密钥经 stdin 管道注入"] = "  # ключ введён через канал stdin",
         ["语言 / Language"] = "Язык",
         ["语言已切换，界面已立即刷新。\nLanguage switched; the UI has been refreshed."] = "Язык переключён; интерфейс обновлён.",
-        // 更新检查（Updater 返回的错误码）
+        // 更新检查
         ["网络连接不可用，请检查网络后重试。"] = "Сеть недоступна; проверьте подключение и повторите.",
         ["无法解析服务器地址，请检查网络后重试。"] = "Не удалось разрешить адрес сервера; проверьте подключение и повторите.",
         ["检查更新超时，请稍后再试。"] = "Проверка обновлений превысила таймаут. Попробуйте позже.",
@@ -794,7 +857,7 @@ public static class L10n
         ["检查更新未返回结果（可能已超时）。请稍后再试。"] = "Проверка обновлений не вернула результат (возможно, таймаут). Попробуйте позже.",
         ["更新器未返回任何结果（可能已超时）。"] = "Обновлятор не вернул результат (возможно, таймаут).",
         ["无法启动更新器，请确认程序安装完整。"] = "Не удалось запустить обновлятор; проверьте целостность установки.",
-        // 密钥包装（--wrap-key / --unwrap-key）
+        // 密钥包装
         ["包装密钥"] = "Обернуть ключ",
         ["解包密钥"] = "Развернуть ключ",
         ["包装文件"] = "Файл обёртки",
@@ -844,6 +907,29 @@ public static class L10n
         ["任务历史保存完整路径"] = "Сохранять полные пути в истории",
         ["开启后任务历史会记录完整文件路径（便于双击回放）；关闭则只记录文件名，不把「保护了哪些文件」明文留在磁盘上。"] =
             "Если включено, история задач хранит полные пути (доступно воспроизведение двойным щелчком). Если выключено, сохраняются только имена файлов, и какие файлы вы защищали не остаётся на диске в открытом виде.",
+        // 本机免密
+        ["本机免密（今后在本机解锁此盘不再输密码）"] =
+            "Без пароля (разблокировка этого хранилища на данном устройстве больше не требует пароля)",
+        ["已启用本机免密：今后在本机解锁此盘无需输入密码。"] =
+            "Разблокировка без пароля включена: это хранилище больше не требует пароля на данном устройстве.",
+        ["已关闭本机免密：此盘今后需输入密码解锁。"] =
+            "Разблокировка без пароля отключена: для разблокировки снова потребуется пароль.",
+        // 暂时不锁定
+        ["暂不锁"] = "Приост. блок.",
+        ["暂时不锁定"] = "Приост. автоблок.",
+        ["暂停自动锁的时长："] = "Срок приост. автоблок.:",
+        ["自定义"] = "Свой",
+        ["请输入加密盘密码以确认："] = "Введите пароль хранилища для подтверждения:",
+        ["密码不能为空。"] = "Пароль не может быть пустым.",
+        ["确认在接下来的 {0} 分钟内不自动锁定该加密盘？\n（仍可由「锁定」手动上锁）"] =
+            "Приостановить автоблок. на {0} мин? (Можно заблок. вручную.)",
+        ["已暂停自动锁 {0} 分钟（到点自动恢复）。"] = "Автоблок. приостановлен на {0} мин (возобновится по истечении).",
+        ["该盘已开启本机免密，无需重复输入密码。"] = "Для этого хранилища включено разблок. по устройству; пароль повторно не нужен.",
+        ["已顺带为该盘开启本机免密：暂停期间若仍被锁定，将自动用本机凭据恢复解锁。"] =
+            "Для этого хранилища включено разблок. по устройству: если оно всё же заблокируется во время приостановки, оно будет разблокировано автоматически локальными уч. данными.",
+        ["已暂停自动锁（{0} 秒后恢复）"] = "Автоблок. приостановлен (осталось {0} с)",
+        ["{0} 分钟"] = "{0} мин",
+        ["操作失败："] = "Ошибка: ",
     };
 
     // 外文→中文反向表
@@ -852,7 +938,7 @@ public static class L10n
 
     public static string Current { get; private set; } = Zh;
 
-    // 启动期初始化语言
+    // 启动期初始化语
     public static void Init()
     {
         var saved = App.Settings.Current.Language;
@@ -866,7 +952,7 @@ public static class L10n
             : saved;
     }
 
-    // 规范回中文再翻译
+    // 规范回中文
     public static string T(string text)
     {
         string baseZh = text;

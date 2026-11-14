@@ -11,7 +11,7 @@ if(WIN32)
   endif()
 endif()
 
-project(FileEncryptorCLI VERSION 3.1.0 LANGUAGES CXX)
+project(FileEncryptorCLI VERSION 3.1.1 LANGUAGES CXX)
 
 # CLI 命令行加密工具（独立工程），静态链接零外部依赖，GUI 经 QProcess 调用。
 
@@ -42,6 +42,8 @@ if(ANDROID)
   message(STATUS "Android: 挂载（FUSE / WinFSP）与常驻服务在 Android 不可用，已跳过；"
                  "机器标识与配置目录推断也已降级，见 config.cpp / machine_id.cpp。")
   add_compile_definitions(FE_PLATFORM_ANDROID=1)
+  # Android 16 起要求 16KB 页面对齐
+  add_link_options(-Wl,-z,max-page-size=16384)
 endif()
 
 # 工程化开关
@@ -90,16 +92,27 @@ if(sodium_FOUND)
   endforeach()
 endif()
 
+# Android 导入目标：NDK 下 find 失效
+if(ANDROID AND SODIUM_ROOT AND NOT SODIUM_TARGET)
+  add_library(sodium_android STATIC IMPORTED)
+  set_target_properties(sodium_android PROPERTIES
+    IMPORTED_LOCATION "${SODIUM_ROOT}/lib/libsodium.a"
+    INTERFACE_INCLUDE_DIRECTORIES "${SODIUM_ROOT}/include")
+  set(SODIUM_TARGET sodium_android)
+  set(SODIUM_FOUND TRUE)
+  message(STATUS "libsodium: Android 导入目标 (${SODIUM_ROOT}/lib/libsodium.a)")
+endif()
+
 # 2) 手动查找（优先于 pkg-config，避免多版本选错）：Linux 默认 /usr/local 先于 /usr；
 #    Windows 预编译包库在 <arch>/<cfg>/<toolset>/<static|dynamic|ltcg> 子目录，按架构自动选取。
 if(NOT SODIUM_FOUND AND NOT SODIUM_TARGET)
   # Windows 专用：构造预编译包的候选库目录
   set(_sodium_win_hints "")
   if(WIN32)
-    # 预编译包根目录：SODIUM_ROOT > 仓库 third_party/libsodium > $ProgramFiles/libsodium。
+    # 预编译包根目录：SODIUM_ROOT > 仓库 Third Party/libsodium > $ProgramFiles/libsodium。
     set(_sodium_pkg_root "${SODIUM_ROOT}")
     if(NOT _sodium_pkg_root)
-      set(_sodium_pkg_root "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/libsodium")
+      set(_sodium_pkg_root "${CMAKE_CURRENT_SOURCE_DIR}/../Third Party/libsodium")
     endif()
     if(NOT EXISTS "${_sodium_pkg_root}")
       set(_sodium_pkg_root "$ENV{ProgramFiles}/libsodium")
@@ -368,12 +381,25 @@ endif()
 
 # 查找 yaml-cpp（YAML 配置解析，v1.7.2 起依赖）
 # 优先 CMake 配置包命中；无配置时按头文件与静态库手动查找（YAMLCPP_ROOT 可显式指定）。
+# Android：pthread 已并入 libc
+if(ANDROID)
+  set(THREADS_PREFER_PTHREAD_FLAG ON)
+endif()
 find_package(Threads REQUIRED)
 set(YAMLCPP_TARGET "")
 set(YAMLCPP_IS_STATIC ON)
-# 库来源：优先仓库内 third_party/yaml-cpp（含 /MT 预编译静态库，工具集匹配），
+# Android 导入目标：NDK 下 find 失效
+if(ANDROID AND YAMLCPP_ROOT)
+  add_library(yaml-cpp-static STATIC IMPORTED)
+  set_target_properties(yaml-cpp-static PROPERTIES
+    IMPORTED_LOCATION "${YAMLCPP_ROOT}/lib/libyaml-cpp.a"
+    INTERFACE_INCLUDE_DIRECTORIES "${YAMLCPP_ROOT}/include")
+  set(YAMLCPP_TARGET yaml-cpp-static)
+  message(STATUS "yaml-cpp: Android 导入目标 (${YAMLCPP_ROOT}/lib/libyaml-cpp.a)")
+endif()
+# 库来源：优先仓库内 Third Party/yaml-cpp（含 /MT 预编译静态库，工具集匹配），
 # 其次 find_package/手动查找，避免命中系统工具集或 CRT 不匹配的安装（曾引发 LNK2019/2038）。
-set(_yamlcpp_repo_root "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/yaml-cpp")
+set(_yamlcpp_repo_root "${CMAKE_CURRENT_SOURCE_DIR}/../Third Party/yaml-cpp")
 if(EXISTS "${_yamlcpp_repo_root}/include/yaml-cpp/yaml.h")
   find_path(YAMLCPP_INCLUDE_DIR NAMES yaml-cpp/yaml.h
     HINTS "${_yamlcpp_repo_root}" NO_DEFAULT_PATH
@@ -387,7 +413,7 @@ if(EXISTS "${_yamlcpp_repo_root}/include/yaml-cpp/yaml.h")
       IMPORTED_LOCATION ${YAMLCPP_LIBRARY}
       INTERFACE_INCLUDE_DIRECTORIES ${YAMLCPP_INCLUDE_DIR})
     set(YAMLCPP_TARGET yaml-cpp-static)
-    message(STATUS "yaml-cpp: 仓库内 third_party (${YAMLCPP_LIBRARY})")
+    message(STATUS "yaml-cpp: 仓库内 Third Party (${YAMLCPP_LIBRARY})")
   endif()
 endif()
 if(NOT YAMLCPP_TARGET)
@@ -414,14 +440,14 @@ else()
     message(STATUS "yaml-cpp: 手动查找 (${YAMLCPP_LIBRARY})")
   endif()
 endif()
-endif() # NOT YAMLCPP_TARGET（third_party 优先分支收尾）
+endif() # NOT YAMLCPP_TARGET（Third Party 优先分支收尾）
 if(NOT YAMLCPP_TARGET)
   message(FATAL_ERROR
     "找不到 yaml-cpp。安装方式：\n"
-    "  仓库内:  确认 third_party/yaml-cpp/ 存在（include/ + lib/yaml-cpp.lib）\n"
+    "  仓库内:  确认 Third Party/yaml-cpp/ 存在（include/ + lib/yaml-cpp.lib）\n"
     "  Linux  (Debian/Ubuntu): sudo apt install libyaml-cpp-dev\n"
     "  Linux  (Fedora):        sudo dnf install yaml-cpp-devel\n"
-    "  Windows:                yaml-cpp 已随仓库放于 ../third_party/yaml-cpp/，\n"
+    "  Windows:                yaml-cpp 已随仓库放于 ../Third Party/yaml-cpp/，\n"
     "                          或设置 YAMLCPP_ROOT 指向其根目录（相对路径亦可）。")
 endif()
 
@@ -489,37 +515,61 @@ endif()
 option(WITH_OPENSSL "Enable OpenSSL-backed ciphers (SM4) and asymmetric (X25519/X448)" ON)
 set(FE_OPENSSL_FOUND FALSE)
 if(WITH_OPENSSL)
-  set(_ossl_repo_root "${CMAKE_CURRENT_SOURCE_DIR}/../Updater/out/openssl")
-  find_path(OPENSSL_INCLUDE_DIR NAMES openssl/ssl.h
-    HINTS "${_ossl_repo_root}/include" NO_DEFAULT_PATH)
-  find_library(OPENSSL_CRYPTO_LIBRARY NAMES libcrypto crypto
-    HINTS "${_ossl_repo_root}/lib" NO_DEFAULT_PATH)
-  if(OPENSSL_INCLUDE_DIR AND OPENSSL_CRYPTO_LIBRARY)
-    set(FE_OPENSSL_FOUND TRUE)
-    target_include_directories(FileEncryptor PRIVATE ${OPENSSL_INCLUDE_DIR})
-    target_link_libraries(FileEncryptor PRIVATE ${OPENSSL_CRYPTO_LIBRARY})
-    if(WIN32)
-      target_link_libraries(FileEncryptor PRIVATE crypt32 ws2_32)
-    else()
-      target_link_libraries(FileEncryptor PRIVATE ${CMAKE_DL_LIBS})
-    endif()
-    message(STATUS "OpenSSL: 静态复用仓库构建 (${OPENSSL_CRYPTO_LIBRARY})")
-  else()
-    # 回退：系统 OpenSSL（Linux 优先静态，Windows 通常动态）
-    if(NOT WIN32)
-      set(OPENSSL_USE_STATIC_LIBS ON)
-    endif()
-    find_package(OpenSSL QUIET)
-    if(OpenSSL_FOUND AND OPENSSL_CRYPTO_LIBRARY)
+  # Android：用预编译静态前缀（scripts/build_openssl_android.py 产出 libcrypto.a + include）。
+  # 与 Windows 复用仓库构建 / Linux find_package 三者互斥，按平台分支；Android 优先。
+  if(ANDROID AND OPENSSL_ROOT)
+    set(_ossl_inc "${OPENSSL_ROOT}/include")
+    set(_ossl_lib "${OPENSSL_ROOT}/lib/libcrypto.a")
+    if(EXISTS "${_ossl_inc}/openssl/ssl.h" AND EXISTS "${_ossl_lib}")
       set(FE_OPENSSL_FOUND TRUE)
-      target_link_libraries(FileEncryptor PRIVATE OpenSSL::Crypto)
-      message(STATUS "OpenSSL: find_package (${OPENSSL_VERSION})")
+      add_library(openssl_android STATIC IMPORTED)
+      set_target_properties(openssl_android PROPERTIES
+        IMPORTED_LOCATION "${_ossl_lib}"
+        INTERFACE_INCLUDE_DIRECTORIES "${_ossl_inc}")
+      target_include_directories(FileEncryptor PRIVATE ${_ossl_inc})
+      target_link_libraries(FileEncryptor PRIVATE openssl_android)
+      # 静态 libcrypto.a 的传递依赖：NDK 的 z / dl
+      target_link_libraries(FileEncryptor PRIVATE -lz -ldl)
+      message(STATUS "OpenSSL: Android 导入目标 (${_ossl_lib})")
     else()
       message(WARNING
-        "WITH_OPENSSL=ON but OpenSSL not found.\n"
-        "  Windows: 需先构建 Updater/out/openssl（libsodium/OpenSSL 静态构建已就绪）。\n"
-        "  Linux  : 安装 libssl-dev 或设置 OPENSSL_ROOT_DIR。\n"
-        "SM4 / X25519 / X448 将不可用。")
+        "WITH_OPENSSL=ON 但 Android OpenSSL 前缀缺失（${OPENSSL_ROOT}）。\n"
+        "  须先运行：python scripts/build_openssl_android.py\n"
+        "SM4 / X25519 / X448 / ML-KEM / ML-DSA 将不可用。")
+    endif()
+  elseif(NOT ANDROID)
+    set(_ossl_repo_root "${CMAKE_CURRENT_SOURCE_DIR}/../Updater/out/openssl")
+    find_path(OPENSSL_INCLUDE_DIR NAMES openssl/ssl.h
+      HINTS "${_ossl_repo_root}/include" NO_DEFAULT_PATH)
+    find_library(OPENSSL_CRYPTO_LIBRARY NAMES libcrypto crypto
+      HINTS "${_ossl_repo_root}/lib" NO_DEFAULT_PATH)
+    if(OPENSSL_INCLUDE_DIR AND OPENSSL_CRYPTO_LIBRARY)
+      set(FE_OPENSSL_FOUND TRUE)
+      target_include_directories(FileEncryptor PRIVATE ${OPENSSL_INCLUDE_DIR})
+      target_link_libraries(FileEncryptor PRIVATE ${OPENSSL_CRYPTO_LIBRARY})
+      if(WIN32)
+        target_link_libraries(FileEncryptor PRIVATE crypt32 ws2_32)
+      else()
+        target_link_libraries(FileEncryptor PRIVATE ${CMAKE_DL_LIBS})
+      endif()
+      message(STATUS "OpenSSL: 静态复用仓库构建 (${OPENSSL_CRYPTO_LIBRARY})")
+    else()
+      # 回退：系统 OpenSSL（Linux 优先静态，Windows 通常动态）
+      if(NOT WIN32)
+        set(OPENSSL_USE_STATIC_LIBS ON)
+      endif()
+      find_package(OpenSSL QUIET)
+      if(OpenSSL_FOUND AND OPENSSL_CRYPTO_LIBRARY)
+        set(FE_OPENSSL_FOUND TRUE)
+        target_link_libraries(FileEncryptor PRIVATE OpenSSL::Crypto)
+        message(STATUS "OpenSSL: find_package (${OPENSSL_VERSION})")
+      else()
+        message(WARNING
+          "WITH_OPENSSL=ON but OpenSSL not found.\n"
+          "  Windows: 需先构建 Updater/out/openssl（libsodium/OpenSSL 静态构建已就绪）。\n"
+          "  Linux  : 安装 libssl-dev 或设置 OPENSSL_ROOT_DIR。\n"
+          "SM4 / X25519 / X448 将不可用。")
+      endif()
     endif()
   endif()
   if(FE_OPENSSL_FOUND)
@@ -527,8 +577,9 @@ if(WITH_OPENSSL)
   endif()
 
   # 静态 libcrypto.a 的传递依赖（动态版由 .so 自带）：zlib 用于 PEM / ASN.1，
-  # jitterentropy 是 jitter 熵源的实现；两者缺失都会在与 libcrypto.a 链接时 undefined reference
-  if(NOT WIN32 AND FE_OPENSSL_FOUND AND OPENSSL_CRYPTO_LIBRARY MATCHES "\\.a$")
+  # jitterentropy 是 jitter 熵源的实现；两者缺失都会在与 libcrypto.a 链接时 undefined reference。
+  # Android 走 -lz -ldl（见 Android 分支），无需此处再探；本段仅覆盖非 Android 的 .a。
+  if(NOT WIN32 AND NOT ANDROID AND FE_OPENSSL_FOUND AND OPENSSL_CRYPTO_LIBRARY MATCHES "\\.a$")
     set(_saved_suffixes ${CMAKE_FIND_LIBRARY_SUFFIXES})
     set(CMAKE_FIND_LIBRARY_SUFFIXES ".a")
     foreach(_dep z jitterentropy)
@@ -545,7 +596,7 @@ endif()
 # zstd 压缩支持
 # 查找顺序按平台分开：Linux/macOS 先找系统静态库（省去编译整棵源码树、也是包管理器的
 # 常规安装方式），再回退源码编译；Windows 先源码编译（与 MSVC 工具链 / /MT 一致），
-# 再回退 third_party 预编译库。
+# 再回退 Third Party 预编译库。
 # 静态链接是默认行为：只找到动态库会让 DEB/RPM 带上 libzstd.so 运行时依赖，
 # 与「零声明依赖、完全自包含」的目标冲突。ZSTD_STATIC=OFF 允许动态链接。
 option(WITH_ZSTD "Enable zstd compression support" ON)
@@ -553,7 +604,7 @@ option(ZSTD_STATIC "Statically link zstd (recommended for self-contained package
 set(FE_ZSTD_FOUND FALSE)
 set(FE_ZSTD_STATIC FALSE)
 if(WITH_ZSTD)
-  set(_zstd_root "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/zstd")
+  set(_zstd_root "${CMAKE_CURRENT_SOURCE_DIR}/../Third Party/zstd")
   set(_zstd_src "${_zstd_root}/src/lib")
   # 每次配置重新探测：find_library 结果进缓存，沿用旧值会在换平台/换库后指向不匹配的库
   unset(ZSTD_LIBRARY CACHE)
@@ -568,7 +619,7 @@ if(WITH_ZSTD)
     target_compile_definitions(FileEncryptor PRIVATE FE_WITH_ZSTD)
     if(WIN32)
       target_link_libraries(FileEncryptor PRIVATE ws2_32)
-    else()
+    elseif(NOT ANDROID)
       target_link_libraries(FileEncryptor PRIVATE pthread)
     endif()
     message(STATUS "zstd: 静态链接预编译库 (${_lib})")
@@ -618,15 +669,15 @@ if(WITH_ZSTD)
     target_include_directories(FileEncryptor PRIVATE "${_zstd_root}/include")
     target_link_libraries(FileEncryptor PRIVATE zstd_static)
     target_compile_definitions(FileEncryptor PRIVATE FE_WITH_ZSTD)
-    if(NOT WIN32)
+    if(NOT WIN32 AND NOT ANDROID)
       target_link_libraries(FileEncryptor PRIVATE pthread)
     endif()
     message(STATUS "zstd: 已从源码编译集成 (${_zstd_src})")
   endif()
 
-  # 3) Windows 兜底：third_party 预编译静态库（.lib）
+  # 3) Windows 兜底：Third Party 预编译静态库（.lib）
   # 该库由 MinGW 构建，仅当源码树缺失、且链接器不报错时才可用；MSVC 下若报
-  # ___chkstk_ms unresolved 说明工具链不匹配，请保留 third_party/zstd/src/lib。
+  # ___chkstk_ms unresolved 说明工具链不匹配，请保留 Third Party/zstd/src/lib。
   if(NOT FE_ZSTD_FOUND AND WIN32 AND ZSTD_STATIC)
     find_path(ZSTD_INCLUDE_DIR NAMES zstd.h
       HINTS "$ENV{ZSTD_ROOT}" "${_zstd_root}/include" NO_DEFAULT_PATH)
@@ -647,12 +698,12 @@ if(WITH_ZSTD)
         "    Debian/Ubuntu: sudo apt install libzstd-dev\n"
         "    Fedora        : sudo dnf install libzstd-static\n"
         "    macOS         : brew install zstd\n"
-        "  或直接沿用仓库内的源码树 third_party/zstd/src/lib 走源码编译。\n"
+        "  或直接沿用仓库内的源码树 Third Party/zstd/src/lib 走源码编译。\n"
         "  确需动态链接请用 -DZSTD_STATIC=OFF。")
     else()
       message(WARNING
         "WITH_ZSTD=ON 但未找到 zstd（静态库关闭查找、源码树也不在），将构建为“无压缩”版本。\n"
-        "  安装 libzstd-dev（Ubuntu）或从源码放置 third_party/zstd/src/lib。\n"
+        "  安装 libzstd-dev（Ubuntu）或从源码放置 Third Party/zstd/src/lib。\n"
         "CLI 的 -z / --compression-level 会在运行时被拒绝。")
     endif()
   endif()
@@ -671,7 +722,19 @@ set(VDISK_CORE_SOURCES
   core/source_handling.cpp core/config.cpp core/keylib.cpp core/progress_frame.cpp
   core/asym_crypto.cpp core/password_policy.cpp
   core/machine_id.cpp core/watermark.cpp core/split_volumes.cpp core/archive.cpp
-  core/keywrap.cpp core/vault_index.cpp core/vdisk_abi.cpp core/rate_limit.cpp core/fileio_util.cpp core/resume.cpp core/output_lock.cpp core/name_obfuscate.cpp core/ptd_meta.cpp core/batch.cpp)
+  core/keywrap.cpp core/vault_index.cpp core/vdisk_abi.cpp core/rate_limit.cpp core/fileio_util.cpp core/resume.cpp core/output_lock.cpp core/name_obfuscate.cpp   core/ptd_meta.cpp core/batch.cpp)
+
+# fe_mobile：fd 版单文件加解密 ABI（移动端主入口；
+# Win32 兼容层使桌面 vdisk.dll 同样导出，便于本机跑 fd 路径测试）
+list(APPEND VDISK_CORE_SOURCES core/fe_mobile.cpp)
+
+# Android：没找到可用的 OpenSSL 前缀时换降级实现（找到即用真实实现，与 WITH_OPENSSL 开关解耦）
+if(ANDROID AND NOT FE_OPENSSL_FOUND)
+  list(TRANSFORM VDISK_CORE_SOURCES
+       REPLACE "core/watermark\\.cpp" "core/watermark_android.cpp")
+  list(TRANSFORM VDISK_CORE_SOURCES
+       REPLACE "core/asym_crypto\\.cpp" "core/asym_crypto_android.cpp")
+endif()
 
 add_library(vdisk SHARED ${VDISK_CORE_SOURCES})
 add_library(FileEncryptor::vdisk ALIAS vdisk)
@@ -695,7 +758,7 @@ endif()
 # vdisk 是共享库：Linux 发行版/源码装的 libz.a / libcrypto.a / libsodium.a 常为非 PIC（无 -fPIC 编译），
 # 直接链进 .so 会报 "relocation R_X86_64_PC32 ... can not be used when making a
 # shared object"。可执行文件不受此限，故只需给共享库换成动态版。
-if(UNIX AND NOT APPLE)
+if(UNIX AND NOT APPLE AND NOT ANDROID)
   foreach(_dep z crypto ssl sodium)
     # _fe_links 里存的是绝对路径（.../libz.a），故按文件名匹配而非裸名
     foreach(_l IN LISTS _fe_links)
@@ -1023,7 +1086,7 @@ set(CPACK_PACKAGE_DESCRIPTION
 The binary is statically linked against libsodium and yaml-cpp, so the installed package requires \
 no external libsodium or other third-party libraries at runtime. \
 The companion GUI frontend lives in the FileEncryptorGUI project.")
-set(CPACK_PACKAGE_LICENSE "GPLv3")
+set(CPACK_PACKAGE_LICENSE "AGPLv3")
 if(EXISTS "${CMAKE_SOURCE_DIR}/LICENSE")
   set(CPACK_RESOURCE_FILE_LICENSE "${CMAKE_SOURCE_DIR}/LICENSE")
 endif()
@@ -1045,7 +1108,7 @@ set(CPACK_DEBIAN_PACKAGE_DEPENDS "libsodium23, zlib1g")
 set(CPACK_DEBIAN_PACKAGE_SUGGESTS "libfuse3-3 (>= 3.0)")
 
 # —— RPM ——
-set(CPACK_RPM_PACKAGE_LICENSE "GPLv3")
+set(CPACK_RPM_PACKAGE_LICENSE "AGPLv3")
 set(CPACK_RPM_PACKAGE_GROUP "Applications/System")
 # libvdisk.so 动态链接 libz.so / libsodium.so，须声明运行时依赖；关闭自动探测以免把静态 EXE 误判带依赖，
 # 改用显式 Requires（libsodium / zlib 的包名；/usr/local 源码版不被 rpm 数据库跟踪，自动探测会生成无法满足的 cap）。

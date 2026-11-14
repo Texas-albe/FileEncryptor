@@ -1,0 +1,14 @@
+<metadata>
+    <remove-node
+        path="/api/package[@name='androidx.wear.watchface.complications.data']/class[@name='ComplicationData.BaseBuilder']/method[@name='build' and count(parameter)=0]"
+        />
+
+    <!-- Preserve nonstandard capitalization of Datasource -->
+    <attr
+        path="/api/package[@name='androidx.wear.watchface.complications.datasource']"
+        name="managedName"
+        >
+        AndroidX.Wear.WatchFace.Complications.Datasource
+    </attr>
+
+</metadata>

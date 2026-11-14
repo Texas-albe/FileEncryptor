@@ -1,0 +1,198 @@
+﻿<metadata>
+    <attr
+        path="/api/package[@name='com.google.android.gms.ads.mediation']/interface[@name='MediationBannerListener']/method[@name='onAdClicked' and count(parameter)=1 and parameter[1][@type='com.google.android.gms.ads.mediation.MediationBannerAdapter']]"
+        name="managedName"
+        >
+        OnBannerAdClicked
+    </attr>
+    <attr
+        path="/api/package[@name='com.google.android.gms.ads.mediation']/interface[@name='MediationBannerListener']/method[@name='onAdClosed' and count(parameter)=1 and parameter[1][@type='com.google.android.gms.ads.mediation.MediationBannerAdapter']]"
+        name="managedName"
+        >
+        OnBannerAdClosed
+    </attr>
+    <attr
+        path="/api/package[@name='com.google.android.gms.ads.mediation']/interface[@name='MediationBannerListener']/method[@name='onAdFailedToLoad' and count(parameter)=2 and parameter[1][@type='com.google.android.gms.ads.mediation.MediationBannerAdapter'] and parameter[2][@type='com.google.android.gms.ads.AdError']]"
+        name="managedName"
+        >
+        OnBannerAdFailedToLoadWithError
+    </attr>
+    <attr
+        path="/api/package[@name='com.google.android.gms.ads.mediation']/interface[@name='MediationBannerListener']/method[@name='onAdFailedToLoad' and count(parameter)=2 and parameter[1][@type='com.google.android.gms.ads.mediation.MediationBannerAdapter'] and parameter[2][@type='int']]"
+        name="managedName"
+        >
+        OnBannerAdFailedToLoadWithErrorCode
+    </attr>
+    <attr
+        path="/api/package[@name='com.google.android.gms.ads.mediation']/interface[@name='MediationBannerListener']/method[@name='onAdLeftApplication' and count(parameter)=1 and parameter[1][@type='com.google.android.gms.ads.mediation.MediationBannerAdapter']]"
+        name="managedName"
+        >
+        OnBannerAdLeftApplication
+    </attr>
+    <attr
+        path="/api/package[@name='com.google.android.gms.ads.mediation']/interface[@name='MediationBannerListener']/method[@name='onAdLoaded' and count(parameter)=1 and parameter[1][@type='com.google.android.gms.ads.mediation.MediationBannerAdapter']]"
+        name="managedName"
+        >
+        OnBannerAdLoaded
+    </attr>
+    <attr
+        path="/api/package[@name='com.google.android.gms.ads.mediation']/interface[@name='MediationBannerListener']/method[@name='onAdOpened' and count(parameter)=1 and parameter[1][@type='com.google.android.gms.ads.mediation.MediationBannerAdapter']]"
+        name="managedName"
+        >
+        OnBannerAdOpened
+    </attr>
+    <attr
+        path="/api/package[@name='com.google.android.gms.ads.mediation']/interface[@name='MediationBannerListener']/method[@name='onAppEvent' and count(parameter)=3 and parameter[1][@type='com.google.android.gms.ads.mediation.MediationBannerAdapter'] and parameter[2][@type='java.lang.String'] and parameter[3][@type='java.lang.String']]"
+        name="managedName"
+        >
+        OnBannerAppEvent
+    </attr>
+    <attr
+        path="/api/package[@name='com.google.android.gms.ads.mediation']/interface[@name='MediationInterstitialListener']/method[@name='onAdClicked' and count(parameter)=1 and parameter[1][@type='com.google.android.gms.ads.mediation.MediationInterstitialAdapter']]"
+        name="managedName"
+        >
+        OnInterstitialAdClicked
+    </attr>
+    <attr
+        path="/api/package[@name='com.google.android.gms.ads.mediation']/interface[@name='MediationInterstitialListener']/method[@name='onAdClosed' and count(parameter)=1 and parameter[1][@type='com.google.android.gms.ads.mediation.MediationInterstitialAdapter']]"
+        name="managedName"
+        >
+        OnInterstitialAdClosed
+    </attr>
+    <attr
+        path="/api/package[@name='com.google.android.gms.ads.mediation']/interface[@name='MediationInterstitialListener']/method[@name='onAdFailedToLoad' and count(parameter)=2 and parameter[1][@type='com.google.android.gms.ads.mediation.MediationInterstitialAdapter'] and parameter[2][@type='com.google.android.gms.ads.AdError']]"
+        name="managedName"
+        >
+        OnInterstitialAdFailedToLoadWithError
+    </attr>
+    <attr
+        path="/api/package[@name='com.google.android.gms.ads.mediation']/interface[@name='MediationInterstitialListener']/method[@name='onAdFailedToLoad' and count(parameter)=2 and parameter[1][@type='com.google.android.gms.ads.mediation.MediationInterstitialAdapter'] and parameter[2][@type='int']]"
+        name="managedName"
+        >
+        OnInterstitialAdFailedToLoadWithErrorCode
+    </attr>
+    <attr
+        path="/api/package[@name='com.google.android.gms.ads.mediation']/interface[@name='MediationInterstitialListener']/method[@name='onAdLeftApplication' and count(parameter)=1 and parameter[1][@type='com.google.android.gms.ads.mediation.MediationInterstitialAdapter']]"
+        name="managedName"
+        >
+        OnInterstitialAdLeftApplication
+    </attr>
+    <attr
+        path="/api/package[@name='com.google.android.gms.ads.mediation']/interface[@name='MediationInterstitialListener']/method[@name='onAdLoaded' and count(parameter)=1 and parameter[1][@type='com.google.android.gms.ads.mediation.MediationInterstitialAdapter']]"
+        name="managedName"
+        >
+        OnInterstitialAdLoaded
+    </attr>
+    <attr
+        path="/api/package[@name='com.google.android.gms.ads.mediation']/interface[@name='MediationInterstitialListener']/method[@name='onAdOpened' and count(parameter)=1 and parameter[1][@type='com.google.android.gms.ads.mediation.MediationInterstitialAdapter']]"
+        name="managedName"
+        >
+        OnInterstitialAdOpened
+    </attr>
+    <attr
+        path="/api/package[@name='com.google.android.gms.ads.mediation']/interface[@name='MediationNativeListener']/method[@name='onAdClicked' and count(parameter)=1 and parameter[1][@type='com.google.android.gms.ads.mediation.MediationNativeAdapter']]"
+        name="managedName"
+        >
+        OnNativeAdClicked
+    </attr>
+    <attr
+        path="/api/package[@name='com.google.android.gms.ads.mediation']/interface[@name='MediationNativeListener']/method[@name='onAdClosed' and count(parameter)=1 and parameter[1][@type='com.google.android.gms.ads.mediation.MediationNativeAdapter']]"
+        name="managedName"
+        >
+        OnNativeAdClosed
+    </attr>
+    <attr
+        path="/api/package[@name='com.google.android.gms.ads.mediation']/interface[@name='MediationNativeListener']/method[@name='onAdFailedToLoad' and count(parameter)=2 and parameter[1][@type='com.google.android.gms.ads.mediation.MediationNativeAdapter'] and parameter[2][@type='com.google.android.gms.ads.AdError']]"
+        name="managedName"
+        >
+        OnNativeAdFailedToLoadWithError
+    </attr>
+    <attr
+        path="/api/package[@name='com.google.android.gms.ads.mediation']/interface[@name='MediationNativeListener']/method[@name='onAdFailedToLoad' and count(parameter)=2 and parameter[1][@type='com.google.android.gms.ads.mediation.MediationNativeAdapter'] and parameter[2][@type='int']]"
+        name="managedName"
+        >
+        OnNativeAdFailedToLoadWithErrorCode
+    </attr>
+    <attr
+        path="/api/package[@name='com.google.android.gms.ads.mediation']/interface[@name='MediationNativeListener']/method[@name='onAdImpression' and count(parameter)=1 and parameter[1][@type='com.google.android.gms.ads.mediation.MediationNativeAdapter']]"
+        name="managedName"
+        >
+        OnNativeAdImpression
+    </attr>
+    <attr
+        path="/api/package[@name='com.google.android.gms.ads.mediation']/interface[@name='MediationNativeListener']/method[@name='onAdLeftApplication' and count(parameter)=1 and parameter[1][@type='com.google.android.gms.ads.mediation.MediationNativeAdapter']]"
+        name="managedName"
+        >
+        OnNativeAdLeftApplication
+    </attr>
+    <attr
+        path="/api/package[@name='com.google.android.gms.ads.mediation']/interface[@name='MediationNativeListener']/method[@name='onAdLoaded' and count(parameter)=2 and parameter[1][@type='com.google.android.gms.ads.mediation.MediationNativeAdapter'] and parameter[2][@type='com.google.android.gms.ads.mediation.UnifiedNativeAdMapper']]"
+        name="managedName"
+        >
+        OnNativeAdLoaded
+    </attr>
+    <attr
+        path="/api/package[@name='com.google.android.gms.ads.mediation']/interface[@name='MediationNativeListener']/method[@name='onAdOpened' and count(parameter)=1 and parameter[1][@type='com.google.android.gms.ads.mediation.MediationNativeAdapter']]"
+        name="managedName"
+        >
+        OnNativeAdOpened
+    </attr>
+    <attr
+        path="/api/package[@name='com.google.android.gms.ads.mediation']/interface[@name='MediationNativeListener']/method[@name='onVideoEnd' and count(parameter)=1 and parameter[1][@type='com.google.android.gms.ads.mediation.MediationNativeAdapter']]"
+        name="managedName"
+        >
+        OnNativeVideoEnd
+    </attr>
+    <remove-node
+        path="/api/package[starts-with(@name,'com.google.android.libraries.ads.mobile.sdk.internal')]"
+        />
+    <!-- Generic type-erasure: remove abstract generic members that subclasses cannot satisfy in C# -->
+    <remove-node
+        path="/api/package[@name='com.google.android.libraries.ads.mobile.sdk.common']/class[@name='BaseRequestBuilder']/method[@name='self' and count(parameter)=0]"
+        />
+    <remove-node
+        path="/api/package[@name='com.google.android.libraries.ads.mobile.sdk.common']/class[@name='BaseError']/method[@name='getCode' and count(parameter)=0]"
+        />
+    <remove-node
+        path="/api/package[@name='com.google.android.libraries.ads.mobile.sdk.common']/class[@name='AdPreloader']/method[@name='pollAd' and count(parameter)=1 and parameter[1][@type='java.lang.String']]"
+        />
+    <remove-node
+        path="/api/package[@name='com.google.android.libraries.ads.mobile.sdk.banner']/interface[@name='BannerRequest']/method[@name='getAdSizes' and count(parameter)=0]"
+        />
+    <!-- BannerAd exposes obfuscated members referencing the unbound 'ads_mobile_sdk' package;
+         removing them lets the BannerAd interface (and AdView.LoadAd, which takes AdLoadCallback<BannerAd>) bind. -->
+    <remove-node
+        path="/api/package[@name='com.google.android.libraries.ads.mobile.sdk.banner']/interface[@name='BannerAd']/method[@name='getView' and count(parameter)=0]"
+        />
+    <remove-node
+        path="/api/package[@name='com.google.android.libraries.ads.mobile.sdk.banner']/interface[@name='BannerAd']/method[@name='a' and count(parameter)=1 and parameter[1][@type='com.google.android.libraries.ads.mobile.sdk.banner.AdSize']]"
+        />
+    <!-- VideoLifecycleCallbacks implements an obfuscated internal interface that is intentionally
+         not bound. Remove that internal base so VideoController and the dependent banner/native
+         ad surfaces remain valid. -->
+    <remove-node
+        path="/api/package[@name='com.google.android.libraries.ads.mobile.sdk.common']/interface[@name='VideoController.VideoLifecycleCallbacks']/implements[@name='ads_mobile_sdk.mq0']"
+        />
+    <!-- MediaContent exposes an obfuscated accessor 'a()' returning a type from the (removed)
+         'com.google.android.libraries.ads.mobile.sdk.internal' package. Because it is an abstract
+         interface method with an unresolvable return type, the whole MediaContent interface fails
+         to generate, which cascades: NativeAd.getMediaContent() and CustomNativeAd.getMediaContent()
+         then reference an unbound type, so NativeAd and CustomNativeAd are dropped too. That in turn
+         silently removes NativeAdLoaderCallback.onNativeAdLoaded / onCustomNativeAdLoaded and
+         NativeAdView.registerNativeAd, leaving native ads unusable. Removing this internal accessor
+         (same approach as the BannerAd fix above) lets the whole native-ad surface bind. -->
+    <remove-node
+        path="/api/package[@name='com.google.android.libraries.ads.mobile.sdk.nativead']/interface[@name='MediaContent']/method[@name='a' and count(parameter)=0]"
+        />
+    <!-- Java generics erasure: NativeRequest declares getCustomFormatIds()/getNativeAdTypes() with a
+         raw java.util.List return, while its implementors (NativeAdRequest, NativeSignalRequest) expose
+         the reified List<String> / List<NativeAd.NativeAdType>. That maps to IList vs IList<T> in C#,
+         which cannot satisfy the interface (CS0738). Drop the raw interface members so the concrete,
+         generic properties on the request classes bind. Same fix already applied to BannerRequest.getAdSizes above. -->
+    <remove-node
+        path="/api/package[@name='com.google.android.libraries.ads.mobile.sdk.nativead']/interface[@name='NativeRequest']/method[@name='getCustomFormatIds' and count(parameter)=0]"
+        />
+    <remove-node
+        path="/api/package[@name='com.google.android.libraries.ads.mobile.sdk.nativead']/interface[@name='NativeRequest']/method[@name='getNativeAdTypes' and count(parameter)=0]"
+        />
+</metadata>

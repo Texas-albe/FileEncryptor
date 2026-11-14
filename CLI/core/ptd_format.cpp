@@ -2,7 +2,7 @@
 
 const unsigned char MAGIC[4]={'F','E','N','C'};
 
-// v6 DEK 包裹明文的固定标记：解裹时以恒定时间比较，兼作密码正确性校验
+// v6 DEK 包裹明文
 static const unsigned char DEK_MARKER[16] = {
     'F','E','D','E','K','W','R','A','P','0','0','0','0','0','1','\0' };
 
@@ -17,7 +17,7 @@ size_t header_size_for_version(unsigned char ver) {
     if(ver==5) return HEADER_SIZE_V5;
     if(ver==6) return HEADER_SIZE_V6;
     if(ver==4) return HEADER_SIZE_V4;
-    // 未知版本返回哨兵而非静默回退 V4，避免把损坏/伪造文件误判为合法 v4 解析
+    // 未知版本返回哨
     return size_t(-1);
 }
 
@@ -55,14 +55,12 @@ bool unwrap_dek(const unsigned char* box, const unsigned char* kek,
     return ok;
 }
 
-// ---------------------------------------------------------------------------
-// 收件人 blob 序列化 / 反序列化（变长，每条含算法 + 长度前缀）
-// 长度前缀沿用旧的 1 字节写法（古典键 32/56 字节），并在 >=254 时改用
-// 0xFF + 2 字节大端扩展，使 1184 字节的 ML-KEM 公钥也能进同一布局。
-// 旧格式只会取 1 字节分支，故向后读取完全兼容。
-// ---------------------------------------------------------------------------
+// 收件人 blob 序列化 / 反
+// 长度前缀沿用旧
+// 0xFF + 2 字节大端扩展
+// 旧格式只
 namespace {
-constexpr uint8_t LEN_EXT = 0xFF;   // 扩展前缀：后随 2 字节大端长度
+constexpr uint8_t LEN_EXT = 0xFF;   // 扩展前缀
 
 bool put_len_prefixed(std::vector<unsigned char>& b, const std::vector<unsigned char>& v) {
     if(v.size() < LEN_EXT) {
@@ -78,7 +76,7 @@ bool put_len_prefixed(std::vector<unsigned char>& b, const std::vector<unsigned 
     return true;
 }
 
-// 读一个长度前缀；成功推进 off 并返回长度
+// 读一个长度前缀
 bool get_len_prefixed(const unsigned char* data, size_t len, size_t& off, size_t& n) {
     if(off >= len) return false;
     const uint8_t h = data[off++];
@@ -112,7 +110,7 @@ bool serialize_recipients(const std::vector<RecipientStanza>& stanzas,
         blob.push_back(s.algo);
         if(!put_len_prefixed(blob, s.recip_pub)) return false;
         if(!put_len_prefixed(blob, s.eph_pub)) return false;
-        // wrapped_dek 固定 48 字节，直接追加（不另加长度前缀）
+        // wrapped_dek 固定 48 字节，直接追
         blob.insert(blob.end(), s.wrapped_dek.begin(), s.wrapped_dek.end());
     }
     return true;
@@ -126,7 +124,7 @@ bool parse_recipients(const unsigned char* data, size_t len,
         RecipientStanza s;
         s.algo = data[off++];
         size_t rl=0, el=0;
-        // 先读长度、后取数据：两次取片都要用当时的 off，先读两个前缀会让第一片取错起点。
+        // 先读长度、后取数
         if(!get_len_prefixed(data, len, off, rl)) return false;
         if(rl != recip_static_len(s.algo)) return false;
         s.recip_pub.assign(data+off, data+off+rl); off += rl;

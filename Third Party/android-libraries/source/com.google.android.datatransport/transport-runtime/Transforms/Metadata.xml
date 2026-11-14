@@ -1,0 +1,169 @@
+﻿<?xml version="1.0" encoding="UTF-8"?>
+<metadata>
+
+    <!-- Preserve namespace that has "scheduling" removed -->
+    <attr
+        path="/api/package[@name='com.google.android.datatransport.runtime.scheduling.persistence']"
+        name="managedName"
+        >
+        Xamarin.Google.Android.DataTransport.Runtime.Persistence
+    </attr>
+    
+    <attr
+      path="/api/package[@name='com.google.android.datatransport.runtime']/class[@name='TransportRuntimeComponent']"
+      name="visibility"
+      >
+      public
+    </attr>
+
+    <attr
+      path="/api/package[@name='com.google.android.datatransport.runtime.dagger.internal']/class[@name='ProviderOfLazy']/method[@name='get' and count(parameter)=0]"
+      name="managedReturn"
+      >
+      Java.Lang.Object
+    </attr>
+    <attr
+      path="/api/package[@name='com.google.android.datatransport.runtime.dagger.internal']/class[@name='SetFactory']/method[@name='get' and count(parameter)=0]"
+      name="managedReturn"
+      >
+      Java.Lang.Object
+    </attr>
+
+    <attr
+      path="/api/package[@name='com.google.android.datatransport.runtime.scheduling.jobscheduling']/class[@name='Uploader_Factory']/method[@name='get' and count(parameter)=0]"
+      name="managedReturn"
+      >
+      Java.Lang.Object
+    </attr>
+    <attr
+      path="/api/package[@name='com.google.android.datatransport.runtime.scheduling.persistence']/class[@name='SQLiteEventStore_Factory']/method[@name='newInstance' and count(parameter)=4 and parameter[1][@type='com.google.android.datatransport.runtime.time.Clock'] and parameter[2][@type='com.google.android.datatransport.runtime.time.Clock'] and parameter[3][@type='java.lang.Object'] and parameter[4][@type='java.lang.Object']]"
+      name="managedReturn"
+      >
+      Java.Lang.Object
+    </attr>
+    <attr
+      path="/api/package[@name='com.google.android.datatransport.runtime.scheduling.jobscheduling']/class[@name='WorkInitializer_Factory']/method[@name='get' and count(parameter)=0]"
+      name="managedReturn"
+      >
+      Java.Lang.Object
+    </attr>
+    <attr
+      path="/api/package[@name='com.google.android.datatransport.runtime']/class[@name='TransportRuntime_Factory']/method[@name='get' and count(parameter)=0]"
+      name="managedReturn"
+      >
+      Java.Lang.Object
+    </attr>
+    <attr
+      path="/api/package[@name='com.google.android.datatransport.runtime.time']/class[@name='TimeModule_UptimeClockFactory']/method[@name='get' and count(parameter)=0]"
+      name="managedReturn"
+      >
+      Java.Lang.Object
+    </attr>
+    <attr
+      path="/api/package[@name='com.google.android.datatransport.runtime.scheduling']/class[@name='SchedulingModule_WorkSchedulerFactory']/method[@name='get' and count(parameter)=0]"
+      name="managedReturn"
+      >
+      Java.Lang.Object
+    </attr>
+    <attr
+      path="/api/package[@name='com.google.android.datatransport.runtime.scheduling']/class[@name='SchedulingConfigModule_ConfigFactory']/method[@name='get' and count(parameter)=0]"
+      name="managedReturn"
+      >
+      Java.Lang.Object
+    </attr>
+    <attr
+      path="/api/package[@name='com.google.android.datatransport.runtime.time']/class[@name='TimeModule_EventClockFactory']/method[@name='get' and count(parameter)=0]"
+      name="managedReturn"
+      >
+      Java.Lang.Object
+    </attr>
+
+
+    <attr
+      path="/api/package[@name='com.google.android.datatransport.runtime.scheduling.persistence']/class[@name='SQLiteEventStore_Factory']/method[@name='get' and count(parameter)=0]"
+      name="managedReturn"
+      >
+      Java.Lang.Object
+    </attr>
+    <attr
+      path="/api/package[@name='com.google.android.datatransport.runtime.scheduling.persistence']/class[@name='SchemaManager_Factory']/method[@name='get' and count(parameter)=0]"
+      name="managedReturn"
+      >
+      Java.Lang.Object
+    </attr>
+    <attr
+      path="/api/package[@name='com.google.android.datatransport.runtime.scheduling.persistence']/class[@name='SchemaManager_Factory']/method[@name='get' and count(parameter)=0]"
+      name="managedReturn"
+      >
+      Java.Lang.Object
+    </attr>
+    <attr
+      path="/api/package[@name='com.google.android.datatransport.runtime.scheduling']/class[@name='DefaultScheduler_Factory']/method[@name='get' and count(parameter)=0]"
+      name="managedReturn"
+      >
+      Java.Lang.Object
+    </attr>
+    <attr
+      path="/api/package[@name='com.google.android.datatransport.runtime.scheduling.persistence']/class[@name='EventStoreModule_SchemaVersionFactory']/method[@name='get' and count(parameter)=0]"
+      name="managedReturn"
+      >
+      Java.Lang.Object
+    </attr>
+    <attr
+      path="/api/package[@name='com.google.android.datatransport.runtime.scheduling.persistence']/class[@name='EventStoreModule_DbNameFactory']/method[@name='get' and count(parameter)=0]"
+      name="managedReturn"
+      >
+      Java.Lang.Object
+    </attr>
+    <attr
+      path="/api/package[@name='com.google.android.datatransport.runtime']/class[@name='ExecutionModule_ExecutorFactory']/method[@name='get' and count(parameter)=0]"
+      name="managedReturn"
+      >
+      Java.Lang.Object
+    </attr>
+
+    <remove-node
+      path="/api/package[@name='com.google.android.datatransport.runtime.dagger.internal']/class[@name='ProviderOfLazy']/method[@name='get' and count(parameter)=0]"
+      />
+    <remove-node
+      path="/api/package[@name='com.google.android.datatransport.runtime.dagger.internal']/class[@name='SetFactory']/method[@name='get' and count(parameter)=0]"
+      />
+
+      <!--
+    <attr
+      path="/api/package[@name='com.google.android.datatransport.runtime.dagger.internal']/class[@name='MapProviderFactory']/method[@name='get' and count(parameter)=0]"
+      name="managedReturn"
+      >
+      Java.Lang.Object
+    </attr>
+      -->
+    <remove-node
+      path="/api/package[@name='com.google.android.datatransport.runtime.dagger.internal']/class[@name='MapProviderFactory']/method[@name='get' and count(parameter)=0]"
+      />
+    <remove-node
+      path="/api/package[@name='com.google.android.datatransport.runtime.dagger.internal']/class[@name='MapProviderFactory']/implements"
+      />
+
+    <!-- Remove dagger.internal.Provider overloads that duplicate the javax.inject.Provider overloads
+         after generics erasure; both erase to the same C# signature Lazy/Provider(Java.Lang.Object?) -->
+    <remove-node
+      path="/api/package[@name='com.google.android.datatransport.runtime.dagger.internal']/class[@name='DoubleCheck']/method[@name='lazy' and @jni-signature='(Lcom/google/android/datatransport/runtime/dagger/internal/Provider;)Lcom/google/android/datatransport/runtime/dagger/Lazy;']"
+      />
+    <remove-node
+      path="/api/package[@name='com.google.android.datatransport.runtime.dagger.internal']/class[@name='DoubleCheck']/method[@name='provider' and @jni-signature='(Lcom/google/android/datatransport/runtime/dagger/internal/Provider;)Lcom/google/android/datatransport/runtime/dagger/internal/Provider;']"
+      />
+      
+    <attr
+      path="/api/package[@name='com.google.android.datatransport.runtime.scheduling.persistence']/class[@name='EventStoreModule_PackageNameFactory']/method[@name='get' and count(parameter)=0]"
+      name="managedReturn"
+      >
+      Java.Lang.Object
+    </attr>
+
+    <!-- Remove local jakarta.inject.Provider base from dagger.internal.Provider to fix CS0121
+         ambiguity between jakarta.inject.IProvider.Get() and javax.inject.IProvider.Get() -->
+    <remove-node
+      path="/api/package[@name='com.google.android.datatransport.runtime.dagger.internal']/interface[@name='Provider']/implements[@name='com.google.android.datatransport.runtime.jakarta.inject.Provider']"
+      />
+
+</metadata>

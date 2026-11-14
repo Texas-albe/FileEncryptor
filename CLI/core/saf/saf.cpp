@@ -1,4 +1,4 @@
-// SAF 公共实现：错误文本 / 路径工具 / URI 解析 / 编码 / 后端工厂
+// SAF 公共实现
 #include "saf.hpp"
 #include "saf_archive.hpp"
 #include "saf_vault.hpp"
@@ -75,8 +75,8 @@ SafStatus saf_open_backend(const std::string& uri, std::shared_ptr<StorageBacken
         out = saf_open_local_fs(rest);
         return out ? SAF_OK : SAF_E_BADARG;
     }
-    if (scheme == "archive") return saf_open_archive_file(rest, out);   // 阶段二：归档只读后端
-    if (scheme == "vault") return SAF_E_LOCKED;                         // 需密码，走带密码重载
+    if (scheme == "archive") return saf_open_archive_file(rest, out);   // 阶段二
+    if (scheme == "vault") return SAF_E_LOCKED;                         // 需密码
     return SAF_E_BADARG;
 }
 
@@ -85,7 +85,7 @@ SafStatus saf_open_backend_with_password(const std::string& uri,
                                          std::shared_ptr<StorageBackend>& out) {
     std::string scheme, rest;
     if (!saf_uri_split(uri, scheme, rest)) return SAF_E_BADARG;
-    if (scheme != "vault") return saf_open_backend(uri, out);           // 其余后端不认密码
+    if (scheme != "vault") return saf_open_backend(uri, out);           // 其余后端不认密
     VaultVdiskOptions opt;
     return saf_open_vault_vdisk(rest, passphrase, opt, out);
 }

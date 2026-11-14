@@ -1,4 +1,4 @@
-// CLI 未找到对话框（含自动下载）
+// CLI 未找到对话框
 #pragma once
 #include <QDialog>
 
@@ -16,7 +16,7 @@ public:
         QWidget* parent=nullptr);
     ~CliNotFoundDialog();
 
-    // 调用方用 exec() 弹出后，靠这两个 getter 判断后续动作
+    // 调用方用 exec 弹出
     bool retryPressed() const { return m_retry; }
     bool downloaded() const { return m_downloaded; }
 
@@ -37,8 +37,8 @@ private:
     void failDownload(const QString& msg);
     QString pickCliAsset(const QJsonArray& assets) const;
     bool isAllowedDownloadHost(const QUrl& url) const;
-    // M47：QNetworkAccessManager 的自动重定向不过白名单，改为手动跟随，
-    // 每跳都对新 url 复检主机白名单；返回 true 表示已发起新请求
+    // M47
+    // 每跳
     bool followRedirect(QNetworkReply* reply,
                         void (CliNotFoundDialog::*restart)(const QUrl&));
     void startTagsRequest(const QUrl& url);
@@ -58,6 +58,6 @@ private:
     QString m_assetUrl;
     QString m_tempPath;
     QByteArray m_assetData;
-    // M47：手动跟随重定向的计数（防重定向环）
+    // M47
     int m_redirects = 0;
 };

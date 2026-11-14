@@ -4,10 +4,9 @@
 #include <QFile>
 #include <QTimer>
 
-// M50：stdout/stderr 行缓冲与帧收集的上限。CLI 输出大量无换行数据
-// （畸形或被篡改的输出）时，不设上限会让 GUI 内存无界增长。
+// M50
 static const int kMaxBufferChars = 8 * 1024 * 1024;
-// 帧内行数上限（单帧按 200 列估算约数百 KB，留足正常批量进度帧余量）
+// 帧内行数上限
 static const int kMaxFrameLines = 65536;
 
 ProcessCommandExecutor::ProcessCommandExecutor(QObject* parent)
@@ -34,8 +33,8 @@ void ProcessCommandExecutor::execute(const CommandRequest& request) {
     m_confirmAnswered = false;
     m_confirmFile = request.confirmFile;
     if (!m_confirmFile.isEmpty()) {
-        // 原地清空：先 remove 再创建会让 CLI 120ms 轮询看到文件缺失，
-        // 把「未取走」误判成新的问题状态；重创还会丢掉创建时设的 DACL
+        // 原地清空
+        // 把「未取走」误判成
         QFile f(m_confirmFile);
         if (f.open(QIODevice::WriteOnly | QIODevice::Truncate)) f.close();
         if (!m_confirmTimer) {
@@ -75,17 +74,17 @@ void ProcessCommandExecutor::execute(const CommandRequest& request) {
             this, &ProcessCommandExecutor::onErrorOccurred);
 
     m_process->start();
-    // 写入 stdin 后关闭写通道：CLI 的 --key-stdin 读到 EOF 为止，
-    // 不关它就会一直等。后续 y/n 确认走握手文件，不依赖 stdin。
+    // 写入 stdin 后关闭写通
+    // 不关它
     if (!request.stdinData.isEmpty()) {
         m_process->write(request.stdinData);
     }
     m_process->closeWriteChannel();
 }
 
-// 握手文件轮询。CLI 写问题 -> 宿主弹窗 -> 宿主写答案 -> CLI 取走后清空文件。
-// 三态严格串行：pending（等回答）/ answered（等 CLI 取走）/ 空（可接受新问题），
-// 缺了这层串行就会在 120ms 轮询里把刚写进去的答案当成新问题再弹一次。
+// 握手文件轮询
+// 三态严格串行
+// 缺了这层串行
 void ProcessCommandExecutor::pollConfirmFile() {
     if (m_confirmFile.isEmpty()) return;
     QFile f(m_confirmFile);
@@ -93,7 +92,7 @@ void ProcessCommandExecutor::pollConfirmFile() {
     const QString content = QString::fromUtf8(f.readAll()).trimmed();
     f.close();
     if (content.isEmpty()) {
-        // CLI 取走答案后清空文件，此时才允许下一次询问
+        // CLI 取走答案后清空
         m_confirmPending = false;
         m_confirmAnswered = false;
         return;
@@ -106,16 +105,16 @@ void ProcessCommandExecutor::pollConfirmFile() {
 void ProcessCommandExecutor::answerConfirm(bool yes) {
     if (!m_confirmPending || m_confirmAnswered || m_confirmFile.isEmpty()) return;
     QFile f(m_confirmFile);
-    // 原地覆写：先 QFile::remove 再创建会让 CLI 120ms 轮询在间隙看到文件缺失，
-    // 把「未取走」误判成新问题状态
+    // 原地覆写
+    // 把「未取走」误判成
     if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text)) {
-        m_confirmPending = false;   // 写不进去就别卡住 CLI 之外的状态
+        m_confirmPending = false;   // 写不进去
         return;
     }
     f.write(yes ? QByteArrayLiteral("y\n") : QByteArrayLiteral("n\n"));
     f.flush();
     f.close();
-    m_confirmAnswered = true;   // 等 CLI 清空文件后才复位
+    m_confirmAnswered = true;   // 等 CLI 清空文件后才
 }
 
 void ProcessCommandExecutor::setRawMode(bool on) {
@@ -139,10 +138,10 @@ void ProcessCommandExecutor::onReadyReadStandardOutput() {
     if (!m_process) return;
     const QByteArray chunk = m_process->readAllStandardOutput();
     if (chunk.isEmpty()) return;
-    // raw 模式：原样转交，不做行解析（预览解密的明文前缀可能是二进制）
+    // raw 模式
     if (m_raw) { emit rawStdout(chunk); return; }
-    // CLI 输出按 UTF-8 解码
-    // M50：超限截断并丢弃新数据，防无换行大块输出无界增长
+    // CLI 输出
+    // M50
     if (m_outBuffer.size() >= kMaxBufferChars) {
         m_outTruncated = true;
         return;
@@ -157,7 +156,7 @@ void ProcessCommandExecutor::onReadyReadStandardOutput() {
 
 void ProcessCommandExecutor::onReadyReadStandardError() {
     if (!m_process) return;
-    // M50：同 stdout 的上限处理
+    // M50
     if (m_errBuffer.size() >= kMaxBufferChars) {
         m_outTruncated = true;
         return;
@@ -210,14 +209,14 @@ void ProcessCommandExecutor::handleLine(const QString& line, bool isError) {
         return;
     }
     if (m_inFrame) {
-        // M50：帧内行数同样设上限，畸形帧不拖垮 GUI
+        // M50
         if (m_frameLines.size() < kMaxFrameLines)
             m_frameLines << line;
         else
             m_frameTruncated = true;
         return;
     }
-    // 普通行按 \r 刷新
+    // 普通行
     int start = 0;
     int cr;
     while ((cr = line.indexOf(QLatin1Char('\r'), start)) != -1) {
@@ -231,7 +230,7 @@ void ProcessCommandExecutor::handleLine(const QString& line, bool isError) {
 
 void ProcessCommandExecutor::onFinished(int exitCode, QProcess::ExitStatus exitStatus) {
     Q_UNUSED(exitStatus);
-    // M50：超限截断提示（每轮至多一次）
+    // M50
     if (m_outTruncated || m_frameTruncated) {
         m_outTruncated = false;
         m_frameTruncated = false;
@@ -247,7 +246,7 @@ void ProcessCommandExecutor::onFinished(int exitCode, QProcess::ExitStatus exitS
             m_outBuffer.clear();
         }
     }
-    // 补发未闭合的半帧
+    // 补发未闭合
     if (m_inFrame && !m_frameLines.isEmpty()) {
         m_inFrame = false;
         emit outputLine(OutputLine{m_frameLines.join(QLatin1Char('\n')), false, false, true});
@@ -313,7 +312,7 @@ void ProcessCommandExecutor::cleanup() {
         m_process->disconnect(this);
         if (m_process->state() != QProcess::NotRunning) {
             m_process->kill();
-            // 短暂等待后兜底回收
+            // 短暂等待后兜底
             m_process->waitForFinished(200);
         }
         m_process->deleteLater();

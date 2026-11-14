@@ -9,8 +9,8 @@ public:
     explicit ProcessCommandExecutor(QObject* parent = nullptr);
     ~ProcessCommandExecutor() override;
 
-    // raw 模式：stdout 原样字节流交给 rawStdout，不做行解析。
-    // 预览解密要的就是二进制明文前缀，走行解析会被 \r / \0 切坏。
+    // raw 模式
+    // 预览解密要
     void execute(const CommandRequest& request) override;
     void setRawMode(bool on);
     void cancel() override;
@@ -39,12 +39,12 @@ private:
 
     QStringList m_frameLines;
     bool m_inFrame = false;
-    // M50：输出缓冲上限（8MB）的截断标记，超限后在结束时提示用户
+    // M50
     bool m_outTruncated = false;
     bool m_frameTruncated = false;
 
     QString m_confirmFile;
-    // 已弹窗等回答 / 已写答案但 CLI 未取走，两态都禁止再次弹窗
+    // 已弹窗等回答 / 已
     bool m_confirmPending = false;
     bool m_confirmAnswered = false;
     class QTimer* m_confirmTimer = nullptr;

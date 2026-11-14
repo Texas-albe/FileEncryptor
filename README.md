@@ -1,6 +1,6 @@
 # FileEncryptor
 
-跨平台 C++17 文件加密工具，基于 libsodium（XChaCha20-Poly1305 / AEGIS-256），GPLv3 许可。
+跨平台 C++17 文件加密工具，基于 libsodium（XChaCha20-Poly1305 / AEGIS-256），AGPLv3 许可。
 支持 Windows / Linux（macOS 未充分测试）。磁盘格式默认 v6（可扩展加密容器，含 header_hmac 安全信封；
 按需可写 v4/v5 头，v1–v6 全部可直接解密，向后兼容）。
 
@@ -94,4 +94,16 @@ cd ../GUI-Qt && cmake -S . -B build -DCMAKE_BUILD_TYPE=Release && cmake --build 
 
 ## 许可
 
-GPLv3（见 `CLI/LICENSE`、`GUI-Qt/LICENSE`、`GUI-WinUI/LICENSE`）。Noto Sans SC 字体为 SIL OFL。
+GNU Affero General Public License v3.0（AGPLv3，全文见根目录 `LICENSE`；CLI、GUI-Qt、GUI-WinUI、Updater 目录另有副本）。
+官方许可地址：<https://www.gnu.org/licenses/agpl-3.0.html>
+Copyright (C) 2024-2026 FileEncryptor Contributors
+
+本项目源码随发布仓库完整提供；分发修改版或通过网络向用户提供修改后的程序时，
+请按 AGPLv3 第 13 条提供对应的完整源码。Noto Sans SC 字体为 SIL OFL，第三方依赖仍遵循各自许可。
+
+### Corresponding Source（AGPLv3 第 13 条）
+
+- 完整对应源码：<https://github.com/Texas-albe/FileEncryptor>，取与所运行程序**同一版本号**的 tag 或 commit；版本号见各端「关于」页。
+- 构建与打包脚本在仓库 `scripts/`，native 依赖在 `Third Party/`；第三方组件及许可见 `CLI/DEPENDENCIES.md` 与应用内「鸣谢」页。
+- 网络服务端正在运行的版本，其对应源码以该版本 tag 的仓库快照为准；若仓库不可访问或需要离线归档，
+  可通过发布渠道向作者索取与二进制版本一一对应的源码归档。

@@ -6,22 +6,26 @@ using FileEncryptorGUI.Services;
 
 namespace FileEncryptorGUI;
 
-// 挂载为磁盘对话框：盘符/目录（默认填上次用的）+ 密码 + 可写勾选
+// 挂载
 public sealed partial class VaultMountDialog : ContentDialog
 {
     public string MountPoint => MpBox.Text.Trim();
     public string Password => PwBox.Password;
     public bool ReadWrite => RwChk != null && RwChk.IsChecked == true;
-    // 挂载前清空（格式化）：勾选后挂载流程会先用密码格式化该盘再挂载，得到空盘
+    // 挂载前清空
     public bool FormatVault => FmtChk != null && FmtChk.IsChecked == true;
+    // 本机免密
+    public bool NoPassword => NoPwdChk != null && NoPwdChk.IsChecked == true;
 
     private readonly TextBox MpBox = null!;
     private readonly PasswordBox PwBox = null!;
     private readonly CheckBox? RwChk;
     private readonly CheckBox? FmtChk;
+    private readonly CheckBox? NoPwdChk;
 
-    // defaultPoint：上次用的盘符，空则用 Z:
-    public VaultMountDialog(bool allowReadWrite, string defaultPoint = "")
+    // defaultPoint
+    // vaultDir
+    public VaultMountDialog(bool allowReadWrite, string defaultPoint = "", string vaultDir = "")
     {
         RequestedTheme = App.Settings.Current.Theme switch
         {
@@ -40,7 +44,7 @@ public sealed partial class VaultMountDialog : ContentDialog
         };
         panel.Children.Add(new TextBlock { Text = L10n.T("盘符"), FontWeight = Microsoft.UI.Text.FontWeights.SemiBold });
         panel.Children.Add(MpBox);
-        // 固定 1 分钟空闲自动锁（FE-Mounter --idle-timeout），只告知、不给开关
+        // 固定 1 分钟空闲自
         panel.Children.Add(new TextBlock
         {
             Text = L10n.T("挂载后 1 分钟无操作将自动锁定。"),
@@ -58,6 +62,15 @@ public sealed partial class VaultMountDialog : ContentDialog
         panel.Children.Add(new TextBlock { Text = L10n.T("密码"), FontWeight = Microsoft.UI.Text.FontWeights.SemiBold });
         panel.Children.Add(PwBox);
 
+        // 本机免密
+        // 已绑定
+        NoPwdChk = new CheckBox
+        {
+            Content = L10n.T("本机免密（今后在本机解锁此盘不再输密码）"),
+            IsChecked = !string.IsNullOrEmpty(vaultDir) && DeviceKeyService.IsBound(vaultDir),
+        };
+        panel.Children.Add(NoPwdChk);
+
         if (allowReadWrite)
         {
             RwChk = new CheckBox
@@ -68,8 +81,8 @@ public sealed partial class VaultMountDialog : ContentDialog
             panel.Children.Add(RwChk);
         }
 
-        // 挂载前格式化：勾选后本次挂载会先用密码清空该盘再挂，得到空盘。
-        // 适合「盘里有旧数据想直接抹掉重来」的场景，免去先挂载再单独格式化的两步。
+        // 挂载前格式化
+        // 适合「盘里有旧数
         FmtChk = new CheckBox
         {
             Content = L10n.T("挂载前清空此加密盘（格式化）"),

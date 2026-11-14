@@ -27,14 +27,14 @@ public partial class App : Application
 
     public App()
     {
-        // 进程加固（顺序要紧：加载策略须早于任何非系统 DLL 加载）
+        // 进程加固
         Services.ProcessHardening.HardenImageLoad();   // P1-2 禁远程/低 IL 镜像
         Services.ProcessHardening.Harden();            // P0-1 收紧进程对象 DACL
-        Services.ProcessHardening.DisableCrashDump();  // P1-3 排除出 WER，不产生崩溃转储
+        Services.ProcessHardening.DisableCrashDump();  // P1-3 排除出 WER
         InitializeComponent();
         AppDomain.CurrentDomain.UnhandledException += (s, e) =>
         {
-            // 仅记录异常类型与消息
+            // 仅记录异常类型
             if (e.ExceptionObject is Exception ex)
                 WriteCrashLog($"UnhandledException: {ex.GetType().Name}: {ex.Message}");
             else
@@ -42,7 +42,7 @@ public partial class App : Application
         };
         UnhandledException += (s, e) =>
         {
-            // 只记异常类型名与消息：完整 ToString() 含调用栈与本地路径，落入 crash.log 反而造成信息泄漏
+            // 只记异常类型名
             WriteCrashLog("XamlUnhandledException: " + (e.Exception != null
                 ? $"{e.Exception.GetType().Name}: {e.Exception.Message}"
                 : "null"));
@@ -54,19 +54,24 @@ public partial class App : Application
     {
         try
         {
-            // 顺序要紧：资源覆盖必须在控件加载之前做完。
-            // 控件模板里的 {ThemeResource} 只在解析那一刻取一次值，
-            // 放到 MainWindow 构造之后覆盖资源字典，界面会一半深一半浅。
+            // 顺序要紧
+            // 控件模板里
+            // 放到 MainWindow 构造
             Services.NationalDayTheme.ApplyThemeOverrides();
             MainWindow = new FileEncryptorGUI.MainWindow();
             MainWindow.Activate();
-            // SystemBackdrop 必须在窗口激活之后再设：
-            // 构造函数阶段 DWM 还没拿到窗口句柄，会被静默丢弃（表现为设了却完全不透明）
-            if (MainWindow is FileEncryptorGUI.MainWindow mw) mw.ApplyBackdrop();
-            // 主题取用户在「视图」菜单里的选择，不再每次启动强制覆写
+            // SystemBackdrop 必须
+            // 构造函数阶段 DWM
+            // 文件关联
+            if (MainWindow is FileEncryptorGUI.MainWindow mw)
+            {
+                mw.ApplyBackdrop();
+                mw.AddFilesFromCommandLine(Environment.GetCommandLineArgs().Skip(1));
+            }
+            // 主题取用户
             Theme.ApplyTheme(Settings.Current.Theme);
 
-            // P2 调试检测：仅告警，不阻断使用（Attach 调试属正常开发行为，不能拦）
+            // P2 调试检测
             if (Services.ProcessHardening.IsDebuggerAttached())
                 _ = ShowDebuggerWarningAsync();
         }
@@ -77,12 +82,12 @@ public partial class App : Application
         }
     }
 
-    // P2 调试器告警：非阻塞提示，用户关掉即可继续使用
+    // P2 调试器告警
     private async System.Threading.Tasks.Task ShowDebuggerWarningAsync()
     {
         try
         {
-            await System.Threading.Tasks.Task.Delay(800);   // 等主窗口稳定，避免抢焦点
+            await System.Threading.Tasks.Task.Delay(800);   // 等主窗口稳定
             var dlg = new Microsoft.UI.Xaml.Controls.ContentDialog
             {
                 Title = Services.L10n.T("检测到调试器"),

@@ -8,7 +8,7 @@ using Microsoft.UI.Xaml.Media;
 
 namespace FileEncryptorGUI;
 
-// 预览解密窗口：调 CLI --preview 取回明文前缀显示，不写出任何文件
+// 预览解密窗口
 public sealed class PreviewWindow
 {
     private readonly CliProcessService _cli = new();
@@ -19,7 +19,7 @@ public sealed class PreviewWindow
     private readonly Button _nextBtn;
     private readonly NumberBox _bytes;
     private readonly StringBuilder _pending = new();
-    // 流式解码器：跨 chunk 保留不完整的多字节序列，避免 UTF-8 字符被块边界截断成乱码
+    // 流式解码器
     private readonly Decoder _utf8Decoder = Encoding.UTF8.GetDecoder();
 
     private string _programPath = "";
@@ -94,7 +94,7 @@ public sealed class PreviewWindow
         };
         _window.AppWindow.Resize(new Windows.Graphics.SizeInt32(900, 620));
 
-        // 关闭按钮订阅放在 _window 赋值后：lambda 引用 _window，前置会撞 CS8602（未赋值字段）
+        // 关闭
         closeBtn.Click += (_, _) => { _cli.Cancel(); _window.Close(); };
 
         _cli.RawStdout += OnRaw;
@@ -102,7 +102,7 @@ public sealed class PreviewWindow
         _cli.Finished += OnFinished;
     }
 
-    // 主窗切主题时跟着换配色
+    // 主窗切主题时跟
     public void ApplyTheme(ElementTheme theme)
     {
         if (_window.Content is FrameworkElement fe) fe.RequestedTheme = theme;
@@ -116,7 +116,7 @@ public sealed class PreviewWindow
         _fileLabel.Text = L10n.F("文件：{0}", displayName);
         _view.Text = "";
         _pending.Clear();
-        _utf8Decoder.Reset();   // 窗口复用时清掉上一次残留的半截字节
+        _utf8Decoder.Reset();   // 窗口复用时清掉
         _done = false;
         _nextBtn.Visibility = Visibility.Collapsed;
         _status.Text = L10n.T("正在解密…");
@@ -132,10 +132,11 @@ public sealed class PreviewWindow
         {
             ProgramPath = _programPath,
             ShowConsole = false,
-            // 密码走 stdin，不进 argv
+            // 密码走 stdin
             StdinData = _password,
         };
         req.Arguments.Add("-d");
+        req.Arguments.Add("--key-stdin");   // 密码走 stdin
         req.Arguments.Add("--preview");
         req.Arguments.Add("--max-bytes");
         req.Arguments.Add(max.ToString());
@@ -146,9 +147,9 @@ public sealed class PreviewWindow
 
     private void OnRaw(byte[] chunk)
     {
-        // 不能每 chunk 单独 UTF8.GetString：一个多字节字符可能横跨两块，
-        // 单独解码会让两边各变成 U+FFFD。改用常驻 Decoder，它会把尾部不完整
-        // 的字节留在内部缓冲，等下一块补齐再解。
+        // 不能每 chunk 单独
+        // 单独解码
+        // 的字节留
         if (chunk.Length == 0) return;
         char[] chars = new char[_utf8Decoder.GetCharCount(chunk, 0, chunk.Length)];
         int n = _utf8Decoder.GetChars(chunk, 0, chunk.Length, chars, 0);
@@ -171,7 +172,7 @@ public sealed class PreviewWindow
             : L10n.F("预览失败：{0}", r.ErrorString is { Length: > 0 } e ? e : L10n.F("CLI 返回码 {0}", r.ExitCode));
     }
 
-    // 不可打印字节用 · 占位，保证行不乱、长度可见
+    // 不可打印字节用 ·
     private static string ToDisplay(string raw)
     {
         var sb = new StringBuilder(raw.Length);

@@ -64,7 +64,7 @@ public sealed partial class ViewSettingsDialog : ContentDialog
             Text = L10n.T("支持 PNG / JPG / BMP / WebP 格式。"),
             FontSize = 12,
             TextWrapping = TextWrapping.Wrap,
-            Foreground = new SolidColorBrush(Microsoft.UI.Colors.Gray)
+            Foreground = ThemeService.BrushFor("AppTextSecondaryBrush", RequestedTheme)
         };
         panel.Children.Add(hint);
 
@@ -90,7 +90,7 @@ public sealed partial class ViewSettingsDialog : ContentDialog
         try
         {
             var uri = new Uri(path);
-            // 仅允许本地文件
+            // 仅允许本
             if (!uri.IsFile) return;
             var bitmap = new BitmapImage();
             bitmap.UriSource = uri;

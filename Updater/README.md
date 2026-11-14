@@ -3,7 +3,7 @@
 FileEncryptor 的**独立自动更新器**，供 GUI（Qt / WinUI）以子进程方式调用，查询 GitHub Releases 最新版本并完成「下载 → 校验 → 安装」。
 
 - **无自更新、无版本号**：本工具不检查自身更新，也不携带版本号——「当前版本」由调用方经 `--current` 传入，便于长期复用而无需随各子项目一起升版。
-- **跨平台**：Windows / Linux 同构编译。HTTP 层使用静态链接的 [libcurl](https://curl.se/)（bundled 源码 `../third_party/curl`，双平台均静态链接 OpenSSL，Windows 亦非 Schannel），SHA-256 为内置纯 C++ 实现，JSON 为内置最小解析器——除系统库外**零外部依赖**。
+- **跨平台**：Windows / Linux 同构编译。HTTP 层使用静态链接的 [libcurl](https://curl.se/)（bundled 源码 `../Third Party/curl`，双平台均静态链接 OpenSSL，Windows 亦非 Schannel），SHA-256 为内置纯 C++ 实现，JSON 为内置最小解析器——除系统库外**零外部依赖**。
 - **单文件分发**：libcurl 静态链接进二进制（`CURL_STATICLIB` + `BUILD_SHARED_LIBS=OFF`），产物不依赖任何 curl/openssl 动态库。
 
 ## 用法

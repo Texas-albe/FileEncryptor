@@ -9,12 +9,12 @@ using FileEncryptorGUI.Models;
 
 namespace FileEncryptorGUI;
 
-// 已挂载加密盘列表：显示盘符/目录与锁定状态；双击处于锁定状态的盘即弹出解锁密码框（仅输入一次）。
+// 已挂载加密盘列
 public sealed partial class MountedVaultsDialog : ContentDialog
 {
     private readonly string _mounter;
     private readonly List<MountedVault> _mounts;
-    private readonly Action<string> _unlock;   // 传入 VaultDir，由宿主执行解锁
+    private readonly Action<string> _unlock;   // 传入 VaultDir
     private readonly StackPanel _rowsPanel;
 
     public MountedVaultsDialog(string mounter, List<MountedVault> mounts, Action<string> unlock)
@@ -96,18 +96,18 @@ public sealed partial class MountedVaultsDialog : ContentDialog
             row.Children.Add(new TextBlock
             {
                 Text = status,
-                Foreground = locked ? new SolidColorBrush(Microsoft.UI.Colors.OrangeRed)
-                                    : new SolidColorBrush(Microsoft.UI.Colors.Gray),
+                Foreground = locked ? ThemeService.BrushFor("AppDangerBrush", RequestedTheme)
+                                    : ThemeService.BrushFor("AppTextSecondaryBrush", RequestedTheme),
                 Width = 70,
             });
-            // 双击解锁：先 Hide 本页再触发宿主解锁（宿主会弹密码框，
-            // 同一 XamlRoot 不能双 ContentDialog 并存，顺序倒置即「双击没反应」）
+            // 双击解锁
+            // 同一 XamlRoot 不能双
             row.DoubleTapped += async (_, _) =>
             {
                 if (locked && !string.IsNullOrEmpty(m.VaultDir))
                 {
                     Hide();
-                    await Task.Delay(120);   // 等退场动画结束，规避同 XamlRoot 双框竞态
+                    await Task.Delay(120);   // 等退场动画结束
                     _unlock?.Invoke(m.VaultDir);
                 }
             };

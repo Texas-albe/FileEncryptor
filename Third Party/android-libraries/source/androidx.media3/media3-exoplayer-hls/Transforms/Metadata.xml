@@ -1,0 +1,169 @@
+﻿<metadata>
+    <attr
+        path="/api/package[@name='androidx.media3.exoplayer.hls.playlist']/class[@name='HlsMediaPlaylist.SegmentBase']/method[@name='compareTo' and count(parameter)=1 and parameter[1][@type='java.lang.Long']]/parameter[1]"
+        name="managedType"
+        >
+        Java.Lang.Object
+    </attr>
+    <attr
+        path="/api/package[@name='androidx.media3.exoplayer.hls.playlist']/class[@name='DefaultHlsPlaylistTracker']/method[@name='onLoadCanceled' and count(parameter)=4 and parameter[1][@type='androidx.media3.exoplayer.upstream.ParsingLoadable&lt;androidx.media3.exoplayer.hls.playlist.HlsPlaylist&gt;'] and parameter[2][@type='long'] and parameter[3][@type='long'] and parameter[4][@type='boolean']]/parameter[1]"
+        name="managedType"
+        >
+        Java.Lang.Object
+    </attr>
+    <attr
+        path="/api/package[@name='androidx.media3.exoplayer.hls.playlist']/class[@name='DefaultHlsPlaylistTracker']/method[@name='onLoadCompleted' and count(parameter)=3 and parameter[1][@type='androidx.media3.exoplayer.upstream.ParsingLoadable&lt;androidx.media3.exoplayer.hls.playlist.HlsPlaylist&gt;'] and parameter[2][@type='long'] and parameter[3][@type='long']]/parameter[1]"
+        name="managedType"
+        >
+        Java.Lang.Object
+    </attr>
+    <attr
+        path="/api/package[@name='androidx.media3.exoplayer.hls.playlist']/class[@name='DefaultHlsPlaylistTracker']/method[@name='onLoadError' and count(parameter)=5 and parameter[1][@type='androidx.media3.exoplayer.upstream.ParsingLoadable&lt;androidx.media3.exoplayer.hls.playlist.HlsPlaylist&gt;'] and parameter[2][@type='long'] and parameter[3][@type='long'] and parameter[4][@type='java.io.IOException'] and parameter[5][@type='int']]/parameter[1]"
+        name="managedType"
+        >
+        Java.Lang.Object
+    </attr>
+    <attr
+        path="/api/package[@name='androidx.media3.exoplayer.hls.playlist']/class[@name='DefaultHlsPlaylistTracker']/method[@name='onLoadError' and count(parameter)=5 and parameter[1][@type='androidx.media3.exoplayer.upstream.ParsingLoadable&lt;androidx.media3.exoplayer.hls.playlist.HlsPlaylist&gt;'] and parameter[2][@type='long'] and parameter[3][@type='long'] and parameter[4][@type='java.io.IOException'] and parameter[5][@type='int']]"
+        name="managedReturn"
+        >
+        AndroidX.Media3.ExoPlayer.Upstream.Loader.LoadErrorAction
+    </attr>
+    <attr
+        path="/api/package[@name='androidx.media3.exoplayer.hls.playlist']/class[@name='HlsPlaylistParser']/method[@name='parse' and count(parameter)=2 and parameter[1][@type='android.net.Uri'] and parameter[2][@type='java.io.InputStream']]"
+        name="managedReturn"
+        >
+        Java.Lang.Object
+    </attr>
+
+    <attr
+        path="/api/package[@name='androidx.media3.exoplayer.hls']/class[@name='DefaultHlsExtractorFactory']/method[@name='createExtractor' and count(parameter)=7 and parameter[1][@type='android.net.Uri'] and parameter[2][@type='androidx.media3.common.Format'] and parameter[3][@type='java.util.List&lt;androidx.media3.common.Format&gt;'] and parameter[4][@type='androidx.media3.common.util.TimestampAdjuster'] and parameter[5][@type='java.util.Map&lt;java.lang.String, java.util.List&lt;java.lang.String&gt;&gt;'] and parameter[6][@type='androidx.media3.extractor.ExtractorInput'] and parameter[7][@type='androidx.media3.exoplayer.analytics.PlayerId']]"
+        name="managedReturn"
+        >
+        AndroidX.Media3.ExoPlayer.Hls.IHlsMediaChunkExtractor
+    </attr>
+
+    <attr
+        path="/api/package[@name='androidx.media3.exoplayer.hls.playlist']/class[@name='HlsMediaPlaylist']/method[@name='copy' and count(parameter)=1]"
+        name="managedOverride"
+        >
+        override
+    </attr>
+    <attr
+        path="/api/package[@name='androidx.media3.exoplayer.hls.playlist']/class[@name='HlsMediaPlaylist']/method[@name='copy' and count(parameter)=1]"
+        name="managedReturn"
+        >
+      Java.Lang.Object
+    </attr>
+    <attr
+        path="/api/package[@name='androidx.media3.exoplayer.hls.playlist']/class[@name='HlsMultivariantPlaylist']/method[@name='copy' and count(parameter)=1]"
+        name="managedOverride"
+        >
+        override
+    </attr>
+    <attr
+        path="/api/package[@name='androidx.media3.exoplayer.hls.playlist']/class[@name='HlsMultivariantPlaylist']/method[@name='copy' and count(parameter)=1]"
+        name="managedReturn"
+        >
+      Java.Lang.Object
+    </attr>
+    <attr
+        path="/api/package[@name='androidx.media3.exoplayer.hls.offline']/class[@name='HlsDownloader']/method[@name='getSegments' and count(parameter)=3 and parameter[1][@type='androidx.media3.datasource.DataSource'] and parameter[2][@type='androidx.media3.exoplayer.hls.playlist.HlsPlaylist'] and parameter[3][@type='boolean']]/parameter[2]"
+        name="managedType"
+          >
+      Java.Lang.Object
+    </attr>
+
+
+    <attr
+        path="/api/package[@name='androidx.media3.exoplayer.hls']/class[@name='HlsMediaSource']/method[@name='canUpdateMediaItem' and count(parameter)=1 and parameter[1][@type='androidx.media3.common.MediaItem']]"
+        name="final"
+        >
+      true
+    </attr>
+    <attr
+        path="/api/package[@name='androidx.media3.exoplayer.hls']/class[@name='HlsMediaSource']/method[@name='updateMediaItem' and count(parameter)=1 and parameter[1][@type='androidx.media3.common.MediaItem']]"
+        name="final"
+        >
+      true
+    </attr>
+
+    <attr
+        path="/api/package[@name='androidx.media3.exoplayer.hls.playlist']/class[@name='HlsMultivariantPlaylist']/method[@name='copy' and count(parameter)=1 and parameter[1][@type='java.util.List&lt;androidx.media3.common.StreamKey&gt;']]"
+        name="managedOverride"
+        >
+        new
+    </attr>
+    <attr
+        path="/api/package[@name='androidx.media3.exoplayer.hls.playlist']/class[@name='HlsMediaPlaylist']/method[@name='copy' and count(parameter)=1 and parameter[1][@type='java.util.List&lt;androidx.media3.common.StreamKey&gt;']]"
+        name="managedOverride"
+        >
+        new
+    </attr>
+
+    <attr
+        path="/api/package[@name='androidx.media3.exoplayer.hls']/class[@name='HlsMediaSource.Factory']/method[@name='createMediaSource' and count(parameter)=1 and parameter[1][@type='androidx.media3.common.MediaItem']]"
+        name="managedReturn"
+        >
+        AndroidX.Media3.ExoPlayer.Source.IMediaSource
+    </attr>
+    <attr
+        path="/api/package[@name='androidx.media3.exoplayer.hls']/class[@name='HlsMediaSource.Factory']/method[@name='setDrmSessionManagerProvider' and count(parameter)=1 and parameter[1][@type='androidx.media3.exoplayer.drm.DrmSessionManagerProvider']]"
+        name="managedReturn"
+        >
+        AndroidX.Media3.ExoPlayer.Source.IMediaSourceMediaSourceIFactory
+    </attr>
+    <attr
+        path="/api/package[@name='androidx.media3.exoplayer.hls']/class[@name='HlsMediaSource.Factory']/method[@name='setLoadErrorHandlingPolicy' and count(parameter)=1 and parameter[1][@type='androidx.media3.exoplayer.upstream.LoadErrorHandlingPolicy']]"
+        name="managedReturn"
+        >
+        AndroidX.Media3.ExoPlayer.Source.IMediaSourceMediaSourceIFactory
+    </attr>
+
+    <attr
+        path="/api/package[@name='androidx.media3.exoplayer.hls']/class[@name='HlsInterstitialsAdsLoader.AdsMediaSourceFactory']/method[@name='setDrmSessionManagerProvider' and count(parameter)=1 and parameter[1][@type='androidx.media3.exoplayer.drm.DrmSessionManagerProvider']]"
+        name="managedReturn"
+        >
+        AndroidX.Media3.ExoPlayer.Source.IMediaSourceMediaSourceIFactory
+    </attr>
+    <attr
+        path="/api/package[@name='androidx.media3.exoplayer.hls']/class[@name='HlsInterstitialsAdsLoader.AdsMediaSourceFactory']/method[@name='setLoadErrorHandlingPolicy' and count(parameter)=1 and parameter[1][@type='androidx.media3.exoplayer.upstream.LoadErrorHandlingPolicy']]"
+        name="managedReturn"
+        >
+        AndroidX.Media3.ExoPlayer.Source.IMediaSourceMediaSourceIFactory
+    </attr>
+
+    <!-- Remove duplicate methods in HlsDownloader.Factory -->
+    <!--
+    Some work done in the base interface
+
+    <remove-node
+        path="/api/package[@name='androidx.media3.exoplayer.hls.offline']/class[@name='HlsDownloader.Factory']/method[@name='create' and count(parameter)=1 and parameter[1][@type='androidx.media3.common.MediaItem']]"
+        />
+    <remove-node path="/api/package[@name='androidx.media3.exoplayer.hls.offline']/class[@name='HlsDownloader.Factory']/method[@name='create' and count(parameter)=1 and parameter[1][@type='androidx.media3.common.MediaItem' and @name='p0']]" />
+    -->
+    <remove-node
+        path="/api/package[@name='androidx.media3.exoplayer.hls.offline']/class[@name='HlsDownloader.Factory']/method[@name='create' and @return='androidx.media3.exoplayer.offline.SegmentDownloader' and count(parameter)=1 and parameter[1][@type='androidx.media3.common.MediaItem']]"
+        />
+
+    <remove-node
+        path="/api/package[@name='androidx.media3.exoplayer.hls.offline']/class[@name='HlsDownloader.Factory']/method[@name='setDurationUs' and @return='androidx.media3.exoplayer.hls.offline.HlsDownloader.Factory' and count(parameter)=1 and parameter[1][@type='long']]" />
+    <remove-node 
+        path="/api/package[@name='androidx.media3.exoplayer.hls.offline']/class[@name='HlsDownloader.Factory']/method[@name='setExecutor' and @return='androidx.media3.exoplayer.hls.offline.HlsDownloader.Factory' and count(parameter)=1 and parameter[1][@type='java.util.concurrent.Executor']]" />
+    <remove-node
+        path="/api/package[@name='androidx.media3.exoplayer.hls.offline']/class[@name='HlsDownloader.Factory']/method[@name='setMaxMergedSegmentStartTimeDiffMs' and @return='androidx.media3.exoplayer.hls.offline.HlsDownloader.Factory' and count(parameter)=1 and parameter[1][@type='long']]" />
+    <remove-node
+        path="/api/package[@name='androidx.media3.exoplayer.hls.offline']/class[@name='HlsDownloader.Factory']/method[@name='setStartPositionUs' and @return='androidx.media3.exoplayer.hls.offline.HlsDownloader.Factory' and count(parameter)=1 and parameter[1][@type='long']]" />
+
+    <!-- DefaultHlsPlaylistTracker.getRedundantGroups returns ImmutableList but
+         IHlsPlaylistTracker.GetRedundantGroups expects IList<HlsRedundantGroup>.
+         Rename the method and provide an explicit interface implementation in Additions. -->
+    <attr
+        path="/api/package[@name='androidx.media3.exoplayer.hls.playlist']/class[@name='DefaultHlsPlaylistTracker']/method[@name='getRedundantGroups' and count(parameter)=1 and parameter[1][@type='int']]"
+        name="managedName"
+        >
+        GetRedundantGroupsImpl
+    </attr>
+
+    
+</metadata>

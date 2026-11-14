@@ -1,4 +1,4 @@
-// 关于菜单的两个子项对话框
+// 关于菜单
 #pragma once
 #include <QDialog>
 

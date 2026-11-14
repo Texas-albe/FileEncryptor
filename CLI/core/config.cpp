@@ -1,6 +1,6 @@
 #define _CRT_SECURE_NO_WARNINGS
 #include "config.hpp"
-#include "FileEncryptor.hpp"  // 为 create_directory_recursive（用户配置目录回退）
+#include "FileEncryptor.hpp"  // 为 create_directory_recur
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -25,8 +25,8 @@
 #include <sys/stat.h>
 #endif
 
-// YAML 配置解析（依赖 yaml-cpp）：支持 fileencryptor.yaml 的顶层标量键与单层序列
-// (path_whitelist)。未知键静默忽略；解析失败不致命，由调用方回退默认配置。
+// YAML 配置解析
+// (path_whitelist)。未知键静默忽略
 
 static std::string trim(const std::string& s) {
     size_t a = 0, b = s.size();
@@ -35,10 +35,10 @@ static std::string trim(const std::string& s) {
     return s.substr(a, b - a);
 }
 
-// 解析布尔标量：true/yes/1/on -> true；false/no/0/off -> false（大小写不敏感）。
+// 解析布尔标量
 static bool parse_bool(const std::string& v, bool& out) {
     std::string s = trim(v);
-    // 仅对 ASCII 转小写：非 ASCII 字节传给 ::tolower 是未定义行为
+    // 仅对 ASCII 转小写
     std::transform(s.begin(), s.end(), s.begin(),
                    [](unsigned char c) { return (char)std::tolower(c); });
     if (s == "true" || s == "yes" || s == "1" || s == "on") { out = true; return true; }
@@ -48,14 +48,14 @@ static bool parse_bool(const std::string& v, bool& out) {
 
 static int level_from_string(const std::string& v) {
     std::string s = trim(v);
-    // 仅对 ASCII 转小写：非 ASCII 字节传给 ::tolower 是未定义行为
+    // 仅对 ASCII 转小写
     std::transform(s.begin(), s.end(), s.begin(),
                    [](unsigned char c) { return (char)std::tolower(c); });
     if (s == "error") return LOG_ERROR;
     if (s == "warn" || s == "warning") return LOG_WARN;
     if (s == "info") return LOG_INFO;
     if (s == "debug") return LOG_DEBUG;
-    return -1; // 非字符串 → 当作数字解析
+    return -1; // 非字符串 → 当作数
 }
 
 bool parse_yaml_config(const std::string& text, Config& cfg, std::string& err, std::string* warn) {
@@ -70,7 +70,7 @@ bool parse_yaml_config(const std::string& text, Config& cfg, std::string& err, s
     if (!root || root.IsNull()) return true; // 空文档 → 默认配置
     if (!root.IsMap()) { err = "Config root must be a mapping (map)"; return false; }
 
-    // 非致命告警累加（用户写错类型时给出明确键名，而非静默忽略）
+    // 非致命告警累加
     auto note = [&](const char* key, const char* why) {
         if (warn) {
             if (!warn->empty()) *warn += "; ";
@@ -78,7 +78,7 @@ bool parse_yaml_config(const std::string& text, Config& cfg, std::string& err, s
         }
     };
 
-    // 取标量字符串（仅当节点为标量）
+    // 取标量字符串
     auto opt_str = [&](const char* key, std::string& out) {
         const YAML::Node& n = root[key];
         if (n && n.IsScalar()) { out = n.as<std::string>(); return true; }
@@ -88,7 +88,7 @@ bool parse_yaml_config(const std::string& text, Config& cfg, std::string& err, s
 
     opt_str("log_file", cfg.log_file);
 
-    // log_level：优先字符串（ERROR/WARN/INFO/DEBUG），否则按数字
+    // log_level
     {
         const YAML::Node& n = root["log_level"];
         if (n && n.IsScalar()) {
@@ -124,7 +124,7 @@ bool parse_yaml_config(const std::string& text, Config& cfg, std::string& err, s
     opt_size("max_open_files", cfg.max_open_files);
     opt_size("max_path_length", cfg.max_path_length);
 
-    // 带单位的大小字段（支持 KB/MB/GB，1024 进制）
+    // 带单位
     auto opt_size_unit = [&](const char* key, uint64_t& out) {
         const YAML::Node& n = root[key];
         if (n && n.IsScalar()) {
@@ -158,7 +158,7 @@ bool parse_yaml_config(const std::string& text, Config& cfg, std::string& err, s
     opt_bool("obfuscate_names", cfg.obfuscate_names);
     opt_bool("write_sha256", cfg.write_sha256);
 
-    // 密码强度策略（功能7）
+    // 密码强度策略
     auto opt_int2 = [&](const char* key, int& out) {
         const YAML::Node& n = root[key];
         if (n && n.IsScalar()) {
@@ -170,7 +170,7 @@ bool parse_yaml_config(const std::string& text, Config& cfg, std::string& err, s
     opt_int2("min_password_length", cfg.min_password_length);
     opt_int2("min_password_classes", cfg.min_password_classes);
 
-    // 加密强度预设（功能14）：fast / standard / strong，或整数 0/1/2
+    // 加密强度预设
     {
         const YAML::Node& n = root["kdf_preset"];
         if (n && n.IsScalar()) {
@@ -192,8 +192,8 @@ bool parse_yaml_config(const std::string& text, Config& cfg, std::string& err, s
     }
     after_preset:;
 
-    // 加密默认算法（crypto.default_cipher，多算法架构）：xchacha20 / aegis256。
-    // 空或缺省 = xchacha20；未知值告警并忽略（保持默认）。
+    // 加密默认算法
+    // 空或缺省 = xchacha20
     {
         const YAML::Node& crypto = root["crypto"];
         if (crypto && !crypto.IsNull()) {
@@ -210,7 +210,7 @@ bool parse_yaml_config(const std::string& text, Config& cfg, std::string& err, s
         }
     }
 
-    // path_whitelist：序列；仅显式列出至少一项才启用，空列表不启用
+    // path_whitelist
     {
         const YAML::Node& n = root["path_whitelist"];
         if (n && n.IsSequence()) {
@@ -228,7 +228,7 @@ bool parse_yaml_config(const std::string& text, Config& cfg, std::string& err, s
     return true;
 }
 
-// 单位解析 / 格式化（统一 1024 进制：KB/MB/GB）
+// 单位解析 / 格式化
 bool parse_size(const std::string& s, uint64_t& out_bytes) {
     out_bytes = 0;
     std::string t = s;
@@ -238,9 +238,9 @@ bool parse_size(const std::string& s, uint64_t& out_bytes) {
     while (b > a && std::isspace((unsigned char)t[b - 1])) --b;
     t = t.substr(a, b - a);
     if (t.empty()) return false;
-    // 速率写法可带 "/s" 后缀，忽略之
+    // 速率写法可带 "/s"
     if (t.size() >= 2 && t.compare(t.size() - 2, 2, "/s") == 0) t = t.substr(0, t.size() - 2);
-    // 拆分数字部分与单位部分（单位可选）
+    // 拆分数字部分
     size_t i = 0;
     while (i < t.size() && (std::isdigit((unsigned char)t[i]) || t[i] == '.')) ++i;
     std::string num = t.substr(0, i);
@@ -256,8 +256,8 @@ bool parse_size(const std::string& s, uint64_t& out_bytes) {
     double val = 0;
     try { val = std::stod(num); } catch (...) { return false; }
     if (val < 0) return false;
-    // stod 接受 "nan"/"inf"：与 0 比较全为假会直接穿透到转换，且 (uint64_t)NaN/inf
-    // 是 UB；乘积 >= 2^64 时的 double->uint64 转换同样是 UB，须在转换前拦掉。
+    // stod 接受 "nan"/"inf"
+    // 是 UB
     if (!(val >= 0) || !std::isfinite(val)) return false;
     const double prod = val * factor;
     if (!(prod < 18446744073709551616.0)) return false;   // 2^64
@@ -275,7 +275,7 @@ std::string format_size(uint64_t bytes) {
     return std::string(buf);
 }
 
-// 文件读取（UTF-8 安全）
+// 文件读取
 static bool file_exists_utf8(const std::string& path) {
 #ifdef _WIN32
     int wn = MultiByteToWideChar(CP_UTF8, 0, path.c_str(), (int)path.size(), NULL, 0);
@@ -327,7 +327,7 @@ static bool write_file_utf8(const std::string& path, const std::string& content)
 #endif
 }
 
-// 默认配置模板：CWD 下无 fileencryptor.yaml 时自动生成。与 Config 默认值一致。
+// 默认配置模板
 static const char* DEFAULT_CONFIG_YAML =
 "# 运维参数仅由此文件提供，CLI 不可覆盖；删除即恢复默认。\n"
 "log_file: \"\"              # 留空 = 仅控制台进度\n"
@@ -345,9 +345,9 @@ static const char* DEFAULT_CONFIG_YAML =
 "crypto:\n"
 "  default_cipher: xchacha20   # xchacha20 / aegis256（CLI 未指定 -m 时生效；解密以文件头为准）\n";
 
-// YAML 别名炸弹（Billion Laughs）防护：yaml-cpp 默认不限制别名展开，极小输入可膨胀成
-// GB 级内存。硬性限制配置文件 1 MB，超过直接拒绝回退默认（运维参数无需如此之大）。
-// read_file_utf8 在流式读取时同步累计字节，即使大小预检后文件被增长（TOCTOU）也不超限。
+// YAML 别名炸弹
+// GB 级内存
+// read_file_utf8 在流式读取时同
 static constexpr int64_t kMaxConfigBytes = 1 << 20;
 
 static bool read_file_utf8(const std::string& path, std::string& out) {
@@ -388,7 +388,7 @@ static bool read_file_utf8(const std::string& path, std::string& out) {
 #endif
 }
 
-// 取文件大小（字节），不存在/不可访问返回 -1
+// 取文件大小
 static int64_t get_file_size_raw(const std::string& path) {
 #ifdef _WIN32
     std::wstring wp;
@@ -436,8 +436,8 @@ static std::string get_exe_dir() {
 
 static std::string get_user_config_dir() {
 #ifdef _WIN32
-    // 用 APPDATA 环境变量定位用户配置根（等价 SHGetFolderPathW(CSIDL_APPDATA)，
-    // 但无需引入 shlobj.h / shell32 依赖）。APPDATA 在 Windows 用户会话中始终设置。
+    // 用 APPDATA 环境变量定位
+    // 但无需引入 shlobj.h /
     const char* appdata = std::getenv("APPDATA");
     if (appdata && *appdata) {
         std::string dir(appdata);
@@ -446,8 +446,8 @@ static std::string get_user_config_dir() {
     }
     return "";
 #elif defined(__ANDROID__)
-    // Android 没有可用的 HOME（进程多以 app 身份运行，HOME 常为 / 或不可写），
-    // 不猜目录：配置只认 XDG_CONFIG_HOME 或 --config 显式指定。
+    // Android 没有可用
+    // 不猜目录
     const char* xdg = std::getenv("XDG_CONFIG_HOME");
     if (xdg && *xdg) return std::string(xdg) + "/fileencryptor";
     return "";
@@ -474,12 +474,26 @@ std::string to_native_path(const std::string& p) {
 #endif
 }
 
-// 配置文件名 fileencryptor.yaml（v2.3.1 起统一 .yaml；v2.3.0 曾短暂用 .yml）。
-// 旧名 .yml 仅读取时回退，新写入一律 .yaml。
+// 配置文件名
+// 旧名 .yml
 static const char* const kConfigName       = "fileencryptor.yaml";
 static const char* const kConfigNameLegacy = "fileencryptor.yml";
 
-// 在给定目录里挑配置文件：优先 .yaml，其次旧名 .yml
+// 两个目录是否同
+static bool same_dir(const std::string& a, const std::string& b) {
+    if (a.empty() || b.empty()) return false;
+    auto norm = [](std::string s) {
+        for (char& c : s) if (c == '/') c = '\\';
+        while (s.size() > 1 && s.back() == '\\') s.pop_back();
+#ifdef _WIN32
+        for (char& c : s) c = (char)tolower((unsigned char)c);
+#endif
+        return s;
+    };
+    return norm(a) == norm(b);
+}
+
+// 在给定目录里挑
 static std::string pick_config_in(const std::string& dir) {
     if (dir.empty()) return "";
     std::string p = to_native_path(dir + "/" + kConfigName);
@@ -491,18 +505,22 @@ static std::string pick_config_in(const std::string& dir) {
 
 std::string find_config_file(ConfigSource* src) {
     if (src) *src = ConfigSource::None;
-    // 1) 环境变量（显式，最高优先）
+    // 环境变量
     const char* env = std::getenv("FILEENCRYPTOR_CONFIG");
     if (env && *env) {
         if (file_exists_utf8(env)) { if (src) *src = ConfigSource::Env; return env; }
     }
-    // 2) 运行目录（CWD）：用户在哪个目录启动程序，配置就在哪里
-    std::string p = pick_config_in(get_cwd());
-    if (!p.empty()) { if (src) *src = ConfigSource::Cwd; return p; }
-    // 3) 可执行文件目录
+    // 运行目录
+    // CWD 与 exe 目录相同
+    // 安装包自带
+    std::string cwd = get_cwd();
+    bool cwd_is_exe = same_dir(cwd, get_exe_dir());
+    std::string p = pick_config_in(cwd);
+    if (!p.empty()) { if (src) *src = cwd_is_exe ? ConfigSource::ExeDir : ConfigSource::Cwd; return p; }
+    // 可执行文件目录
     p = pick_config_in(get_exe_dir());
     if (!p.empty()) { if (src) *src = ConfigSource::ExeDir; return p; }
-    // 4) 用户配置目录
+    // 用户配置目录
     p = pick_config_in(get_user_config_dir());
     if (!p.empty()) { if (src) *src = ConfigSource::UserConfig; return p; }
     return "";
@@ -513,16 +531,17 @@ Config load_config() {
     ConfigSource src = ConfigSource::None;
     std::string path = find_config_file(&src);
     if (path.empty()) {
-        // CWD 下生成默认配置文件便于查看/修改（best-effort）；CWD 不可写时回退用户配置目录，
-        // 否则模板静默丢失、用户误以为配置从未生成。
+        // 只在 exe 目录
+        // 会在用户任意工
+        // 又让下一次运行
         std::string cwd = get_cwd();
         bool wrote = false;
-        if (!cwd.empty()) {
+        if (same_dir(cwd, get_exe_dir()) && !cwd.empty()) {
             std::string def = to_native_path(cwd + "/" + kConfigName);
             if (!file_exists_utf8(def)) {
                 wrote = write_file_utf8(def, DEFAULT_CONFIG_YAML);
             } else {
-                wrote = true; // 已存在，视为已成功
+                wrote = true; // 已存
             }
         }
         if (!wrote) {
@@ -536,9 +555,9 @@ Config load_config() {
                 }
             }
         }
-        return cfg; // 默认配置（与生成的模板一致）
+        return cfg; // 默认配置
     }
-    // YAML 别名炸弹防护 配置文件超过 1 MB 直接拒绝。
+    // YAML 别名炸弹防护 配
     if (get_file_size_raw(path) > kMaxConfigBytes) {
         std::cerr << "Warning: config file too large (" << path << "); refusing to load (> "
                   << (kMaxConfigBytes >> 20) << " MB). Using defaults.\n";
@@ -549,8 +568,8 @@ Config load_config() {
         std::cerr << "Warning: cannot read config file: " << path << "\n";
         return cfg;
     }
-    // 去除 UTF-8 BOM（Windows 记事本 / PowerShell Set-Content 默认会写 EF BB BF），
-    // 否则首行键名会带上 BOM 前缀（如 "\uFEFFlog_file"）导致解析失败。
+    // 去除 UTF-8 BOM
+    // 首行键名
     if (text.size() >= 3 &&
         (unsigned char)text[0] == 0xEF &&
         (unsigned char)text[1] == 0xBB &&
@@ -562,13 +581,13 @@ Config load_config() {
         std::cerr << "Warning: config parse error (" << err << "); using defaults.\n";
         return Config();
     }
-    // 非致命的类型/单位解析告警，统一输出一次，避免用户写错键值时毫无反馈。
+    // 非致命
     if (!warn.empty()) {
         std::cerr << "Warning: config at " << path << " has ignored values: " << warn << "\n";
         log_event(LOG_WARN, "config_ignored_values", {{"detail", warn}});
     }
-    // v2.1.2：CWD 配置不可信 任何可写目录都能预置 fileencryptor.yaml 劫持 log_file
-    // 或关闭白名单。故 CWD 来源只接受便利性键，安全敏感键回退默认并告警。
+    // v2.1.2
+    // 或关闭白名单
     if (src == ConfigSource::Cwd) {
         const Config def;
         bool clamped = false;
@@ -579,8 +598,8 @@ Config load_config() {
             cfg.path_whitelist = def.path_whitelist;
             clamped = true;
         }
-        // 加密强度/密码策略/文件名混淆同样属安全敏感键：CWD 可被预置文件弱化 KDF、放松密码
-        // 长度要求或关闭名称混淆，一并回退默认，与 log_file/path_whitelist 同等待遇。
+        // 加密强度/密码策
+        // 长度要求或关闭
         if (cfg.kdf_preset != def.kdf_preset ||
             cfg.min_password_length != def.min_password_length ||
             cfg.min_password_classes != def.min_password_classes ||
@@ -591,9 +610,9 @@ Config load_config() {
             cfg.obfuscate_names = def.obfuscate_names;
             clamped = true;
         }
-        // M22：资源与审计类键同样不可托管付给 CWD——log_level 可被置 ERROR 抑制
-        // 全部审计日志，io_buffer_size/max_memory_bytes 超大值致 OOM，
-        // default_cipher/max_speed/write_sha256/max_path_length 影响安全与行为。
+        // M22
+        // 全部审计日志
+        // default_cipher
         if (cfg.log_level != def.log_level ||
             cfg.io_buffer_size != def.io_buffer_size ||
             cfg.max_memory_bytes != def.max_memory_bytes ||
@@ -624,8 +643,8 @@ Config load_config() {
 
 // 结构化 JSON 日志
 
-// v2.1.2：Windows 上 std::ofstream 按 ANSI 代码页解析路径，中文路径会打开失败。
-// 统一走 UTF-8 → 宽字符打开（与 FileEncryptor 的 open_stream 同策略）。
+// v2.1.2
+// 统一走 UTF-8 → 宽字符打
 #ifdef _WIN32
 static std::wstring log_utf8_to_wide(const std::string& s) {
     if (s.empty()) return std::wstring();
@@ -701,7 +720,7 @@ static void write_log(int level, const std::string& msg,
     auto now = std::chrono::system_clock::now();
     std::time_t t = std::chrono::system_clock::to_time_t(now);
     std::tm tm_buf;
-    // 使用 UTC（gmtime）以匹配时间戳末尾的 'Z'，避免把本地时间误标为 UTC 误导日志分析
+    // 使用 UTC
 #ifdef _WIN32
     gmtime_s(&tm_buf, &t);
 #else
@@ -728,8 +747,8 @@ static void write_log(int level, const std::string& msg,
     if (g_log_stream.is_open()) {
         g_log_stream << line.str();
         g_log_stream.flush();
-        // 磁盘满/权限变化/文件被删会让流进入 badbit，不处理则后续日志静默丢失。
-        // 检测到时复位并重开；仍失败则降级 stderr 告警（仅一次，避免刷屏）。
+        // 磁盘满/权限变化/
+        // 检测到时复位并
         if (!g_log_stream.good()) {
             g_log_stream.clear();
             open_log_stream_utf8(g_log_stream, g_log_file, std::ios::out | std::ios::app);

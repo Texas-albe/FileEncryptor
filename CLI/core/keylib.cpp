@@ -1,4 +1,4 @@
-// 密钥库实现（功能1）。目录与索引格式见 keylib.hpp 注释。
+// 密钥库实现
 #include "keylib.hpp"
 #include "config.hpp"
 #include "FileEncryptor.hpp"
@@ -16,7 +16,7 @@
 
 namespace {
 
-// 文件是否存在（UTF-8 安全；与 main.cpp 的 file_exists_path 同实现）
+// 文件是否存
 bool file_exists(const std::string& p) {
     std::ifstream t;
     if (!open_stream(t, p, std::ios::in)) return false;
@@ -24,19 +24,19 @@ bool file_exists(const std::string& p) {
     return true;
 }
 
-// 索引字段名与顺序（save 的唯一写出格式；load 按字段名读取，顺序无关）
+// 索引字段名
 const char* kIndexComment =
     "# FileEncryptor key library index.\n"
     "# Key material lives in the individual .key files next to this index;\n"
     "# this file holds metadata only. Names are referenced by -K <name>.\n";
 
-// 单行文本清洗：去掉控制字符与引号/反斜杠，压成单行（备注/别名只在索引中展示）
+// 单行文本清洗
 std::string sanitize_single_line(const std::string& s) {
     std::string out;
     out.reserve(s.size());
     for (unsigned char c : s) {
-        if (c < 0x20 || c == 0x7F) continue;          // 控制字符（含换行）
-        if (c == '"' || c == '\\') continue;           // 与 YAML 双引号转义冲突
+        if (c < 0x20 || c == 0x7F) continue;          // 控制字符
+        if (c == '"' || c == '\\') continue;           // 与 YAML 双引号转义冲
         out.push_back((char)c);
     }
     // 去首尾空白
@@ -46,7 +46,7 @@ std::string sanitize_single_line(const std::string& s) {
     return out.substr(a, b - a);
 }
 
-// YAML 双引号标量转义（sanitize 已剔除 " 与 \，此处兜底）
+// YAML 双引号标量转义
 std::string yaml_quote(const std::string& s) {
     std::string out = "\"";
     for (unsigned char c : s) {
@@ -73,15 +73,15 @@ std::string now_string() {
     return buf;
 }
 
-// 读密钥材料（上限 256 KB），修剪首尾空白后按前缀识别类型。
-// 返回 false 表示材料为空或既不是 identity 也不是 recipient。
+// 读密钥材料
+// 返回 false 表示材料
 bool read_key_material(const std::string& path, std::string& content, std::string& kind, std::string& err) {
     std::ifstream f;
     if (!open_stream(f, path, std::ios::in | std::ios::binary)) {
         err = "Cannot open key file: " + path;
         return false;
     }
-    // 流式分块读取：累计超过 256 KB 立即中断，避免大文件被完整读入内存后才拒绝
+    // 流式分块读取
     std::string buf;
     char chunk[4096];
     while (f.read(chunk, sizeof(chunk)) || f.gcount() > 0) {
@@ -96,7 +96,7 @@ bool read_key_material(const std::string& path, std::string& content, std::strin
     }
     f.close();
     if (buf.size() > size_t(256 * 1024)) return false;
-    // 修剪首尾空白（含 CR/LF）；就地 erase + move 避免 substr 产生无法擦除的临时副本
+    // 修剪首尾空白
     size_t a = 0, b = buf.size();
     while (a < b && (unsigned char)buf[a] <= 0x20) ++a;
     while (b > a && (unsigned char)buf[b - 1] <= 0x20) --b;
@@ -115,7 +115,7 @@ bool read_key_material(const std::string& path, std::string& content, std::strin
     std::transform(low.begin(), low.end(), low.begin(),
         [](unsigned char c) { return (char)std::tolower(c); });
     if (low.rfind("age1", 0) == 0 || low.rfind("publickey:", 0) == 0) {
-        // 统一剥掉可选的 publickey: 前缀
+        // 统一剥掉可选
         if (low.rfind("publickey:", 0) == 0) {
             content.erase(0, 10);
             a = 0; b = content.size();
@@ -144,8 +144,8 @@ std::string keylib_dir() {
 std::string keylib_index_path() {
     const std::string dir = keylib_dir();
     if (dir.empty()) return "";
-    // 索引文件名 library.yaml（v2.3.1 起统一 .yaml；v2.3.0 曾短暂用 .yml）。
-    // 旧名 library.yml 仍可读取，避免升级后旧索引"凭空消失"。
+    // 索引文件名
+    // 旧名 library.yml 仍可读取，避
     const std::string cur = to_native_path(dir + "/library.yaml");
     if (file_exists(cur)) return cur;
     const std::string legacy = to_native_path(dir + "/library.yml");
@@ -153,8 +153,8 @@ std::string keylib_index_path() {
     return cur;
 }
 
-// 密钥库内文件（<dir>/<file>）：拼接后统一归一化为系统原生分隔符，
-// 保证 Windows 下路径不含混用的 '/'。
+// 密钥库内文件
+// 保证 Windows 下路径不含
 static std::string keylib_file_path(const std::string& file) {
     const std::string dir = keylib_dir();
     if (dir.empty()) return "";
@@ -170,8 +170,8 @@ bool keylib_valid_name(const std::string& name) {
     return true;
 }
 
-// 索引 file 字段复核：仅允许库内裸文件名 无目录分隔符、不含 ".."、以 .key 结尾。
-// 反序列化已落盘的 library.yaml 时重跑，防止被篡改的索引把材料路径指向库目录之外。
+// 索引 file 字段复核
+// 反序列化已落盘
 static bool keylib_safe_file(const std::string& file) {
     if (file.empty() || file.size() > 64) return false;
     if (file.find('/') != std::string::npos || file.find('\\') != std::string::npos) return false;
@@ -187,7 +187,7 @@ bool keylib_load(std::vector<KeyLibEntry>& out, std::string& err) {
     if (!file_exists(path)) return true;   // 空库
 
     try {
-        // YAML 别名炸弹防护：解析前预检索引大小 1 MB（与配置侧阈值一致），超限直接拒绝
+        // YAML 别名炸弹防护
         {
             std::ifstream chk;
             open_stream(chk, path, std::ios::in | std::ios::binary);
@@ -202,8 +202,8 @@ bool keylib_load(std::vector<KeyLibEntry>& out, std::string& err) {
             }
         }
         YAML::Node root = YAML::LoadFile(path);
-        // 纵深防御：1MiB 预检不挡 YAML 别名炸弹（指针/锚点可把小文件膨胀成巨树）。
-        // 解析后遍历计数节点总数，超限直接拒绝，限制别名展开造成的内存膨胀。
+        // 纵深防御
+        // 解析后遍历计数
         {
             const size_t MAX_YAML_NODES = 10000;
             size_t count = 0;
@@ -212,7 +212,7 @@ bool keylib_load(std::vector<KeyLibEntry>& out, std::string& err) {
                 ++count;
                 if (n.IsSequence() || n.IsMap()) {
                     for (const auto& child : n) {
-                        // Map 节点的 key 也作为独立子节点计数
+                        // Map 节点
                         if (n.IsMap()) walk(child.first);
                         walk(child.second);
                         if (count > MAX_YAML_NODES) return;
@@ -238,7 +238,7 @@ bool keylib_load(std::vector<KeyLibEntry>& out, std::string& err) {
             e.created    = n["created"] ? n["created"].as<std::string>() : "";
             e.public_key = n["public"]  ? n["public"].as<std::string>() : "";
             if (e.name.empty() || e.file.empty() || e.kind.empty()) continue;   // 跳过残缺行
-            // 反序列化时重跑写入期校验：name/file 不合法的条目直接丢弃，不采信落盘索引
+            // 反序列化时重跑
             if (!keylib_valid_name(e.name) || !keylib_safe_file(e.file)) continue;
             if (!seen.insert(e.name).second) continue;                          // 重名取首条
             out.push_back(std::move(e));
@@ -271,7 +271,7 @@ bool keylib_save(const std::vector<KeyLibEntry>& entries, std::string& err) {
         text += "    public: "  + yaml_quote(e.public_key) + "\n";
     }
 
-    // 先写临时文件再原子替换，避免写一半的索引被并发读到
+    // 先写临时文件
     const std::string tmp = path + ".tmp";
     std::ofstream f;
     if (!open_stream(f, tmp, std::ios::out | std::ios::binary | std::ios::trunc)) {
@@ -318,8 +318,8 @@ bool keylib_add(const std::string& key_path, const std::string& name,
     std::string material, kind;
     if (!read_key_material(key_path, material, kind, err)) return false;
 
-    // identity：导入时即派生公钥并缓存（导出/加密时无需再持有私钥）。
-    // 注意：material 必须在写入材料文件之后才能擦除。
+    // identity
+    // 注意
     std::string pub;
     if (kind == "identity") {
         AsymOutcome o = fe_identity_to_recipient(material, pub);
@@ -330,7 +330,7 @@ bool keylib_add(const std::string& key_path, const std::string& name,
         }
     }
 
-    // 写入材料文件（覆盖前清只读位；写后收紧密钥文件权限）
+    // 写入材料文件
     const std::string dir = keylib_dir();
     if (!create_directory_recursive(dir)) {
         err = "Cannot create key library directory: " + dir;
@@ -383,7 +383,7 @@ bool keylib_remove(const std::string& name, std::string& err) {
     if (file_exists(dst)) {
         clear_readonly_attribute(dst);
         if (!remove_file_utf8(dst)) {
-            // 索引已更新；材料删除失败仅告警，不算失败
+            // 索引已
             err = "Warning: index updated but the key file could not be deleted: " + dst;
         }
     }

@@ -1,4 +1,4 @@
-// 本地文件系统后端：逻辑根 + UTF-8 路径，读写列目录
+// 本地文件系统
 #include "saf.hpp"
 
 #include <cerrno>
@@ -26,7 +26,7 @@ uint64_t filetime_to_unix(FILETIME ft) {
     if (u.QuadPart == 0) return 0;
     return (uint64_t)((u.QuadPart - 116444736000000000ULL) / 10000000ULL);
 }
-// 权限位合成：Windows 仅只读属性有意义，映射为是否含用户写位
+// 权限位合成
 uint32_t local_mode_from_win(DWORD attr, bool is_dir) {
     uint32_t m = is_dir ? 0755u : 0644u;
     if (attr & FILE_ATTRIBUTE_READONLY) m &= ~0200u;
@@ -111,7 +111,7 @@ public:
 #ifdef _WIN32
         return FlushFileBuffers(h_) ? SAF_OK : SAF_E_IO;
 #else
-        return SAF_OK;   // POSIX 无缓冲，写即落
+        return SAF_OK;   // POSIX 无缓冲
 #endif
     }
 
@@ -126,7 +126,7 @@ public:
     }
 };
 
-// 打开本机路径（不做逻辑根解析，绝对路径原样使用）
+// 打开本机路径
 SafStatus open_native(const std::string& p, char mode, std::shared_ptr<Stream>& out) {
     out.reset();
     if (mode != 'r' && mode != 'w' && mode != 'a') return SAF_E_BADARG;
@@ -135,7 +135,7 @@ SafStatus open_native(const std::string& p, char mode, std::shared_ptr<Stream>& 
     DWORD access = (mode == 'r') ? GENERIC_READ : GENERIC_WRITE;
     DWORD share = (mode == 'r') ? FILE_SHARE_READ : 0;
     DWORD disp = (mode == 'w') ? CREATE_NEW : ((mode == 'a') ? OPEN_ALWAYS : OPEN_EXISTING);
-    // M32：FILE_FLAG_OPEN_REPARSE_POINT——打开重解析点本身而非其目标，配合下方 tag 复查（现在能真正看到链接自身的 tag）拒绝符号链接写穿/读穿
+    // M32
     HANDLE h = CreateFileW(saf_utf8_to_wide(p).c_str(), access, share,
                            nullptr, disp,
                            FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
@@ -364,7 +364,7 @@ public:
 #endif
     }
 
-    // 符号链接：vpath（链接位置）指向 target（后端内相对/绝对路径，原样存为链接目标）
+    // 符号链接
     SafStatus symlink(const std::string& target, const std::string& vpath) override {
         std::string pp;
         if (!resolve(vpath, pp)) return SAF_E_BADARG;
@@ -386,7 +386,7 @@ public:
 #endif
     }
 
-    // 读符号链接目标（近似：Windows 下取解析后的规范化绝对路径）
+    // 读符号链接目标
     SafStatus readlink(const std::string& vpath, std::string& out_target) override {
         std::string p;
         if (!resolve(vpath, p)) return SAF_E_BADARG;
@@ -411,7 +411,7 @@ public:
 #endif
     }
 
-    // 权限位：Windows 仅映射用户写位（去写位 → 只读属性）
+    // 权限位
     SafStatus chmod(const std::string& vpath, uint32_t mode) override {
         std::string p;
         if (!resolve(vpath, p)) return SAF_E_BADARG;
@@ -436,7 +436,7 @@ public:
     bool can_seek()   const override { return true; }
 
 private:
-    // 逻辑路径 → 本地路径（越界由 saf_path_normalize 拦截）
+    // 逻辑路径 → 本
     bool resolve(const std::string& vpath, std::string& out) const {
         std::string rel;
         if (!saf_path_normalize(vpath, rel)) return false;

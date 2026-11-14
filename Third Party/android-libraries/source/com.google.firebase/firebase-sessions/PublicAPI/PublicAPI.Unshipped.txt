@@ -1,0 +1,186 @@
+﻿#nullable enable
+Firebase.Sessions.Api.CrashEventReceiver
+Firebase.Sessions.Api.FirebaseSessionsDependencies
+Firebase.Sessions.Api.ISessionSubscriber
+Firebase.Sessions.Api.ISessionSubscriber.GetSessionSubscriberName() -> Firebase.Sessions.Api.SessionSubscriberName!
+Firebase.Sessions.Api.ISessionSubscriber.IsDataCollectionEnabled.get -> bool
+Firebase.Sessions.Api.ISessionSubscriber.OnSessionChanged(Firebase.Sessions.Api.SessionSubscriberSessionDetails! sessionDetails) -> void
+Firebase.Sessions.Api.SessionSubscriberName
+Firebase.Sessions.Api.SessionSubscriberSessionDetails
+Firebase.Sessions.Api.SessionSubscriberSessionDetails.Component1() -> string!
+Firebase.Sessions.Api.SessionSubscriberSessionDetails.Copy(string! sessionId) -> Firebase.Sessions.Api.SessionSubscriberSessionDetails!
+Firebase.Sessions.Api.SessionSubscriberSessionDetails.SessionId.get -> string!
+Firebase.Sessions.Api.SessionSubscriberSessionDetails.SessionSubscriberSessionDetails(string! sessionId) -> void
+Firebase.Sessions.BuildConfig
+Firebase.Sessions.BuildConfig.BuildConfig() -> void
+Firebase.Sessions.DaggerFirebaseSessionsComponent
+Firebase.Sessions.EventGDTLogger_Factory
+Firebase.Sessions.EventGDTLogger_Factory.Get() -> Java.Lang.Object?
+Firebase.Sessions.FirebaseSessionsComponent_MainModule_Companion_ApplicationInfoFactory
+Firebase.Sessions.FirebaseSessionsComponent_MainModule_Companion_ApplicationInfoFactory.Get() -> Java.Lang.Object?
+Firebase.Sessions.FirebaseSessionsComponent_MainModule_Companion_SessionConfigsDataStoreFactory
+Firebase.Sessions.FirebaseSessionsComponent_MainModule_Companion_SessionConfigsDataStoreFactory.Get() -> Java.Lang.Object?
+Firebase.Sessions.FirebaseSessionsComponent_MainModule_Companion_SessionDataStoreFactory
+Firebase.Sessions.FirebaseSessionsComponent_MainModule_Companion_SessionDataStoreFactory.Get() -> Java.Lang.Object?
+Firebase.Sessions.FirebaseSessionsComponent_MainModule_Companion_TimeProviderFactory
+Firebase.Sessions.FirebaseSessionsComponent_MainModule_Companion_TimeProviderFactory.FirebaseSessionsComponent_MainModule_Companion_TimeProviderFactory() -> void
+Firebase.Sessions.FirebaseSessionsComponent_MainModule_Companion_TimeProviderFactory.Get() -> Java.Lang.Object?
+Firebase.Sessions.FirebaseSessionsComponent_MainModule_Companion_UuidGeneratorFactory
+Firebase.Sessions.FirebaseSessionsComponent_MainModule_Companion_UuidGeneratorFactory.FirebaseSessionsComponent_MainModule_Companion_UuidGeneratorFactory() -> void
+Firebase.Sessions.FirebaseSessionsComponent_MainModule_Companion_UuidGeneratorFactory.Get() -> Java.Lang.Object?
+Firebase.Sessions.FirebaseSessions_Factory
+Firebase.Sessions.FirebaseSessions_Factory.Get() -> Java.Lang.Object?
+Firebase.Sessions.ProcessDataManagerImpl_Factory
+Firebase.Sessions.ProcessDataManagerImpl_Factory.Get() -> Java.Lang.Object?
+Firebase.Sessions.SessionDataSerializer_Factory
+Firebase.Sessions.SessionDataSerializer_Factory.Get() -> Java.Lang.Object?
+Firebase.Sessions.SessionFirelogPublisherImpl_Factory
+Firebase.Sessions.SessionFirelogPublisherImpl_Factory.Get() -> Java.Lang.Object?
+Firebase.Sessions.SessionGenerator_Factory
+Firebase.Sessions.SessionGenerator_Factory.Get() -> Java.Lang.Object?
+Firebase.Sessions.SessionsActivityLifecycleCallbacks_Factory
+Firebase.Sessions.SessionsActivityLifecycleCallbacks_Factory.Get() -> Java.Lang.Object?
+Firebase.Sessions.SharedSessionRepositoryImpl_Factory
+Firebase.Sessions.SharedSessionRepositoryImpl_Factory.Get() -> Java.Lang.Object?
+Google.Firebase.Sessions.Dagger.BindsAttribute
+Google.Firebase.Sessions.Dagger.BindsAttribute.BindsAttribute() -> void
+Google.Firebase.Sessions.Dagger.BindsInstanceAttribute
+Google.Firebase.Sessions.Dagger.BindsInstanceAttribute.BindsInstanceAttribute() -> void
+Google.Firebase.Sessions.Dagger.ComponentAttribute
+Google.Firebase.Sessions.Dagger.ComponentAttribute.ComponentAttribute() -> void
+Google.Firebase.Sessions.Dagger.ComponentAttribute.Dependencies.get -> Java.Lang.Class![]?
+Google.Firebase.Sessions.Dagger.ComponentAttribute.Dependencies.set -> void
+Google.Firebase.Sessions.Dagger.ComponentAttribute.Modules.get -> Java.Lang.Class![]?
+Google.Firebase.Sessions.Dagger.ComponentAttribute.Modules.set -> void
+Google.Firebase.Sessions.Dagger.IBinds
+Google.Firebase.Sessions.Dagger.IBindsInstance
+Google.Firebase.Sessions.Dagger.IComponent
+Google.Firebase.Sessions.Dagger.IComponent.Dependencies() -> Java.Lang.Class![]?
+Google.Firebase.Sessions.Dagger.IComponent.Modules() -> Java.Lang.Class![]?
+Google.Firebase.Sessions.Dagger.IComponentBuilder
+Google.Firebase.Sessions.Dagger.IComponentFactory
+Google.Firebase.Sessions.Dagger.ILazy
+Google.Firebase.Sessions.Dagger.ILazy.Get() -> Java.Lang.Object?
+Google.Firebase.Sessions.Dagger.IModule
+Google.Firebase.Sessions.Dagger.IModule.Includes() -> Java.Lang.Class![]?
+Google.Firebase.Sessions.Dagger.IModule.Subcomponents() -> Java.Lang.Class![]?
+Google.Firebase.Sessions.Dagger.IProvides
+Google.Firebase.Sessions.Dagger.Internal.DaggerGeneratedAttribute
+Google.Firebase.Sessions.Dagger.Internal.DaggerGeneratedAttribute.DaggerGeneratedAttribute() -> void
+Google.Firebase.Sessions.Dagger.Internal.DoubleCheck
+Google.Firebase.Sessions.Dagger.Internal.DoubleCheck.Get() -> Java.Lang.Object?
+Google.Firebase.Sessions.Dagger.Internal.IDaggerGenerated
+Google.Firebase.Sessions.Dagger.Internal.IFactory
+Google.Firebase.Sessions.Dagger.Internal.IProvider
+Google.Firebase.Sessions.Dagger.Internal.IQualifierMetadata
+Google.Firebase.Sessions.Dagger.Internal.IQualifierMetadata.Value() -> string![]?
+Google.Firebase.Sessions.Dagger.Internal.IScopeMetadata
+Google.Firebase.Sessions.Dagger.Internal.IScopeMetadata.Value() -> string?
+Google.Firebase.Sessions.Dagger.Internal.InstanceFactory
+Google.Firebase.Sessions.Dagger.Internal.InstanceFactory.Get() -> Java.Lang.Object?
+Google.Firebase.Sessions.Dagger.Internal.Preconditions
+Google.Firebase.Sessions.Dagger.Internal.Providers
+Google.Firebase.Sessions.Dagger.Internal.QualifierMetadataAttribute
+Google.Firebase.Sessions.Dagger.Internal.QualifierMetadataAttribute.QualifierMetadataAttribute() -> void
+Google.Firebase.Sessions.Dagger.Internal.QualifierMetadataAttribute.Value.get -> string![]?
+Google.Firebase.Sessions.Dagger.Internal.QualifierMetadataAttribute.Value.set -> void
+Google.Firebase.Sessions.Dagger.Internal.ScopeMetadataAttribute
+Google.Firebase.Sessions.Dagger.Internal.ScopeMetadataAttribute.ScopeMetadataAttribute() -> void
+Google.Firebase.Sessions.Dagger.Internal.ScopeMetadataAttribute.Value.get -> string?
+Google.Firebase.Sessions.Dagger.Internal.ScopeMetadataAttribute.Value.set -> void
+Google.Firebase.Sessions.Dagger.ModuleAttribute
+Google.Firebase.Sessions.Dagger.ModuleAttribute.Includes.get -> Java.Lang.Class![]?
+Google.Firebase.Sessions.Dagger.ModuleAttribute.Includes.set -> void
+Google.Firebase.Sessions.Dagger.ModuleAttribute.ModuleAttribute() -> void
+Google.Firebase.Sessions.Dagger.ModuleAttribute.Subcomponents.get -> Java.Lang.Class![]?
+Google.Firebase.Sessions.Dagger.ModuleAttribute.Subcomponents.set -> void
+Google.Firebase.Sessions.Dagger.ProvidesAttribute
+Google.Firebase.Sessions.Dagger.ProvidesAttribute.ProvidesAttribute() -> void
+Google.Firebase.Sessions.Jakarta.Inject.IProvider
+Google.Firebase.Sessions.Jakarta.Inject.IProvider.Get() -> Java.Lang.Object?
+Google.Firebase.Sessions.Settings.LocalOverrideSettings_Factory
+Google.Firebase.Sessions.Settings.LocalOverrideSettings_Factory.Get() -> Java.Lang.Object?
+Google.Firebase.Sessions.Settings.RemoteSettingsFetcher_Factory
+Google.Firebase.Sessions.Settings.RemoteSettingsFetcher_Factory.Get() -> Java.Lang.Object?
+Google.Firebase.Sessions.Settings.RemoteSettings_Factory
+Google.Firebase.Sessions.Settings.RemoteSettings_Factory.Get() -> Java.Lang.Object?
+Google.Firebase.Sessions.Settings.SessionsSettings_Factory
+Google.Firebase.Sessions.Settings.SessionsSettings_Factory.Get() -> Java.Lang.Object?
+Google.Firebase.Sessions.Settings.SettingsCacheImpl_Factory
+Google.Firebase.Sessions.Settings.SettingsCacheImpl_Factory.Get() -> Java.Lang.Object?
+Google.Firebase.Sessions.Xamarin.JSpecify.Annotations.INullable
+Google.Firebase.Sessions.Xamarin.JSpecify.Annotations.NullableAttribute
+Google.Firebase.Sessions.Xamarin.JSpecify.Annotations.NullableAttribute.NullableAttribute() -> void
+const Firebase.Sessions.BuildConfig.BuildType = "release" -> string!
+const Firebase.Sessions.BuildConfig.Debug = false -> bool
+const Firebase.Sessions.BuildConfig.LibraryPackageName = "com.google.firebase.sessions" -> string!
+const Firebase.Sessions.BuildConfig.VersionName = "4.0.1" -> string!
+override Firebase.Sessions.Api.CrashEventReceiver.JniPeerMembers.get -> Java.Interop.JniPeerMembers!
+override Firebase.Sessions.Api.FirebaseSessionsDependencies.JniPeerMembers.get -> Java.Interop.JniPeerMembers!
+override Firebase.Sessions.Api.SessionSubscriberName.JniPeerMembers.get -> Java.Interop.JniPeerMembers!
+override Firebase.Sessions.Api.SessionSubscriberSessionDetails.JniPeerMembers.get -> Java.Interop.JniPeerMembers!
+override Firebase.Sessions.BuildConfig.JniPeerMembers.get -> Java.Interop.JniPeerMembers!
+override Firebase.Sessions.DaggerFirebaseSessionsComponent.JniPeerMembers.get -> Java.Interop.JniPeerMembers!
+override Firebase.Sessions.EventGDTLogger_Factory.JniPeerMembers.get -> Java.Interop.JniPeerMembers!
+override Firebase.Sessions.FirebaseSessionsComponent_MainModule_Companion_ApplicationInfoFactory.JniPeerMembers.get -> Java.Interop.JniPeerMembers!
+override Firebase.Sessions.FirebaseSessionsComponent_MainModule_Companion_SessionConfigsDataStoreFactory.JniPeerMembers.get -> Java.Interop.JniPeerMembers!
+override Firebase.Sessions.FirebaseSessionsComponent_MainModule_Companion_SessionDataStoreFactory.JniPeerMembers.get -> Java.Interop.JniPeerMembers!
+override Firebase.Sessions.FirebaseSessionsComponent_MainModule_Companion_TimeProviderFactory.JniPeerMembers.get -> Java.Interop.JniPeerMembers!
+override Firebase.Sessions.FirebaseSessionsComponent_MainModule_Companion_UuidGeneratorFactory.JniPeerMembers.get -> Java.Interop.JniPeerMembers!
+override Firebase.Sessions.FirebaseSessions_Factory.JniPeerMembers.get -> Java.Interop.JniPeerMembers!
+override Firebase.Sessions.ProcessDataManagerImpl_Factory.JniPeerMembers.get -> Java.Interop.JniPeerMembers!
+override Firebase.Sessions.SessionDataSerializer_Factory.JniPeerMembers.get -> Java.Interop.JniPeerMembers!
+override Firebase.Sessions.SessionFirelogPublisherImpl_Factory.JniPeerMembers.get -> Java.Interop.JniPeerMembers!
+override Firebase.Sessions.SessionGenerator_Factory.JniPeerMembers.get -> Java.Interop.JniPeerMembers!
+override Firebase.Sessions.SessionsActivityLifecycleCallbacks_Factory.JniPeerMembers.get -> Java.Interop.JniPeerMembers!
+override Firebase.Sessions.SharedSessionRepositoryImpl_Factory.JniPeerMembers.get -> Java.Interop.JniPeerMembers!
+override Google.Firebase.Sessions.Dagger.Internal.DoubleCheck.JniPeerMembers.get -> Java.Interop.JniPeerMembers!
+override Google.Firebase.Sessions.Dagger.Internal.InstanceFactory.JniPeerMembers.get -> Java.Interop.JniPeerMembers!
+override Google.Firebase.Sessions.Dagger.Internal.Preconditions.JniPeerMembers.get -> Java.Interop.JniPeerMembers!
+override Google.Firebase.Sessions.Dagger.Internal.Providers.JniPeerMembers.get -> Java.Interop.JniPeerMembers!
+override Google.Firebase.Sessions.Settings.LocalOverrideSettings_Factory.JniPeerMembers.get -> Java.Interop.JniPeerMembers!
+override Google.Firebase.Sessions.Settings.RemoteSettingsFetcher_Factory.JniPeerMembers.get -> Java.Interop.JniPeerMembers!
+override Google.Firebase.Sessions.Settings.RemoteSettings_Factory.JniPeerMembers.get -> Java.Interop.JniPeerMembers!
+override Google.Firebase.Sessions.Settings.SessionsSettings_Factory.JniPeerMembers.get -> Java.Interop.JniPeerMembers!
+override Google.Firebase.Sessions.Settings.SettingsCacheImpl_Factory.JniPeerMembers.get -> Java.Interop.JniPeerMembers!
+static Firebase.Sessions.Api.CrashEventReceiver.Instance.get -> Firebase.Sessions.Api.CrashEventReceiver!
+static Firebase.Sessions.Api.CrashEventReceiver.NotifyCrashOccurred() -> void
+static Firebase.Sessions.Api.FirebaseSessionsDependencies.AddDependency(Firebase.Sessions.Api.SessionSubscriberName! subscriberName) -> void
+static Firebase.Sessions.Api.FirebaseSessionsDependencies.Instance.get -> Firebase.Sessions.Api.FirebaseSessionsDependencies!
+static Firebase.Sessions.Api.FirebaseSessionsDependencies.Register(Firebase.Sessions.Api.ISessionSubscriber! subscriber) -> void
+static Firebase.Sessions.Api.SessionSubscriberName.Crashlytics.get -> Firebase.Sessions.Api.SessionSubscriberName?
+static Firebase.Sessions.Api.SessionSubscriberName.Entries.get -> Kotlin.Enums.IEnumEntries!
+static Firebase.Sessions.Api.SessionSubscriberName.MattSaysHi.get -> Firebase.Sessions.Api.SessionSubscriberName?
+static Firebase.Sessions.Api.SessionSubscriberName.Performance.get -> Firebase.Sessions.Api.SessionSubscriberName?
+static Firebase.Sessions.Api.SessionSubscriberName.ValueOf(string? value) -> Firebase.Sessions.Api.SessionSubscriberName?
+static Firebase.Sessions.Api.SessionSubscriberName.Values() -> Firebase.Sessions.Api.SessionSubscriberName![]?
+static Firebase.Sessions.EventGDTLogger_Factory.Create(Google.Firebase.Sessions.Dagger.Internal.IProvider? transportFactoryProvider) -> Firebase.Sessions.EventGDTLogger_Factory?
+static Firebase.Sessions.EventGDTLogger_Factory.NewInstance(Firebase.Inject.IProvider? transportFactoryProvider) -> Java.Lang.Object?
+static Firebase.Sessions.FirebaseSessionsComponent_MainModule_Companion_ApplicationInfoFactory.ApplicationInfo(Firebase.FirebaseApp? firebaseApp) -> Java.Lang.Object?
+static Firebase.Sessions.FirebaseSessionsComponent_MainModule_Companion_ApplicationInfoFactory.Create(Google.Firebase.Sessions.Dagger.Internal.IProvider? firebaseAppProvider) -> Firebase.Sessions.FirebaseSessionsComponent_MainModule_Companion_ApplicationInfoFactory?
+static Firebase.Sessions.FirebaseSessionsComponent_MainModule_Companion_SessionConfigsDataStoreFactory.Create(Google.Firebase.Sessions.Dagger.Internal.IProvider? appContextProvider, Google.Firebase.Sessions.Dagger.Internal.IProvider? blockingDispatcherProvider) -> Firebase.Sessions.FirebaseSessionsComponent_MainModule_Companion_SessionConfigsDataStoreFactory?
+static Firebase.Sessions.FirebaseSessionsComponent_MainModule_Companion_SessionConfigsDataStoreFactory.SessionConfigsDataStore(Android.Content.Context? appContext, Kotlin.Coroutines.ICoroutineContext? blockingDispatcher) -> AndroidX.DataStore.Core.IDataStore?
+static Firebase.Sessions.FirebaseSessionsComponent_MainModule_Companion_SessionDataStoreFactory.SessionDataStore(Android.Content.Context? appContext, Kotlin.Coroutines.ICoroutineContext? blockingDispatcher, Java.Lang.Object? sessionDataSerializer) -> AndroidX.DataStore.Core.IDataStore?
+static Firebase.Sessions.FirebaseSessionsComponent_MainModule_Companion_TimeProviderFactory.Create() -> Firebase.Sessions.FirebaseSessionsComponent_MainModule_Companion_TimeProviderFactory?
+static Firebase.Sessions.FirebaseSessionsComponent_MainModule_Companion_UuidGeneratorFactory.Create() -> Firebase.Sessions.FirebaseSessionsComponent_MainModule_Companion_UuidGeneratorFactory?
+static Firebase.Sessions.FirebaseSessions_Factory.NewInstance(Firebase.FirebaseApp? firebaseApp, Java.Lang.Object? settings, Kotlin.Coroutines.ICoroutineContext? backgroundDispatcher, Java.Lang.Object? sessionsActivityLifecycleCallbacks) -> Java.Lang.Object?
+static Firebase.Sessions.ProcessDataManagerImpl_Factory.Create(Google.Firebase.Sessions.Dagger.Internal.IProvider? appContextProvider, Google.Firebase.Sessions.Dagger.Internal.IProvider? uuidGeneratorProvider) -> Firebase.Sessions.ProcessDataManagerImpl_Factory?
+static Firebase.Sessions.SessionDataSerializer_Factory.NewInstance(Java.Lang.Object? sessionGenerator) -> Java.Lang.Object?
+static Firebase.Sessions.SessionGenerator_Factory.Create(Google.Firebase.Sessions.Dagger.Internal.IProvider? timeProvider, Google.Firebase.Sessions.Dagger.Internal.IProvider? uuidGeneratorProvider) -> Firebase.Sessions.SessionGenerator_Factory?
+static Firebase.Sessions.SessionsActivityLifecycleCallbacks_Factory.Create(Google.Firebase.Sessions.Dagger.Internal.IProvider? sharedSessionRepositoryProvider) -> Firebase.Sessions.SessionsActivityLifecycleCallbacks_Factory?
+static Google.Firebase.Sessions.Dagger.Internal.DoubleCheck.Lazy(Google.Firebase.Sessions.Dagger.Internal.IProvider? provider) -> Google.Firebase.Sessions.Dagger.ILazy?
+static Google.Firebase.Sessions.Dagger.Internal.DoubleCheck.Provider(Google.Firebase.Sessions.Dagger.Internal.IProvider? delegate) -> Google.Firebase.Sessions.Dagger.Internal.IProvider?
+static Google.Firebase.Sessions.Dagger.Internal.InstanceFactory.Create(Java.Lang.Object? instance) -> Google.Firebase.Sessions.Dagger.Internal.IFactory?
+static Google.Firebase.Sessions.Dagger.Internal.InstanceFactory.CreateNullable(Java.Lang.Object? instance) -> Google.Firebase.Sessions.Dagger.Internal.IFactory?
+static Google.Firebase.Sessions.Dagger.Internal.Preconditions.CheckBuilderRequirement(Java.Lang.Object? requirement, Java.Lang.Class? clazz) -> void
+static Google.Firebase.Sessions.Dagger.Internal.Preconditions.CheckNotNull(Java.Lang.Object? reference) -> Java.Lang.Object?
+static Google.Firebase.Sessions.Dagger.Internal.Preconditions.CheckNotNull(Java.Lang.Object? reference, string? errorMessage) -> Java.Lang.Object?
+static Google.Firebase.Sessions.Dagger.Internal.Preconditions.CheckNotNull(Java.Lang.Object? reference, string? errorMessageTemplate, Java.Lang.Object? errorMessageArg) -> Java.Lang.Object?
+static Google.Firebase.Sessions.Dagger.Internal.Preconditions.CheckNotNullFromComponent(Java.Lang.Object? reference) -> Java.Lang.Object?
+static Google.Firebase.Sessions.Dagger.Internal.Preconditions.CheckNotNullFromProvides(Java.Lang.Object? reference) -> Java.Lang.Object?
+static Google.Firebase.Sessions.Dagger.Internal.Providers.AsDaggerProvider(JavaX.Inject.IProvider? provider) -> Google.Firebase.Sessions.Dagger.Internal.IProvider?
+static Google.Firebase.Sessions.Settings.LocalOverrideSettings_Factory.Create(Google.Firebase.Sessions.Dagger.Internal.IProvider? appContextProvider) -> Google.Firebase.Sessions.Settings.LocalOverrideSettings_Factory?
+static Google.Firebase.Sessions.Settings.LocalOverrideSettings_Factory.NewInstance(Android.Content.Context? appContext) -> Java.Lang.Object?
+static Google.Firebase.Sessions.Settings.RemoteSettingsFetcher_Factory.NewInstance(Java.Lang.Object? appInfo, Kotlin.Coroutines.ICoroutineContext? blockingDispatcher) -> Java.Lang.Object?
+static Google.Firebase.Sessions.Settings.SessionsSettings_Factory.Create(Google.Firebase.Sessions.Dagger.Internal.IProvider? localOverrideSettingsProvider, Google.Firebase.Sessions.Dagger.Internal.IProvider? remoteSettingsProvider) -> Google.Firebase.Sessions.Settings.SessionsSettings_Factory?
+static Google.Firebase.Sessions.Settings.SettingsCacheImpl_Factory.Create(Google.Firebase.Sessions.Dagger.Internal.IProvider? backgroundDispatcherProvider, Google.Firebase.Sessions.Dagger.Internal.IProvider? timeProvider, Google.Firebase.Sessions.Dagger.Internal.IProvider? sessionConfigsDataStoreProvider) -> Google.Firebase.Sessions.Settings.SettingsCacheImpl_Factory?

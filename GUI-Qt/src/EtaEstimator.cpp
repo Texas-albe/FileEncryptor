@@ -8,13 +8,13 @@
 namespace {
 const int kMaxSamples=10;
 
-// 筛选可用速率样本
+// 筛选可用速率样
 bool usableSample(const TaskRecord& r) {
     return r.status==QStringLiteral("success") && !r.cancelled
            && r.totalBytes>0 && r.durationMs>0;
 }
 
-// 取吞吐中位数抗离群
+// 取吞吐中位数抗
 double medianRate(const QVector<TaskRecord>& recs,int limit) {
     QVector<double> rates;
     rates.reserve(limit);
@@ -77,7 +77,7 @@ EtaEstimator::Estimate EtaEstimator::fromProgress(int done,int total,qint64 elap
     if(done<=0||total<=0||elapsedMs<=0) return e;
     if(done>=total) { e.remainingMs=0; e.totalMs=elapsedMs; e.valid=true; e.fromProgress=true; return e; }
 
-    // 按完成比例外推并加权
+    // 按完成比例外推
     const double frac=static_cast<double>(done)/static_cast<double>(total);
     const qint64 liveTotal=static_cast<qint64>(std::llround(static_cast<double>(elapsedMs)/frac));
     if(hist.valid) {

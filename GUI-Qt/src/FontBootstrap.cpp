@@ -19,7 +19,7 @@ bool    FontBootstrap::s_cjk=false;
 
 namespace {
 
-    // 探针字符：中
+    // 探针字符
     constexpr ushort kProbeChar=0x4E2D;
 
     bool hasCjkGlyph(const QFont& f) {
@@ -27,7 +27,7 @@ namespace {
         return fm.inFont(QChar(kProbeChar));
     }
 
-    // 候选字体族按常见度排序
+    // 候选字体族
     QStringList cjkCandidates() {
         return {
             QStringLiteral("Noto Sans CJK SC"),
@@ -68,7 +68,7 @@ namespace {
             .value(QStringLiteral("FILEENCRYPTOR_FONT_DEBUG"))==QStringLiteral("1");
     }
 
-    // 从嵌入资源字体挑选
+    // 从嵌入资源字体
     QString loadBundledFont() {
         QDir d(QStringLiteral(":/fonts"));
         if(!d.exists()) return {};
@@ -133,24 +133,24 @@ void FontBootstrap::initialize() {
 
     QString chosen;
 
-    // 1) 显式覆盖
+    // 显式覆盖
     const QString override=QProcessEnvironment::systemEnvironment()
         .value(QStringLiteral("FILEENCRYPTOR_UI_FONT")).trimmed();
     if(!override.isEmpty()) {
         chosen=override;
     }
-    // 2) 默认字体已含中文
+    // 默认字体已含
     else if(hasCjkGlyph(appFont)) {
         chosen=appFont.family();
     }
-    // 3) 挑选系统含中文字体
+    // 挑选系统含中文
     else {
         for(const QString& fam:cjkCandidates()) {
             if(!available.contains(fam,Qt::CaseInsensitive)) continue;
             QFont f(fam);
             if(hasCjkGlyph(f)) { chosen=fam; break; }
         }
-        // 4) 兜底嵌入字体
+        // 兜底嵌入字体
         if(chosen.isEmpty()) {
             chosen=loadBundledFont();
             if(!chosen.isEmpty()) exportBundledFontForSystem();
@@ -158,7 +158,7 @@ void FontBootstrap::initialize() {
     }
 
     if(chosen.isEmpty()) {
-        // 5) 都没有则告警放行
+        // 都没有
         qWarning()<<"[font] 未找到含中文的字体，界面中文可能显示为方块。"
             <<"请安装中文字体（Debian/Ubuntu: sudo apt install fonts-noto-cjk）"
             <<"或用 FILEENCRYPTOR_UI_FONT=<字体族名> 指定。";

@@ -13,7 +13,7 @@
 #   cmake -S FE-Mounter -B out -DFE_MOUNT_CLI_DIR=/path/to/FileEncryptor/CLI
 #   cmake -S FE-Mounter -B out -DFE_MOUNT_CLI_INCLUDE=/path/to/vdisk.h
 cmake_minimum_required(VERSION 3.15)
-project(FileEncryptorMounter VERSION 3.1.0 LANGUAGES CXX)
+project(FileEncryptorMounter VERSION 3.1.1 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -88,10 +88,10 @@ message(STATUS "vdisk.h 目录: ${_fe_mount_inc}")
 message(STATUS "产物目录: ${FE_MOUNT_BIN_OUT}")
 
 # libsodium：secure_zero(sodium_memzero)、crypto_generichash 需 <sodium.h> 与（Windows）静态链接。
-# 与 CLI 同源 third_party/libsodium，保证 FE-Mounter 与 vdisk.dll 用同一套清零/哈希原语（#6 统一）。
+# 与 CLI 同源 Third Party/libsodium，保证 FE-Mounter 与 vdisk.dll 用同一套清零/哈希原语（#6 统一）。
 set(_sodium_root "${SODIUM_ROOT}")
 if(NOT _sodium_root)
-  set(_sodium_root "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/libsodium")
+  set(_sodium_root "${CMAKE_CURRENT_SOURCE_DIR}/../Third Party/libsodium")
 endif()
 if(NOT EXISTS "${_sodium_root}")
   set(_sodium_root "$ENV{ProgramFiles}/libsodium")
@@ -215,7 +215,7 @@ if(WIN32)
           "${_winfsp_root}/bin/winfsp-x64.sys"
           "${_winfsp_root}/bin/winfsp.sys"
           "C:/Windows/System32/drivers/winfsp.sys"
-          "${CMAKE_SOURCE_DIR}/../third_party/winfsp/winfsp-x64.sys")
+          "${CMAKE_SOURCE_DIR}/../Third Party/winfsp/winfsp-x64.sys")
       set(_winfsp_sys_found "")
       foreach(_cand ${_winfsp_sys_candidates})
         if(EXISTS "${_cand}")
@@ -228,7 +228,7 @@ if(WIN32)
           COMMAND ${CMAKE_COMMAND} -E copy_if_different
                   "${_winfsp_sys_found}" "$<TARGET_FILE_DIR:FE-Mounter>/winfsp-x64.sys")
       else()
-        message(WARNING "未找到 winfsp-x64.sys（已查 ${_winfsp_sys_candidates}）；干净机将无法自安装内核驱动，盘符挂载会失效。请确认 WinFSP SDK 完整（含 bin\\winfsp-x64.sys），或将正版 winfsp-x64.sys 放入 third_party/winfsp/。")
+        message(WARNING "未找到 winfsp-x64.sys（已查 ${_winfsp_sys_candidates}）；干净机将无法自安装内核驱动，盘符挂载会失效。请确认 WinFSP SDK 完整（含 bin\\winfsp-x64.sys），或将正版 winfsp-x64.sys 放入 Third Party/winfsp/。")
       endif()
       foreach(_extra launcher-x64.exe fsptool-x64.exe)
         if(EXISTS "${_winfsp_root}/bin/${_extra}")

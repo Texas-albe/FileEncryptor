@@ -1,0 +1,145 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+	<PropertyGroup>
+		<!-- 只做 Android：本机仅装 maui-android 负载，含 ios/maccatalyst 会 NETSDK1147 -->
+		<TargetFramework>net10.0-android36.0</TargetFramework>
+		<!-- 只用复数形式：.NET for Android 的 DefaultProperties.targets 里有
+		     <RuntimeIdentifier Condition="'$(RuntimeIdentifiers)' != '' And '$(RuntimeIdentifier)' != ''" />，
+		     复数与单数同时非空时 SDK 会把单数清空。发布配置（.pubxml）里因此不能再写单数 RID，
+		     否则 PublishSingleFile 等属性拿不到 RID，直接报 NETSDK1191。 -->
+		<RuntimeIdentifiers>android-arm64</RuntimeIdentifiers>
+		<SupportedOSPlatformVersion>26.0</SupportedOSPlatformVersion>
+
+		<OutputType>Exe</OutputType>
+		<RootNamespace>FileEncryptorMobile</RootNamespace>
+		<UseMaui>true</UseMaui>
+		<SingleProject>true</SingleProject>
+		<ImplicitUsings>enable</ImplicitUsings>
+		<Nullable>enable</Nullable>
+		<MauiXamlInflator>SourceGen</MauiXamlInflator>
+
+		<ApplicationTitle>FileEncryptor</ApplicationTitle>
+		<ApplicationId>com.yaoyingluo.fileencryptor</ApplicationId>
+		<ApplicationDisplayVersion>1.0.0</ApplicationDisplayVersion>
+		<ApplicationVersion>7</ApplicationVersion>
+
+		<!-- LibraryImport 源生成器需要不安全代码 -->
+		<AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+	</PropertyGroup>
+
+	<!-- VS 自带工具链：注册表未写入，必须显式指定否则找不到 SDK -->
+	<PropertyGroup>
+		<AndroidSdkDirectory>E:\Microsoft Visual Studio SDK\Android\android-sdk</AndroidSdkDirectory>
+		<AndroidNdkDirectory>E:\Microsoft Visual Studio SDK\Android\AndroidNDK\android-ndk-r27c</AndroidNdkDirectory>
+		<JavaSdkDirectory>E:\Microsoft Visual Studio SDK\Android\openjdk\jdk-21.0.8</JavaSdkDirectory>
+	</PropertyGroup>
+
+	<!-- 本地签名参数：命令行 > 环境变量 FE_KEYSTORE_PASS > keystore.local.props（不入库）。
+	     VS 的「生成 APK / 部署」拿不到命令行参数，只靠环境变量会报 XA4314（AndroidSigningKeyPass 为空），
+	     所以补一个本地属性文件兜底。 -->
+	<Import Project="keystore.local.props" Condition="Exists('keystore.local.props')" />
+
+	<!-- Release 签名：复用本地 fe-release.keystore（覆盖升级须同证书）。
+	     密码优先取环境变量 FE_KEYSTORE_PASS，避免入库；VS 里走 keystore.local.props。 -->
+	<PropertyGroup Condition="'$(Configuration)' == 'Release'">
+		<AndroidKeyStore>True</AndroidKeyStore>
+		<AndroidSigningKeyStore Condition="'$(AndroidSigningKeyStore)' == ''">$(FeAndroidSigningKeyStore)</AndroidSigningKeyStore>
+		<AndroidSigningKeyStore Condition="'$(AndroidSigningKeyStore)' == ''">C:\Users\Administrator\.android\fe-release.keystore</AndroidSigningKeyStore>
+		<AndroidSigningKeyAlias Condition="'$(AndroidSigningKeyAlias)' == ''">$(FeAndroidSigningKeyAlias)</AndroidSigningKeyAlias>
+		<AndroidSigningKeyAlias Condition="'$(AndroidSigningKeyAlias)' == ''">fe</AndroidSigningKeyAlias>
+		<AndroidSigningKeyPass Condition="'$(AndroidSigningKeyPass)' == ''">$(FE_KEYSTORE_PASS)</AndroidSigningKeyPass>
+		<AndroidSigningKeyPass Condition="'$(AndroidSigningKeyPass)' == ''">$(FeAndroidSigningKeyPass)</AndroidSigningKeyPass>
+		<AndroidSigningStorePass Condition="'$(AndroidSigningStorePass)' == ''">$(FE_KEYSTORE_PASS)</AndroidSigningStorePass>
+		<AndroidSigningStorePass Condition="'$(AndroidSigningStorePass)' == ''">$(FeAndroidSigningStorePass)</AndroidSigningStorePass>
+	</PropertyGroup>
+
+	<!-- Release R8 keep 规则：AppCompat 布局用类名反射创建控件，R8 会误删整类，
+	     导致 MainActivity.setContentView 抛 InflateException / ClassNotFoundException。 -->
+	<ItemGroup Condition="'$(Configuration)' == 'Release'">
+		<ProguardConfiguration Include="proguard.cfg" />
+	</ItemGroup>
+
+	<!-- Release 冷启动优化：只影响打包形态，不改业务逻辑。
+	     这几项在 SDK 里都有缺省值但随版本变过，显式钉住（缺省一旦翻转就静默变慢）。 -->
+	<PropertyGroup Condition="'$(Configuration)' == 'Release'">
+		<!-- 预编译：启动路径不再走解释执行 -->
+		<RunAOTCompilation>true</RunAOTCompilation>
+		<!-- 托管方法表代替运行时反射注册 JNI，省掉启动期一大段注册开销 -->
+		<AndroidEnableMarshalMethods>true</AndroidEnableMarshalMethods>
+		<!-- R8 收缩 dex，类加载更快 -->
+		<AndroidLinkTool>r8</AndroidLinkTool>
+		<!-- pdb 不进程序集包：.NET Android 会把 pdb 塞进 assembly store，
+		     关掉后包体小约 2.6MB、启动少读一段；要带行号排查时临时
+		     -p:DebugType=portable -p:DebugSymbols=true 重建即可 -->
+		<DebugType>none</DebugType>
+		<DebugSymbols>false</DebugSymbols>
+	</PropertyGroup>
+
+
+	<ItemGroup>
+		<!-- 图标底 / 启动背景 / 主题主色三处必须同色。
+		     自适应图标不走 MauiIcon：Resizetizer 会把底图展平成不透明方块，
+		     圆角在「方蒙版/无蒙版」启动器上就看不见了。
+		     这里只出传统图标，自适应图标由 Platforms/Android/Resources 手写
+		     （底色是圆角 shape，前层是烘焙好圆角的 appiconfg）。 -->
+		<MauiIcon Include="Resources\AppIcon\appicon.png" Color="#4A72C8" />
+		<!-- 前层：给手写的 adaptive-icon 引用（@drawable/appiconfg） -->
+		<MauiImage Include="Resources\AppIcon\appiconfg.png" BaseSize="108,108" />
+
+		<!-- Splash Screen -->
+		<MauiSplashScreen Include="Resources\Splash\splash.png" Color="#4A72C8" BaseSize="256,256" />
+	</ItemGroup>
+
+	<!-- 作者的小巧思：设置页内联音乐播放器读安装包内的 Musics 音频。
+	     目录为空时通配不到文件，播放器显示空态，不影响构建。 -->
+	<ItemGroup>
+		<AndroidAsset Include="Musics\**\*" />
+	</ItemGroup>
+
+	<ItemGroup>
+		<PackageReference Include="Microsoft.Maui.Controls" Version="$(MauiVersion)" />
+		<!-- Media3 绑定来自 Third Party/android-libraries 本地源码构建的包，
+		     由 GUI-Android/nuget.config 的 packageSourceMapping 保证 Media3.* 只从
+		     build/media3-bindings/nuget 本地源还原（包 id/版本与 NuGet 上一致：1.11.1）。 -->
+		<PackageReference Include="Xamarin.AndroidX.Media3.ExoPlayer" Version="1.11.1" />
+		<PackageReference Include="Xamarin.AndroidX.Media3.DataSource" Version="1.11.1" />
+		<PackageReference Include="Xamarin.AndroidX.Media3.Common" Version="1.11.1" />
+		<!-- 系统媒体控制（MediaSession / MediaSessionService），同样来自本地源码绑定 -->
+		<PackageReference Include="Xamarin.AndroidX.Media3.Session" Version="1.11.1" />
+		<!-- Media3 1.11.1 把 Lifecycle/Collection 拉到 2.11 / 1.6，Maui 基线部分包仍锁 2.9.2.1 / 1.5.0.3。
+		     显式对齐同版本消除 NU1608；升级前勿删，否则还原又报依赖约束冲突。 -->
+		<PackageReference Include="Xamarin.AndroidX.Lifecycle.LiveData.Core.Ktx" Version="2.11.0.1" />
+		<PackageReference Include="Xamarin.AndroidX.Lifecycle.LiveData.Core" Version="2.11.0.1" />
+		<PackageReference Include="Xamarin.AndroidX.Lifecycle.LiveData" Version="2.11.0.1" />
+		<PackageReference Include="Xamarin.AndroidX.Lifecycle.Process" Version="2.11.0.1" />
+		<PackageReference Include="Xamarin.AndroidX.Lifecycle.Runtime.Ktx.Android" Version="2.11.0.1" />
+		<PackageReference Include="Xamarin.AndroidX.Lifecycle.Runtime.Ktx" Version="2.11.0.1" />
+		<PackageReference Include="Xamarin.AndroidX.Lifecycle.ViewModel.Android" Version="2.11.0.1" />
+		<PackageReference Include="Xamarin.AndroidX.Lifecycle.ViewModel.Ktx" Version="2.11.0.1" />
+		<PackageReference Include="Xamarin.AndroidX.Lifecycle.ViewModel" Version="2.11.0.1" />
+		<PackageReference Include="Xamarin.AndroidX.Lifecycle.ViewModelSavedState.Android" Version="2.11.0.1" />
+		<PackageReference Include="Xamarin.AndroidX.Lifecycle.ViewModelSavedState" Version="2.11.0.1" />
+		<PackageReference Include="Xamarin.AndroidX.Collection.Ktx" Version="1.6.0.1" />
+		<PackageReference Include="Xamarin.AndroidX.SavedState.SavedState.Ktx" Version="1.5.0.1" />
+	</ItemGroup>
+
+	<!-- native 加密核心：由 CLI 的 vdisk 目标 NDK 交叉编译产出 -->
+	<ItemGroup Condition="'$(TargetPlatformIdentifier)' == 'android'">
+		<AndroidNativeLibrary Include="Platforms\Android\native\arm64-v8a\libvdisk.so" />
+		<!-- 与 vdisk 同 NDK(r27c) 构建的 libc++_shared，消除双 libc++ ODR 冲突 -->
+		<AndroidNativeLibrary Include="Platforms\Android\native\arm64-v8a\libc++_shared.so" />
+	</ItemGroup>
+
+	<!-- nextlib FFmpeg 软解兜底：TMPlayer 补丁版(9.0.1 arm64)，源码与构建在 E:\third_party\nextlib -->
+	<ItemGroup Condition="'$(TargetPlatformIdentifier)' == 'android'">
+		<AndroidLibrary Include="ThirdParty\nextlib\media3ext-release.aar" TransformFile="Transforms\Metadata.xml" />
+		<!-- SDK 对 net10.0-android36.0 的 Transforms glob 失效（TFM 条件恒 false），显式挂全局 transform -->
+		<TransformFile Include="Transforms\Metadata.xml" />
+		<!-- FFmpeg 四库未被 CMake imported 打包进 AAR，单独随 APK 分发 -->
+		<AndroidNativeLibrary Include="ThirdParty\nextlib\arm64-v8a\libavcodec.so" />
+		<AndroidNativeLibrary Include="ThirdParty\nextlib\arm64-v8a\libavutil.so" />
+		<AndroidNativeLibrary Include="ThirdParty\nextlib\arm64-v8a\libswresample.so" />
+		<AndroidNativeLibrary Include="ThirdParty\nextlib\arm64-v8a\libswscale.so" />
+	</ItemGroup>
+
+</Project>

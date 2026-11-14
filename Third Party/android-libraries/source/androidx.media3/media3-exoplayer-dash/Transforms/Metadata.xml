@@ -1,0 +1,83 @@
+﻿<metadata>
+    <!-- Covariant return type -->
+    <attr
+        path="/api/package[@name='androidx.media3.exoplayer.dash.manifest']/class[@name='DashManifestParser']/method[@name='parse' and count(parameter)=2 and parameter[1][@type='android.net.Uri'] and parameter[2][@type='java.io.InputStream']]"
+        name="managedReturn"
+        >
+        Java.Lang.Object
+    </attr>
+    <attr
+        path="/api/package[@name='androidx.media3.exoplayer.dash.manifest']/class[@name='DashManifest']/method[@name='copy' and count(parameter)=1 and parameter[1][@type='java.util.List&lt;androidx.media3.common.StreamKey&gt;']]"
+        name="managedReturn"
+        >
+        Java.Lang.Object
+    </attr>
+
+    <!-- Erased parameter -->
+    <attr
+       path="/api/package[@name='androidx.media3.exoplayer.dash.offline']/class[@name='DashDownloader']/method[@name='getSegments' and count(parameter)=3 and parameter[1][@type='androidx.media3.datasource.DataSource'] and parameter[2][@type='androidx.media3.exoplayer.dash.manifest.DashManifest'] and parameter[3][@type='boolean']]/parameter[2]"
+       name="managedType"
+          >
+      Java.Lang.Object
+    </attr>
+
+  <!-- Generics arity problem -->
+    <remove-node
+        path="/api/package[@name='androidx.media3.exoplayer.dash']/interface[@name='DashChunkSource']"
+        />
+
+
+        
+    <attr
+        path="/api/package[@name='androidx.media3.exoplayer.dash']/class[@name='DashMediaSource']/method[@name='canUpdateMediaItem' and count(parameter)=1 and parameter[1][@type='androidx.media3.common.MediaItem']]"
+        name="final"
+        >
+      true
+    </attr>
+    <attr
+        path="/api/package[@name='androidx.media3.exoplayer.dash']/class[@name='DashMediaSource']/method[@name='updateMediaItem' and count(parameter)=1 and parameter[1][@type='androidx.media3.common.MediaItem']]"        
+        name="final"
+        >
+      true
+    </attr>
+
+
+    <attr
+        path="/api/package[@name='androidx.media3.exoplayer.dash']/class[@name='DashMediaSource.Factory']/method[@name='createMediaSource' and count(parameter)=1 and parameter[1][@type='androidx.media3.common.MediaItem']]"
+        name="managedReturn"
+        >
+        AndroidX.Media3.ExoPlayer.Source.IMediaSource
+    </attr>
+    <attr
+        path="/api/package[@name='androidx.media3.exoplayer.dash']/class[@name='DashMediaSource.Factory']/method[@name='setDrmSessionManagerProvider' and count(parameter)=1 and parameter[1][@type='androidx.media3.exoplayer.drm.DrmSessionManagerProvider']]"
+        name="managedReturn"
+        >
+        AndroidX.Media3.ExoPlayer.Source.IMediaSourceMediaSourceIFactory
+    </attr>
+    <attr
+        path="/api/package[@name='androidx.media3.exoplayer.dash']/class[@name='DashMediaSource.Factory']/method[@name='setLoadErrorHandlingPolicy' and count(parameter)=1 and parameter[1][@type='androidx.media3.exoplayer.upstream.LoadErrorHandlingPolicy']]"
+        name="managedReturn"
+        >
+        AndroidX.Media3.ExoPlayer.Source.IMediaSourceMediaSourceIFactory
+    </attr>
+
+    <!-- Remove duplicate methods in DashDownloader.Factory -->
+    <remove-node path="/api/package[@name='androidx.media3.exoplayer.dash.offline']/class[@name='DashDownloader.Factory']/method[@name='create' and count(parameter)=1 and parameter[1][@type='androidx.media3.common.MediaItem']]" />
+    <remove-node path="/api/package[@name='androidx.media3.exoplayer.dash.offline']/class[@name='DashDownloader.Factory']/method[@name='setDurationUs' and count(parameter)=1 and parameter[1][@type='long']]" />
+    <remove-node path="/api/package[@name='androidx.media3.exoplayer.dash.offline']/class[@name='DashDownloader.Factory']/method[@name='setExecutor' and count(parameter)=1 and parameter[1][@type='java.util.concurrent.Executor']]" />
+    <remove-node path="/api/package[@name='androidx.media3.exoplayer.dash.offline']/class[@name='DashDownloader.Factory']/method[@name='setMaxMergedSegmentStartTimeDiffMs' and count(parameter)=1 and parameter[1][@type='long']]" />
+    <remove-node path="/api/package[@name='androidx.media3.exoplayer.dash.offline']/class[@name='DashDownloader.Factory']/method[@name='setStartPositionUs' and count(parameter)=1 and parameter[1][@type='long']]" />
+
+    <!-- New in 1.11.0: SegmentBase.SegmentList/SegmentTemplate/SingleSegmentBase override copyWithPresentationTimeOffset
+         with a covariant (subclass) return type, which Java allows but C# cannot satisfy with a plain "override" of
+         the abstract SegmentBase.CopyWithPresentationTimeOffset(long) -> SegmentBase declaration (return types must
+         match exactly). Rename the abstract base declaration so the covariant-returning subclass methods keep their
+         natural name, then provide the real override via Additions (see Additions/SegmentBase.cs). -->
+    <attr
+        path="/api/package[@name='androidx.media3.exoplayer.dash.manifest']/class[@name='SegmentBase']/method[@name='copyWithPresentationTimeOffset' and count(parameter)=1 and parameter[1][@type='long']]"
+        name="managedName"
+        >
+        CopyWithPresentationTimeOffsetCore
+    </attr>
+
+</metadata>

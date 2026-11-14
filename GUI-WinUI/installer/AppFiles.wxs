@@ -269,6 +269,8 @@
         <File Source="$(var.PublishDir)\FileEncryptorGUI.WinUI3.deps.json" />
       </Component>
       <Component Id="f59" Directory="INSTALLFOLDER">
+        <!-- 主程序集：覆盖安装须先删旧文件，否则同版本被跳过复制（旧 DLL + 新 XAML 会崩） -->
+        <RemoveFile Id="rmMainDll" Name="FileEncryptorGUI.WinUI3.dll" On="install" />
         <File Source="$(var.PublishDir)\FileEncryptorGUI.WinUI3.dll" />
       </Component>
       <Component Id="f60" Directory="INSTALLFOLDER">
@@ -665,7 +667,7 @@
         <File Source="$(var.PublishDir)\mscordaccore.dll" />
       </Component>
       <Component Id="f191" Directory="INSTALLFOLDER">
-        <File Source="$(var.PublishDir)\mscordaccore_amd64_amd64_8.0.3126.42015.dll" />
+        <File Source="$(var.PublishDir)\mscordaccore_amd64_amd64_8.0.3226.50405.dll" />
       </Component>
       <Component Id="f192" Directory="INSTALLFOLDER">
         <File Source="$(var.PublishDir)\mscordbi.dll" />

@@ -22,43 +22,42 @@
 
 #define FE_VERSION_MAJOR 3
 #define FE_VERSION_MINOR 1
-#define FE_VERSION_PATCH 0
-#define FE_VERSION_STRING "3.1.0"
+#define FE_VERSION_PATCH 1
+#define FE_VERSION_STRING "3.1.1"
 
-// --force-decrypt：解密时容忍块校验失败与明文哈希不匹配（强制恢复损坏数据）
+// -force-decrypt
 extern bool g_force_decrypt;
 
 enum class CryptoMode: unsigned char {
-    AES_GCM=0,   // 仅用于解密旧格式（v1/v2）文件；新加密不再使用
+    AES_GCM=0,   // AES-256-GCM
     XCHACHA20=1, // 默认模式
-    AEGIS256=2,  // 取代 AES-GCM 的新选项（AEAD，32 字节 nonce / 32 字节 tag）
-    SM4=3        // 国密 SM4-GCM（OpenSSL EVP_sm4_gcm，16 字节密钥 / 12 字节 nonce / 16 字节 tag）
+    AEGIS256=2,  // AEAD
+    SM4=3        // 国密 SM4-GCM
 };
 
-// 进程级限速器（v1.7.2）
-// 用 YAML max_speed（字节/秒，支持 KB/MB/GB）初始化，0=不限速；主循环按字节记账超限休眠。
+// 进程级限速器
+// 用 YAML max_speed
 
-// 生成 "<16 位十六进制>.<混淆扩展名>" 基名（不含 .ptd），由密码与输入路径确定性派生，
-// 故续传仍能命中原输出文件
+// 生成 "<16 位十六进制>.<
+// 故续传仍能命
 std::string make_obfuscated_basename(const std::string& in_path,const SecureBuffer& password);
 
-// read_original_name / read_ptd_metadata / verify_ptd / read_watermark / rewrap_* ：
 // 声明见 ptd_meta.hpp
 
-// 把路径的最后一段替换为 newbase（保留目录部分）
+// 把路径
 std::string replace_basename(const std::string& path,const std::string& newbase);
 
 // 递归创建目录
 
-// 非帧模式的单行 \r 进度条（批量与入盘共用同一观感）；finish=true 时收尾换行。
-// progress_out 指定输出流，默认 stdout；管道输出模式传 &std::cerr 避免污染数据通道。
+// 非帧模式
+// progress_out 指定输出流，默认
 void print_progress(size_t processed,size_t total,
     std::chrono::steady_clock::time_point start, bool finish=false,
     std::ostream* progress_out=&std::cout);
 
-// 管道数据通道（--stdout）：直接走 C `FILE*` 二进制写。
-// 绕开 std::cout 与 C stdio 的同步缓冲——二者交错（进度条写 cerr、数据写 cout）
-// 会导致字节丢失/错位、输出大小不确定，故数据通道不经 iostream。
+// 管道数据通道
+// 绕开 std
+// 会导致字节丢失/
 struct RawStreamBuf : std::streambuf {
     FILE* fp=nullptr;
     explicit RawStreamBuf(FILE* f): fp(f) {}
@@ -73,36 +72,36 @@ protected:
     int sync() override { return fflush(fp)==0 ? 0 : -1; }
 };
 
-// 判断路径是否为已存在的目录（供单文件 -e/-d 拒绝目录输入时使用）
+// 判断路径是否
 bool fe_path_is_directory(const std::string& path);
 
-// 路径穿越检测：拒绝任何包含 ".." 组件（前缀或中间）的路径。
-// 1.5.2 起同时供 CLI 输出目录校验、目录创建与白名单校验复用。
+// 路径穿越检测
+// 5.2 起同时供 CLI 输出目
 bool path_has_traversal(const std::string& p);
 
-// 判断路径是否为符号链接 / 重解析点（已存在才报告，不存在返回 false）。
-// 用于写入前拒绝"通过既有链接写穿到别处"（对称与非对称路径共用）。
+// 判断路径是否
+// 用于写入前拒绝"
 bool path_is_symlink(const std::string& path);
 
-// 依据全局 YAML 配置校验输入输出路径（穿越/长度上限/白名单根目录）。true=允许，false=拒绝。
-// v2.1.2 起对外暴露：此前非对称分支完全绕过白名单与长度策略（高危）。
+// 依据全局 YAML 配置校
+// v2.1.2 起对外暴露
 bool validate_io_paths(const std::string& in_path,const std::string& out_path,bool silent);
 
-// UTF-8 安全原子替换（Win MoveFileExW REPLACE_EXISTING / POSIX rename）
-// 用于「失败即安全擦除半成品输出」，避免半截明文残留。
+// UTF-8 安全原子替换
+// 用于「失败即安全
 bool replace_file_utf8(const std::string& from,const std::string& to);
 
-// 原子输出守卫：先写 <final>.fe_tmp_<hash>，commit() 才落到最终路径。
-// 进程被强杀（GUI 取消=杀进程树）或崩溃时，最终路径上不会出现半截密文，
-// 只留可辨识的 .fe_tmp_ 残留。临时名由最终路径确定性派生 —— 加密支持断点
-// 续传（.prs），用随机名会让重跑认不出上次进度，续传失效且残留堆积。
+// 原子输出守卫
+// 进程
+// 只留可辨识
+// 续传
 class AtomicOutput {
 public:
     explicit AtomicOutput(const std::string& final_path);
     ~AtomicOutput();
-    // 当前应写入的路径：未提交时是临时路径，已提交时是最终路径
+    // 当前应写入
     const std::string& path() const { return committed_ ? final_ : tmp_; }
-    // 自校验等全部通过后再提交；替换失败返回 false（此时最终路径上无半截文件）
+    // 自校验等全部通
     bool commit();
     AtomicOutput(const AtomicOutput&) = delete;
     AtomicOutput& operator=(const AtomicOutput&) = delete;
@@ -112,16 +111,22 @@ private:
     bool committed_ = false;
 };
 
-// 清除 Windows 只读属性位（覆盖写入前调用；POSIX 空操作）。
-// 旧版用 _chmod(_S_IREAD) 只是标只读，二次 -g/-G 会 Cannot write；覆盖前清掉
+// 清除 Windows 只读属性位
+// 旧版用 _chmod
 void clear_readonly_attribute(const std::string& path);
 
-// 收紧密钥文件权限：仅拥有者可读。Windows 写 DACL（当前用户+SYSTEM，PROTECTED_DACL 阻断继承）
-// 达 0600 语义，POSIX 即 chmod 0600；ACL 失败静默回退。
+// 收紧密钥文件权
+// 达 0600 语义
 void tighten_file_permissions(const std::string& path);
 
-// 支持续传。compress_level：0=不压缩，>0/<0=zstd 级别（1..22，负数 -1..-5 快速档）
-// 非 0 时磁盘格式升级 v5；未集成 zstd（FE_WITHOUT_ZSTD）时非 0 值由调用方拒绝。
+// 自动试压
+inline constexpr int FE_COMPRESS_AUTO = 100;
+int fe_probe_compress_level(const unsigned char* data, size_t len);
+
+// 支持续传
+// FE_COMPRESS_AUTO=自动试压；未集
+// in_stream/out_stream 为 fd 等可 seek 流时走流
+// 管道/stdout 等不可 seek 流退
 bool encrypt_file(const std::string& in_path,
     const std::string& out_path,
     const SecureBuffer& password,
@@ -131,16 +136,21 @@ bool encrypt_file(const std::string& in_path,
     int compress_level=0,
     bool asym_mode=false,
     const std::vector<std::string>* asym_recipients=nullptr,
-    const WatermarkSpec* wm=nullptr,    // 非空且 enabled：尾部追加机器指纹 + RSA 签名水印
-    const unsigned char* ext_salt=nullptr,  // 外部预生成盐（批量预派生 KEK 用；续传时忽略）
-    const unsigned char* ext_kek=nullptr,   // 外部预派生 KEK，传入则跳过 Argon2id（续传时忽略）
-    uint32_t chunk_override=0,              // 非 0 且在 [4K,1M] 内：覆盖默认 1MiB 块（库内重加密转 64KB 用）
-    std::istream* in_stream=nullptr,        // 非空时明文来自该流（stdin/管道），不打开 in_path
-    std::ostream* out_stream=nullptr);      // 非空时密文直写该流（--stdout），不落盘、不追加尾部
+    const WatermarkSpec* wm=nullptr,    // 非空且 enabled
+    const unsigned char* ext_salt=nullptr,  // 外部预生成盐
+    const unsigned char* ext_kek=nullptr,   // 外部预派生 KEK
+    uint32_t chunk_override=0,              // 非 0 且
+    std::istream* in_stream=nullptr,        // 非空时明文来自
+    std::ostream* out_stream=nullptr,       // 非空时密文直写
+    // 写入名字信封
+    // 库内入库/改写场
+    // 重建索引只能回
+    const std::string* footer_name=nullptr);
 
-// 解密文件（支持续传）。ext_key：外部已派生最终密钥，传入则直接复用跳过 KDF/解裹；
-// ext_kek：外部已派生 KEK（批量每文件复用），传入则跳过 Argon2id，仍按版本解裹 DEK。
-// asym_identity：非对称容器以身份私钥恢复 DEK（非空时跳过密码 KEK 派生）。
+// 解密文件
+// ext_kek
+// asym_identity
+// in_stream
 bool decrypt_file(const std::string& in_path,
     const std::string& out_path,
     const SecureBuffer& password,
@@ -153,59 +163,77 @@ bool decrypt_file(const std::string& in_path,
     size_t preview_bytes=0,
     const std::string& asym_identity=std::string(),
     bool force_overwrite=false,
-    std::ostream* out_stream=nullptr);  // 非空时明文直写该流（--stdout），不落盘、不续传、不原子rename
+    std::ostream* out_stream=nullptr,  // 非空时明文直写
+    std::istream* in_stream=nullptr);  // 非空时密文来自
 
-// 只读元数据 / 校验（功能2 / 功能3）
-// 不解密、不校验密钥，纯元数据预览（功能2 文件头信息查看器）。
+// 只读元数据 / 校验
+// 不解密、不校验密
 struct PtdMeta {
     unsigned char version=0;
     CryptoMode    mode=CryptoMode::XCHACHA20;
     unsigned int  opslimit=0;
     uint32_t      memlimit_kb=0;
-    std::string   salt_hex;          // 32 字节 salt 的十六进制
+    std::string   salt_hex;          // 32 字节 salt
     std::string   iv_hex;            // nonce 的十六进制
-    uint64_t      orig_size=0;       // 明文原始大小（头部之后的块元数据，非头部字段）
-    uint32_t      chunk_size=0;      // 块大小（同上）
-    uint32_t      total_chunks=0;    // 总块数（同上）
-    std::string   plaintext_hash_hex; // 明文 Blake2b（v3/v4 头部字段），空=旧格式无
-    bool          has_name_footer=false; // 密文尾部是否带（加密）文件名信封
-    bool          valid=false;       // 文件是否为本程序合法产出（magic + 已知版本）
-    unsigned char compression=0;     // 压缩方式：0=无；1=zstd（v5+）
-    unsigned char comp_level=0;     // zstd 压缩级别（仅 compression==1 时有效）
-    bool          dek_wrapped=false; // v6+：DEK 由 KEK 包裹（可密钥轮换）
-    uint32_t      key_version=0;    // v6+：密钥版本（轮换自增，大端解析）
+    uint64_t      orig_size=0;       // 明文原始大小
+    uint32_t      chunk_size=0;      // 块大小
+    uint32_t      total_chunks=0;    // 总块数
+    std::string   plaintext_hash_hex; // 明文 Blake2b
+    bool          has_name_footer=false; // 密文尾部是否带
+    bool          valid=false;       // 文件是否
+    unsigned char compression=0;     // 压缩方式
+    unsigned char comp_level=0;     // zstd 压缩级别
+    bool          dek_wrapped=false; // v6+
+    uint32_t      key_version=0;    // v6+
 };
 
-// 元数据 / 改密 / 水印读取等声明见 ptd_meta.hpp
+// 元数据 / 改密 / 水印
 #include "ptd_meta.hpp"
 
-// 随机读（M0 验证）：从 .ptd 非压缩块按 offset/len 提取明文片段，不整文件解密。
-// 压缩文件无法 O(1) 定位，返回 false 且 *out_compressed=true；非对称容器暂不支持。
-// pre_kek：调用方已缓存的该文件 Argon2 密钥材料（32B，= Argon2id(密码, 文件盐)）。
-// 非空则跳过 derive_key（供挂载层 LRU，§4.1）；v6 用它解裹 DEK，v3–v5 直接作主密钥。
+// 随机读
+// 压缩文件成功
+// out_full 非空且文件
+// pre_kek
+// 非空
 bool random_read_ptd(const std::string& ptd_path,
     const SecureBuffer& password,
     uint64_t offset, uint64_t len,
     std::vector<unsigned char>& out,
     bool* out_compressed = nullptr,
     bool silent = false,
-    const unsigned char* pre_kek = nullptr);
+    const unsigned char* pre_kek = nullptr,
+    std::vector<unsigned char>* out_full = nullptr);
 
-// 派生某 .ptd 的 Argon2 密钥材料（= Argon2id(密码, 该文件盐)），写入 out[32]。
-// 与 random_read_ptd 的 pre_kek 同值，供挂载层缓存以避免每次读都跑 Argon2id。
+// 会话式随机读
+// 之后 read 只剩 pread+解密，消
+// 压缩或旧格式文
+struct PtdReadSession;
+bool ptd_session_open(const std::string& ptd_path,
+    const SecureBuffer& password,
+    const unsigned char* pre_kek,
+    bool silent,
+    PtdReadSession** out);
+bool ptd_session_read(PtdReadSession* s,
+    uint64_t offset, uint64_t len,
+    std::vector<unsigned char>& out,
+    bool silent = true);
+void ptd_session_destroy(PtdReadSession* s);
+
+// 派生某 .ptd
+// 与 random_read_ptd
 bool fe_ptd_argon2_key(const std::string& ptd_path,
     const SecureBuffer& password,
     unsigned char out[32]);
 
-// 完整性校验（功能3：只验不解）：声明见 ptd_meta.hpp
+// 完整性校验
 
-// SHA-256 校验单（功能10）：启用后加密成功生成 <out>.ptd.sha256。
+// SHA-256 校验单
 void set_write_sha256(bool b);
 bool write_sha256_enabled();
 void write_sha256_sidecar(const std::string& file);
 
-// 批量处理（支持并行）。restore_name：批量解密是否还原完整原始文件名。默认 false
-// 为省去每文件昂贵的 Argon2id（仅还原名用），仅保留扩展名；置 true 时还原全名（性能较差）。
+// 批量处理
+// 为省去每文件昂
 bool process_files(const std::vector<std::string>& input_paths,
     const std::string& out_dir,
     const SecureBuffer& password,
@@ -216,49 +244,53 @@ bool process_files(const std::vector<std::string>& input_paths,
     int num_threads=0,
     bool restore_name=false,
     int compress_level=0,
-    const WatermarkSpec* wm=nullptr,     // 批量加密时每个文件都带水印
-    uint64_t split_bytes=0);             // >0 时加密后切分卷，单位字节（0=不分卷）
+    const WatermarkSpec* wm=nullptr,     // 批量加密时每
+    uint64_t split_bytes=0);             // >0 时加密后切分卷
 
 
-// 认证失败详细输出开关（由 CLI -v/--verbose 设置）。
-// 关闭时所有认证失败只输出通用错误，避免向潜在攻击者泄露细节（最小信息泄露原则）。
+// 认证失败详细输
+// 关闭时所有认证
 void set_verbose(bool v);
+
+// 最近一次 decrypt_file 失败
+// 供 C ABI 细化错误码
+bool fe_last_fail_auth();
 
 void anti_debug_check();
 
-// 运行时探测 AEGIS-256 是否可用（缺 AES-NI 的 CPU 上不可用）
+// 运行时探测 AEGIS-256 是否
 bool aegis256_supported();
 
-// 探测 SM4-GCM 可用性（依赖 OpenSSL 静态链接，FE_WITH_OPENSSL 未开启时恒 false）
+// 探测 SM4-GCM 可用性
 bool sm4_supported();
 
-// 运行时探测 AES-256-GCM 是否可用（缺 AES-NI 的 CPU 上不可用）
-// 数据块大小：默认 1 MiB，头部可覆盖（合法区间见 MIN/MAX）
+// 运行时探测 AES-256-GCM 是否
+// 数据块大小
 static constexpr size_t   CHUNK_SIZE     = 1 * 1024 * 1024;
 static constexpr uint32_t MIN_CHUNK_SIZE = 4096;
 static constexpr uint32_t MAX_CHUNK_SIZE = CHUNK_SIZE;
 
-// 各加密模式的认证标签长度（AES-GCM 16 / 其余 16，按需扩展）
+// 各加密模式
 size_t tag_size_for_mode(CryptoMode m);
 
 bool aes_gcm_supported();
-// 探测密文尾部加密名/水印区总长：声明见 name_obfuscate.hpp
+// 探测密文尾部加
 
-// 运行时探测后量子密码是否可用（ML-KEM-768 封装 / ML-DSA-65 签名，依赖 OpenSSL）
+// 运行时探测后量
 bool pqc_supported();
 
-// 判断标准输入是否为交互终端（用于决定是否就 AEGIS-256 降级询问用户）。
-// GUI 经管道传参、--key-stdin、cron 等非 TTY 场景均返回 false。
+// 判断标准输入
+// GUI 经管道传参、--key-stdin、cron
 bool stdin_is_interactive();
 
-// 加密模式解析：请求 AEGIS-256 但 CPU 不支持时，交互终端提示 (Y/n) 降级 XChaCha20；
-// 非交互（GUI 管道/cron）禁止自动降级，refuse=true 由调用方中止。返回最终模式。
+// 加密模式解析
+// 非交互
 CryptoMode resolve_encrypt_mode(CryptoMode requested, bool interactive,
     bool& refuse, std::string& message);
 
-// rewrap_file / rewrap_file_with ：声明见 ptd_meta.hpp
+// rewrap_file / rewrap_file_with ：声明见
 
-// 跨平台路径打开辅助
+// 跨平台路径打开
 #ifdef _WIN32
 static inline std::wstring utf8_to_wstring(const std::string& str) {
     if(str.empty()) return std::wstring();
@@ -288,5 +320,5 @@ static inline bool open_stream(T& stream,const std::string& path,std::ios::openm
 #endif
 }
 
-// UTF-8 安全的文件删除：声明与定义已迁到 core/output_lock.hpp / output_lock.cpp
-// （原 static inline 定义与此处的 extern 前向声明链接属性冲突，Linux GCC 直接报错）
+// UTF-8 安全
+// （原 static inline 定义

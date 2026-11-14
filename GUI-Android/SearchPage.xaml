@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             xmlns:services="clr-namespace:FileEncryptorMobile.Services"
+             x:Class="FileEncryptorMobile.SearchPage"
+             xmlns:local="clr-namespace:FileEncryptorMobile"
+             Title="{local:Zh 搜索}">
+
+    <Grid RowDefinitions="Auto,Auto,Auto,*,Auto" Padding="16,12,16,12">
+
+        <Border Grid.Row="0" Style="{StaticResource FieldBorder}">
+            <Entry x:Name="SearchBox" Style="{StaticResource FieldEntry}"
+                   Placeholder="{local:Zh 输入文件名关键字（不区分大小写）}" TextChanged="OnQueryChanged" />
+        </Border>
+
+        <Border Grid.Row="1" Style="{StaticResource Card}" Padding="12" Margin="0,10,0,0">
+            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="{StaticResource GridGap}">
+                <VerticalStackLayout Grid.Column="0" Spacing="3">
+                    <Label Text="{local:Zh 搜索范围}" Style="{StaticResource SectionTitle}" />
+                    <Label Text="{local:Zh 整库搜索：包含所有子目录。}" Style="{StaticResource Caption}" />
+                </VerticalStackLayout>
+                <Switch Grid.Column="1" x:Name="SwRecursive" IsToggled="True"
+                        Toggled="OnRecursiveChanged" VerticalOptions="Center" />
+            </Grid>
+        </Border>
+
+        <Label Grid.Row="2" x:Name="LblStatus" Style="{StaticResource Caption}"
+               Text="{local:Zh 只搜文件名，不解密内容。}"
+               Margin="0,10,0,6" />
+
+        <CollectionView Grid.Row="3" x:Name="ResultList" SelectionMode="None">
+            <CollectionView.ItemTemplate>
+                <DataTemplate x:DataType="services:VaultItem">
+                    <Grid Padding="12,10" RowDefinitions="Auto,Auto" ColumnDefinitions="Auto,*"
+                          ColumnSpacing="{StaticResource GridGapSm}">
+                        <Grid.GestureRecognizers>
+                            <TapGestureRecognizer Tapped="OnResultTapped"
+                                                  CommandParameter="{Binding .}" />
+                        </Grid.GestureRecognizers>
+                        <Label Grid.RowSpan="2" Grid.Column="0" Text="{Binding Placeholder}"
+                               FontSize="{StaticResource FontSizeCaption}" WidthRequest="40" VerticalOptions="Center"
+                               TextColor="{AppThemeBinding Light={StaticResource TextMutedLight}, Dark={StaticResource TextMutedDark}}" />
+                        <Label Grid.Row="0" Grid.Column="1" Text="{Binding Name}"
+                               FontSize="{StaticResource FontSizeField}" LineBreakMode="TailTruncation" />
+                        <Label Grid.Row="1" Grid.Column="1" Text="{Binding RelPath}"
+                               Style="{StaticResource Caption}"
+                               LineBreakMode="MiddleTruncation" />
+                    </Grid>
+                </DataTemplate>
+            </CollectionView.ItemTemplate>
+            <CollectionView.EmptyView>
+                <VerticalStackLayout Spacing="6" Padding="24,36"
+                                     HorizontalOptions="Center" VerticalOptions="Center">
+                    <Label Text="{local:Zh 无匹配结果}" Style="{StaticResource SectionTitle}"
+                           HorizontalTextAlignment="Center" HorizontalOptions="Center" />
+                    <Label Text="{local:Zh 换个关键字试试，或确认已开启整库搜索。}"
+                           Style="{StaticResource Caption}"
+                           HorizontalTextAlignment="Center" HorizontalOptions="Center" />
+                </VerticalStackLayout>
+            </CollectionView.EmptyView>
+        </CollectionView>
+
+        <Button Grid.Row="4" Text="{local:Zh 返回}" Clicked="OnClose"
+                Style="{StaticResource SecondaryButton}" Margin="0,10,0,0" />
+    </Grid>
+</ContentPage>

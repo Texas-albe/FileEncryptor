@@ -1,10 +1,10 @@
 <Project Sdk="WixToolset.Sdk/4.0.5">
   <PropertyGroup>
-    <!-- 版本 3.1.0。覆盖安装的文件替换问题由 Product.wxs 的
+    <!-- 版本 3.1.1。覆盖安装的文件替换问题由 Product.wxs 的
          MajorUpgrade AllowSameVersionUpgrades="yes" 解决（相同版本也先卸后装），不靠版本号递增。 -->
-    <GuiVersion>3.1.0</GuiVersion>
+    <GuiVersion>3.1.1</GuiVersion>
     <!-- CLI 产物名由 CMake project(VERSION) 拼出，只支持数值版（无 -alpha.N），故独立定义 -->
-    <CliVersion>3.1.0</CliVersion>
+    <CliVersion>3.1.1</CliVersion>
     <OutputType>Package</OutputType>
     <OutputName>FileEncryptorGUI-$(GuiVersion)-WinUI-Windows</OutputName>
     <Platform>x64</Platform>
@@ -33,7 +33,15 @@
     <MSBuild Projects="..\FileEncryptorGUI.WinUI3.csproj"
              Targets="Publish"
              Properties="Configuration=$(Configuration);Platform=x64;RuntimeIdentifier=win-x64;SelfContained=true" />
-    <Copy SourceFiles="..\bin\x64\$(Configuration)\net8.0-windows10.0.19041.0\win-x64\App.xbf;..\bin\x64\$(Configuration)\net8.0-windows10.0.19041.0\win-x64\MainWindow.xbf;..\bin\x64\$(Configuration)\net8.0-windows10.0.19041.0\win-x64\TaskNotificationWindow.xbf"
+    <!-- .xbf 必须从「普通 Build」输出拷：SelfContained Publish 不产出 .xbf，而 win-x64\ 子目录
+         里的 .xbf 是 RID 构建的陈旧中间产物（停在上次带 RID 的构建），拷它会把旧 XAML 装进 MSI——
+         曾因新 DLL + 旧 XBF 元素编号错位，运行即 XamlUnhandledException/InvalidCastException。
+         普通 Build（Platform=x64，无 RID）的输出在 net8.0-windows10.0.19041.0\ 顶层，这才是最新 XAML。 -->
+    <Copy SourceFiles="..\bin\x64\$(Configuration)\net8.0-windows10.0.19041.0\App.xbf;..\bin\x64\$(Configuration)\net8.0-windows10.0.19041.0\MainWindow.xbf;..\bin\x64\$(Configuration)\net8.0-windows10.0.19041.0\TaskNotificationWindow.xbf"
+          DestinationFolder="..\bin\x64\$(Configuration)\net8.0-windows10.0.19041.0\win-x64\publish" />
+    <!-- resources.pri 同理：增量 Publish 不会刷新 publish 目录里的旧 pri（XAML 资源表），
+         旧 pri + 新 xbf 会让 XAML 元素解析错位，运行即 InvalidCastException。必须显式同步。 -->
+    <Copy SourceFiles="..\bin\x64\$(Configuration)\net8.0-windows10.0.19041.0\resources.pri"
           DestinationFolder="..\bin\x64\$(Configuration)\net8.0-windows10.0.19041.0\win-x64\publish" />
     <!-- Updater 由 Updater 工程独立产出（build_updater.ps1 已废弃），先构建再补拷进 publish -->
     <Exec Command="&quot;$(BuildHelper)&quot; &quot;$(VcVarsBat)&quot; &quot;$(CMakeExe)&quot; &quot;..\..\Updater\out\build\x64-Release&quot; Release"
@@ -59,7 +67,7 @@
     <CMakeExe Condition="'$(CMakeExe)'==''">E:\MICROSOFT VISUAL STUDIO\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe</CMakeExe>
     <!-- 构建脚本：复刻 vcvars_env.py 的环境补偿（先 vcvars 设好 MSVC/SDK 环境，再补本机缺失的 SDK um/ucrt 库路径），
          然后跑 cmake build。用独立 .bat 而非 cmd /c 内联，避免 %LIB% 解析期展开冲掉 vcvars 设置的库路径。 -->
-    <BuildHelper>$(MSBuildThisFileDirectory)..\..\.workbuddy\build_with_vcvars.bat</BuildHelper>
+    <BuildHelper>$(MSBuildThisFileDirectory)..\..\scripts\build_with_vcvars.bat</BuildHelper>
   </PropertyGroup>
 
   <!-- CLI 三件套并入 MSI：publish 之后拷贝，确保不被动覆盖；cmake 已配置则先增量编译 -->
@@ -72,9 +80,9 @@
     <!-- 构建树被删除时上面的 Exec 会被 Condition 静默跳过，表现为「MSI 里没有 CLI/挂载组件」
          却无任何提示。这里显式告警并给出恢复命令。 -->
     <Warning Condition="!Exists('$(CliBuildDir)\CMakeCache.txt')"
-             Text="[installer] CLI 构建树未配置（$(CliBuildDir) 无 CMakeCache.txt），已跳过 CLI 编译：安装包将缺少 CLI 与 vdisk.dll。请先执行：python E:\FileEncryptor\.workbuddy\build_cli.py" />
+             Text="[installer] CLI 构建树未配置（$(CliBuildDir) 无 CMakeCache.txt），已跳过 CLI 编译：安装包将缺少 CLI 与 vdisk.dll。请先执行：python E:\FileEncryptor\scripts\build_cli.py" />
     <Warning Condition="!Exists('$(MounterBuildDir)\CMakeCache.txt')"
-             Text="[installer] FE-Mounter 构建树未配置（$(MounterBuildDir) 无 CMakeCache.txt），已跳过挂载组件编译：安装包将缺少 FE-Mounter.exe。请先执行：python E:\FileEncryptor\.workbuddy\build_mounter.py" />
+             Text="[installer] FE-Mounter 构建树未配置（$(MounterBuildDir) 无 CMakeCache.txt），已跳过挂载组件编译：安装包将缺少 FE-Mounter.exe。请先执行：python E:\FileEncryptor\scripts\build_mounter.py" />
     <!-- 产物目录逐个文件解析：CLI 主构建是 Ninja 单配置，产物直接落 bin\；
          FE-Mounter 走 VS 生成器，产物落 bin\Release\（bin\Release\ 里还留着早期
          多配置时代的陈旧 CLI 副本）。写死一个目录会装进旧 CLI，表现为
@@ -94,7 +102,7 @@
       <P_Launcher Condition="'$(P_Launcher)'==''">$(CliBinCfg)launcher-x64.exe</P_Launcher>
       <P_WinfspSys Condition="Exists('$(CliBinRoot)winfsp-x64.sys')">$(CliBinRoot)winfsp-x64.sys</P_WinfspSys>
       <P_WinfspSys Condition="'$(P_WinfspSys)'==''">$(CliBinCfg)winfsp-x64.sys</P_WinfspSys>
-      <P_WinfspSys Condition="'$(P_WinfspSys)'==''">$(MSBuildThisFileDirectory)..\..\third_party\winfsp\winfsp-x64.sys</P_WinfspSys>
+      <P_WinfspSys Condition="'$(P_WinfspSys)'==''">$(MSBuildThisFileDirectory)..\..\Third Party\winfsp\winfsp-x64.sys</P_WinfspSys>
     </PropertyGroup>
     <Copy SourceFiles="$(P_CliExe)"
           DestinationFiles="$(GuiPublishDir)\FileEncryptorCLI.exe"
@@ -137,6 +145,7 @@
     <Warning Condition="!Exists('$(P_Winfsp)')"
              Text="[installer] 未找到 winfsp-x64.dll：安装包将不含 WinFSP 运行时，盘符挂载无法工作。请确认构建 FE-Mounter 时能找到 WinFSP SDK。" />
     <Warning Condition="!Exists('$(P_WinfspSys)')"
-             Text="[installer] 未找到 winfsp-x64.sys（已查 CLI bin\、bin\Release\、third_party\winfsp\）：安装包将不含 WinFSP 内核驱动，未预装 WinFSP 的干净机（如 Win11 22H2 样机）盘符挂载会失效。请确认 WinFSP SDK 完整（含 bin\winfsp-x64.sys），或将正版签名的 winfsp-x64.sys 放入 E:\FileEncryptor\third_party\winfsp\ 后重新生成。" />
+             Text="[installer] 未找到 winfsp-x64.sys（已查 CLI bin\、bin\Release\、Third Party\winfsp\）：安装包将不含 WinFSP 内核驱动，未预装 WinFSP 的干净机（如 Win11 22H2 样机）盘符挂载会失效。请确认 WinFSP SDK 完整（含 bin\winfsp-x64.sys），或将正版签名的 winfsp-x64.sys 放入 E:\FileEncryptor\Third Party\winfsp\ 后重新生成。" />
   </Target>
+
 </Project>

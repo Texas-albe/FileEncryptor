@@ -1,0 +1,75 @@
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+
+  <ItemGroup>
+    <FirstParty Include="Xamarin.Android.*.dll" />
+    <FirstParty Include="Xamarin.AndroidX.*.dll" />
+    <FirstParty Include="Xamarin.Google.*.dll" />
+    <FirstParty Include="Xamarin.Jetbrains.*.dll" />
+    <FirstParty Include="Xamarin.Kotlin.*.dll" />    
+    <FirstParty Include="Xamarin.KotlinX.*.dll" />    
+    <FirstParty Include="Xamarin.Google.AutoValue.*.dll" />    
+    <FirstParty Include="GoogleGson.dll" />
+    <FirstParty Include="androidx-migrator.dll" />
+    <FirstParty Include="jetifierWrapper*.jar" />
+    <FirstParty Include="org.jetbrains.*.jar" />
+    <FirstParty Include="kotlinx-coroutines*.jar" />  
+    <FirstParty Include="Xamarin.Google.Guava.*.dll" />
+    <FirstParty Include="Xamarin.AAkira.*.dll" />
+    <FirstParty Include="Xamarin.Dev.ChrisBanes.Snapper.dll" />
+    <FirstParty Include="Xamarin.Flogger.dll" />
+    <FirstParty Include="Xamarin.Flogger.*.dll" />
+    <FirstParty Include="Xamarin.CheckerFramework.*.dll" />
+    <FirstParty Include="Xamarin.Build.Download.dll" />
+    <FirstParty Include="Xamarin.AndroidBinderator.dll" />
+    <FirstParty Include="Xamarin.AndroidBinderator.Tool.dll" />    
+    <FirstParty Include="guava*.jar" />
+    <FirstParty Include="checker-qual.jar" />
+    <FirstParty Include="checker-compat-qual.jar" />
+    <FirstParty Include="j2objc-annotations.jar" />  
+
+    <!-- GPS-FB-MLKit SignList.xml -->
+    <!-- Automatically sign all "Xamarin." assemblies, which all packages *should* use -->
+    <FirstParty Include="Xamarin.*.dll" />
+    
+    <!-- Other names shouldn't be used, but we have to support some historical mistakes -->
+    <FirstParty Include="Jsr305Binding.dll" />
+    <FirstParty Include="Square.*.dll" />
+    <FirstParty Include="Google.ZXing.*.dll" />
+    <FirstParty Include="org.tensorflow.*.dll" />
+
+  </ItemGroup>
+
+  <ItemGroup>
+    <ThirdParty Include="ILRepack.dll" />
+    <ThirdParty Include="protobuf-net.dll" />
+    <ThirdParty Include="Newtonsoft.Json.dll" />
+    <ThirdParty Include="Mono.Cecil.dll" />
+    <ThirdParty Include="Mono.Cecil.*.dll" />
+    <ThirdParty Include="androidx*.jar" />
+
+    <!-- GPS-FB-MLKit SignList.xml -->    
+    <ThirdParty Include="disklrucache.jar" />
+    <ThirdParty Include="annotations.jar" />
+    <!-- Xamarin.AndroidX.Compose.Runtime.Annotation(.Jvm) -->
+    <ThirdParty Include="runtime-annotation*.jar" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Skip Include="System.dll" />
+    <Skip Include="System.*.dll" />
+    <Skip Include="NuGet.*.dll" />
+    <Skip Include="Microsoft.*.dll" />
+    <Skip Include="Mono.*.dll" />
+    <Skip Include="MonoPosixHelper.dll" />
+    <Skip Include="libMonoPosixHelper.dll" />
+    <Skip Include="MavenNet.dll" />
+    <Skip Include="RazorLight.dll" />
+    <Skip Include="mscorlib.dll" />
+    <Skip Include="netstandard.dll" />
+    <Skip Include="WindowsBase.dll" />
+    <Skip Include="mscorlib.dll" />
+
+    <!-- GPS-FB-MLKit SignList.xml -->
+  </ItemGroup>
+
+</Project>

@@ -6,20 +6,20 @@
 class FileEncryptorLocator {
 public:
     static QString locate();
-    // 外壳 exe 所在目录
+    // 外壳 exe
     static QString selfDir();
     static QString version();
     // GUI 自身版本
     static QString guiVersion();
     // CLI 下载页 URL
     static QString cliDownloadUrl();
-    // 生成带版本号的候选文件名
+    // 生成带版本号
     static QStringList getExpectedNames();
-    // 定位 FE-Mounter 挂载持有进程（加密盘盘符挂载；与 CLI 分离的可选组件）
+    // 定位 FE-Mounter 挂载持有进
     static QString locateMounter();
     static QStringList getMounterExpectedNames();
-    // 检查是否存在匹配的 CLI
+    // 检查是否存
     static bool existsWithVersion(QString* foundPath=nullptr);
-    // 清掉程序目录里版本号低于目标版本的 CLI，返回被删的文件名
+    // 清掉程序目录里
     static QStringList cleanupOutdated(const QString& keepPath=QString());
 };

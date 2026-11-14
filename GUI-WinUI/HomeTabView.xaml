@@ -1,0 +1,314 @@
+<UserControl
+    x:Class="FileEncryptorGUI.HomeTabView"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:controls="using:Microsoft.UI.Xaml.Controls"
+    xmlns:models="using:FileEncryptorGUI.Models">
+    <Grid ColumnDefinitions="*,2*" Margin="16,12,16,8" ColumnSpacing="12">
+
+        <!-- 左侧：文件选择 -->
+        <controls:Border Grid.Column="0" x:Name="LeftPanel" x:FieldModifier="public"
+                         Style="{StaticResource AppCardBorderStyle}">
+            <Grid RowDefinitions="Auto,*,Auto">
+                <TextBlock Grid.Row="0" Text="文件选择" Style="{StaticResource AppSectionHeaderTextStyle}"
+                           Margin="0,0,0,12" />
+                <controls:ListView Grid.Row="1" x:Name="FileList" x:FieldModifier="public"
+                                   ItemsSource="{Binding ViewModel.InputPaths}"
+                                   Background="Transparent" BorderThickness="0"
+                                   AllowDrop="True"
+                                   DragOver="OnFileListDragOver" Drop="OnFileListDrop">
+                    <controls:ListView.ItemContainerStyle>
+                        <Style TargetType="controls:ListViewItem">
+                            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                            <Setter Property="Padding" Value="8,4" />
+                        </Style>
+                    </controls:ListView.ItemContainerStyle>
+                    <controls:ListView.ItemTemplate>
+                        <DataTemplate>
+                            <CheckBox HorizontalAlignment="Stretch"
+                                      Loaded="OnItemLoaded"
+                                      Checked="OnItemCheckedChanged" Unchecked="OnItemCheckedChanged">
+                                <TextBlock Text="{Binding Path}" TextTrimming="CharacterEllipsis" />
+                            </CheckBox>
+                        </DataTemplate>
+                    </controls:ListView.ItemTemplate>
+                </controls:ListView>
+                <StackPanel Grid.Row="2" Margin="0,12,0,0" Spacing="8">
+                    <Grid ColumnDefinitions="*,*" ColumnSpacing="8">
+                        <Button Grid.Column="0" Content="添加文件..." Click="OnAddFiles" HorizontalAlignment="Stretch" />
+                        <Button Grid.Column="1" Content="添加目录..." Click="OnAddDir" HorizontalAlignment="Stretch" />
+                    </Grid>
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8">
+                        <Button Content="预览..." Click="OnPreviewClicked"
+                                ToolTipService.ToolTip="仅查看密文内容，不写出解密文件" />
+                        <Button Content="清空" Click="OnClearFiles" />
+                    </StackPanel>
+                </StackPanel>
+            </Grid>
+        </controls:Border>
+
+        <!-- 右侧：功能区 -->
+        <controls:Border Grid.Column="1" x:Name="CenterPanel" x:FieldModifier="public"
+                         Style="{StaticResource AppCardBorderStyle}">
+            <Grid RowDefinitions="Auto,*,Auto">
+                <TextBlock Grid.Row="0" Text="任务设置" Style="{StaticResource AppSectionHeaderTextStyle}"
+                           Margin="0,0,0,12" />
+                <ScrollViewer x:Name="MainScroll" x:FieldModifier="public" Grid.Row="1"
+                              VerticalScrollMode="Auto" VerticalScrollBarVisibility="Auto"
+                              Padding="0,0,12,0">
+                    <StackPanel Spacing="12">
+
+                        <!-- 操作 -->
+                        <Grid ColumnDefinitions="120,*">
+                            <TextBlock Grid.Column="0" Text="操作" Style="{StaticResource AppFieldLabelTextStyle}" />
+                            <ScrollViewer x:Name="ActionScroll" x:FieldModifier="public" Grid.Column="1" HorizontalScrollBarVisibility="Auto"
+                                          HorizontalScrollMode="Auto" VerticalScrollMode="Disabled"
+                                          VerticalScrollBarVisibility="Disabled">
+                                <StackPanel x:Name="ActionRow" x:FieldModifier="public" Orientation="Horizontal" Spacing="16">
+                                    <RadioButton x:Name="RbEncrypt" x:FieldModifier="public" Content="加密" GroupName="Action" Checked="OnActionRadioChecked" />
+                                    <RadioButton x:Name="RbDecrypt" x:FieldModifier="public" Content="解密" GroupName="Action" Checked="OnActionRadioChecked" />
+                                    <RadioButton x:Name="RbBatchEncrypt" x:FieldModifier="public" Content="批量加密" GroupName="Action" Checked="OnActionRadioChecked" />
+                                    <RadioButton x:Name="RbBatchDecrypt" x:FieldModifier="public" Content="批量解密" GroupName="Action" Checked="OnActionRadioChecked" />
+                                </StackPanel>
+                            </ScrollViewer>
+                        </Grid>
+
+                        <!-- 密钥管理 -->
+                        <Grid ColumnDefinitions="120,*">
+                            <TextBlock Grid.Column="0" Text="密钥管理" Style="{StaticResource AppFieldLabelTextStyle}" />
+                            <ScrollViewer x:Name="KeyMgmtScroll" x:FieldModifier="public" Grid.Column="1" HorizontalScrollBarVisibility="Auto"
+                                          HorizontalScrollMode="Auto" VerticalScrollMode="Disabled"
+                                          VerticalScrollBarVisibility="Disabled">
+                                <StackPanel x:Name="KeyMgmtRow" x:FieldModifier="public" Orientation="Horizontal" Spacing="16">
+                                    <RadioButton x:Name="RbKeyGen" x:FieldModifier="public" Content="生成密钥对" GroupName="KeyMgmt" Checked="OnKeyMgmtRadioChecked" />
+                                    <RadioButton x:Name="RbDerive" x:FieldModifier="public" Content="密码派生密钥对" GroupName="KeyMgmt" Checked="OnKeyMgmtRadioChecked" />
+                                    <RadioButton x:Name="RbPubKey" x:FieldModifier="public" Content="导出公钥" GroupName="KeyMgmt" Checked="OnKeyMgmtRadioChecked" />
+                                </StackPanel>
+                            </ScrollViewer>
+                        </Grid>
+
+                        <!-- 与「密钥管理」互斥的第三组单选 -->
+                        <Grid ColumnDefinitions="120,*">
+                            <TextBlock Grid.Column="0" Text="密钥包装" Style="{StaticResource AppFieldLabelTextStyle}" />
+                            <ScrollViewer x:Name="WrapScroll" x:FieldModifier="public" Grid.Column="1" HorizontalScrollBarVisibility="Auto"
+                                          HorizontalScrollMode="Auto" VerticalScrollMode="Disabled"
+                                          VerticalScrollBarVisibility="Disabled">
+                                <StackPanel x:Name="WrapRow" x:FieldModifier="public" Orientation="Horizontal" Spacing="16">
+                                    <RadioButton x:Name="RbWrapKey" x:FieldModifier="public" Content="包装密钥" GroupName="Wrap" Checked="OnWrapRadioChecked"
+                                                 ToolTipService.ToolTip="将一份 32 字节数据密钥单独封装进 .fekw 文件，用密码或收件人公钥保护" />
+                                    <RadioButton x:Name="RbUnwrapKey" x:FieldModifier="public" Content="解包密钥" GroupName="Wrap" Checked="OnWrapRadioChecked"
+                                                 ToolTipService.ToolTip="将 .fekw 中的数据密钥还原为 32 字节文件" />
+                                </StackPanel>
+                            </ScrollViewer>
+                        </Grid>
+
+                        <!-- 产物路径由这里的输出行决定 -->
+                        <StackPanel x:Name="WrapPanel" x:FieldModifier="public" Visibility="Collapsed" Spacing="12">
+                            <Grid ColumnDefinitions="120,*">
+                                <TextBlock Grid.Column="0" x:Name="WrapFileLabel" x:FieldModifier="public" Text="32 字节密钥文件" Style="{StaticResource AppFieldLabelTextStyle}" />
+                                <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8">
+                                    <TextBox x:Name="WrapFileEdit" x:FieldModifier="public" PlaceholderText="恰好 32 字节的数据密钥（DEK）文件" Width="320" TextChanged="OnWrapInputChanged" />
+                                    <Button Content="浏览..." Click="OnBrowseWrapFile" />
+                                </StackPanel>
+                            </Grid>
+                            <Grid ColumnDefinitions="120,*">
+                                <TextBlock Grid.Column="0" x:Name="WrapOutLabel" x:FieldModifier="public" Text="包装输出" Style="{StaticResource AppFieldLabelTextStyle}" />
+                                <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8">
+                                    <TextBox x:Name="WrapOutEdit" x:FieldModifier="public" PlaceholderText="留空则用 &lt;密钥文件&gt;.fekw" Width="320" TextChanged="OnWrapOutputChanged" />
+                                    <Button Content="浏览..." Click="OnBrowseWrapOut" />
+                                </StackPanel>
+                            </Grid>
+                            <Grid ColumnDefinitions="120,*">
+                                <TextBlock Grid.Column="0" x:Name="WrapAlgLabel" x:FieldModifier="public" Text="包装算法" Style="{StaticResource AppFieldLabelTextStyle}" />
+                                <controls:ComboBox x:Name="WrapAlgCombo" x:FieldModifier="public" Grid.Column="1" HorizontalAlignment="Left" Width="320"
+                                                   SelectionChanged="OnWrapAlgChanged"
+                                                   ToolTipService.ToolTip="包装密钥的算法">
+                                    <controls:ComboBoxItem Content="AES-256-KWP（推荐，长度不限）" />
+                                    <controls:ComboBoxItem Content="AES-KW（兼容旧工具）" />
+                                    <controls:ComboBoxItem Content="收件人公钥（不需要密码）" />
+                                </controls:ComboBox>
+                            </Grid>
+                            <TextBlock x:Name="WrapIntroText" x:FieldModifier="public" TextWrapping="Wrap"
+                                       Style="{StaticResource AppSecondaryTextStyle}" />
+                        </StackPanel>
+
+                        <!-- 加密模式：解密 / 批量解密 / 密钥管理下一律整行隐藏（含左侧标签） -->
+                        <Grid x:Name="EncryptModeRow" x:FieldModifier="public" ColumnDefinitions="120,*">
+                            <TextBlock Grid.Column="0" Text="加密模式" Style="{StaticResource AppFieldLabelTextStyle}" />
+                            <Grid Grid.Column="1" ColumnDefinitions="1*,1*" ColumnSpacing="12">
+                                <controls:ComboBox x:Name="ModeCombo" x:FieldModifier="public" Grid.Column="0" HorizontalAlignment="Stretch"
+                                                   SelectionChanged="OnModeChanged">
+                                    <controls:ComboBoxItem Content="XChaCha20-Poly1305" />
+                                    <controls:ComboBoxItem Content="AEGIS-256" />
+                                    <controls:ComboBoxItem Content="AES-256-GCM" />
+                                    <controls:ComboBoxItem Content="SM4-GCM" />
+                                    <controls:ComboBoxItem Content="X25519 非对称" />
+                                </controls:ComboBox>
+                                <Grid Grid.Column="1" x:Name="FileCipherCell" x:FieldModifier="public" ColumnDefinitions="Auto,*" ColumnSpacing="8" Visibility="Collapsed">
+                                    <TextBlock Grid.Column="0" Text="文件算法：" VerticalAlignment="Center" x:Name="FileCipherLabel" x:FieldModifier="public"
+                                               Foreground="{ThemeResource AppTextSecondaryBrush}" />
+                                    <controls:ComboBox x:Name="FileCipherCombo" x:FieldModifier="public" Grid.Column="1" HorizontalAlignment="Stretch"
+                                                       SelectionChanged="OnFileCipherChanged"
+                                                       ToolTipService.ToolTip="非对称模式下的文件载荷加密算法；非对称部分只加密此处所选算法生成的密钥">
+                                        <controls:ComboBoxItem Content="XChaCha20-Poly1305（默认）" />
+                                        <controls:ComboBoxItem Content="AEGIS-256" />
+                                        <controls:ComboBoxItem Content="AES-256-GCM" />
+                                        <controls:ComboBoxItem Content="SM4-GCM" />
+                                    </controls:ComboBox>
+                                </Grid>
+                            </Grid>
+                        </Grid>
+
+                        <!-- 压缩 -->
+                        <Grid x:Name="CompressionRow" x:FieldModifier="public" ColumnDefinitions="120,*">
+                            <TextBlock Grid.Column="0" Text="压缩（zstd）" Style="{StaticResource AppFieldLabelTextStyle}" />
+                            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="12" VerticalAlignment="Center">
+                                <CheckBox x:Name="ChkCompress" x:FieldModifier="public" Content="压缩数据" Checked="OnOptionChanged" Unchecked="OnOptionChanged" VerticalAlignment="Center" />
+                                <TextBlock Text="压缩级别（-5 到 22）：" VerticalAlignment="Center" />
+                                <controls:NumberBox x:Name="CompressLevel" x:FieldModifier="public" Value="3" Minimum="-5" Maximum="22" SmallChange="1" Width="72" SpinButtonPlacementMode="Hidden" ValueChanged="OnCompressLevelChanged" />
+                            </StackPanel>
+                        </Grid>
+
+                        <!-- 输出目录 -->
+                        <Grid ColumnDefinitions="120,*" x:Name="OutDirRow" x:FieldModifier="public">
+                            <TextBlock Grid.Column="0" Text="输出目录" Style="{StaticResource AppFieldLabelTextStyle}" />
+                            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8">
+                                <TextBox x:Name="OutDirEdit" x:FieldModifier="public" PlaceholderText="留空 = 输出到源文件目录" Width="320" TextChanged="OnOutDirChanged" />
+                                <Button Content="浏览..." Click="OnBrowseOutDir" />
+                            </StackPanel>
+                        </Grid>
+
+                        <!-- 加密盘 -->
+                        <Grid ColumnDefinitions="120,*" x:Name="VaultRow" x:FieldModifier="public" Visibility="Collapsed">
+                            <TextBlock Grid.Column="0" Text="加密盘" Style="{StaticResource AppFieldLabelTextStyle}" />
+                            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="12" VerticalAlignment="Center">
+                                <CheckBox x:Name="ChkIntoVault" x:FieldModifier="public" Content="入加密盘" Checked="OnIntoVaultChanged" Unchecked="OnIntoVaultChanged"
+                                          VerticalAlignment="Center" ToolTipService.ToolTip="勾选后产物写入加密盘目录并登记进加密索引；不勾选则为普通加密" />
+                                <TextBox x:Name="VaultDirEdit" x:FieldModifier="public" PlaceholderText="加密盘存储目录（如 D:\Vault）" Width="240" IsEnabled="False" TextChanged="OnVaultDirChanged" />
+                                <Button x:Name="BtnVaultBrowse" x:FieldModifier="public" Content="浏览..." Click="OnBrowseVaultDir" IsEnabled="False" />
+                            </StackPanel>
+                        </Grid>
+
+                        <!-- 密钥文件 -->
+                        <Grid ColumnDefinitions="120,*">
+                            <TextBlock Grid.Column="0" Text="密钥文件" Style="{StaticResource AppFieldLabelTextStyle}" />
+                            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8">
+                                <TextBox x:Name="KeyfileEdit" x:FieldModifier="public" PlaceholderText="留空 = 运行时弹窗输入" Width="320" TextChanged="OnKeyfileChanged" />
+                                <Button Content="浏览..." Click="OnBrowseKeyfile" />
+                            </StackPanel>
+                        </Grid>
+
+                        <!-- 选项 -->
+                        <Grid ColumnDefinitions="120,*">
+                            <TextBlock Grid.Column="0" Text="选项" Style="{StaticResource AppFieldLabelTextStyle}" />
+                            <ScrollViewer x:Name="OptionsScroll" x:FieldModifier="public" Grid.Column="1" HorizontalScrollBarVisibility="Auto"
+                                          HorizontalScrollMode="Auto" VerticalScrollMode="Disabled"
+                                          VerticalScrollBarVisibility="Disabled">
+                                <StackPanel x:Name="OptionsRow" x:FieldModifier="public" Orientation="Horizontal" Spacing="16" VerticalAlignment="Center">
+                                    <controls:ComboBox x:Name="SourceCombo" x:FieldModifier="public" Width="160" SelectionChanged="OnSourceChanged">
+                                        <controls:ComboBoxItem Content="保留源文件" />
+                                        <controls:ComboBoxItem Content="删除源文件" />
+                                        <controls:ComboBoxItem Content="安全擦除" />
+                                        <controls:ComboBoxItem Content="移至回收站" />
+                                    </controls:ComboBox>
+                                    <CheckBox x:Name="ChkForce" x:FieldModifier="public" Content="覆盖已存在文件" Checked="OnOptionChanged" Unchecked="OnOptionChanged" VerticalAlignment="Center" />
+                                    <CheckBox x:Name="ChkPack" x:FieldModifier="public" Content="打包为单个文件" Checked="OnOptionChanged" Unchecked="OnOptionChanged"
+                                              VerticalAlignment="Center" IsEnabled="{Binding ViewModel.PackAvailable}"
+                                              ToolTipService.ToolTip="将整个目录树或多个文件打包为单个文件，不删除源文件" />
+                                    <CheckBox x:Name="ChkSplit" x:FieldModifier="public" Content="分卷输出" Checked="OnOptionChanged" Unchecked="OnOptionChanged"
+                                              VerticalAlignment="Center" ToolTipService.ToolTip="将密文切分为多个 .001/.002 分卷；解密时任选一卷即可自动合并" />
+                                    <CheckBox x:Name="ChkSha256" x:FieldModifier="public" Content="生成校验单" Checked="OnOptionChanged" Unchecked="OnOptionChanged" VerticalAlignment="Center" />
+                                    <CheckBox x:Name="ChkPqc" x:FieldModifier="public" Content="后量子 PQC" Checked="OnOptionChanged" Unchecked="OnOptionChanged"
+                                              VerticalAlignment="Center" ToolTipService.ToolTip="非对称收件人用 X25519（或 X448）+ ML-KEM-768 混合密钥，水印签名用 ML-DSA-65" />
+                                    <CheckBox x:Name="ChkX448" x:FieldModifier="public" Content="使用 X448" Checked="OnOptionChanged" Unchecked="OnOptionChanged"
+                                              VerticalAlignment="Center" ToolTipService.ToolTip="勾选后非对称封装使用 X448，不勾选则使用 X25519" />
+                                    <CheckBox x:Name="ChkWatermark" x:FieldModifier="public" Content="签名水印" Checked="OnOptionChanged" Unchecked="OnOptionChanged"
+                                              VerticalAlignment="Center" ToolTipService.ToolTip="在密文尾部追加一条签名水印" />
+                                </StackPanel>
+                            </ScrollViewer>
+                        </Grid>
+
+                        <!-- 分卷 -->
+                        <Grid x:Name="SplitSizeRow" x:FieldModifier="public" ColumnDefinitions="120,*" Visibility="Collapsed">
+                            <TextBlock Grid.Column="0" Text="分卷大小" Style="{StaticResource AppFieldLabelTextStyle}" />
+                            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                                <controls:NumberBox x:Name="SplitSizeBox" x:FieldModifier="public" Value="100" Minimum="1" Maximum="1048576"
+                                                    SmallChange="10" Width="180" SpinButtonPlacementMode="Compact"
+                                                    ValueChanged="OnSplitSizeChanged" />
+                                <controls:ComboBox x:Name="SplitUnitCombo" x:FieldModifier="public" Width="84" SelectionChanged="OnSplitUnitChanged">
+                                    <controls:ComboBoxItem Content="MB" />
+                                    <controls:ComboBoxItem Content="GB" />
+                                    <controls:ComboBoxItem Content="TB" />
+                                </controls:ComboBox>
+                            </StackPanel>
+                        </Grid>
+
+                        <!-- 水印签名私钥 -->
+                        <Grid ColumnDefinitions="120,*" x:Name="WatermarkKeyRow" x:FieldModifier="public" Visibility="Collapsed">
+                            <TextBlock Grid.Column="0" Text="水印签名密钥" Style="{StaticResource AppFieldLabelTextStyle}" />
+                            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                                <PasswordBox x:Name="WatermarkKeyEdit" x:FieldModifier="public" Width="300" PasswordChar="•"
+                                             PasswordChanged="OnOptionChanged"
+                                             PlaceholderText="私钥 PEM（在密码框中输入，不回显明文）" />
+                                <Button Content="浏览..." Click="OnBrowseWatermarkKey" />
+                                <TextBlock Text="留空 = 只写水印记录不签名" VerticalAlignment="Center"
+                                           Foreground="{ThemeResource AppTextSecondaryBrush}" />
+                            </StackPanel>
+                        </Grid>
+
+                        <!-- 密钥轮换 + 运行/取消 -->
+                        <Border BorderThickness="0,1,0,0"
+                                BorderBrush="{ThemeResource DividerStrokeColorDefaultBrush}"
+                                Margin="0,4,0,0" Padding="0,12,0,0">
+                            <Grid ColumnDefinitions="Auto,*,Auto">
+                                <Button Grid.Column="0" x:Name="BtnRewrap" x:FieldModifier="public" Content="密钥轮换" Click="OnRewrapClicked" />
+                                <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="8">
+                                    <Button x:Name="BtnRun" x:FieldModifier="public" Content="运行" Click="OnRunClicked"
+                                            Style="{StaticResource AppPrimaryButtonStyle}" MinWidth="88" />
+                                    <Button x:Name="BtnCancel" x:FieldModifier="public" Content="取消" Click="OnCancelClicked"
+                                            IsEnabled="False" MinWidth="88" />
+                                </StackPanel>
+                            </Grid>
+                        </Border>
+
+                        <!-- 非对称：收件人 -->
+                        <StackPanel x:Name="RecipientPanel" x:FieldModifier="public" Orientation="Horizontal" Spacing="8" Visibility="Collapsed">
+                            <TextBlock x:Name="RecipientLabel" x:FieldModifier="public" Text="收件人：" VerticalAlignment="Center"
+                                       Foreground="{ThemeResource AppTextSecondaryBrush}" />
+                            <TextBox x:Name="RecipientEdit" x:FieldModifier="public" PlaceholderText="公钥或公钥文件路径" Width="320" TextChanged="OnRecipientChanged" />
+                            <Button Content="浏览..." Click="OnBrowseRecipient" />
+                        </StackPanel>
+
+                        <!-- 非对称：身份私钥 -->
+                        <StackPanel x:Name="IdentityPanel" x:FieldModifier="public" Orientation="Horizontal" Spacing="8" Visibility="Collapsed">
+                            <TextBlock x:Name="IdentityLabel" x:FieldModifier="public" Text="身份文件：" VerticalAlignment="Center"
+                                       Foreground="{ThemeResource AppTextSecondaryBrush}" />
+                            <TextBox x:Name="IdentityEdit" x:FieldModifier="public" PlaceholderText="私钥文件路径" Width="320" TextChanged="OnIdentityChanged" />
+                            <Button Content="浏览..." Click="OnBrowseIdentity" />
+                        </StackPanel>
+
+                        <!-- 批量解密还原文件名 -->
+                        <CheckBox x:Name="ChkRestoreName" x:FieldModifier="public" Content="还原完整原始文件名（批量解密，较慢）"
+                                  Checked="OnOptionChanged" Unchecked="OnOptionChanged"
+                                  Visibility="Collapsed" />
+
+                    </StackPanel>
+                </ScrollViewer>
+
+                <!-- 国庆祝福：放在滚动区之外的固定行 -->
+                <Border Grid.Row="2" x:Name="BirthdayBar" x:FieldModifier="public" Visibility="Collapsed"
+                        Margin="0,12,0,0" Padding="0,12,0,0"
+                        BorderThickness="0,1,0,0"
+                        BorderBrush="{ThemeResource DividerStrokeColorDefaultBrush}">
+                    <TextBlock x:Name="BirthdayText" x:FieldModifier="public"
+                               Text="祝祖国{0}岁生日快乐！永远繁荣昌盛！"
+                               TextWrapping="Wrap"
+                               TextAlignment="Center"
+                               FontWeight="SemiBold"
+                               FontSize="14"
+                               Foreground="{ThemeResource AccentFillColorDefaultBrush}" />
+                </Border>
+            </Grid>
+        </controls:Border>
+    </Grid>
+</UserControl>

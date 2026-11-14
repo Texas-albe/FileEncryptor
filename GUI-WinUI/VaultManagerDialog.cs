@@ -11,13 +11,12 @@ using FileEncryptorGUI.Models;
 
 namespace FileEncryptorGUI;
 
-// P1-1 设备加密管理页：对标 BitLocker「管理 BitLocker」的一屏视图。
-// 一行列出：盘符 / 存储目录 / 状态灯（已解锁·已锁定·未挂载）/ 自动锁剩余秒数 /
-// 免密开关（本机设备绑定）/ 操作按钮（解锁·锁定·挂载）。
-//
-// 数据源是 FE-Mounter 的 `vaults status`（P1-2 新增，输出 JSON）——
-// 此前只能靠 settings.json 里的本地挂载记录，且状态靠 Contains("unlocked=1")
-// 子串匹配（错误串会误落「未响应」）。JSON 聚合让两端字段对齐不再靠字符串猜。
+// P1-1 设备加密管理页
+// 一行列出
+// 免密开关
+// 数据源是 FE-Mounter
+// 只能靠 settings.json 里
+// 子串匹配
 public sealed partial class VaultManagerDialog : ContentDialog
 {
     private sealed class VaultRow
@@ -38,8 +37,8 @@ public sealed partial class VaultManagerDialog : ContentDialog
     private readonly string _mounter;
     private readonly Func<string, string, Task> _mount;   // (dir, mountPoint)
     private readonly Func<string, Task> _unlock;          // dir
-    private readonly Func<string, Task> _doLock;          // dir（lock 是 C# 关键字，参数改名）
-    private readonly Action<string> _refreshHost;         // 刷新宿主设置（新增盘后同步）
+    private readonly Func<string, Task> _doLock;          // dir
+    private readonly Action<string> _refreshHost;         // 刷新宿主设置
     private readonly StackPanel _rows;
     private readonly TextBlock _summary;
 
@@ -71,7 +70,7 @@ public sealed partial class VaultManagerDialog : ContentDialog
         var batchLock = new Button { Content = L10n.T("全部锁定"), Margin = new Thickness(8, 0, 0, 0) };
         batchLock.Click += async (_, _) =>
         {
-            // P1-2 批量锁：FE-Mounter 侧扇出，这里只发一次
+            // P1-2 批量锁
             await RunMounterAsync("vaults", "batch", "lock");
             await LoadAsync();
         };
@@ -85,9 +84,9 @@ public sealed partial class VaultManagerDialog : ContentDialog
         sp.Children.Add(_summary);
         sp.Children.Add(_rows);
 
-        // WinUI 滚动条是覆盖式（浮在内容上）：横向滚动条会压住行内控件下半部分。
-        // 行内容宽度可控（约 690px），禁用横向滚动；底部 Padding 兜底防极端窄窗时
-        // 垂直滚动条贴边时与最后一行重叠。
+        // WinUI 滚动条是覆盖式
+        // 行内容宽度可控
+        // 垂直滚动条贴边
         Content = new ScrollViewer
         {
             Content = sp,
@@ -103,22 +102,22 @@ public sealed partial class VaultManagerDialog : ContentDialog
         _ = LoadAsync();
     }
 
-    // FE-Mounter 输出的 JSON 字段是全小写（count/vaults/vault/mount/reachable/unlocked），
-    // 而本文件的 C# 属性是 PascalCase；System.Text.Json 默认区分大小写，不开这个选项会
-    // 全部反序列化成默认值（Count=0 / Vaults 空）→ 管理页恒显示「尚未注册任何加密盘」。
+    // FE-Mounter 输出
+    // 而本文件
+    // 全部反序列化成
     private static readonly JsonSerializerOptions JsonOpts = new()
     {
         PropertyNameCaseInsensitive = true,
     };
 
-    // mounter stdout 累积上限：畸形/海量输出不得撑爆内存后再进 JsonDocument.Parse
+    // mounter stdout 累积上限：畸形/海
     private const int kMaxStatusBytes = 4 * 1024 * 1024;
 
     private async Task<StatusDoc?> QueryAsync()
     {
         var cli = new CliProcessService();
         var sb = new System.Text.StringBuilder();
-        // mounter stdout 累积设上限（4MB）：超出部分直接丢弃，畸形/海量输出不得撑爆内存后再进 JsonDocument.Parse
+        // mounter stdout 累积设上限：超出
         cli.OutputLine += line =>
         {
             lock (sb)
@@ -138,7 +137,7 @@ public sealed partial class VaultManagerDialog : ContentDialog
 
         string text;
         lock (sb) text = sb.ToString();
-        // 输出里可能混有非 JSON 的诊断行（进度/警告），只取首尾花括号之间的片段
+        // 输出里可能混有
         int b = text.IndexOf('{');
         int e = text.LastIndexOf('}');
         if (b < 0 || e <= b) return null;
@@ -148,7 +147,7 @@ public sealed partial class VaultManagerDialog : ContentDialog
             using var doc = JsonDocument.Parse(text.Substring(b, e - b + 1));
             var d = JsonSerializer.Deserialize<StatusDoc>(doc.RootElement.GetRawText(), JsonOpts);
             if (d == null) return null;
-            // v.Vault/v.Mount 将作为 IPC 参数与 DeviceKeyService 路径使用：反序列化后做存在性/目录校验，丢弃空路径或目录不存在的行；Count 以列表为准
+            // v.Vault/v.Mount 将作
             if (d.Vaults != null)
             {
                 d.Vaults.RemoveAll(v => string.IsNullOrWhiteSpace(v.Vault)
@@ -192,11 +191,11 @@ public sealed partial class VaultManagerDialog : ContentDialog
         foreach (var v in doc.Vaults)
         {
             string status;
-            SolidColorBrush color;
+            Brush color;
             if (!v.Reachable)
             {
                 status = L10n.T("未挂载");
-                color = new SolidColorBrush(Microsoft.UI.Colors.Gray);
+                color = ThemeService.BrushFor("AppTextSecondaryBrush", RequestedTheme);
                 unmounted++;
             }
             else if (v.Unlocked)
@@ -204,13 +203,13 @@ public sealed partial class VaultManagerDialog : ContentDialog
                 status = v.Idle.HasValue
                     ? string.Format(L10n.T("已解锁（{0} 秒后自动锁）"), v.Idle.Value)
                     : L10n.T("已解锁");
-                color = new SolidColorBrush(Microsoft.UI.Colors.MediumSeaGreen);
+                color = ThemeService.BrushFor("AppSuccessBrush", RequestedTheme);
                 unlocked++;
             }
             else
             {
                 status = L10n.T("已锁定");
-                color = new SolidColorBrush(Microsoft.UI.Colors.OrangeRed);
+                color = ThemeService.BrushFor("AppDangerBrush", RequestedTheme);
                 locked++;
             }
 
@@ -234,12 +233,12 @@ public sealed partial class VaultManagerDialog : ContentDialog
                 TextTrimming = TextTrimming.CharacterEllipsis,
                 VerticalAlignment = VerticalAlignment.Center,
             };
-            ToolTipService.SetToolTip(dirText, v.Vault);   // 完整路径放悬浮提示（宽度所限）
+            ToolTipService.SetToolTip(dirText, v.Vault);   // 完整路径放悬浮
             row.Children.Add(dirText);
             row.Children.Add(new TextBlock { Text = "●", Foreground = color, FontSize = 14, VerticalAlignment = VerticalAlignment.Center });
             row.Children.Add(new TextBlock { Text = status, Foreground = color, Width = 170, VerticalAlignment = VerticalAlignment.Center });
 
-            // P2-1 免密开关：本机设备绑定（DPAPI）。开→本机解锁无需库密码。
+            // P2-1 免密开关
             var bound = DeviceKeyService.IsBound(v.Vault);
             var bindChk = new CheckBox
             {
@@ -252,7 +251,7 @@ public sealed partial class VaultManagerDialog : ContentDialog
             {
                 if (bindChk.IsChecked == true)
                 {
-                    // 启用本机免密：需确认库密码（凭据即库密码经 DPAPI 存于本机）
+                    // 启用本机免密
                     var pwd = new PasswordDialog(false)
                     {
                         XamlRoot = XamlRoot,
@@ -261,10 +260,10 @@ public sealed partial class VaultManagerDialog : ContentDialog
                     };
                     if (await pwd.ShowAsync() != ContentDialogResult.Primary || string.IsNullOrEmpty(pwd.Password))
                     {
-                        bindChk.IsChecked = false;   // 取消则回滚勾选
+                        bindChk.IsChecked = false;   // 取消
                         return;
                     }
-                    // DPAPI 缺程序集时此处抛 FileNotFoundException，兜底为失败
+                    // DPAPI 缺程序集时此处
                     bool ok;
                     try { ok = DeviceKeyService.Enable(v.Vault, pwd.Password); }
                     catch { ok = false; }
@@ -289,17 +288,17 @@ public sealed partial class VaultManagerDialog : ContentDialog
             };
             row.Children.Add(bindChk);
 
-            // 操作按钮：按当前状态给可用动作，避免对未挂载盘发 IPC（必失败）
-            // 铁律：后续流程都会弹 ContentDialog（密码框/消息框），而同一 XamlRoot
-            // 同时只能开一个对话框——必须先 Hide 本页并让退场完成，再触发后续弹框，
-            // 否则第二个 ShowAsync 在同一 XamlRoot 上冲突、异常被吞→按钮「没反应」
+            // 操作
+            // 铁律
+            // 只能开一个对话
+            // 第二个 ShowAsync
             if (v.Reachable && v.Unlocked)
             {
                 var b = new Button { Content = L10n.T("锁定"), Margin = new Thickness(4, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center };
                 b.Click += async (_, _) =>
                 {
                     Hide();
-                    await Task.Delay(120);   // 等退场动画结束，规避同 XamlRoot 双框竞态
+                    await Task.Delay(120);   // 等退场动画结束
                     await _doLock(v.Vault);
                 };
                 row.Children.Add(b);
@@ -310,7 +309,7 @@ public sealed partial class VaultManagerDialog : ContentDialog
                 b.Click += async (_, _) =>
                 {
                     Hide();
-                    await Task.Delay(120);   // 等退场动画结束，规避同 XamlRoot 双框竞态
+                    await Task.Delay(120);   // 等退场动画结束
                     await _unlock(v.Vault);
                 };
                 row.Children.Add(b);
@@ -321,7 +320,7 @@ public sealed partial class VaultManagerDialog : ContentDialog
                 b.Click += async (_, _) =>
                 {
                     Hide();
-                    await Task.Delay(120);   // 等退场动画结束，规避同 XamlRoot 双框竞态
+                    await Task.Delay(120);   // 等退场动画结束
                     var dlg = new VaultMountDialog(true, v.Mount) { XamlRoot = XamlRoot };
                     if (await dlg.ShowAsync() != ContentDialogResult.Primary) return;
                     await _mount(v.Vault, dlg.MountPoint);

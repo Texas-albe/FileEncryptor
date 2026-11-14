@@ -5,8 +5,8 @@ using FileEncryptorGUI.Services;
 
 namespace FileEncryptorGUI;
 
-// 可滚动的输出对话框：用于展示命令行返回的长文本（如加密盘内文件清单），
-// 内容超出可视区域时滚动查看，避免长输出被截断或撑爆对话框。
+// 可滚动
+// 内容超出可视区
 public sealed partial class ScrollOutputDialog : ContentDialog
 {
     public ScrollOutputDialog(string title, string body, bool monospace = true)
@@ -33,7 +33,8 @@ public sealed partial class ScrollOutputDialog : ContentDialog
             VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
             HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
             MaxHeight = 480,
-            Padding = new Thickness(0, 4, 0, 4),
+            // 横向滚动条是浮
+            Padding = new Thickness(0, 4, 0, 16),
         };
 
         Content = scroller;

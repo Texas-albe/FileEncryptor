@@ -8,7 +8,7 @@ namespace FileEncryptorGUI.Services;
 
 public static class TaskHistoryService
 {
-    // 同一文件加锁防并发截断
+    // 同一文件加锁防
     private static readonly object _gate = new();
 
     private static string HistoryDir => Path.Combine(
@@ -16,7 +16,7 @@ public static class TaskHistoryService
         "FileEncryptor", "GUI", "history");
     private static string HistoryFile => Path.Combine(HistoryDir, "tasks.log");
 
-    // 进程内只收紧一次：目录与文件 ACL 都在首次写历史前落地
+    // 进程内只收紧一
     private static bool _aclApplied;
 
     private static void EnsureAcl()
@@ -27,14 +27,14 @@ public static class TaskHistoryService
         RestrictToCurrentUser(HistoryFile, isDirectory: false);
     }
 
-    // M18：默认不把完整路径写进 tasks.log。ACL 只挡同机其他用户，挡不住「用户到底
-    // 加密了哪些文件」这一隐私被明文留在磁盘上。未开启 HistoryStorePaths 时：
-    // 文件类字段只留文件名（Path.GetFileName 对不含分隔符的公钥串原样返回，不会误伤），
-    // 目录类字段直接清空。代价是该条无法双击回放，读取侧按 PathsStripped 提示用户。
+    // M18
+    // 加密了哪些文件」
+    // 文件类字段只留
+    // 目录类字段直接
     private static TaskRecord SanitizeForStorage(TaskRecord r)
     {
         if (App.Settings.Current.HistoryStorePaths) return r;
-        // 借序列化做浅拷贝，避免手工复制字段时漏掉新增项
+        // 借序列化做浅拷
         var copy = JsonSerializer.Deserialize<TaskRecord>(JsonSerializer.Serialize(r));
         if (copy == null) return r;
         copy.InputPaths = r.InputPaths.Select(p => Path.GetFileName(p) ?? p).ToList();
@@ -130,8 +130,8 @@ public static class TaskHistoryService
             {
                 Directory.CreateDirectory(HistoryDir);
                 EnsureAcl();
-                // 写回时反转为正序
-                // M43: 与读取/追加路径一致：关闭 HistoryStorePaths 后，旧记录（可能含全路径）不得被原样回写
+                // 写回时反转
+                // M43: 与读取/追加路径
                 var ordered = records.AsEnumerable().Reverse().ToList();
                 var lines = ordered.Select(r => JsonSerializer.Serialize(SanitizeForStorage(r)));
                 File.WriteAllLines(HistoryFile, lines);
@@ -162,7 +162,7 @@ public static class TaskHistoryService
                 FileSystemRights.FullControl, AccessControlType.Allow));
             if (isDirectory)
             {
-                // 目录须先存在才能改 ACL
+                // 目录须先存
                 if (!Directory.Exists(path)) return;
                 new DirectoryInfo(path).SetAccessControl((DirectorySecurity)sec);
             }

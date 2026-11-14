@@ -13,7 +13,7 @@ class TaskHistoryDialog : public QDialog {
 public:
     explicit TaskHistoryDialog(QWidget* parent=nullptr);
 
-    // 回放返回的记录
+    // 回放返回
     TaskRecord selectedRecord() const;
 
 private slots:

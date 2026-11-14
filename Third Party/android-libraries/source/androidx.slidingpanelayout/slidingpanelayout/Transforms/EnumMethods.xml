@@ -1,0 +1,5 @@
+﻿<enum-method-mappings>
+    <!--<mapping jni-class="androidx/vectordrawable/graphics/drawable/AnimatedVectorDrawableCompat">
+    <method jni-name="getLayoutDirection" parameter="return" clr-enum-type="Android.Views.LayoutDirection" />
+  </mapping>-->
+</enum-method-mappings>

@@ -1,5 +1,5 @@
-// fe_ipc：§5.1 受限 IPC 控制面（命名管道）。只传命令与一次性密码，
-// KEK/索引密钥/明文一律不出 holder 进程（§5.1#1）。密码 hex 编码走管道、用后清零。
+// fe_ipc
+// KEK/索引密钥/明文一
 #include "fe_common.h"
 #include <cstdio>
 #include <cstring>
@@ -19,20 +19,21 @@ VDiskApi*     g_ipc_v = nullptr;
 VDiskHandle** g_ipc_h = nullptr;
 std::atomic<bool> g_ipc_unlocked{false};
 std::atomic<bool> g_ipc_stop{false};
-std::atomic<uint64_t> g_last_fg_activity_ms{0};   // M5 前台活动自动锁：最近一次前台访问时刻
+std::atomic<uint64_t> g_last_fg_activity_ms{0};   // M5 前台活动自动锁
+std::atomic<int64_t> g_suspend_until_ms{0};   // M8
 void        (*g_ipc_eject_hook)() = nullptr;
 
-// M6：libvdisk 调用互斥（fe_winfsp 的 watchdog/SvcStop 共用，声明见 fe_common.h）。IPC 控制面命令在临界区内完成「判空→调用」，与 watchdog/SvcStop 对 g_wh 的操作序列化。
+// M6
 static std::mutex g_vdisk_call_mtx;
 std::mutex& fe_vdisk_call_mutex() { return g_vdisk_call_mtx; }
-// M7：g_ipc_unlocked 置位与 watchdog 上锁决策的同一临界区（g_last_fg_activity_ms 同受保护）。
+// M7
 static std::mutex g_idle_decision_mtx;
 std::mutex& fe_idle_decision_mutex() { return g_idle_decision_mtx; }
 
-// 管道名派生：用 blake2b（crypto_generichash）替代非密码学 FNV-1a，避免同机可控
-// vault 路径构造哈希碰撞、跨 vault 命中管道（§5.1 标识符强度）。
+// 管道名派生
+// vault 路径构造哈希碰
 std::string ipc_pipe_name(const std::string& vault) {
-    unsigned char h[crypto_generichash_BYTES_MIN];   // 16 字节（128 位）
+    unsigned char h[crypto_generichash_BYTES_MIN];   // 16 字节
     crypto_generichash(h, sizeof h, (const unsigned char*)vault.data(), vault.size(), nullptr, 0);
     char buf[64]; static const char* t = "0123456789abcdef";
     size_t hi = 0;
@@ -41,7 +42,7 @@ std::string ipc_pipe_name(const std::string& vault) {
 #ifdef _WIN32
     return std::string("\\\\.\\pipe\\fe-") + buf;
 #else
-    // Linux：XDG_RUNTIME_DIR 优先（/run/user/<uid>，仅本人可访问），退化到 /tmp。
+    // Linux
     const char* xdg = getenv("XDG_RUNTIME_DIR");
     std::string base = (xdg && *xdg) ? std::string(xdg) : std::string("/tmp");
     return base + "/fe-" + buf + ".sock";
@@ -62,8 +63,8 @@ std::string hex_decode(const std::string& s) {
     return o;
 }
 
-// 解锁防暴破：连续失败达阈值后锁定一段时间，阻止同用户在线爆破 vault 密码（§5.1）。
-// 单 mounter 进程只服务一个 vault，全局计数即可。
+// 解锁防暴破
+// 单 mounter 进程只服务一
 static constexpr int    kUnlockMaxFails = 5;
 static constexpr uint64_t kUnlockLockMs = 30000;   // 锁定 30s
 static std::atomic<int>      g_unlock_fails{0};
@@ -74,7 +75,7 @@ static uint64_t now_ms() {
     return (uint64_t)duration_cast<milliseconds>(steady_clock::now().time_since_epoch()).count();
 }
 
-// 是否处于暴破锁定中（到期自动复位计数）
+// 是否处于暴破锁
 static bool unlock_blocked() {
     uint64_t until = g_unlock_lock_until.load();
     if (!until) return false;
@@ -85,19 +86,22 @@ static bool unlock_blocked() {
 }
 
 static std::string do_unlock(const std::string& arg, int flags) {
-    if (unlock_blocked()) return "ERR locked";   // 暴破锁定，直接拒绝
+    if (unlock_blocked()) return "ERR locked";   // 暴破锁定
     if (!g_ipc_v || !g_ipc_h || !*g_ipc_h) return "ERR nostate";
     std::string pass = hex_decode(arg);
     if (pass.empty()) return "ERR badpass";
     VDiskStatus st = g_ipc_v->unlock(*g_ipc_h, pass.c_str(), flags);
     sodium_memzero(pass.data(), pass.size());   // 用后即清
     if (st == VDISK_OK) {
-        // M7：与 watchdog 的上锁决策同一临界区——否则交叉时出现「IPC 显示已解锁、库实际已被 watchdog 锁上」的不一致态（原约 1s 才自纠）。
+        // M7
         std::lock_guard<std::mutex> lk(fe_idle_decision_mutex());
         g_ipc_unlocked = true;
-        g_last_fg_activity_ms.store(now_ms(), std::memory_order_relaxed);   // 解锁即起算一个完整自动锁窗口
+        g_suspend_until_ms.store(0, std::memory_order_relaxed);   // M8
+        g_last_fg_activity_ms.store(now_ms(), std::memory_order_relaxed);   // 解锁即起算一
         g_unlock_fails.store(0);
         g_unlock_lock_until.store(0);
+        // M8
+        if (g_ipc_v->set_idle_timeout) g_ipc_v->set_idle_timeout(*g_ipc_h, g_svc_idle);
         return "OK";
     }
     if (++g_unlock_fails >= kUnlockMaxFails)
@@ -107,24 +111,32 @@ static std::string do_unlock(const std::string& arg, int flags) {
 }
 
 static std::string ipc_dispatch(const std::string& req) {
-    // M6：控制面命令统一在库调用互斥区内执行——与 watchdog/SvcStop 对 g_wh 的并发访问序列化。加锁序：fe_vdisk_call_mutex 始终先于 fe_idle_decision_mutex（watchdog 同序）。
+    // M6
     std::lock_guard<std::mutex> lk(fe_vdisk_call_mutex());
     size_t sp = req.find(' ');
     std::string cmd = (sp == std::string::npos) ? req : req.substr(0, sp);
     std::string arg = (sp == std::string::npos) ? "" : req.substr(sp + 1);
-    // 低危 C 组：句柄判空与 lock/unlock 一致（关闭竞态下偶发 null 解引用）。
+    // 低危 C 组
     if (!g_ipc_v || !g_ipc_h || !*g_ipc_h) return "ERR nostate";
     VDiskApi& v = *g_ipc_v;
     if (cmd == "status") {
         std::string s = std::string("OK unlocked=") + (g_ipc_unlocked.load() ? "1" : "0");
         if (g_ipc_unlocked.load() && v.idle_remaining && g_ipc_h && *g_ipc_h)
             s += " idle=" + std::to_string(v.idle_remaining(*g_ipc_h));
+        int64_t sus = g_suspend_until_ms.load(std::memory_order_relaxed);
+        if (sus > 0) {
+            uint64_t rem = (uint64_t)sus > now_ms() ? (uint64_t)sus - now_ms() : 0;
+            s += " suspend=" + std::to_string(rem / 1000 + (rem % 1000 ? 1 : 0));
+        }
         return s;
     }
     if (cmd == "lock") {
         if (g_ipc_h && *g_ipc_h) v.lock(*g_ipc_h);
         g_ipc_unlocked = false;
-        g_last_fg_activity_ms.store(0, std::memory_order_relaxed);   // 锁态不计时，下次解锁重新起算
+        g_suspend_until_ms.store(0, std::memory_order_relaxed);   // M8
+        g_last_fg_activity_ms.store(0, std::memory_order_relaxed);   // 锁态不计
+        // M8
+        if (v.set_idle_timeout) v.set_idle_timeout(*g_ipc_h, g_svc_idle);
         return "OK";
     }
     if (cmd == "unlock") {
@@ -134,23 +146,23 @@ static std::string ipc_dispatch(const std::string& req) {
         VDiskStatus st = v.reindex(*g_ipc_h, nullptr);
         return (st == VDISK_OK) ? "OK" : "ERR io";
     }
-    // M4：用恢复密钥解锁（等价解锁凭证，§4.4）
+    // M4
     if (cmd == "unlockr") {
         return do_unlock(arg, 1);
     }
-    // M5：空闲超时自动锁（秒，0=关闭）
+    // M5
     if (cmd == "idle") {
         if (!v.set_idle_timeout) return "ERR unsupported";
         uint32_t sec = (uint32_t)strtoul(arg.c_str(), nullptr, 10);
+        g_svc_idle = sec;   // 与 watchdog 同步
+        g_last_fg_activity_ms.store(now_ms(), std::memory_order_relaxed);   // 改超时即重新起
+        // M8
+        int64_t sus = g_suspend_until_ms.load(std::memory_order_relaxed);
+        if (sus > (int64_t)now_ms()) return "OK";
         if (v.set_idle_timeout(*g_ipc_h, sec) != VDISK_OK) return "ERR io";
-#if defined(_WIN32) && FE_HAVE_WINFSP
-        extern uint32_t g_svc_idle;   // 与库侧超时同步：watchdog 据此判断自动锁是否启用（0=关）
-        g_svc_idle = sec;
-        g_last_fg_activity_ms.store(now_ms(), std::memory_order_relaxed);   // 改超时即重新起算窗口
-#endif
         return "OK";
     }
-    // M5：预读缓存 cap_bytes ahead_segments
+    // M5
     if (cmd == "cache") {
         if (!v.set_read_cache) return "ERR unsupported";
         size_t sp2 = arg.find(' ');
@@ -159,7 +171,7 @@ static std::string ipc_dispatch(const std::string& req) {
                        : (uint32_t)strtoul(arg.c_str() + sp2 + 1, nullptr, 10);
         return (v.set_read_cache(*g_ipc_h, cap, ahead) == VDISK_OK) ? "OK" : "ERR io";
     }
-    // 卸载磁盘：回 OK 后再收尾，否则客户端先读到断管
+    // 卸载磁盘
     if (cmd == "eject") {
         g_ipc_stop = true;
         if (g_ipc_eject_hook) {
@@ -170,13 +182,34 @@ static std::string ipc_dispatch(const std::string& req) {
         }
         return "OK";
     }
+    // M8
+    if (cmd == "suspend") {
+        if (!g_ipc_unlocked.load()) return "ERR locked";   // 锁态无可暂停
+        long minutes = strtol(arg.c_str(), nullptr, 10);
+        if (minutes <= 0) {
+            g_suspend_until_ms.store(0, std::memory_order_relaxed);
+            // 取消暂停
+            if (v.set_idle_timeout) v.set_idle_timeout(*g_ipc_h, g_svc_idle);
+            g_last_fg_activity_ms.store(now_ms(), std::memory_order_relaxed);   // 恢复即重新起算
+            return "OK suspend=0";
+        }
+        if (minutes > 24 * 60) minutes = 24 * 60;
+        g_suspend_until_ms.store((int64_t)now_ms() + (int64_t)minutes * 60000,
+                                 std::memory_order_relaxed);
+        g_last_fg_activity_ms.store(now_ms(), std::memory_order_relaxed);   // 暂停期间持续刷
+        // 关键
+        // 自行超时锁定
+        // 「设了暂时不锁定
+        if (v.set_idle_timeout) v.set_idle_timeout(*g_ipc_h, 0);
+        return "OK suspend=" + std::to_string(minutes);
+    }
     return "ERR unknown";
 }
 
 #if defined(_WIN32)
-// 管道 ACL 限「当前用户 + SYSTEM + Administrators」。不设则默认 DACL 来自进程 token，
-// 服务以 LocalSystem 跑时普通用户 GUI 连不上（ERR nopipe）——安全与功能问题一体。
-// 口径对齐 Linux 侧 0700 + SO_PEERCRED。
+// 管道 ACL 限「当前用户 + SYSTEM +
+// 服务
+// 口径对齐 Linux 侧 0700 +
 static PSECURITY_DESCRIPTOR ipc_pipe_sd() {
     static PSECURITY_DESCRIPTOR cached = nullptr;
     if (!cached) {
@@ -198,19 +231,19 @@ static PSECURITY_DESCRIPTOR ipc_pipe_sd() {
             }
             CloseHandle(tok);
         }
-        if (sddl.empty()) sddl = L"D:P(A;;GA;;;SY)(A;;GA;;;BA)";   // 兜底：仅特权身份
+        if (sddl.empty()) sddl = L"D:P(A;;GA;;;SY)(A;;GA;;;BA)";   // 兜底
         PSECURITY_DESCRIPTOR sd = nullptr; DWORD need = 0;
         if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(
                 sddl.c_str(), SDDL_REVISION_1, &sd, &need)) return nullptr;
-        cached = sd;   // LocalAlloc，生命周期=进程
+        cached = sd;   // LocalAlloc
     }
     return cached;
 }
 
-// 客户端身份校验：管道名可被同机任何人猜到，必须确认对端身份。
-// 规则：同进程用户 或 SYSTEM/Administrators 才放行（LocalSystem 服务的客户端常是管理员 GUI）。
-// 拿不到客户端 token 时保守拒绝——宁可不服务，也不给未验证方开解锁口。
-// 校验 token 是否隶属于某已知别名组（如 Administrators），用于放行服务场景下的管理员 GUI 客户端。
+// 客户端身份校验
+// 规则
+// 拿不到客户端 token
+// 校验 token 是否隶属于
 static bool token_in_group(HANDLE tok, const wchar_t* groupSidStr) {
     if (!tok) return false;
     PSID gsid = nullptr;
@@ -249,12 +282,12 @@ static bool ipc_client_allowed(HANDLE pipe) {
                     }
                     CloseHandle(mytok);
                 }
-                // SYSTEM(S-1-5-18) 账户，或 Administrators(S-1-5-32-544) 组成员放行
+                // SYSTEM
                 if (!ok && sid) {
                     wchar_t* s = nullptr;
                     if (ConvertSidToStringSidW(sid, &s)) {
                         if (wcscmp(s, L"S-1-5-18") == 0) ok = true;
-                        else if (tok && token_in_group(tok, L"S-1-5-32-544")) ok = true;   // 组隶属，非用户 SID 比较
+                        else if (tok && token_in_group(tok, L"S-1-5-32-544")) ok = true;   // 组隶属
                         LocalFree(s);
                     }
                 }
@@ -269,8 +302,8 @@ static bool ipc_client_allowed(HANDLE pipe) {
 void ipc_server_thread() {
     std::string name = ipc_pipe_name(g_ipc_vault);
     PSECURITY_DESCRIPTOR sd = ipc_pipe_sd();
-    // P0-4 失败关闭：拿不到受限 SD 就绝不开放解锁口。
-    // 旧行为是回退 NULL 安全属性＝采用默认 DACL，等于把解锁控制面暴露给本机任意可连方。
+    // P0-4 失败关闭
+    // 旧行
     if (!sd) {
         fprintf(stderr, "[fe] ipc: restricted security descriptor unavailable, refusing to serve\n");
         return;
@@ -286,7 +319,7 @@ void ipc_server_thread() {
         if (pipe == INVALID_HANDLE_VALUE) break;
         if (ConnectNamedPipe(pipe, nullptr)) {
             if (ipc_client_allowed(pipe)) {
-                // M4 读超时：客户端连上不发数据会永久占住服务线程 → 解锁/锁定全失效（坏连接 DoS）。真正实现 5s 超时：overlapped ReadFile + WaitForSingleObject。PIPE_WAIT 下同步 ReadFile 无限阻塞，SetNamedPipeHandleState 传不了超时，原 deadline 判断是死代码。
+                // M4 读超
                 DWORD mode = PIPE_READMODE_BYTE;
                 SetNamedPipeHandleState(pipe, &mode, nullptr, nullptr);
                 OVERLAPPED ov; memset(&ov, 0, sizeof ov);
@@ -296,11 +329,11 @@ void ipc_server_thread() {
                     BOOL ok = ReadFile(pipe, buf, (DWORD)(sizeof(buf) - 1), &n, &ov);
                     if (!ok && GetLastError() == ERROR_IO_PENDING) {
                         if (WaitForSingleObject(ov.hEvent, 5000) != WAIT_OBJECT_0) {
-                            CancelIo(pipe);                            // 5s 超时：取消本线程挂起的读
-                            GetOverlappedResult(pipe, &ov, &n, TRUE);  // 等取消完成；n 无意义
+                            CancelIo(pipe);                            // 5s 超
+                            GetOverlappedResult(pipe, &ov, &n, TRUE);  // 等取消完成
                             n = 0;
                         } else if (!GetOverlappedResult(pipe, &ov, &n, FALSE)) {
-                            n = 0;                                     // 读失败（客户端已断开）
+                            n = 0;                                     // 读失败
                         }
                     } else if (!ok) {
                         n = 0;
@@ -321,16 +354,16 @@ void ipc_server_thread() {
 }
 std::string ipc_call(const std::string& vault, const std::string& req) {
     std::wstring wname = utf8_to_wide(ipc_pipe_name(vault));
-    WaitNamedPipeW(wname.c_str(), 3000);   // 等服务起来（最多 3s）；失败也直接试连一次
+    WaitNamedPipeW(wname.c_str(), 3000);   // 等服务起来
     HANDLE pipe = CreateFileW(wname.c_str(), GENERIC_READ | GENERIC_WRITE,
         0, nullptr, OPEN_EXISTING, 0, nullptr);
     if (pipe == INVALID_HANDLE_VALUE) return "ERR nopipe";
     DWORD w = 0; WriteFile(pipe, req.c_str(), (DWORD)req.size(), &w, nullptr);
-    // 读超时：服务端无响应时不让 GUI 永久卡住
+    // 读超
     char buf[4096]; DWORD n = 0; std::string resp;
     DWORD deadline = GetTickCount() + 5000;
     for (;;) {
-        // 低危 C 组：读失败即退。原写法失败不 break，tight loop 空转至 5s（客户端 CPU 空转）。
+        // 低危 C 组
         if (!ReadFile(pipe, buf, sizeof(buf) - 1, &n, nullptr)) break;
         if (n > 0) { buf[n] = 0; resp = buf; break; }
         if (GetTickCount() > deadline) break;
@@ -339,9 +372,9 @@ std::string ipc_call(const std::string& vault, const std::string& req) {
     return resp.empty() ? "ERR io" : resp;
 }
 #else
-// Linux 控制面：Unix domain socket（SOCK_STREAM）。
-// 安全口径对齐 §5.1：socket 文件 0700（仅 owner），并用 SO_PEERCRED 拒非同 uid 进程，
-// 防止别的用户猜到路径后发 unlock 试探密码。协议与 Windows 命名管道完全一致。
+// Linux 控制面
+// 安全口径对齐 §5.1
+// 别的用户猜到路
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/un.h>
@@ -350,7 +383,7 @@ std::string ipc_call(const std::string& vault, const std::string& req) {
 static bool ipc_fill_sun(sockaddr_un& sa, const std::string& path) {
     memset(&sa, 0, sizeof sa);
     sa.sun_family = AF_UNIX;
-    if (path.size() >= sizeof(sa.sun_path)) return false;   // 路径过长无法表达
+    if (path.size() >= sizeof(sa.sun_path)) return false;   // 路径过长无法表
     memcpy(sa.sun_path, path.c_str(), path.size());
     return true;
 }
@@ -359,7 +392,7 @@ void ipc_server_thread() {
     std::string path = ipc_pipe_name(g_ipc_vault);
     sockaddr_un sa;
     if (!ipc_fill_sun(sa, path)) return;
-    unlink(path.c_str());                       // 清上次异常退出的残 socket
+    unlink(path.c_str());                       // 清上次异常退出
     int srv = socket(AF_UNIX, SOCK_STREAM, 0);
     if (srv < 0) return;
     if (bind(srv, (sockaddr*)&sa, sizeof sa) != 0) { close(srv); return; }
@@ -368,7 +401,7 @@ void ipc_server_thread() {
     while (!g_ipc_stop.load()) {
         int fd = accept(srv, nullptr, nullptr);
         if (fd < 0) { if (errno == EINTR) continue; break; }
-        // 同 uid 校验：拒绝其它用户进程
+        // 同 uid 校验
         ucred cr; socklen_t crl = sizeof cr;
         bool same_user = (getsockopt(fd, SOL_SOCKET, SO_PEERCRED, &cr, &crl) == 0) &&
                          (cr.uid == getuid());
@@ -405,7 +438,7 @@ std::string ipc_call(const std::string& vault, const std::string& req) {
     if (fd < 0) return "ERR io";
     if (connect(fd, (sockaddr*)&sa, sizeof sa) != 0) { close(fd); return "ERR noserver"; }
     if (send(fd, req.data(), req.size(), 0) < 0) { close(fd); return "ERR io"; }
-    shutdown(fd, SHUT_WR);                      // 告知服务端请求已完
+    shutdown(fd, SHUT_WR);                      // 告知服务端请求
     std::string resp;
     char buf[4096];
     ssize_t n;

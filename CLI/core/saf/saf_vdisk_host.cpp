@@ -1,6 +1,6 @@
-// vdisk 宿主：运行时加载 vdisk 库并驱动，直连加密盘（不挂载）
+// vdisk 宿主
 #ifdef _WIN32
-#define _CRT_SECURE_NO_WARNINGS   // getenv 在 MSVC 下告警，此处只读取只读环境变量
+#define _CRT_SECURE_NO_WARNINGS   // getenv 在 MSVC 下告警，此处只
 #endif
 
 #include "saf_vault.hpp"
@@ -99,11 +99,11 @@ LibHandle load_raw(const std::string& path, bool full_path) {
     if (path.empty()) return LibHandle();
 #ifdef _WIN32
     std::wstring w = saf_utf8_to_wide(path);
-    // 全路径只信该目录与默认目录；裸名只查 System32，堵住 DLL 劫持
+    // 全路径只信该目
     DWORD flags = full_path ? (LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS)
                             : LOAD_LIBRARY_SEARCH_SYSTEM32;
     HMODULE h = LoadLibraryExW(w.c_str(), nullptr, flags);
-    if (!h && full_path) h = LoadLibraryExW(w.c_str(), nullptr, LOAD_WITH_ALTERED_SEARCH_PATH);   // 老系统（无 LOAD_LIBRARY_SEARCH_* 支持）回落：ALTERED_SEARCH_PATH 仍优先从 DLL 所在目录解析依赖，比裸 LoadLibraryW 的劫持面小
+    if (!h && full_path) h = LoadLibraryExW(w.c_str(), nullptr, LOAD_WITH_ALTERED_SEARCH_PATH);   // 老系统
     return h;
 #else
     (void)full_path;
@@ -119,10 +119,10 @@ std::string lib_name() {
 #endif
 }
 
-// 候选顺序：显式路径 → FE_VDISK_LIB → 库目录 → 系统名
+// 候选顺序
 bool load_vdisk(const std::string& explicit_path, const std::string& library_dir,
                 LibHandle& out_lib, VdiskSyms& out_syms, bool& out_full_path) {
-    std::vector<std::pair<std::string, bool>> cands;   // (路径, 是否全路径)
+    std::vector<std::pair<std::string, bool>> cands;   
     if (!explicit_path.empty()) cands.push_back({ explicit_path, true });
     if (const char* env = std::getenv("FE_VDISK_LIB")) {
         if (env && *env) cands.push_back({ std::string(env), true });
@@ -157,7 +157,7 @@ bool load_vdisk(const std::string& explicit_path, const std::string& library_dir
             unload_lib(h);
             continue;
         }
-        if (s.abi_version() != VDISK_ABI_VERSION) {   // 符号齐全但 ABI 版本不符：语义/结构体布局可能已漂移，拒载
+        if (s.abi_version() != VDISK_ABI_VERSION) {   // 符号齐全但 ABI 版本
             unload_lib(h);
             continue;
         }
@@ -188,13 +188,13 @@ public:
     SafStatus readdir(const std::string& vpath, std::vector<SafEntry>& out) override {
         out.clear();
         uint64_t n = 0;
-        VDiskStatus st = s_.readdir(h_, vpath.c_str(), nullptr, &n);   // 第一段：取数量
+        VDiskStatus st = s_.readdir(h_, vpath.c_str(), nullptr, &n);   // 第一段
         if (st != VDISK_OK) return map_status(st);
         if (n == 0) return SAF_OK;
         std::vector<VDiskEntry> arr(n);
         VDiskEntry* base = arr.data();
         uint64_t cap = n;
-        st = s_.readdir(h_, vpath.c_str(), &base, &cap);                // 第二段：取数组
+        st = s_.readdir(h_, vpath.c_str(), &base, &cap);                // 第二段
         if (st != VDISK_OK) return map_status(st);
         for (uint64_t i = 0; i < n; ++i) {
             SafEntry e;
@@ -272,13 +272,13 @@ SafStatus saf_open_vault_vdisk(const std::string& library_dir,
     VDiskHandle* h = syms.open(library_dir.c_str());
     if (!h) { unload_lib(lib); return SAF_E_IO; }
 
-    std::string pw = passphrase;                       // 拷一份，用完清零
+    std::string pw = passphrase;                       // 拷一份
     VDiskStatus st = syms.unlock(h, pw.c_str(), opt.use_recovery ? 1 : 0);
     wipe(pw);
     if (st != VDISK_OK) { syms.close(h); unload_lib(lib); return map_status(st); }
 
     if (opt.writable) {
-        // 只置可写标志，不做任何挂载动作
+        // 只置可写标志
         st = syms.mount_rw(h, "");
         if (st != VDISK_OK) { syms.close(h); unload_lib(lib); return map_status(st); }
     }

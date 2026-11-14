@@ -1,0 +1,198 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             xmlns:local="clr-namespace:FileEncryptorMobile"
+             x:Class="FileEncryptorMobile.SettingsPage"
+             Title="{local:Zh 设置}">
+
+    <Grid RowDefinitions="*">
+        <ScrollView>
+        <VerticalStackLayout Padding="{StaticResource PagePadding}" Spacing="{StaticResource PageSpacing}">
+
+            <Label Text="{local:Zh 外观}" Style="{StaticResource SectionTitle}" />
+            <Border Style="{StaticResource Card}">
+                <VerticalStackLayout Spacing="{StaticResource SpaceMd}">
+                    <Label Text="{local:Zh 主题}" FontSize="{StaticResource FontSizeBody}" />
+                    <FlexLayout x:Name="ThemeChoices" Direction="Row" Wrap="Wrap"
+                                AlignItems="Start" />
+                </VerticalStackLayout>
+            </Border>
+
+            <Border Style="{StaticResource Card}">
+                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="{StaticResource GridGap}">
+                    <VerticalStackLayout Spacing="{StaticResource SpaceXs}">
+                        <Label Text="{local:Zh 语言}" FontSize="{StaticResource FontSizeBody}" />
+                        <Label Text="{local:Zh 切换后立即生效并重新锁定加密库。默认跟随系统。}"
+                               Style="{StaticResource Caption}" />
+                    </VerticalStackLayout>
+                    <Picker x:Name="PkLang" Grid.Column="1" WidthRequest="150"
+                            VerticalOptions="Center" SelectedIndexChanged="OnLangChanged" />
+                </Grid>
+            </Border>
+            <Label Text="{local:Zh 安全}" Style="{StaticResource SectionTitle}" Margin="0,4,0,0" />
+            <Border Style="{StaticResource Card}">
+                <VerticalStackLayout Spacing="{StaticResource SpaceXl}">
+                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="{StaticResource GridGap}">
+                        <VerticalStackLayout Spacing="{StaticResource SpaceXs}">
+                            <Label Text="{local:Zh 应用锁}" FontSize="{StaticResource FontSizeBody}" />
+                            <Label Text="{local:Zh 从后台返回时，需验证一次指纹或面容。默认关闭。}"
+                                   Style="{StaticResource Caption}" />
+                        </VerticalStackLayout>
+                        <Switch x:Name="SwAppLock" Grid.Column="1"
+                                VerticalOptions="Center" Toggled="OnAppLockToggled" />
+                    </Grid>
+                    <BoxView Style="{StaticResource Divider}" Margin="0,2" />
+                    <Label Text="{local:Zh 未开应用锁时，回到应用若停在加密库，仍需输密码。}"
+                           Style="{StaticResource Caption}" />
+                    <BoxView Style="{StaticResource Divider}" Margin="0,2" />
+                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="{StaticResource GridGap}">
+                        <VerticalStackLayout Spacing="{StaticResource SpaceXs}">
+                            <Label Text="{local:Zh 空闲自动锁定}" FontSize="{StaticResource FontSizeBody}" />
+                            <Label Text="{local:Zh 无操作超过设定时长即锁定；切后台始终立即锁定。}"
+                                   Style="{StaticResource Caption}" />
+                        </VerticalStackLayout>
+                        <Picker x:Name="PkIdleMinutes" Grid.Column="1" WidthRequest="108"
+                                VerticalOptions="Center"
+                                SelectedIndexChanged="OnIdleMinutesChanged">
+                            <Picker.ItemsSource>
+                                <x:Array Type="{x:Type x:String}">
+                                    <x:String>1 分钟</x:String>
+                                    <x:String>5 分钟</x:String>
+                                    <x:String>15 分钟</x:String>
+                                    <x:String>30 分钟</x:String>
+                                </x:Array>
+                            </Picker.ItemsSource>
+                        </Picker>
+                    </Grid>
+                    <Button x:Name="BtnClean" Text="{local:Zh 清理明文缓存和导出文件}"
+                            Style="{StaticResource DangerOutlineButton}" Margin="0,2,0,0"
+                            Clicked="OnCleanPlaintext" />
+                    <Label Text="{local:Zh 删除预览缓存和导出的明文文件，无法恢复。}"
+                           Style="{StaticResource Caption}" />
+                </VerticalStackLayout>
+            </Border>
+
+            <Label Text="{local:Zh 加密库}" Style="{StaticResource SectionTitle}" Margin="0,4,0,0" />
+            <Border Style="{StaticResource Card}">
+                <VerticalStackLayout Spacing="{StaticResource SpaceMd}">
+                    <Label Text="{local:Zh 回收站保留天数}" FontSize="{StaticResource FontSizeBody}" />
+                    <Picker x:Name="PkTrashDays" SelectedIndexChanged="OnTrashDaysChanged">
+                        <Picker.ItemsSource>
+                            <x:Array Type="{x:Type x:String}">
+                                <x:String>不自动清理</x:String>
+                                <x:String>7 天</x:String>
+                                <x:String>30 天</x:String>
+                                <x:String>90 天</x:String>
+                                <x:String>180 天</x:String>
+                                <x:String>365 天</x:String>
+                            </x:Array>
+                        </Picker.ItemsSource>
+                    </Picker>
+                    <Label Text="{local:Zh 删除的文件先进回收站，到期后解锁时自动清理；选「不自动清理」则只手动清空。}"
+                           Style="{StaticResource Caption}" />
+                </VerticalStackLayout>
+            </Border>
+
+            <Label Text="{local:Zh 高危}" Style="{StaticResource SectionTitle}"
+                   TextColor="{AppThemeBinding Light={StaticResource DangerLight}, Dark={StaticResource DangerDark}}"
+                   Margin="0,4,0,0" />
+            <Border Style="{StaticResource Card}">
+                <VerticalStackLayout Spacing="{StaticResource SpaceXl}">
+                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="{StaticResource GridGap}">
+                        <VerticalStackLayout Spacing="{StaticResource SpaceXs}">
+                            <Label Text="{local:Zh 禁止系统截屏}" FontSize="{StaticResource FontSizeBody}" />
+                            <Label Text="{local:Zh 开启后，截图、录屏和最近任务缩略图都会变黑，保护明文内容。}"
+                                   Style="{StaticResource Caption}" />
+                        </VerticalStackLayout>
+                        <Switch x:Name="SwSecure" Grid.Column="1"
+                                VerticalOptions="Center" Toggled="OnSecureToggled" />
+                    </Grid>
+                    <Label x:Name="LblSecureWarn"
+                           Text="{local:Zh 已关闭截屏保护：明文预览和库内容可能被截图或录屏捕获。}"
+                           Style="{StaticResource ErrorText}" IsVisible="False" />
+                </VerticalStackLayout>
+            </Border>
+
+            <Label Text="{local:Zh 关于}" Style="{StaticResource SectionTitle}" Margin="0,4,0,0" />
+            <Border Style="{StaticResource Card}">
+                <VerticalStackLayout Spacing="{StaticResource SpaceMd}">
+                    <Label x:Name="LblVersion" Style="{StaticResource Caption}" />
+                    <Label Text="{local:Zh 本地文件加密工具：数据与密钥都在本机，不会上传。}"
+                           Style="{StaticResource MutedText}" />
+                    <Label Text="{local:Zh 单文件加密使用 XChaCha20-Poly1305、AEGIS-256 或 AES-256-GCM，加密库使用 Argon2id 派生密钥。}"
+                           Style="{StaticResource Caption}" />
+                    <Label Text="{local:Zh © 瑶璎珞。软件按现状提供，作者不对数据丢失承担责任。请务必另行保存恢复密钥。}"
+                           Style="{StaticResource Caption}" />
+                    <Grid ColumnDefinitions="*,*" ColumnSpacing="{StaticResource SpaceLg}" Margin="0,6,0,0">
+                        <Button Grid.Column="0" x:Name="BtnCheckUpdate" Text="{local:Zh 检查更新}"
+                                Style="{StaticResource SecondaryButton}" Clicked="OnCheckUpdate" />
+                        <Button Grid.Column="1" x:Name="BtnCredits" Text="{local:Zh 鸣谢}"
+                                Style="{StaticResource SecondaryButton}" Clicked="OnCredits" />
+                    </Grid>
+                </VerticalStackLayout>
+            </Border>
+
+            <Label Text="{local:Zh 诊断}" Style="{StaticResource SectionTitle}" Margin="0,4,0,0" />
+            <Border Style="{StaticResource Card}">
+                <VerticalStackLayout Spacing="{StaticResource SpaceMd}">
+                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="{StaticResource GridGap}">
+                        <VerticalStackLayout Spacing="{StaticResource SpaceXs}">
+                            <Label Text="{local:Zh 详细日志}" FontSize="{StaticResource FontSizeBody}" />
+                            <Label Text="{local:Zh 向系统日志输出播放器诊断信息，仅供排查。默认关闭。}"
+                                   Style="{StaticResource Caption}" />
+                        </VerticalStackLayout>
+                        <Switch x:Name="SwDiag" Grid.Column="1"
+                                VerticalOptions="Center" Toggled="OnDiagToggled" />
+                    </Grid>
+                    <Label Text="{local:Zh 日志只存本机，不含内容与密码；排查完请关闭。}"
+                           Style="{StaticResource Caption}" />
+                </VerticalStackLayout>
+            </Border>
+
+            <Label Text="{local:Zh 作者的小巧思}" Style="{StaticResource SectionTitle}" Margin="0,4,0,0" />
+            <Border Style="{StaticResource Card}">
+                <local:MusicPlayerView x:Name="Player" />
+            </Border>
+
+        </VerticalStackLayout>
+        </ScrollView>
+
+        <Grid x:Name="SecureWarnOverlay" RowDefinitions="*" IsVisible="False"
+              BackgroundColor="{StaticResource Scrim}">
+            <Border Style="{StaticResource DialogCard}" HorizontalOptions="Center"
+                    VerticalOptions="Center" WidthRequest="320" MaximumWidthRequest="320">
+                <VerticalStackLayout Spacing="{StaticResource SpaceXxl}">
+                    <Label Text="{local:Zh 关闭截屏保护？}" Style="{StaticResource DialogTitle}" />
+                    <Label Text="{local:Zh 关闭后，明文预览和库内容可能被截图或录屏捕获。}"
+                           Style="{StaticResource ErrorText}" />
+                    <Grid ColumnDefinitions="*,*" ColumnSpacing="{StaticResource SpaceLg}">
+                        <Button Grid.Column="0" x:Name="BtnWarnCancel" Text="{local:Zh 取消}"
+                                Style="{StaticResource SecondaryButton}" Clicked="OnWarnCancel" />
+                        <Button Grid.Column="1" x:Name="BtnWarnContinue" Text="{local:Zh 继续}"
+                                Style="{StaticResource DangerOutlineButton}" Clicked="OnWarnContinue" />
+                    </Grid>
+                </VerticalStackLayout>
+            </Border>
+        </Grid>
+
+        <Grid x:Name="SecureConfirmOverlay" RowDefinitions="*" IsVisible="False"
+              BackgroundColor="{StaticResource Scrim}">
+            <Border Style="{StaticResource DialogCard}" HorizontalOptions="Center"
+                    VerticalOptions="Center" WidthRequest="320" MaximumWidthRequest="320">
+                <VerticalStackLayout Spacing="{StaticResource SpaceXxl}">
+                    <Label Text="{local:Zh 确认关闭截屏保护？}" Style="{StaticResource DialogTitle}" />
+                    <Label Text="{local:Zh 关闭后明文可能被截图或录屏捕获，建议保持开启。}"
+                           Style="{StaticResource ErrorText}" />
+                    <Grid ColumnDefinitions="*,*" ColumnSpacing="{StaticResource SpaceLg}">
+                        <Button Grid.Column="0" x:Name="BtnSecureCancel" Text="{local:Zh 取消}"
+                                Style="{StaticResource SecondaryButton}" Clicked="OnSecureCancel" />
+                        <Button Grid.Column="1" x:Name="BtnSecureConfirm" Text="确定关闭 (5)"
+                                Style="{StaticResource DangerOutlineButton}"
+                                Clicked="OnSecureConfirm" IsEnabled="False" />
+                    </Grid>
+                </VerticalStackLayout>
+            </Border>
+        </Grid>
+    </Grid>
+
+</ContentPage>

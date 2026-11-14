@@ -20,7 +20,7 @@
 
     <Icon Id="app.ico" SourceFile="..\..\GUI-Qt\logogui.ico" />
 
-    <!-- GPLv3 许可协议 -->
+    <!-- AGPLv3 许可协议 -->
     <WixVariable Id="WixUILicenseRtf" Value="license.rtf" />
 
     <Feature Id="MainFeature" Title="FileEncryptor GUI (Qt)" Level="1"
@@ -31,6 +31,7 @@
       <ComponentRef Id="StartMenuShortcut" />
       <ComponentRef Id="DesktopShortcut" />
       <ComponentRef Id="WerExclusions" />
+      <ComponentRef Id="PtdFileAssociation" />
       <!-- 加密盘挂载组件：与 vdisk.dll 捆绑（FE-Mounter 必须 dlopen 它，两者必须同装同卸）。
            CLI 本身不依赖 vdisk.dll，故不选此功能只影响盘符挂载，GUI 会自动隐藏加密盘入口。 -->
       <Feature Id="VaultFeature" Title="Encrypted vault mounting (FE-Mounter)" Level="1"
@@ -74,8 +75,19 @@
                   Impersonate="no"
                   Return="asyncNoWait" />
 
+    <!-- 卸载完成后清安装目录残留（与 WinUI 安装器同规格）：RemoveFiles 之后 rd /s /q，
+         兜底 MSI 未登记的文件（update_staging、卸载器同目录碎片等）。
+         UPGRADINGPRODUCTCODE 时不执行，避免升级过程中误删新装文件；只删 INSTALLFOLDER 本身。 -->
+    <CustomAction Id="CleanInstallDir"
+                  Directory="INSTALLFOLDER"
+                  ExeCommand="cmd.exe /c rd /s /q &quot;[INSTALLFOLDER]&quot;"
+                  Execute="deferred"
+                  Impersonate="no"
+                  Return="ignore" />
+
     <InstallExecuteSequence>
       <Custom Action="InstallWinFsp" After="InstallFiles" Condition="&amp;WinFspFeature=3 AND NOT WINFSP_INSTALLED" />
+      <Custom Action="CleanInstallDir" After="RemoveFiles" Condition="NOT UPGRADINGPRODUCTCODE AND REMOVE~=&quot;ALL&quot;" />
     </InstallExecuteSequence>
 
   </Package>
@@ -133,7 +145,7 @@
     <!-- WinFSP 安装包（捆绑进 MSI，落入 INSTALLFOLDER\redist）。由 WinFspFeature 控制安装，
          安装阶段由 InstallWinFsp 自定义操作静默装到系统。 -->
     <Component Id="WinFspRedist" Directory="REDISTDIR">
-      <File Id="WinFspMsi" Source="..\..\third_party\winfsp-2.1.25156.msi" KeyPath="yes" />
+      <File Id="WinFspMsi" Source="..\..\Third Party\winfsp-2.1.25156.msi" KeyPath="yes" />
     </Component>
 
     <Component Id="StartMenuShortcut" Directory="ProgramMenuDir">
@@ -141,6 +153,12 @@
                 Name="FileEncryptor GUI"
                 Target="[#MainExeFile]"
                 WorkingDirectory="INSTALLFOLDER"
+                Icon="app.ico" />
+      <!-- 开始菜单「卸载」入口：直接调 Windows Installer 卸载本产品，不再随包附带卸载器。 -->
+      <Shortcut Id="UninstallSc"
+                Name="卸载 FileEncryptor"
+                Target="[SystemFolder]msiexec.exe"
+                Arguments="/x [ProductCode]"
                 Icon="app.ico" />
       <RemoveFolder Id="RemoveProgramMenu" Directory="ProgramMenuDir" On="uninstall" />
       <RegistryValue Root="HKCU" Key="Software\FileEncryptor\GUI"
@@ -178,6 +196,18 @@
       <RegistryValue Root="HKLM"
                      Key="SOFTWARE\Microsoft\Windows\Windows Error Reporting\ExcludedApplications"
                      Name="RestartAgent.exe" Type="integer" Value="1" />
+    </Component>
+
+    <!-- .ptd 文件关联 -->
+    <Component Id="PtdFileAssociation" Directory="INSTALLFOLDER">
+      <RegistryValue Root="HKCR" Key=".ptd"
+                     Value="FileEncryptor.Qt.ptd" Type="string" KeyPath="yes" />
+      <RegistryValue Root="HKCR" Key="FileEncryptor.Qt.ptd"
+                     Value="FileEncryptor Encrypted File (Qt)" Type="string" />
+      <RegistryValue Root="HKCR" Key="FileEncryptor.Qt.ptd\DefaultIcon"
+                     Value="&quot;[#MainExeFile]&quot;,0" Type="string" />
+      <RegistryValue Root="HKCR" Key="FileEncryptor.Qt.ptd\shell\open\command"
+                     Value="&quot;[#MainExeFile]&quot; &quot;%1&quot;" Type="string" />
     </Component>
   </Fragment>
 

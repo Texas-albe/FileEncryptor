@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<Shell
+    x:Class="FileEncryptorMobile.AppShell"
+    xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+    xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+    xmlns:local="clr-namespace:FileEncryptorMobile"
+    Title="FileEncryptorMobile">
+
+    <ShellContent
+        Title="{local:Zh 主页}"
+        ContentTemplate="{DataTemplate local:HomePage}"
+        Route="HomePage" />
+
+    <ShellContent
+        Title="{local:Zh 加密库}"
+        ContentTemplate="{DataTemplate local:VaultPage}"
+        Route="VaultPage" />
+
+    <ShellContent
+        Title="{local:Zh 文件加解密}"
+        ContentTemplate="{DataTemplate local:CryptoPage}"
+        Route="CryptoPage" />
+
+    <ShellContent
+        Title="{local:Zh 设置}"
+        ContentTemplate="{DataTemplate local:SettingsPage}"
+        Route="SettingsPage" />
+
+    <!-- 设置项下面 -->
+    <Shell.FlyoutFooter>
+        <local:BackgroundTaskFooter />
+    </Shell.FlyoutFooter>
+
+</Shell>

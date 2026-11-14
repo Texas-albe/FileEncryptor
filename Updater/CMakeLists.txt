@@ -81,18 +81,18 @@ endif()
 # Updater 只要静态库，不要 curl 的安装规则：否则 libcurl 的 curl-config、
 # pkgconfig、头文件与 man page 会冒泡进顶层，把 Updater 的 DEB/RPM 撑到 500+ 文件
 set(CURL_DISABLE_INSTALL ON CACHE BOOL "" FORCE)
-add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../third_party/curl
+add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../Third Party/curl"
                  ${CMAKE_CURRENT_BINARY_DIR}/curl-build)
 
 # curl 目标归入文件夹，免得 VS 目标列表刷屏
 set_property(GLOBAL PROPERTY USE_FOLDERS ON)
 get_target_property(_fe_curl_real libcurl ALIASED_TARGET)
 if(_fe_curl_real)
-  set_target_properties(${_fe_curl_real} PROPERTIES FOLDER "third_party/curl")
+  set_target_properties(${_fe_curl_real} PROPERTIES FOLDER "Third Party/curl")
 endif()
 foreach(_fe_curl_tgt curl-ca-bundle curl-ca-firefox curl-lint curl_uninstall)
   if(TARGET ${_fe_curl_tgt})
-    set_target_properties(${_fe_curl_tgt} PROPERTIES FOLDER "third_party/curl")
+    set_target_properties(${_fe_curl_tgt} PROPERTIES FOLDER "Third Party/curl")
   endif()
 endforeach()
 
@@ -114,7 +114,7 @@ endif()
 # 静态链接需 CURL_STATICLIB，否则符号被声明为 dllimport
 target_compile_definitions(Updater PRIVATE CURL_STATICLIB)
 target_include_directories(Updater PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/../third_party/curl/include)
+    "${CMAKE_CURRENT_SOURCE_DIR}/../Third Party/curl/include")
 target_link_libraries(Updater PRIVATE libcurl)
 
 if(NOT WIN32)
@@ -210,7 +210,7 @@ set(CPACK_PACKAGE_CONTACT "maintainer@example.com")
 set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "FileEncryptor auto-updater (libcurl)")
 set(CPACK_PACKAGE_DESCRIPTION
     "Updater checks GitHub releases and downloads/verifies updates.")
-set(CPACK_PACKAGE_LICENSE "GPLv3")
+set(CPACK_PACKAGE_LICENSE "AGPLv3")
 if(EXISTS "${CMAKE_SOURCE_DIR}/LICENSE")
   set(CPACK_RESOURCE_FILE_LICENSE "${CMAKE_SOURCE_DIR}/LICENSE")
 endif()
@@ -235,7 +235,7 @@ set(CPACK_DEBIAN_PACKAGE_MAINTAINER "maintainer@example.com")
 set(CPACK_DEBIAN_PACKAGE_SECTION "utils")
 set(CPACK_DEBIAN_PACKAGE_PRIORITY "optional")
 
-set(CPACK_RPM_PACKAGE_LICENSE "GPLv3")
+set(CPACK_RPM_PACKAGE_LICENSE "AGPLv3")
 set(CPACK_RPM_PACKAGE_GROUP "Applications/System")
 
 set(CPACK_STRIP_FILES ON)

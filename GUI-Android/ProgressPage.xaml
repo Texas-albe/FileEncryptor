@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<ContentView xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             xmlns:local="clr-namespace:FileEncryptorMobile"
+             x:Class="FileEncryptorMobile.ProgressPage">
+
+    <!-- 全屏遮罩 -->
+    <Grid x:Name="Mask" RowDefinitions="*" BackgroundColor="{StaticResource Scrim}">
+        <Grid.GestureRecognizers>
+            <TapGestureRecognizer Tapped="OnMaskTapped" />
+        </Grid.GestureRecognizers>
+
+        <Border Style="{StaticResource DialogCardFlush}"
+                HorizontalOptions="Fill" VerticalOptions="Center"
+                Margin="{StaticResource DialogMarginH}" MaximumWidthRequest="420">
+            <Border.GestureRecognizers>
+                <TapGestureRecognizer Tapped="OnCardTapped" />
+            </Border.GestureRecognizers>
+            <Grid RowDefinitions="Auto,Auto">
+                <Grid Grid.Row="0" ColumnDefinitions="*,Auto" Padding="20,4,12,0">
+                    <Label Grid.Column="0" Text="{local:Zh 后台任务}" Style="{StaticResource SubSectionTitle}"
+                           VerticalOptions="Center" />
+                    <Button Grid.Column="1" Text="{local:Zh 隐藏}" Clicked="OnHide"
+                            Style="{StaticResource QuietButton}" VerticalOptions="Center" />
+                </Grid>
+                <VerticalStackLayout Grid.Row="1" Spacing="{StaticResource SpaceMd}" Padding="20,2,20,20">
+                    <local:ResourceBar x:Name="ResBar" HorizontalOptions="Center" />
+                    <Label x:Name="LblTitle" Style="{StaticResource DialogTitle}"
+                           HorizontalOptions="Center" />
+                    <Label x:Name="LblOverall" Style="{StaticResource MutedText}"
+                           HorizontalOptions="Center" />
+                    <Label x:Name="LblRate" Style="{StaticResource Caption}"
+                           HorizontalOptions="Center" />
+
+                    <BoxView Style="{StaticResource Divider}" Margin="0,2" />
+
+                    <Label x:Name="LblFile" Style="{StaticResource MutedText}"
+                           LineBreakMode="MiddleTruncation" />
+                    <ProgressBar x:Name="BarFile" Progress="0" HeightRequest="6" />
+                    <Label x:Name="LblFilePct" Style="{StaticResource Caption}" />
+                    <Label x:Name="LblFiles" Style="{StaticResource Caption}" />
+
+                    <Button x:Name="BtnCancel" Text="{local:Zh 取消}" Clicked="OnCancel"
+                            Style="{StaticResource SecondaryButton}" Margin="0,4,0,0" />
+                </VerticalStackLayout>
+            </Grid>
+        </Border>
+    </Grid>
+
+</ContentView>

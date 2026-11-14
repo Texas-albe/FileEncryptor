@@ -1,9 +1,9 @@
 <Project Sdk="WixToolset.Sdk/4.0.5">
   <PropertyGroup>
     <!-- 版本唯一来源：Product.wxs 通过 $(var.Version) 消费，MSI 版本与输出文件名一起变 -->
-    <GuiVersion>3.1.0</GuiVersion>
+    <GuiVersion>3.1.1</GuiVersion>
     <!-- CLI 产物名由 CMake project(VERSION) 拼出，只支持数值版（无 -alpha.N），故独立定义 -->
-    <CliVersion>3.1.0</CliVersion>
+    <CliVersion>3.1.1</CliVersion>
     <OutputType>Package</OutputType>
     <OutputName>FileEncryptorGUI-$(GuiVersion)-Qt-Windows</OutputName>
     <Platform>x64</Platform>
@@ -38,7 +38,7 @@
     <CMakeExe Condition="'$(CMakeExe)'==''">E:\MICROSOFT VISUAL STUDIO\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe</CMakeExe>
     <!-- 构建脚本：复刻 vcvars_env.py 的环境补偿（先 vcvars 设好 MSVC/SDK 环境，再补本机缺失的 SDK um/ucrt 库路径），
          然后跑 cmake build。用独立 .bat 而非 cmd /c 内联，避免 %LIB% 解析期展开冲掉 vcvars 设置的库路径。 -->
-    <BuildHelper>$(MSBuildThisFileDirectory)..\..\.workbuddy\build_with_vcvars.bat</BuildHelper>
+    <BuildHelper>$(MSBuildThisFileDirectory)..\..\scripts\build_with_vcvars.bat</BuildHelper>
   </PropertyGroup>
 
   <!-- 构建 MSI 前先编 Qt GUI，VS 里点一次「生成」就能出安装包，不必手动先过一遍 CMake -->

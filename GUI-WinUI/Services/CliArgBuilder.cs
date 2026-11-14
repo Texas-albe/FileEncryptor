@@ -6,37 +6,37 @@ using FileEncryptorGUI.Models;
 
 namespace FileEncryptorGUI.Services;
 
-// GUI 参数到 argv 的映射
+// GUI 参数到 argv
 public static class CliArgBuilder
 {
-    // 密码框里存的是私钥明文，而 CLI 的 --wm-sign 只收文件路径
+    // 密码框里存
     private static string ResolveKeySource(string key, ShellOptions options)
         => IsPrivateKeyMaterial(key) ? TempFileFor(key, options) : key;
 
     public static bool IsPrivateKeyMaterial(string? v)
         => !string.IsNullOrEmpty(v) && v.Contains("PRIVATE KEY", StringComparison.Ordinal);
 
-    // 入盘目标原样下发：盘符支持已移除，CLI 会拒盘符根，用户须填真实存储目录
+    // 入盘目标原样
     private static string ResolveVaultTarget(string target)
     {
         return (target ?? "").Trim();
     }
 
-    // 私钥明文只落在这一个任务自己的临时文件里（路径挂在 ShellOptions 上）。
-    // 原来用静态字段存路径：单任务串行没事，一旦并发任务，后一个会覆盖前一个的路径，
-    // 前一个任务结束时删错文件、私钥残留。ACL 显式收紧到仅当前用户，不继承 %TEMP% 默认 DACL。
+    // 私钥明文只落
+    // 用静态字段存路
+    // 前一个任务结束
     private static string TempFileFor(string key, ShellOptions options)
     {
         var path = Path.Combine(Path.GetTempPath(),
             "fe_wm_" + Guid.NewGuid().ToString("N") + ".pem");
-        // 创建句柄时即带限制性 DACL（File.Create 的 fileSecurity 形参），消除「先按 %TEMP% 继承 ACL 落盘、后 TightenTempAcl」之间的可读窗口；TightenTempAcl 保留作双保险
+        // 创建句柄时即带
         var sec = new FileSecurity();
         sec.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
         var me = WindowsIdentity.GetCurrent().User;
         if (me == null) return key;
         sec.AddAccessRule(new FileSystemAccessRule(
             me, FileSystemRights.FullControl, AccessControlType.Allow));
-        // 创建即带限制 DACL，关闭可读窗口
+        // 创建即带限制 DACL
         using (var fs = new FileInfo(path).Create(FileMode.CreateNew, FileSystemRights.Write, FileShare.None, 4096, FileOptions.None, sec))
         using (var sw = new StreamWriter(fs, new UTF8Encoding(false)))
         {
@@ -47,7 +47,7 @@ public static class CliArgBuilder
         return path;
     }
 
-    // 显式收紧 ACL：断继承 + 清空既有规则 + 只留当前用户完全控制
+    // 显式收紧 ACL
     private static void TightenTempAcl(string path)
     {
         try
@@ -71,14 +71,14 @@ public static class CliArgBuilder
         catch { /* 收紧失败不阻断：文件仍会由任务结束时删除 */ }
     }
 
-    // 删除本次任务自己的水印私钥临时文件（每任务独立，不会误删并发任务的文件）
+    // 删除本次任务自
     public static void CleanupWatermarkTemp(ShellOptions options)
     {
         var path = options?.WatermarkTempKeyPath;
         if (string.IsNullOrEmpty(path)) return;
         try
         {
-            // 先零填充再删：私钥明文不得留在磁盘可恢复区
+            // 先零填充
             var n = new FileInfo(path).Length;
             if (n > 0) File.WriteAllBytes(path, new byte[n]);
         }
@@ -91,8 +91,8 @@ public static class CliArgBuilder
     {
         var args = new List<string>();
 
-        // 密钥包装：与加解密流程完全独立，只有 --wrap-key / --unwrap-key 一组参数。
-        // 密码 / 私钥不落 argv：统一走 --key-stdin 或 -k <file>，理由同水印私钥。
+        // 密钥包装
+        // 密码 / 私钥不落 argv
         if (options.Action == CryptoAction.WrapKey) return BuildWrapArgs(options);
         if (options.Action == CryptoAction.UnwrapKey) return BuildUnwrapArgs(options);
 
@@ -107,8 +107,8 @@ public static class CliArgBuilder
             case CryptoAction.PubKey: args.Add("-Y"); break;
         }
 
-        // 模式：CLI 的 -m 后写覆盖前写，但 -m x25519/x448 只置 asym_mode 标志、不改算法，
-        // 所以两条都带上即为「非对称封装 + 指定文件载荷对称算法」。
+        // 模式
+        // 两条
         if (options.Action is CryptoAction.Encrypt or CryptoAction.BatchEncrypt)
         {
             if (options.Mode == CryptoMode.Asymmetric)
@@ -122,16 +122,16 @@ public static class CliArgBuilder
             }
         }
 
-        // 生成密钥对的曲线选择（默认 X25519）
+        // 生成密钥
         if (options.Action == CryptoAction.KeyGen && options.UseX448) args.Add("-x448");
 
-        // 加密盘入盘（M1/M4）：产物入索引；与 -o 互斥（由界面保证）。必须在 -o 之前。
+        // 加密盘入盘
         bool isVaultIngest = options.Action is CryptoAction.Encrypt or CryptoAction.BatchEncrypt
                              && !string.IsNullOrEmpty(options.IntoVault);
         if (isVaultIngest)
         {
-            // 填的是盘符（如 Z:）则解析回本程序挂载过的存储目录；解析不到原样下发，
-            // 由 CLI 守卫给出「看起来是盘符」的明确报错，避免把文件双重加密污染索引。
+            // 填的是盘符
+            // 由 CLI 守卫给出「看起
             var target = ResolveVaultTarget(options.IntoVault!);
             args.Add("--into-vault"); args.Add(target);
         }
@@ -141,10 +141,10 @@ public static class CliArgBuilder
 
         bool isEnc = options.Action is CryptoAction.Encrypt or CryptoAction.BatchEncrypt;
 
-        // 加密压缩包：目录树 / 多文件打成单个 .ptd。短选项 -p，长选项 --pack。必须排在 -- 之前。
+        // 加密压缩包
         if (isEnc && options.Pack) args.Add("-p");
 
-        // 分卷：把产出的 .ptd 切成 <base>.001.ptd/002/…；--split 的值是尺寸串（2GB/512MB/4096）
+        // 分卷
         if (isEnc && options.Split)
         {
             args.Add("--split");
@@ -160,20 +160,20 @@ public static class CliArgBuilder
                 case SourceDisposition.Wipe: args.Add("--wipe-source"); break;
                 case SourceDisposition.Recycle: args.Add("--recycle-source"); break;
             }
-            // 目录 + 删除类处置：界面已弹窗确认，告知 CLI 免掉交互询问
+            // 目录 + 删除类处置
             if (options.SourceDeleteOk && options.SourceDisposition != SourceDisposition.Keep)
                 args.Add("--source-delete-ok");
         }
 
         if (options.ForceOverwrite) args.Add("-y");
 
-        // 密钥文件（对称模式）
+        // 密钥文件
         if (!string.IsNullOrEmpty(options.KeyfilePath) && options.Mode != CryptoMode.Asymmetric)
         {
             args.Add("-k"); args.Add(options.KeyfilePath);
         }
 
-        // 非对称加密：收件人
+        // 非对称加密
         if (options.Mode == CryptoMode.Asymmetric &&
             options.Action is CryptoAction.Encrypt or CryptoAction.BatchEncrypt &&
             !string.IsNullOrEmpty(options.RecipientPath))
@@ -181,7 +181,7 @@ public static class CliArgBuilder
             args.Add("-r"); args.Add(options.RecipientPath);
         }
 
-        // 非对称解密：身份私钥文件
+        // 非对称解密
         if (options.Mode == CryptoMode.Asymmetric &&
             options.Action is CryptoAction.Decrypt or CryptoAction.BatchDecrypt &&
             !string.IsNullOrEmpty(options.IdentityPath))
@@ -189,7 +189,7 @@ public static class CliArgBuilder
             args.Add("-k"); args.Add(options.IdentityPath);
         }
 
-        // 批量解密还原文件名
+        // 批量解密
         if (options.Action == CryptoAction.BatchDecrypt && options.RestoreName)
         {
             args.Add("--restore-name");
@@ -201,11 +201,11 @@ public static class CliArgBuilder
             args.Add("--sha256");
         }
 
-        // 后量子开关：CLI 仅在密钥生成、水印签名/验签处读取；其它动作带上会让旧 CLI 报未知开关
+        // 后量子开关
         bool pqcAffects = options.Action == CryptoAction.KeyGen || options.Watermark;
         if (pqcAffects && !options.Pqc) args.Add("--no-pqc");
 
-        // 尾部水印：仅加密动作；带私钥时下发 --wm-sign（私钥可留空 = 写未签名记录，不阻断加密）
+        // 尾部水印
         if (options.Watermark &&
             options.Action is CryptoAction.Encrypt or CryptoAction.BatchEncrypt)
         {
@@ -217,7 +217,7 @@ public static class CliArgBuilder
             }
         }
 
-        // zstd 压缩（非对称 .ptd 同样支持，CLI run_asym 会把级别透传给 encrypt_file）
+        // zstd 压缩
         if (options.Compress && options.Action is CryptoAction.Encrypt or CryptoAction.BatchEncrypt)
         {
             args.Add("-zstd");
@@ -228,7 +228,7 @@ public static class CliArgBuilder
             }
         }
 
-        // 密钥经 stdin 注入（-- 之前）：控制台模式同样经由 stdin，只是窗口可见
+        // 密钥经 stdin 注入
         bool needsStdinKey = options.Mode != CryptoMode.Asymmetric &&
                              string.IsNullOrEmpty(options.KeyfilePath) &&
                              options.Action is CryptoAction.Encrypt or CryptoAction.Decrypt
@@ -236,14 +236,14 @@ public static class CliArgBuilder
                                  or CryptoAction.Derive;
         if (needsStdinKey) args.Add("--key-stdin");
 
-        // 批量模式：-i 输入
+        // 批量模式
         if (options.Action is CryptoAction.BatchEncrypt or CryptoAction.BatchDecrypt)
         {
             foreach (var p in options.InputPaths) { args.Add("-i"); args.Add(p); }
         }
         else if (options.Action is CryptoAction.Encrypt or CryptoAction.Decrypt or CryptoAction.PubKey)
         {
-            // -- 终止选项解析
+            // - 终止选项解析
             if (options.InputPaths.Count > 0) { args.Add("--"); args.Add(options.InputPaths[0]); }
         }
 
@@ -257,7 +257,7 @@ public static class CliArgBuilder
         if (!string.IsNullOrEmpty(o.WrapOutput)) { args.Add("--wrap-out"); args.Add(o.WrapOutput); }
         if (o.WrapAlg == WrapAlg.Pubkey)
         {
-            // 公钥路线：--wrap-to 接字符串或文件都认，这里给界面填的路径
+            // 公钥路线
             if (!string.IsNullOrEmpty(o.RecipientPath)) { args.Add("--wrap-to"); args.Add(o.RecipientPath); }
         }
         else if (!string.IsNullOrEmpty(o.KeyfilePath)) { args.Add("-k"); args.Add(o.KeyfilePath); }
@@ -270,7 +270,7 @@ public static class CliArgBuilder
     private static List<string> BuildUnwrapArgs(ShellOptions o)
     {
         var args = new List<string> { "--unwrap-key", o.WrapInput };
-        // 解包时算法写在 blob 头里，但界面上的选择用于决定「密码还是私钥」
+        // 解包时算法写
         if (o.WrapAlg != WrapAlg.Pubkey)
         {
             if (!string.IsNullOrEmpty(o.KeyfilePath)) { args.Add("-k"); args.Add(o.KeyfilePath); }
@@ -289,7 +289,7 @@ public static class CliArgBuilder
         _ => "kwp"
     };
 
-    // 组装 --split 尺寸串；CLI 的 parse_split_size 认 1024 进制 KB/MB/GB/TB
+    // 组装 --split 尺寸串
     private static string FormatSplitSize(double value, SplitUnit unit)
     {
         double v = value > 0 ? value : 1;
@@ -326,11 +326,11 @@ public static class CliArgBuilder
         foreach (var a in BuildArguments(options))
         {
             sb.Append(' ');
-            // 密钥取值只显示占位符：临时文件落盘失败时这里是私钥明文
+            // 密钥取值只显示
             if (!a.StartsWith("-") && (prev == "--wm-sign" || prev == "--wm-verify"
                                        || IsPrivateKeyMaterial(a)))
                 sb.Append("<private-key>");
-            // 值参数统一加引号
+            // 值参数统一加引
             else if (a.StartsWith("-"))
                 sb.Append(a);
             else
@@ -343,14 +343,14 @@ public static class CliArgBuilder
         {
             sb.Append(L10n.T("  # 密钥经 stdin 管道注入"));
         }
-        // 包装动作：密码路线走 stdin，公钥路线靠收件人密钥材料
+        // 包装动作
         if (options.Action is CryptoAction.WrapKey or CryptoAction.UnwrapKey)
         {
             if (options.WrapAlg == WrapAlg.Pubkey) sb.Append(L10n.T("  # 使用收件人密钥材料"));
             else if (!string.IsNullOrEmpty(options.KeyfilePath)) sb.Append(L10n.T("  # 密码来自 -k 文件"));
             else sb.Append(L10n.T("  # 密码经 stdin 管道注入"));
         }
-        // 预览只拼字符串、不真正跑 CLI，临时私钥用完即删
+        // 预览只拼字符串
         CleanupWatermarkTemp(options);
         return sb.ToString();
     }

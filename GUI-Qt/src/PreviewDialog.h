@@ -1,8 +1,8 @@
-// 预览解密窗口：调 CLI --preview 把明文前缀取回来显示，不落盘
+// 预览解密窗口
 #pragma once
 #include <QDialog>
-// 槽参数类型要完整定义：moc 生成元数据时按声明处的名字配对，
-// 只前置声明 class OutputLine 会解析不出真实签名，LNK2019。
+// 槽参数类型要完
+// 只前置声明 class OutputLine
 #include "ICommandExecutor.h"
 
 class QLabel;
@@ -10,11 +10,11 @@ class QPlainTextEdit;
 class QSpinBox;
 class QPushButton;
 
-// 预览请求：外部负责填好 programPath / filePath / 密码
+// 预览请求
 struct PreviewRequest {
     QString programPath;
     QString filePath;
-    // 为空表示非对称/无需密码
+    // 为空表示非对称/
     QByteArray password;
     // 预览字节数
     int maxBytes = 4096;
@@ -27,11 +27,11 @@ public:
     ~PreviewDialog() override;
 
     void setFileName(const QString& name);
-    // 启动预览；由 dialog 内部管理 executor 生命周期
+    // 启动预览
     void start(const PreviewRequest& req);
 
 signals:
-    // 请求下一个文件（用户点「下一个」）
+    // 请求下一个文件
     void nextRequested();
 
 private slots:
@@ -43,8 +43,8 @@ private slots:
 private:
     void appendChunk(const QString& text);
     void setBusy(bool busy);
-    // 子进程 stdout 是二进制流，Qt 的 QString::fromUtf8 会按 \0 截断：
-    // 预览到的字节先缓存成 QByteArray，收齐再一次性解码
+    // 子进程 stdout 是二进制
+    // 预览到
     void flushPending();
 
     QLabel*    m_fileLabel = nullptr;

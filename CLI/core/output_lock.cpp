@@ -19,14 +19,14 @@
 #include <signal.h>
 #endif
 
-#include "FileEncryptor.hpp"   // AtomicOutput / open_stream / remove_file_utf8 / utf8_to_wstring
+#include "FileEncryptor.hpp"   
 
-// ---- 跨进程输出锁 ----
+// 跨进程输出锁
 
-// 锁文件内容：pid + 随机 nonce + 创建时间戳。
-// 只存 pid 有两个问题：PID 重用后失效锁永远收不回（该输出路径永久 LOCKED）；
-// 回收时也无法确认文件还是我们发现的那一份（别的进程可能已回收重建）。
-// nonce 用于回收前的二次校验，时间戳便于诊断。
+// 锁文件内容
+// 只存 pid 有两个问题
+// 回收
+// nonce 用于回收
 struct LockContent {
     uint32_t magic;
     uint32_t pid;
@@ -89,22 +89,22 @@ LockResult fe_acquire_output_lock(const std::string& out_path, std::string& lock
         DWORD wr;
         WriteFile(h, &lc, sizeof(lc), &wr, NULL);
         CloseHandle(h);
-        // P0-4：锁文件按 0600 语义收紧（Windows 写真正 DACL），阻断他用户篡改/顶掉锁
+        // P0-4
         tighten_file_permissions(lock_path);
         return true;
     };
     if (create_new_lock()) return LockResult::OK;
 
-    // CREATE_NEW 失败：要么「真被占用」，要么「无法创建（权限/路径）」，需要区分
+    // CREATE_NEW 失败
     HANDLE h = CreateFileW(w.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, NULL);
     if (h != INVALID_HANDLE_VALUE) {
         LockContent lc;
         if (!read_lock_handle(h, lc)) { CloseHandle(h); return LockResult::CANNOT_CREATE; }
         const bool alive = fe_process_alive((int)lc.pid);
         CloseHandle(h);
-        if (alive) return LockResult::LOCKED;   // 锁仍被存活进程持有
-        // 失效锁（持有进程已退出）：回收前二次校验——重读内容须与首次一致，
-        // 否则说明别的进程刚回收重建过（或 PID 已被重用），此时不得再删。
+        if (alive) return LockResult::LOCKED;   // 锁仍
+        // 失效锁
+        // 说明别
         h = CreateFileW(w.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, NULL);
         bool same = false;
         if (h != INVALID_HANDLE_VALUE) {
@@ -115,11 +115,11 @@ LockResult fe_acquire_output_lock(const std::string& out_path, std::string& lock
         if (!same) return LockResult::LOCKED;
         DeleteFileW(w.c_str());
         if (create_new_lock()) return LockResult::OK;
-        // 回收与另一进程竞争重建：再试一次，仍失败视为被他人接管（LOCKED），而非误报无法创建
+        // 回收
         if (create_new_lock()) return LockResult::OK;
         return LockResult::LOCKED;
     }
-    // 连读取现有锁文件都失败：权限 / 路径问题
+    // 连读取现有锁文
     return LockResult::CANNOT_CREATE;
 #else
     auto create_new_lock = [&]() -> bool {
@@ -138,8 +138,8 @@ LockResult fe_acquire_output_lock(const std::string& out_path, std::string& lock
         if (!read_lock_fd(fd, lc)) { close(fd); return LockResult::CANNOT_CREATE; }
         const bool alive = fe_process_alive((int)lc.pid);
         close(fd);
-        if (alive) return LockResult::LOCKED;   // 锁被存活进程持有
-        // 失效锁：回收前二次校验，内容须与首次读取一致（未被他人回收重建）
+        if (alive) return LockResult::LOCKED;   // 锁被存活进程持
+        // 失效锁
         fd = open(lock_path.c_str(), O_RDONLY, 0);
         bool same = false;
         if (fd >= 0) {
@@ -150,16 +150,16 @@ LockResult fe_acquire_output_lock(const std::string& out_path, std::string& lock
         if (!same) return LockResult::LOCKED;
         unlink(lock_path.c_str());
         if (create_new_lock()) return LockResult::OK;
-        // 回收竞争失败：再试一次，仍失败视为被他人接管（LOCKED）
+        // 回收竞争失败
         if (create_new_lock()) return LockResult::OK;
         return LockResult::LOCKED;
     }
-    // 连读取都失败：权限 / 路径问题
+    // 连读取
     return LockResult::CANNOT_CREATE;
 #endif
 }
 
-// ---- 防符号链接写穿 ----
+// 防符号链接写穿
 
 #if !defined(_WIN32)
 bool fe_create_output_no_follow(const std::string& path) {
@@ -172,11 +172,11 @@ bool fe_create_output_no_follow(const std::string& path) {
     return true;
 }
 #else
-// Windows: 没有 O_NOFOLLOW 等价物，CreateFileW 会跟随最后一级的 reparse point。
-// 因此分两步：先 CREATE_NEW——名字原本不存在时，最后一级不可能是链接，无需比较路径
-// （比较路径会被 8.3 短名与父目录 junction 误导，误拒合法路径）。只有已存在时，
-// 才用 OPEN_REPARSE_POINT 再打开一次读属性，确认非链接后才截断——
-// 这样不存在「链接目标已被破坏才被发现」的窗口。
+// Windows
+// 因此分两步
+// 。只有已存
+// 才用 OPEN_REPARSE_POINT
+// 这样不存
 bool fe_create_output_no_follow(const std::string& path) {
     const std::wstring wpath = utf8_to_wstring(path);
     HANDLE h = CreateFileW(wpath.c_str(), GENERIC_WRITE, 0, NULL, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, NULL);
@@ -186,7 +186,7 @@ bool fe_create_output_no_follow(const std::string& path) {
         fprintf(stderr, "Cannot create output file: %s\n", path.c_str());
         return false;
     }
-    // 已存在：只检查末级自身属性，不穿越它（避免跟随链接）
+    // 已存
     HANDLE lh = CreateFileW(wpath.c_str(), FILE_READ_ATTRIBUTES,
                             FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
                             NULL, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, NULL);
@@ -212,26 +212,26 @@ bool fe_create_output_no_follow(const std::string& path) {
 }
 #endif
 
-// ---- 原子替换与临时名 ----
+// 原子替换
 
-// UTF-8 安全的原子替换。v2.1.2 起去掉 static：AtomicOutput / keylib / resume 等多处复用。
+// UTF-8 安全
 bool replace_file_utf8(const std::string& from, const std::string& to) {
 #ifdef _WIN32
     std::wstring wf = utf8_to_wstring(from);
     std::wstring wt = utf8_to_wstring(to);
     return MoveFileExW(wf.c_str(), wt.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != 0;
 #else
-    // M19：POSIX rename 本身原子覆盖已存在的目标；先 remove 再 rename 会在
-    // 两步之间留下「目标不存在」窗口，且 remove 成功而 rename 失败时原文件
-    // 已丢失（vault-recrypt 曾因此把库内文件永久删除）。
+    // M19
+    // 两步
+    // 已丢失
     return std::rename(from.c_str(), to.c_str()) == 0;
 #endif
 }
 
-// 临时名由最终路径确定性派生（FNV-1a 64）：同一输出路径每次得到同一临时名，
-// 这样重跑才能复用上次的 .prs 续传；随机名会让续传失效并堆积孤儿残留。
-// 对外导出（output_lock.hpp）：调用方在构造 AtomicOutput 之前探测续传元数据时
-// 需要先算出这个路径。
+// 临时名
+// 这样重跑才能复
+// 对外导出
+// 先算出这个路径
 std::string atomic_output_tmp_path(const std::string& final_path) {
     uint64_t h = 1469598103934665603ull;
     for (unsigned char c : final_path) { h ^= c; h *= 1099511628211ull; }
@@ -250,19 +250,19 @@ AtomicOutput::~AtomicOutput() {
 bool AtomicOutput::commit() {
     if (committed_) return true;
     if (!replace_file_utf8(tmp_, final_)) {
-        // 替换失败：最终路径上不能留半截文件，临时文件也一并清掉
+        // 替换失败
         fprintf(stderr, "Error: cannot move temp output into place: %s\n", final_.c_str());
         remove_file_utf8(tmp_);
-        committed_ = true;   // 视作已终结，析构不再干预
+        committed_ = true;   // 视作已终结
         return false;
     }
     committed_ = true;
     return true;
 }
 
-// ---- 权限 ----
+// 权限
 
-// UTF-8 安全的文件删除（声明在 output_lock.hpp，OutputLockGuard 析构依赖）
+// UTF-8 安全
 bool remove_file_utf8(const std::string& path) {
 #ifdef _WIN32
     return _wremove(utf8_to_wstring(path).c_str()) == 0;
@@ -271,7 +271,7 @@ bool remove_file_utf8(const std::string& path) {
 #endif
 }
 
-// 清掉只读属性（密钥文件 / 源文件覆写前的准备）
+// 清掉只读属性
 void clear_readonly_attribute(const std::string& path) {
 #ifdef _WIN32
     const std::wstring w = utf8_to_wstring(path);
@@ -279,21 +279,21 @@ void clear_readonly_attribute(const std::string& path) {
     if (a != INVALID_FILE_ATTRIBUTES && (a & FILE_ATTRIBUTE_READONLY))
         SetFileAttributesW(w.c_str(), a & ~FILE_ATTRIBUTE_READONLY);
 #else
-    // POSIX 的只读就是权限位：0444 打不开写句柄，补上属主写位再覆写
+    // POSIX 的只读
     struct stat st;
     if (::stat(path.c_str(), &st) == 0 && (st.st_mode & S_IWUSR) == 0)
         ::chmod(path.c_str(), st.st_mode | S_IWUSR);
 #endif
 }
 
-// 收紧密钥文件权限（0600）。Windows 写真正 DACL（当前用户+SYSTEM，PROTECTED_DACL
-// 阻断继承）；旧 _chmod 只读位并非访问控制。ACL 失败静默回退。
+// 收紧密钥文件权
+// 阻断继承）
 void tighten_file_permissions(const std::string& path) {
 #ifdef _WIN32
     clear_readonly_attribute(path);
     const std::wstring w = utf8_to_wstring(path);
 
-    // 当前进程的令牌用户 SID
+    // 当前进程
     HANDLE tok = NULL;
     if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &tok)) return;
     DWORD need = 0;
@@ -332,6 +332,6 @@ void tighten_file_permissions(const std::string& path) {
     }
     if (system_sid) FreeSid(system_sid);
 #else
-    chmod(path.c_str(), 0600);        // rw-------，仅拥有者可读写
+    chmod(path.c_str(), 0600);        // rw
 #endif
 }

@@ -15,12 +15,12 @@
 
 #include <sodium.h>
 
-#include "FileEncryptor.hpp"    // open_stream / ProgressInfo / CryptoMode / 常量 / 路径工具
+#include "FileEncryptor.hpp"    // open_stream / ProgressInfo /
 #include "fileio_util.hpp"      // fe_file_size / fe_normalize_path_lexical
-#include "ptd_format.hpp"       // HEADER_SIZE_V6 / MAGIC / header_size_for_version
+#include "ptd_format.hpp"       
 
-// 内容摘要：头部 64KiB + 尾部 64KiB 的 blake2b，拼上文件大小的十六进制。
-// 只取首尾是折中——全文件哈希对大文件太慢，而首尾已足以区分「同一个文件」与「被换掉的文件」。
+// 内容摘要
+// 只取首尾是折
 static std::string file_content_token(const std::string& path) {
     int64_t sz = fe_file_size(path);
     if (sz < 0) return std::string();
@@ -51,8 +51,8 @@ static std::string file_content_token(const std::string& path) {
 }
 
 std::string fe_compute_progress_binding(const std::string& in_path) {
-    // 规范化走 fe_normalize_path_lexical：宽字符往返，避免 fs::path 按 ACP 解释
-    // 使含中文/Emoji 的 UTF-8 路径抛异常（历史缺陷：中文路径加密必崩溃）。
+    // 规范化走
+    // 使含中文/Emoji
     const std::string norm = fe_normalize_path_lexical(in_path);
     int64_t sz = fe_file_size(in_path);
     int64_t mt = 0;
@@ -64,7 +64,7 @@ std::string fe_compute_progress_binding(const std::string& in_path) {
     if (stat(in_path.c_str(), &st) == 0) mt = (int64_t)st.st_mtime;
 #endif
     std::string token = file_content_token(in_path);
-    // 用 std::string 拼接，避免 snprintf 返回超长时按返回值构造 std::string 的越界读。
+    // 用 std
     return "|" + norm + "|" + std::to_string(sz) + "|" + std::to_string(mt) + "|" + token;
 }
 
@@ -89,12 +89,12 @@ bool fe_is_complete_output(const std::string& out_path, bool encrypt, const std:
         int64_t in_sz = in_size_hint;
         if (in_sz < 0) in_sz = fe_file_size(in_path);
         if (in_sz < 0) return false;
-        // 读取输出头部的 version / mode 以确定头部大小与 tag 长度
+        // 读取输出头部
         std::ifstream hf;
         unsigned char ver = 0; CryptoMode m = CryptoMode::XCHACHA20;
-        uint32_t cs_stored = CHUNK_SIZE;   // 文件头里的实际块大小，读不到则按当前默认
+        uint32_t cs_stored = CHUNK_SIZE;   // 文件头里
         if (open_stream(hf, out_path, std::ios::binary)) {
-            // 一次读到最大头长：既取 version/mode，也据实际读到的字节数判头是否完整
+            // 一次读到
             unsigned char hb[HEADER_SIZE_V6];
             hf.read(reinterpret_cast<char*>(hb), HEADER_SIZE_V6);
             std::streamsize got = hf.gcount();
@@ -103,8 +103,8 @@ bool fe_is_complete_output(const std::string& out_path, bool encrypt, const std:
                 if (header_ok && (uint64_t)got >= header_size_for_version(ver)
                     && (ver == 1 || ver == 2 || ver == 3 || ver == 5 || ver == 6 || ver == VERSION)) *header_ok = true;
             }
-            // 块大小取自文件头：默认块大小上调后，旧密文仍能被正确判定为「已完成」
-            hf.clear();   // 首读可能撞 EOF 置位，不清则后续 seekg 直接失败
+            // 块大小取自文件
+            hf.clear();   // 首读可能撞 EOF 置位
             uint64_t recip_meta = 0;
             if (ver == 6 && (uint64_t)got >= HEADER_SIZE_V6) {
                 FileHeaderV6 hv = load_header<FileHeaderV6>(hb);
@@ -129,11 +129,11 @@ bool fe_is_complete_output(const std::string& out_path, bool encrypt, const std:
             expected = hdr + 4 + 4 + 8 + (tc - 1) * (cs + tag) + (last + tag);
         }
         uint64_t fl = 0;
-        fe_peek_name_footer_len(out_path, fl);   // 新格式总带加密名尾部
+        fe_peek_name_footer_len(out_path, fl);   // 新格式总带加密
         expected += fl;
         return (uint64_t)cur == expected;
     } else {
-        // 解密产物：从源 .ptd 头读取 orig_size 与当前输出尺寸比较
+        // 解密产物
         std::ifstream f;
         if (!open_stream(f, in_path, std::ios::binary)) return false;
         unsigned char verbuf[5];
@@ -141,7 +141,7 @@ bool fe_is_complete_output(const std::string& out_path, bool encrypt, const std:
         unsigned char ver = verbuf[4];
         uint64_t hdr_size = header_size_for_version(ver);
         uint64_t orig = 0;
-        // v6 非对称容器：块元数据之前还有收件人 blob，需先读出其长度再定位 orig_size
+        // v6 非对称容器
         uint64_t recip_len_meta = 0;
         if (ver == 6) {
             unsigned char h6[HEADER_SIZE_V6];
@@ -197,11 +197,11 @@ bool fe_save_progress(const std::string& out_path, uint64_t processed_chunks,
 
     std::string prog_path = out_path + ".prs";
     std::string temp_prog = prog_path + ".tmp";
-    // H5d：.prs.tmp 路径确定性可预测（>=64MiB 加密每 0.5s 保存一次），
-    // ofstream(trunc) 会跟随攻击者预置的符号链接，把进度写到库外任意文件。
-    // 改为先 unlink 清掉残留 / 旧链接（unlink 只删链接本身、不跟随），再以
-    // O_EXCL/no-follow 独占创建；两步之间若被换链，O_EXCL 必然失败，
-    // 不会写穿（Windows 无 O_NOFOLLOW，两阶段之间竞态的残留风险在此标注）。
+    // H5d
+    // ofstream
+    // 改为先 unlink 清掉残留 /
+    // O_EXCL/no-follow 独占创建；两步
+    // 不会写穿
     remove_file_utf8(temp_prog);
     int pfd = -1;
 #ifdef _WIN32
@@ -223,8 +223,8 @@ bool fe_save_progress(const std::string& out_path, uint64_t processed_chunks,
         remove_file_utf8(temp_prog);
         return false;
     }
-    // 关键：Windows std::rename 在目标已存在时失败(EEXIST)，改用 replace_file_utf8()
-    //（MoveFileExW 替换写）保证每块后都能覆盖更新进度文件。
+    // 关键
+    // 保证每块
     if (!replace_file_utf8(temp_prog, prog_path)) {
         remove_file_utf8(temp_prog);
         return false;
@@ -233,6 +233,7 @@ bool fe_save_progress(const std::string& out_path, uint64_t processed_chunks,
 }
 
 void fe_remove_progress(const std::string& out_path) {
+    if(out_path.empty()) return;   // 流输出
     std::string prog_path = out_path + ".prs";
     remove_file_utf8(prog_path);
 }

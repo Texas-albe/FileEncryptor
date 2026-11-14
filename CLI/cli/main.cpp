@@ -9,6 +9,7 @@
 #include "kdf.hpp"
 #include "vault_index.hpp"
 #include "progress_frame.hpp"
+#include "../core/saf/saf_batch.hpp"
 #include "util/hex.hpp"
 #include <cstdio>
 #include <cstdlib>
@@ -30,6 +31,7 @@
 #include <sodium.h>
 #include <stdexcept>
 #include <ctime>
+#include <sstream>
 #ifdef _WIN32
 #include <io.h>
 #include <fcntl.h>
@@ -52,18 +54,18 @@
 
 #include <conio.h>
 #include <shellapi.h>
-#include <io.h>            // _chmod（收紧密钥文件权限）
+#include <io.h>            // _chmod
 #include <sys/stat.h>     // _S_IREAD
-#include <aclapi.h>       // SetEntriesInAclW / SetNamedSecurityInfoW（真正的 DACL 收紧）
+#include <aclapi.h>       // SetEntriesInAclW / SetNamedSecurityInfoW
 #else
 #include <termios.h>
 #include <unistd.h>
-#include <sys/stat.h>     // chmod（收紧密钥文件权限）
+#include <sys/stat.h>     // chmod
 #endif
 
 #ifdef _WIN32
-// 交互控制台：逐键读取密码并回显 '*'，退格按 UTF-8 码点删除，而非按字节 当 stdin 被重定向（管道 / 文件 / winpty PTY）时，_getch()
-// 会读控制台输入 缓冲区而挂起，故先检测 stdin 是否为控制台：不是则退化为从 std::cin 读一行
+// 交互控制台
+// 会读控制台输入
 static std::vector<char> get_password_win() {
     bool is_console=false;
     HANDLE hIn=GetStdHandle(STD_INPUT_HANDLE);
@@ -73,7 +75,7 @@ static std::vector<char> get_password_win() {
     }
 
     if(!is_console) {
-        // 非交互（管道 / 重定向 / PTY）：直接读取一行密码（原始 UTF-8 字节）
+        // 非交互
         std::string line;
         std::vector<char> pwd;
         if(std::getline(std::cin,line)) {
@@ -94,7 +96,7 @@ static std::vector<char> get_password_win() {
     };
     int ch;
     while((ch=_getch())!='\r'&&ch!='\n') {
-        if(ch==0||ch==0xE0) { _getch(); continue; } // 扩展键（方向键等）
+        if(ch==0||ch==0xE0) { _getch(); continue; } // 扩展键
         if(ch=='\b') {
             pop_utf8();
             std::cout<<"\b \b";
@@ -110,19 +112,19 @@ static std::vector<char> get_password_win() {
 }
 #endif
 
-// ===== 确认询问 =====
-// 交互终端：纯文本提示 + std::cin 读一个字符。
-// 宿主（GUI）：FILEENCRYPTOR_CONFIRM_FILE 指向一个来回文件 —— CLI 把问题写进去，
-// 宿主弹窗后把 y/n 写回来。走文件而非 stdin/stdout 有两个硬理由：
-//   1) stdin 已被密码通道占满（--key-stdin 读到 EOF 为止），关掉写端后 CLI 读到的是 EOF；
-//   2) WinUI 的「系统控制台」模式只重定向 stdin，stdout/stderr 直接进控制台窗口，
-//      宿主根本看不到提示，也没法把应答送回去。
+// 确认询问
+// 交互终端
+// 宿主
+// 宿主弹窗
+// stdin 已被密码通道占
+// WinUI 的「系统控制台」模
+// 宿主根本看不到
 static bool host_confirm_enabled() {
     const char* v=std::getenv("FILEENCRYPTOR_CONFIRM_FILE");
     return v&&v[0];
 }
 
-// 把问题写进握手文件，再轮询等应答。宿主写回以覆盖截断，故读到的首行即答案。
+// 把问题写进握手
 static bool host_confirm(const std::string& question) {
     const char* path=std::getenv("FILEENCRYPTOR_CONFIRM_FILE");
     if(!path||!path[0]) return false;
@@ -140,14 +142,14 @@ static bool host_confirm(const std::string& question) {
             return false;
         }
     }
-    // 上限 10 分钟：宿主窗口被用户最小化时不该把 CLI 永久挂住。
-    // 答案只认严格的 y/yes/n/no：第一次轮询很可能读回上面刚写的**问题本身**，
-    // 若按首字符判断，「Source directories...」会被当成回答（既不是 y 也不是 n，
-    // 结果是立刻返回 false，用户还没来得及答就被判为拒绝）。
+    // 上限 10 分钟
+    // 答案只认严格
+    // 若按首字符判断
+    // 结果是立刻返回 false
     for(int i=0; i<6000; ++i) {
         std::ifstream in;
         std::string line;
-        int verdict=-1;   // 0=否 1=是 -1=还没收到答案
+        int verdict=-1;   
         if(open_stream(in,f,std::ios::in|std::ios::binary)&&std::getline(in,line)) {
             while(!line.empty()&&(line.back()=='\r'||line.back()==' '||line.back()=='\t')) line.pop_back();
             size_t b=0;
@@ -159,7 +161,7 @@ static bool host_confirm(const std::string& question) {
             else if(low=="n"||low=="no") verdict=0;
         }
         if(verdict>=0) {
-            // 吃掉应答，免得下一次询问读到上一轮的残留
+            // 吃掉应答
             std::ofstream clr;
             open_stream(clr,f,std::ios::out|std::ios::binary|std::ios::trunc);
             clr.flush();
@@ -173,7 +175,7 @@ static bool host_confirm(const std::string& question) {
 }
 
 static bool confirm_yes_no(const std::string& subject, const char* prompt_suffix) {
-    // subject 可能是多行（目录清单），必须换行接提示，否则最后一条路径与提示符连成一行
+    // subject 可能是多行
     if(host_confirm_enabled()) return host_confirm(subject+"\n"+prompt_suffix);
     std::string suf=prompt_suffix;
     while(!suf.empty()&&(suf.back()==' ')) suf.pop_back();
@@ -183,8 +185,8 @@ static bool confirm_yes_no(const std::string& subject, const char* prompt_suffix
     return ch=='y'||ch=='Y';
 }
 
-// 目录输入 + 删除类源文件处置：整棵树会被清掉，动手前必须确认一次。
-// GUI 侧先弹窗并用 --source-delete-ok 免掉这里的询问；--pack 不删目录，故不适用。
+// 目录输入 + 删除类
+// GUI 侧先弹窗并用 --source-delete
 static bool confirm_source_dir_removal(const std::vector<std::string>& input_paths,
                                        int source_action) {
     std::vector<std::string> dirs;
@@ -193,9 +195,9 @@ static bool confirm_source_dir_removal(const std::vector<std::string>& input_pat
     const char* how = source_action==2 ? "securely erased"
                     : source_action==3 ? "moved to the Recycle Bin"
                     : "deleted";
-    // 措辞与实现对齐：-de 只逐个删除目录树里的文件（secure_handle_source 作用于文件），
-    // 空目录壳保留。不写 "directories will be deleted"，否则默认输出到源目录时
-    // .ptd 就落在目录里、目录根本不会空，承诺与行为对不上。
+    // 措辞
+    // 空目录壳保留
+    // .ptd
     std::string msg = "Files inside these directories will be ";
     msg += how;
     msg += " once encryption finishes (the directories themselves are kept; this cannot be undone):";
@@ -213,12 +215,12 @@ static bool confirm_source_dir_removal(const std::vector<std::string>& input_pat
 static std::vector<char> get_password_posix() {
     std::vector<char> pwd;
     struct termios oldt,newt;
-    // 仅当 stdin 是 TTY 时才关闭回显；管道/CI 等非 TTY 场景下 tcgetattr 会失败，
-    // 此时若仍调用 tcsetattr 会把未初始化的 oldt 写回，行为不可预期。故先检查返回值。
+    // 仅当 stdin 是 TTY 时才关闭
+    // 若仍调用 tcsetattr
     bool term_ok=(tcgetattr(STDIN_FILENO,&oldt)==0);
 #ifdef __ANDROID__
-    // Android 没有交互终端：stdin 多为 /dev/null，读回来只会是空密码。
-    // 与其让空密码继续往下走，不如直接终止并提示改用密钥文件 / stdin。
+    // Android 没有交互终端
+    // 与其让空密码继
     if(!term_ok) {
         std::cerr<<"Error: no interactive terminal on Android; "
                    "supply the passphrase with -k <keyfile> or --key-stdin.\n";
@@ -258,6 +260,137 @@ static bool file_exists_path(const std::string& p) {
     return true;
 }
 
+
+// 机器可读契约
+// 退出码
+enum FeExit : int {
+    FE_EXIT_OK = 0, FE_EXIT_USAGE = 2, FE_EXIT_AUTH = 3,
+    FE_EXIT_IO = 4, FE_EXIT_PARTIAL = 5, FE_EXIT_CANCEL = 6
+};
+
+struct FeContract {
+    bool json = false;
+    bool dry_run = false;
+    bool progress_events = false;
+    std::string action = "none";
+    std::vector<std::string> inputs;
+    std::string output_dir;
+    std::string cipher = "xchacha20";
+    std::string device_id = "local";
+    std::string audit_path;
+    int compress_level = 0;
+    uint64_t total_bytes = 0;
+    size_t audit_events = 0;
+};
+static FeContract g_contract;
+
+static std::string fe_json_escape(const std::string& s) {
+    std::string o;
+    for (unsigned char c : s) {
+        switch (c) {
+        case '"':  o += "\\\""; break;
+        case '\\': o += "\\\\"; break;
+        case '\n': o += "\\n"; break;
+        case '\r': o += "\\r"; break;
+        case '\t': o += "\\t"; break;
+        default:
+            if (c < 0x20) { char b[8]; std::snprintf(b, sizeof(b), "\\u%04x", c); o += b; }
+            else o += (char)c;
+        }
+    }
+    return o;
+}
+
+// 审计 JSONL
+static void fe_audit_emit(const char* op, const std::string& key, int status,
+                          uint64_t bytes, uint64_t elapsed_ms, int error_code) {
+    if (g_contract.dry_run || g_contract.audit_path.empty()) return;
+    static bool perms_done = false;
+    std::ofstream f(g_contract.audit_path, std::ios::app);
+    if (!f) return;
+    f.close();
+    if (!perms_done) {
+        std::error_code ec;
+        std::filesystem::permissions(g_contract.audit_path,
+            std::filesystem::perms::owner_read | std::filesystem::perms::owner_write,
+            std::filesystem::perm_options::replace, ec);
+        perms_done = true;
+    }
+    std::ofstream o(g_contract.audit_path, std::ios::app);
+    if (!o) return;
+    o << "{\"schema\":1,\"ts\":" << (unsigned long long)std::time(nullptr)
+      << ",\"op\":\"" << fe_json_escape(op) << "\""
+      << ",\"key\":\"" << fe_json_escape(key) << "\""
+      << ",\"status\":" << status
+      << ",\"bytes\":" << bytes
+      << ",\"elapsed_ms\":" << elapsed_ms
+      << ",\"error_code\":" << error_code
+      << ",\"device_id\":\"" << fe_json_escape(g_contract.device_id) << "\""
+      << "}\n";
+    g_contract.audit_events++;
+}
+
+// 只读枚举
+static uint64_t fe_collect_plan(const std::vector<std::string>& inputs,
+                                std::vector<std::string>& files) {
+    uint64_t total = 0;
+    std::error_code ec;
+    for (const auto& s : inputs) {
+        std::filesystem::path fp = std::filesystem::u8path(s);
+        if (std::filesystem::is_directory(fp, ec)) {
+            std::filesystem::recursive_directory_iterator it(
+                fp, std::filesystem::directory_options::skip_permission_denied, ec);
+            std::filesystem::recursive_directory_iterator end;
+            while (!ec && it != end) {
+                if (it->is_regular_file(ec)) {
+                    files.push_back(it->path().u8string());
+                    total += (uint64_t)it->file_size(ec);
+                    if (ec) ec.clear();
+                }
+                it.increment(ec);
+            }
+            ec.clear();
+        } else {
+            ec.clear();
+            files.push_back(s);
+            uintmax_t sz = std::filesystem::file_size(fp, ec);
+            if (!ec) total += (uint64_t)sz;
+            ec.clear();
+        }
+    }
+    return total;
+}
+
+static void fe_print_plan(const std::vector<std::string>& files, uint64_t total) {
+    std::cout << "[dry-run] action: " << g_contract.action << "\n"
+              << "[dry-run] cipher: " << g_contract.cipher << "\n"
+              << "[dry-run] output: " << (g_contract.output_dir.empty() ? "<source dir>" : g_contract.output_dir) << "\n"
+              << "[dry-run] compress: " << g_contract.compress_level << "\n"
+              << "[dry-run] inputs (" << files.size() << " files, " << total << " bytes):\n";
+    for (const auto& f : files) std::cout << "  " << f << "\n";
+    std::cout << "[dry-run] no files written.\n";
+}
+
+static std::string fe_result_json(int rc) {
+    std::ostringstream o;
+    o << "{\"schema\":1,\"ok\":" << (rc == 0 ? "true" : "false")
+      << ",\"exit_code\":" << rc
+      << ",\"action\":\"" << fe_json_escape(g_contract.action) << "\""
+      << ",\"dry_run\":" << (g_contract.dry_run ? "true" : "false")
+      << ",\"inputs\":[";
+    for (size_t i = 0; i < g_contract.inputs.size(); ++i) {
+        if (i) o << ",";
+        o << "\"" << fe_json_escape(g_contract.inputs[i]) << "\"";
+    }
+    o << "],\"output_dir\":\"" << fe_json_escape(g_contract.output_dir) << "\""
+      << ",\"cipher\":\"" << fe_json_escape(g_contract.cipher) << "\""
+      << ",\"compress_level\":" << g_contract.compress_level
+      << ",\"total_bytes\":" << g_contract.total_bytes
+      << ",\"audit_events\":" << g_contract.audit_events
+      << "}";
+    return o.str();
+}
+
 static void print_usage() {
     std::cout<<"FileEncryptor v"<<FE_VERSION_STRING<<"\n\n"
         <<"Modes (file encryption / decryption):\n"
@@ -287,6 +420,11 @@ static void print_usage() {
         <<"  --pqc             Hybrid X25519+ML-KEM-768 recipients and ML-DSA-65 watermark\n"
         <<"                    signatures (default on)\n"
         <<"  --no-pqc          Classic only: X25519/X448 recipients and RSA watermark signatures\n\n"
+        <<"Machine-readable contract:\n"
+        <<"  --json            One JSON object on stdout; business stdout suppressed\n"
+        <<"  -n, --dry-run     Print the operation plan, write nothing\n"
+        <<"  --progress-events Emit JSONL progress frames on stderr\n"
+        <<"  Exit codes: 0 ok | 2 usage | 3 auth | 4 I/O | 5 partial | 6 cancelled\n\n"
         <<"Options:\n"
         <<"  -o <dir>          Output directory (optional, default: source file's directory)\n"
         <<"  -de               Delete source after success: plaintext (encrypt) / .ptd (decrypt)\n"
@@ -372,8 +510,8 @@ static void print_usage() {
 }
 
 #ifdef _WIN32
-// 将 Windows 命令行（UTF-16）转换为 UTF-8 参数向量，保证非 ASCII 路径正确解析。
-// 使用标准 main 入口（而非 MSVC 专属的 wmain），以便 MinGW / Clang 等编译器也能构建。
+// 将 Windows 命令行
+// 使用标准 main 入口
 static std::vector<std::string> get_utf8_argv() {
     std::vector<std::string> argv_utf8;
     int argc_w=0;
@@ -392,8 +530,8 @@ static std::vector<std::string> get_utf8_argv() {
 }
 #endif
 
-// -r 收件人公钥：内联公钥（age1.../publickey: 前缀）或
-// 每行一个公钥的文件（容忍 # 注释与 publickey: 前缀）
+// r 收件人公钥
+// 每行一个公钥
 static bool collect_recipients(const std::string& spec,
                                std::vector<std::string>& out,
                                std::string& err) {
@@ -409,7 +547,7 @@ static bool collect_recipients(const std::string& spec,
     auto is_pubkey=[&trim](const std::string& s)->bool{
         if(s.rfind("publickey:",0)==0) return true;
         std::string low=trim(s);
-        // 前缀含大写，统一小写后再比对（age1... / x448-... / mlkem1-... 均视为内联公钥）
+        // 前缀含大写
         std::transform(low.begin(),low.end(),low.begin(),
             [](unsigned char c){ return (char)std::tolower(c); });
         return low.rfind("age1",0)==0 || low.rfind("x448-",0)==0
@@ -426,7 +564,7 @@ static bool collect_recipients(const std::string& spec,
         return true;
     }
 
-    std::ifstream rf;                       // 否则：公钥文件
+    std::ifstream rf;                       
     if(!open_stream(rf,t,std::ios::in|std::ios::binary)) {
         err="Cannot open public key file: "+t;
         return false;
@@ -449,11 +587,10 @@ static bool collect_recipients(const std::string& spec,
     return true;
 }
 
-// 把归档明文展开到 dest_dir（行为同 unzip：直接铺进去，不再套一层同名目录）。
-//
-// 先展开到同级暂存目录再逐项搬过去：归档里的条目可能与 dest_dir 下已有的
-// 同名文件撞车，边展开边覆盖会在中途失败时留下半新半旧的状态。
-// 暂存目录与目标同级，收尾是同卷改名，不用整树复制。
+// 把归档明文展开
+// 先展开到同级暂
+// 同名文件撞车
+// 暂存目录
 static bool unpack_archive(const std::string& plain_path, const std::string& dest_dir,
                            bool force_overwrite) {
     if (!create_directory_recursive(dest_dir)) {
@@ -474,7 +611,7 @@ static bool unpack_archive(const std::string& plain_path, const std::string& des
     std::function<void(uint64_t, uint64_t)> cb = [&](uint64_t done, uint64_t total) {
         if (total == 0) return;
         uint64_t pct = done * 100 / total;
-        if (pct >= last_pct) return;              // 只在整数百分点跳变时刷一行
+        if (pct >= last_pct) return;              // 只在整数百分点
         last_pct = pct;
         fprintf(stderr, "\rExtracting: %llu%%", (unsigned long long)pct);
         fflush(stderr);
@@ -482,19 +619,19 @@ static bool unpack_archive(const std::string& plain_path, const std::string& des
     if (!archive_extract(plain_path, tmp_dir, force_overwrite, cb, err)) {
         fprintf(stderr, "\n");
         std::cerr << "Error: " << err << "\n";
-        remove_file_utf8(plain_path);             // 半成品不留，明文也别留在盘上
+        remove_file_utf8(plain_path);             // 半成品不留
         return false;
     }
     if (last_pct < 100) fprintf(stderr, "\rExtracting: 100%%");
     fprintf(stderr, "\n");
 
-    // 展开成功才删中间明文：失败时它还在，用户可以 --no-extract 再取一次
+    // 展开成功才删
     remove_file_utf8(plain_path);
 
-    // 把暂存目录里的顶层项搬进 dest_dir：目录树可能有好几层，
-    // 直接 rename 整个暂存目录会把 dest_dir 本身换掉
-    // 顶层项逐个并入 dest_dir：同名目录递归并（不整体替换，免得丢掉
-    // dest_dir 里已有的其它内容），文件按 -y 决定跳过还是替换
+    // 把暂存目录里
+    // rename 整个暂存目录
+    // 顶层项逐个并入 dest_dir
+    // dest_dir 里已有
     bool ok = true;
     std::vector<std::string> tops;
     if (!list_dir_names(tmp_dir, tops)) {
@@ -529,14 +666,14 @@ static bool unpack_archive(const std::string& plain_path, const std::string& des
             ok = false;
         }
     }
-    // 暂存目录空了，删掉；里面还剩东西说明上面有失败，保留给用户查看
+    // 暂存目录空了，删
     if (ok) remove_tree(tmp_dir);
     else std::cerr << "Incomplete items are left at: " << tmp_dir << "\n";
     return ok;
 }
 
-// --pack：把目录树 / 多个文件打成单个归档明文，再走常规加密成单个 .ptd。
-// 归档字节流本身是普通明文，所以压缩、分卷、水印、密钥轮换都照常生效。
+// -pack
+// 归档字节流本身
 static bool run_pack(const std::vector<std::string>& input_paths,
                      const std::string& output_dir,
                      const SecureBuffer& password,
@@ -547,7 +684,7 @@ static bool run_pack(const std::vector<std::string>& input_paths,
                      uint64_t split_bytes,
                      const WatermarkSpec* wm,
                      bool sha_sidecar) {
-    // 输出名：单根输入取其基名，多根输入给个通用名
+    // 输出名
     std::string out_base = "archive";
     if (input_paths.size() == 1) {
         const std::string& in = input_paths[0];
@@ -579,7 +716,7 @@ static bool run_pack(const std::vector<std::string>& input_paths,
         }
     }
 
-    // 输出 .ptd 与中间归档件都得排除：同目录时会把刚生成的产物打进包里
+    // 输出 .ptd
     std::vector<std::string> excludes;
     excludes.push_back(out_path);
 
@@ -623,7 +760,7 @@ static bool run_pack(const std::vector<std::string>& input_paths,
         ok = false;
     }
 
-    // 中间归档明文：无论成败都不留（成功时它是完整的明文目录内容）
+    // 中间归档明文
     if (ok) secure_handle_source(tmp_archive, SourceDisposition::Wipe);
     else remove_file_utf8(tmp_archive);
 
@@ -633,8 +770,8 @@ static bool run_pack(const std::vector<std::string>& input_paths,
         return false;
     }
 
-    // 源文件处置：逐个输入走一遍，目录则交给 secure_handle_source 递归不了，
-    // 故目录输入只提示（要清源请用 -de 配 -be 逐文件处理）
+    // 源文件处置
+    // 故目录输入只提
     if (source_action != 0) {
         for (const auto& in : input_paths) {
             if (fe_path_is_directory(in)) {
@@ -660,8 +797,8 @@ static bool run_pack(const std::vector<std::string>& input_paths,
     return ok;
 }
 
-// 非对称调度：DEK 以收件人公钥（X25519/X448）包装进 v6 容器（.ptd）。
-// 路径校验 / 符号链接守卫 / 流式直写落盘复用对称路径同一套。
+// 非对称调度
+// 路径校验 / 符号链
 static bool run_asym(const std::vector<std::string>& input_paths,
                      const std::string& output_dir,
                      bool is_encrypt,
@@ -677,8 +814,8 @@ static bool run_asym(const std::vector<std::string>& input_paths,
                      uint64_t split_bytes = 0) {
     std::vector<std::string> recipients;
     if(is_encrypt) {
-        // -r 收件人：内联公钥（age1.../X448-...）或公钥文件；
-        // -K 补充密钥库收件人（二者至少其一）。重复公钥去重。
+        // r 收件人
+        // K 补充密钥库收件
         if(recipient_spec.empty()&&extra_recipients.empty()) {
             std::cerr<<"Asymmetric encryption requires -r <public key or public key file> "
                 <<"or -K <library key name>.\n";
@@ -698,7 +835,7 @@ static bool run_asym(const std::vector<std::string>& input_paths,
             return false;
         }
     } else {
-        // 解密私钥仅用文件(-k)，不收内联字符串
+        // 解密私钥
         if(identity_file.empty()) {
             std::cerr<<"Asymmetric decryption requires a private key file: -k <identity file>.\n";
             return false;
@@ -711,8 +848,8 @@ static bool run_asym(const std::vector<std::string>& input_paths,
 
     bool all_ok=true;
     for(const std::string& in_path: input_paths) {
-        // 分卷输入先合并成完整件；解密输出的名字仍按原卷名推导，
-        // 所以只换读取源，不动 in_path 的展示名
+        // 分卷输入先合并
+        // 只换读取源
         SplitPlan plan;
         MergedTemp merged;
         std::string src_path=in_path;
@@ -732,7 +869,7 @@ static bool run_asym(const std::vector<std::string>& input_paths,
             std::string base=in_path;
             size_t pos=base.find_last_of("/\\");
             std::string fname=(pos!=std::string::npos)?base.substr(pos+1):base;
-            // 容器自带文件名信封（与对称路径一致），混淆名需 --obfuscate-name 显式开启。
+            // 容器自带文件名
             if(obfuscate_name) {
                 fname=make_obfuscated_basename(in_path,key_material);
             }
@@ -747,7 +884,7 @@ static bool run_asym(const std::vector<std::string>& input_paths,
             } else {
                 out_path=in_path;
             }
-            out_path=to_native_path(out_path);   // 分隔符统一（Windows）
+            out_path=to_native_path(out_path);   // 分隔符统一
             out_path+=".ptd";
         } else {
             std::string lower=in_path;
@@ -771,15 +908,15 @@ static bool run_asym(const std::vector<std::string>& input_paths,
             } else {
                 out_path=stem;
             }
-            out_path=to_native_path(out_path);   // 分隔符统一（Windows）
+            out_path=to_native_path(out_path);   // 分隔符统一
             if(out_path==in_path) {
                 std::cerr<<"Error: output path would overwrite input file.\n";
                 all_ok=false; continue;
             }
         }
 
-        // 路径策略校验 + 符号链接守卫（与对称路径同一套）
-        // 输入路径的 ".." 交由 validate_io_paths 的白名单前缀比较裁决
+        // 路径策略校验 + 符
+        // 输入路径
         if(!validate_io_paths(in_path,out_path,false)) {
             std::cerr<<"Path validation failed (config policy)\n";
             all_ok=false; continue;
@@ -789,7 +926,7 @@ static bool run_asym(const std::vector<std::string>& input_paths,
             all_ok=false; continue;
         }
 
-        // 覆盖确认（与对称路径一致；GUI 带 -y 跳过）
+        // 覆盖确认
         if(!force_overwrite) {
             std::ifstream test;
             if(open_stream(test,out_path,std::ios::in)&&test.good()) {
@@ -800,8 +937,8 @@ static bool run_asym(const std::vector<std::string>& input_paths,
             }
         }
 
-        // 解密走 .prt 半成品 + 原子 rename 收尾（out 要么完整要么不存在）；加密仍直写 out_path。
-        // 失败由核心层删 .prt（解密）或此处兜底删除（加密）。
+        // 解密走 .prt 半成品 + 原
+        // 失败
         bool ok=false;
         if(is_encrypt) {
             std::cout<<"Asymmetric encrypting: "<<in_path<<" -> "<<out_path<<"\n";
@@ -818,7 +955,7 @@ static bool run_asym(const std::vector<std::string>& input_paths,
         } else {
             std::cout<<"Asymmetric decrypting: "<<in_path<<" -> "<<out_path<<"\n";
             std::string identity(key_material.cdata(), key_material.size());
-            {   // 私钥文件可能带尾随换行 / 空格；就地 erase 避免缓冲残留（审计问题 9）
+            {   // 私钥文件可能带
                 size_t a=0,b=identity.size();
                 while(a<b && (unsigned char)identity[a]<=0x20) ++a;
                 while(b>a && (unsigned char)identity[b-1]<=0x20) --b;
@@ -835,13 +972,13 @@ static bool run_asym(const std::vector<std::string>& input_paths,
                 fprintf(stderr,"Error: asymmetric decryption failed (unexpected exception)\n");
                 ok=false;
             }
-            // resize 到 capacity() 再清零，覆盖字符串容量尾部的私钥残留
+            // resize 到 capacity
             identity.resize(identity.capacity());
             sodium_memzero(identity.data(),identity.size());
         }
         if(!ok) {
             std::cerr<<"Failed to process: "<<in_path<<"\n";
-            // 解密失败时核心层已安全擦除输出；加密失败（密文半成品）在此兜底删除
+            // 解密失败时核心
             remove_file_utf8(out_path);
             all_ok=false; continue;
         }
@@ -862,9 +999,8 @@ static bool run_asym(const std::vector<std::string>& input_paths,
     return all_ok;
 }
 
-// -g：随机生成密钥对。公钥写 stdout（干净一行，可重定向），私钥写 <dir>/rage_private.txt。
-// 密钥包装：把 32 字节 DEK 藏进 FEKW blob。三条路线——密码 KWP、公钥 KWP、AES-KW。
-// 公钥路线不需要密码：临时 X25519 ECDH + HKDF 出 KEK，临时公钥写进 blob 头部。
+// 密钥包装
+// 公钥路线不需要
 static int run_keywrap(const std::string& in_path, const std::string& out_path,
                        const std::string& alg_name, const std::string& to_pub,
                        const SecureBuffer& password, bool force_overwrite) {
@@ -892,7 +1028,7 @@ static int run_keywrap(const std::string& in_path, const std::string& out_path,
         return 1;
     }
 
-    // 公钥串本身或存放该串的文件都要能处理
+    // 公钥串本身或存
     std::string pub_s;
     if(is_pub) {
         pub_s = to_pub;
@@ -945,7 +1081,7 @@ static int run_keywrap(const std::string& in_path, const std::string& out_path,
     return 0;
 }
 
-// 解包装：把 FEKW blob 还原成 32 字节 DEK
+// 解包装
 static int run_unwrapkey(const std::string& in_path, const std::string& out_path,
                          const SecureBuffer& password, const std::string& priv_path,
                          bool force_overwrite) {
@@ -967,7 +1103,7 @@ static int run_unwrapkey(const std::string& in_path, const std::string& out_path
         return 1;
     }
 
-    // 密码路线：复用 blob 里的 salt 才能复现同一 KEK
+    // 密码路线
     unsigned char kek[ARGON2_OUTPUT_LEN];
     bool have_kek=false;
     if(!is_pub) {
@@ -987,7 +1123,7 @@ static int run_unwrapkey(const std::string& in_path, const std::string& out_path
         have_kek=true;
     }
 
-    // 身份私钥串本身或存放该串的文件都要能处理
+    // 身份私钥串本身
     std::string priv_s;
     if(is_pub) {
         if(priv_path.empty()) {
@@ -1049,7 +1185,7 @@ static bool run_keygen(const std::string& output_dir,bool force_overwrite,uint8_
     }
 
     auto write_line=[](const std::string& path,const std::string& content)->bool{
-        clear_readonly_attribute(path);   // 旧版本可能把文件设成了只读
+        clear_readonly_attribute(path);   // 旧版本可能
         std::ofstream of;
         if(!open_stream(of,path,std::ios::out|std::ios::binary|std::ios::trunc)) {
             std::cerr<<"Cannot write: "<<path<<"\n";
@@ -1062,9 +1198,9 @@ static bool run_keygen(const std::string& output_dir,bool force_overwrite,uint8_
         return !bad;
     };
 
-    // H5c：私钥独占创建（O_EXCL，不跟随符号链接、不覆盖既有私钥）。
-    // 即便 -y 也不覆写：私钥一旦被静默覆盖，用它加密的所有 .age 文件将永久
-    // 不可解密；预置符号链接时 trunc 打开还会把私钥写到攻击者指定的文件。
+    // H5c
+    // 即便 -y
+    // 不可解密
     auto write_line_exclusive=[](const std::string& path,const std::string& content)->bool{
 #ifdef _WIN32
         const std::wstring wp=utf8_to_wstring(path);
@@ -1105,8 +1241,8 @@ static bool run_keygen(const std::string& output_dir,bool force_overwrite,uint8_
 
     const std::string priv_path=dir+"rage_private.txt";
 
-    // v2.1.2：补上与 run_derive 一致的覆盖保护 私钥一旦被静默覆盖，用它加密的
-    // 所有 .age 文件将永久不可解密。即便 -y 也不覆写既有私钥（见下方独占创建）。
+    // v2.1.2
+    // .age 文件
     if(!force_overwrite&&file_exists_path(priv_path)) {
         std::cerr<<"Refusing to overwrite existing private key file: "<<priv_path
             <<"\nDelete it or choose another directory first.\n";
@@ -1118,9 +1254,9 @@ static bool run_keygen(const std::string& output_dir,bool force_overwrite,uint8_
         sodium_memzero(priv.data(),priv.size());
         return false;
     }
-    tighten_file_permissions(priv_path);   // 收紧密钥文件权限（仅拥有者可读）
+    tighten_file_permissions(priv_path);   // 收紧密钥文件权
 
-    // 公钥也落盘（与私钥同目录、同名风格）：stdout 只 serving 管道用途，存文件才方便复用
+    // 公钥
     const std::string pub_path=dir+"rage_public.txt";
     if(!write_line(pub_path,pub)) {
         std::cerr<<"Cannot write: "<<pub_path<<"\n";
@@ -1128,10 +1264,10 @@ static bool run_keygen(const std::string& output_dir,bool force_overwrite,uint8_
         return false;
     }
 
-    // stdout 只输出公钥，可直接管道喂给 -r 或存文件
+    // stdout 只输出公钥
     std::cout<<pub<<"\n";
     std::cout.flush();
-    // stderr 输出其余信息，重定向 stdout 仍得干净公钥
+    // stderr 输出其余信息
     std::cerr<<"Private key file: "<<priv_path<<"\n";
     std::cerr<<"Public key file : "<<pub_path<<"\n";
     std::cerr<<"Public key ("<<(algo==RECIP_ALGO_MLKEM?"MLKEM1-...":algo==RECIP_ALGO_X448?"X448-...":"age1...")
@@ -1141,11 +1277,11 @@ static bool run_keygen(const std::string& output_dir,bool force_overwrite,uint8_
     return true;
 }
 
-// 解析 --salt：32 个十六进制字符，或存放它们的文件（rage_derive_salt.txt）。
+// 解析 --salt
 static bool parse_salt(const std::string& spec,std::vector<unsigned char>& out) {
     auto trim=[](const std::string& s)->std::string{
         size_t a=0,b=s.size();
-        while(a<b&&(unsigned char)s[a]<=0x20) ++a;      // 同时吃掉 CR / LF / 空格
+        while(a<b&&(unsigned char)s[a]<=0x20) ++a;      // 吃掉 CR / LF / 空格
         while(b>a&&(unsigned char)s[b-1]<=0x20) --b;
         return s.substr(a,b-a);
     };
@@ -1155,7 +1291,7 @@ static bool parse_salt(const std::string& spec,std::vector<unsigned char>& out) 
         return true;
     };
     std::string t=trim(spec);
-    if(t.size()!=32||!is_hex(t)) {                       // 不是裸 hex，就当作文件读取
+    if(t.size()!=32||!is_hex(t)) {                       // 不是裸 hex
         std::ifstream f;
         if(!open_stream(f,t,std::ios::in)) {
             std::cerr<<"Cannot open salt file: "<<t<<"\n";
@@ -1178,7 +1314,6 @@ static bool parse_salt(const std::string& spec,std::vector<unsigned char>& out) 
     return true;
 }
 
-// -G：由密码派生密钥对。输出同 -g，另写 <dir>/rage_derive_salt.txt（复现同一密钥对必需）。
 static bool run_derive(const std::string& output_dir,
                        const SecureBuffer& password,
                        const std::string& salt_spec,
@@ -1208,7 +1343,7 @@ static bool run_derive(const std::string& output_dir,
         return file_exists_path(p);
     };
     auto write_line=[](const std::string& path,const std::string& content)->bool{
-        clear_readonly_attribute(path);   // 旧版本可能把文件设成了只读
+        clear_readonly_attribute(path);   // 旧版本可能
         std::ofstream of;
         if(!open_stream(of,path,std::ios::out|std::ios::binary|std::ios::trunc)) {
             std::cerr<<"Cannot write: "<<path<<"\n";
@@ -1220,9 +1355,9 @@ static bool run_derive(const std::string& output_dir,
         of.close();
         return !bad;
     };
-    // H5c：私钥独占创建（O_EXCL，不跟随符号链接、不覆盖既有私钥）。
-    // 即便 -y 也不覆写：私钥一旦被静默覆盖，用它加密的所有 .age 文件将永久
-    // 不可解密；预置符号链接时 trunc 打开还会把私钥写到攻击者指定的文件。
+    // H5c
+    // 即便 -y
+    // 不可解密
     auto write_line_exclusive=[](const std::string& path,const std::string& content)->bool{
 #ifdef _WIN32
         const std::wstring wp=utf8_to_wstring(path);
@@ -1279,7 +1414,7 @@ static bool run_derive(const std::string& output_dir,
 
     bool ok=write_line_exclusive(priv_path,priv);
     if(ok) ok=write_line(salt_path,std::string(salt_hex));
-    if(ok) tighten_file_permissions(priv_path);   // 收紧密钥文件权限（仅拥有者可读）
+    if(ok) tighten_file_permissions(priv_path);   // 收紧密钥文件权
 
     sodium_memzero(salt_hex,sizeof(salt_hex));
     sodium_memzero(salt.data(),salt.size());
@@ -1300,10 +1435,9 @@ static bool run_derive(const std::string& output_dir,
     return true;
 }
 
-// -Y：由身份私钥导出收件人公钥。
 static bool run_pubkey(const SecureBuffer& identity) {
     std::string id(identity.cdata(),identity.size());
-    {   // 私钥文件可能带尾随换行 / 空格；就地 erase 避免 substr 产生无法擦除的临时副本
+    {   // 私钥文件可能带
         size_t a=0,b=id.size();
         while(a<b&&(unsigned char)id[a]<=0x20) ++a;
         while(b>a&&(unsigned char)id[b-1]<=0x20) --b;
@@ -1323,8 +1457,8 @@ static bool run_pubkey(const SecureBuffer& identity) {
     return true;
 }
 
-// 功能2：文件头信息查看器（只读、不解密）。展示版本/模式/Argon2 参数/salt/iv（十六进制）/
-// 原始大小/明文 Blake2b/是否带加密名尾部。纯元数据预览，不验证密钥正确性。
+// 功能2
+// 原始大小/明文 Blake2b/
 static bool run_info(const std::string& path) {
     PtdMeta meta;
     if(!read_ptd_metadata(path, meta)) {
@@ -1334,7 +1468,7 @@ static bool run_info(const std::string& path) {
     const char* mode_str = (meta.mode==CryptoMode::XCHACHA20)?"XChaCha20"
                          : (meta.mode==CryptoMode::AEGIS256)?"AEGIS-256"
                          : (meta.mode==CryptoMode::SM4)?"SM4-GCM"
-                         : (meta.mode==CryptoMode::AES_GCM)?"AES-GCM(legacy)":"unknown";
+                         : (meta.mode==CryptoMode::AES_GCM)?"AES-256-GCM":"unknown";
     std::cout<<"File: "<<path<<"\n";
     std::cout<<"  version          : "<<(int)meta.version<<"\n";
     std::cout<<"  mode             : "<<mode_str<<"\n";
@@ -1362,7 +1496,7 @@ static bool run_info(const std::string& path) {
     return true;
 }
 
-// 水印查看器（只读尾部记录，不需密码）。带公钥时验签，验签失败即记录被改过或公钥不对。
+// 水印查看器
 static bool run_watermark(const std::string& path, const std::string& pub_pem, bool pqc) {
     WatermarkInfo wm;
     if(!read_watermark(path, wm, pub_pem, pqc)) {
@@ -1387,8 +1521,8 @@ static bool run_watermark(const std::string& path, const std::string& pub_pem, b
     return wm.verify_ok || wm.error.empty();
 }
 
-// 身份私钥常以文件/终端输入传入，尾部必带换行；带 \r\n 时 EVP 解码出的密钥是垃圾，
-// -V/-R 会误报「解密失败」，故统一先裁剪首尾空白再当身份使用。
+// 身份私钥常
+// V/-R 会误报「解密失败」
 static std::string normalize_identity(const SecureBuffer& buf) {
     const unsigned char* p=reinterpret_cast<const unsigned char*>(buf.cdata());
     size_t a=0, b=buf.size();
@@ -1397,14 +1531,14 @@ static std::string normalize_identity(const SecureBuffer& buf) {
     return std::string(reinterpret_cast<const char*>(p+a), b-a);
 }
 
-// 密码材料本身是身份私钥串时按非对称通道处理：省得 -V/-R 漏写 -m x25519 直接失败。
+// 密码材料本身
 static bool looks_like_identity(const SecureBuffer& buf) {
     const std::string s=normalize_identity(buf);
     return s.rfind("AGE-SECRET-KEY-",0)==0 || s.rfind("MLKEM1SEC-",0)==0
         || s.rfind("X448SEC-",0)==0;
 }
 
-// 功能3：完整性校验（只验不解）。对单文件解密到临时文件比对明文哈希，不落盘明文。
+// 功能3
 static bool run_verify(const std::string& path, const SecureBuffer& pw,
                        const std::string& asym_identity) {
     if(verify_ptd(path, pw, asym_identity)) {
@@ -1415,8 +1549,8 @@ static bool run_verify(const std::string& path, const SecureBuffer& pw,
     return false;
 }
 
-// 功能15：离线还原混淆文件名（不改内容）。用密码恢复 .ptd 尾部信封中的原始文件名并打印；
-// 带 --rename 时把 .ptd 自身重命名为 <原始名>.ptd（内容不变）。
+// 功能15
+// 带 --rename
 static bool run_recover(const std::string& path, const SecureBuffer& pw, bool do_rename,
                         const std::string& asym_identity) {
     std::string orig;
@@ -1426,19 +1560,19 @@ static bool run_recover(const std::string& path, const SecureBuffer& pw, bool do
     }
     std::cout<<"Original name: "<<orig<<"\n";
     if(do_rename) {
-        // orig 来自密文尾部文件名信封（数据可控）：拼接前必须拒绝任何目录成分/绝对路径，
-        // 否则 "<..\..\evil>.ptd" 会把 .ptd 重命名逃逸出原目录。
+        // orig 来自密文尾部文
+        // "<..\..\evil>.ptd"
         bool bad = orig.empty() || orig.find_first_of("/\\") != std::string::npos
                 || orig.find("..") != std::string::npos
                 || orig.front() == '/' || orig.front() == '\\';
 #ifdef _WIN32
-        if(!bad && orig.size() >= 2 && orig[1] == ':') bad = true;   // 盘符 X: 绝对路径
+        if(!bad && orig.size() >= 2 && orig[1] == ':') bad = true;   // 盘符 X
 #endif
         if(bad) {
             std::cerr<<"Refusing to rename: original name contains path elements: "<<orig<<"\n";
             return false;
         }
-        // 重命名 .ptd 本身（不触碰内容）：<原始名>.ptd，置于同目录
+        // 重命名 .ptd 本身
         std::string dir=path;
         size_t bs=dir.find_last_of("/\\");
         std::string base=(bs!=std::string::npos)?dir.substr(0,bs+1):"";
@@ -1461,8 +1595,8 @@ static bool run_recover(const std::string& path, const SecureBuffer& pw, bool do
     return true;
 }
 
-// 功能1：密钥库管理（-L）。子命令经位置参数传入：list|add|remove|show|pub|export。
-// 索引与材料布局见 core/keylib.hpp；本函数只做 CLI 侧的表现层（打印/校验/派生回写）。
+// 功能1
+// 索引
 static bool run_keylib(const std::vector<std::string>& words,
                        const std::string& as_name,
                        const std::string& alias,
@@ -1550,13 +1684,13 @@ static bool run_keylib(const std::vector<std::string>& words,
             std::cerr<<"Usage: -L pub <name|keyfile>\n";
             return false;
         }
-        // 读取身份材料（库内名称或任意路径），派生收件人公钥
+        // 读取身份材料
         auto read_trimmed=[&](const std::string& path,std::string& out,std::string& err)->bool{
             std::ifstream f;
             if(!open_stream(f,path,std::ios::in|std::ios::binary)) {
                 err="Cannot open key file: "+path; return false;
             }
-            // 流式读取身份材料并封顶 256 KB，与 keylib 侧上限一致，避免大文件全量入内存
+            // 流式读取身份材
             std::string buf;
             {
                 char chunk[4096];
@@ -1599,7 +1733,7 @@ static bool run_keylib(const std::vector<std::string>& words,
         }
         std::cout<<pub<<"\n";
         if(in_library) {
-            // 回写缓存：之后 -K <name> 加密无需再接触私钥
+            // 回写缓存
             if(!keylib_set_public(words[1],pub,err))
                 std::cerr<<"Warning: could not cache the public key in the index: "<<err<<"\n";
             std::cerr<<"Public key (age1...) cached for '"<<words[1]<<"'.\n";
@@ -1622,11 +1756,11 @@ static bool run_keylib(const std::vector<std::string>& words,
     return false;
 }
 
-// 国庆节祝福（每年 10/1–10/7 自动追加到 stdout 输出末尾）
-// 为什么用 RAII 替换 std::cout 的 streambuf：main 有数十个提前 return 的出口，
-// 逐出口补打印既繁琐又易漏；替换缓冲区可统一捕获「本进程是否真的向 stdout
-// 写过内容」，进程退出时仅在确有输出的情况下追加一行祝福。
-// 祝福只进 stdout：stderr 的错误信息不属于「有输出的文本」。
+// 国庆节祝福
+// 为什么用 RAII 替换 std
+// 逐出口补打印既
+// 写过内容」
+// 祝福只进 stdout
 static std::tm local_now() {
     std::time_t t = std::time(nullptr);
     std::tm lt{};
@@ -1643,7 +1777,7 @@ static bool is_national_day_week() {
     return lt.tm_mon == 9 /* 10 月（0 基）*/ && lt.tm_mday >= 1 && lt.tm_mday <= 7;
 }
 
-// 中华人民共和国 1949-10-01 成立；国庆周内的祖国年龄 = 当前年份 − 1949
+// 中华人民共和国 1949-10
 static int motherland_age() {
     return local_now().tm_year + 1900 - 1949;
 }
@@ -1669,10 +1803,10 @@ struct NationalDaySuffix {
         std::cout.rdbuf(&buf_);
     }
     ~NationalDaySuffix() {
-        std::cout.rdbuf(old_);   // 先恢复真实缓冲区，再追加祝福行
+        std::cout.rdbuf(old_);   // 先恢复真实缓冲
         if (buf_.any_ && is_national_day_week()) {
-            // 空行隔开，避免与前面的业务输出粘连
-            // 祝福走 stderr：stdout 要留干净，否则重定向公钥/公钥串进文件时会把祝福写进数据
+            // 空行隔开
+            // 祝福走 stderr
             std::cerr << "\nHappy " << motherland_age()
                       << "th Birthday to the People's Republic of China!\n";
             std::cerr.flush();
@@ -1680,19 +1814,19 @@ struct NationalDaySuffix {
     }
 };
 
-int main(int argc,char* argv[]) {
+static int main_impl(int argc,char* argv[]) {
 #ifdef _WIN32
-    // 让控制台以 UTF-8 输出，确保中文提示正确显示
+    // 让控制台
     SetConsoleOutputCP(CP_UTF8);
     SetConsoleCP(CP_UTF8);
-    // 改用 UTF-8 参数向量（覆盖默认 ANSI 代码页的 argv）
+    // 改用 UTF-8 参数向量
     std::vector<std::string> argv_store=get_utf8_argv();
 #else
     std::vector<std::string> argv_store(argv, argv+argc);
 #endif
-    // CLI11 2.7.2 拒绝「单横线 + 多字符」选项名（-be/-bd/-x448/-de/-zstd/-cl/-rn/-on），
-    // 这里在交给 CLI11 之前改写成双横线形式；对外接口（CLI/GUI 仍用 -be 等）保持不变。
-    // 必须在所有平台生效：GUI 传的就是 -be/-bd/-de，只在 Windows 改写会让 Linux GUI 全线失败。
+    // CLI11 2.7.2 拒绝「单横线 + 多字
+    // 在交给 CLI11
+    // 必须
     {
         static const std::pair<const char*,const char*> kDashRewrite[] = {
             {"-be","--be"}, {"-bd","--bd"}, {"-x448","--x448"}, {"-de","--de"},
@@ -1714,18 +1848,18 @@ int main(int argc,char* argv[]) {
 
     anti_debug_check();
 
-    NationalDaySuffix nds;   // 进程退出时按需追加国庆节祝福（机制见 struct 注释）
+    NationalDaySuffix nds;   // 进程退出
 
     if(sodium_init()<0) {
         std::cerr<<"libsodium initialization failed.\n";
         return 1;
     }
 
-    // 加载 YAML 配置（日志/并发/路径策略等运维参数统一走配置文件，CLI 不可覆盖）
+    // 加载 YAML 配置
     Config cfg=load_config();
     set_global_config(cfg);
     init_logger(cfg.log_file,cfg.log_level);
-    init_rate_limiter(cfg.max_speed); // 进程级限速（YAML max_speed；0 = 不限速）
+    init_rate_limiter(cfg.max_speed); // 进程级限速
 
     enum {
         ACTION_NONE,ACTION_ENCRYPT,ACTION_DECRYPT,
@@ -1739,52 +1873,52 @@ int main(int argc,char* argv[]) {
     std::vector<std::string> input_paths;
     std::string output_dir;
     CryptoMode mode=CryptoMode::XCHACHA20;
-    // 未显式指定 -m 时，加密默认算法取 YAML crypto.default_cipher（空 = xchacha20）
+    // 未显式指定 -m
     {
         const std::string& dc = global_config().default_cipher;
         if (dc == "aegis256") mode = CryptoMode::AEGIS256;
         else if (dc == "sm4") mode = CryptoMode::SM4;
         else if (dc == "aes-gcm") mode = CryptoMode::AES_GCM;
     }
-    int source_action=0;          // 0=保留 1=删除(-de) 2=安全擦除(--wipe-source) 3=回收站(--recycle-source)
+    int source_action=0;          // 源处置
     bool force_overwrite=false;
     bool force_decrypt=false;
     int num_threads=0;
-    bool restore_name=false;     // 批量解密是否还原完整原始文件名（默认 false：仅保留扩展名，省去每文件 KDF）
-    bool obfuscate_name=false;   // -on：强制混淆输出文件名（另受配置 obfuscate_names 控制）
-    std::string keyfile_path;   // 一.1：密钥文件输入（-k）
-    bool asym_mode=false;       // -m x25519/x448：非对称（DEK 由收件人公钥包裹进 v6 容器）
-    bool x448_mode=false;        // -x448：非对称 ECDH 曲线用 X448（默认 X25519）
-    std::string recipient_spec; // -r <pub|file>：公钥（age1… / X448-…）或含多个公钥的文件（加密用）
-    bool key_from_stdin=false;  // --key-stdin：从 stdin 读取密钥材料（密码或 age 身份私钥）
-    bool preview_mode=false;    // --preview：仅解密并输出明文前缀到 stdout，不落盘
-    size_t preview_max=4096;    // --max-bytes N：预览字节数上限（默认 4 KiB）
-    std::string salt_spec;      // --salt <hex|file>：-G 派生的盐（空 = 生成随机盐）
-    bool force_sha256=false;    // --sha256：本次加密生成 <out>.ptd.sha256 校验单（功能10）
-    bool recover_rename=false;  // --rename：配合 -R 原地重命名 .ptd（内容不变）
-    bool pqc_on=true;           // --pqc / --no-pqc：后量子（混合 KEM + ML-DSA 签名），默认开启
-    WatermarkSpec wm_spec;      // --watermark / --no-watermark / --wm-sign：尾部水印
-    std::string wm_verify_pem;  // --wm-verify：<--watermark-extract> 验签用的签名公钥 PEM
-    bool wm_keygen_mode=false;  // --wm-keygen <file>：生成水印签名密钥（ML-DSA-65/RSA）
-    std::string wm_keygen_path; // --wm-keygen 的私钥落盘路径
-    // 密钥包装层：与 -m 正交，包的是 DEK 而非文件内容
+    bool restore_name=false;     // 还原文件名
+    bool obfuscate_name=false;   // 混淆文件名
+    std::string keyfile_path;   // 密钥文件
+    bool asym_mode=false;       // 非对称
+    bool x448_mode=false;        // X448曲线
+    std::string recipient_spec; // 收件人公钥
+    bool key_from_stdin=false;  // 密钥走输入
+    bool preview_mode=false;    // 预览明文
+    size_t preview_max=4096;    // 预览字节数
+    std::string salt_spec;      // 派生盐
+    bool force_sha256=false;    // 生成校验单
+    bool recover_rename=false;  // 原地重命名
+    bool pqc_on=true;           // 后量子
+    WatermarkSpec wm_spec;      // 水印
+    std::string wm_verify_pem;  // 水印验签
+    bool wm_keygen_mode=false;  // 生成水印密钥
+    std::string wm_keygen_path; // 水印密钥路径
+    // 密钥包装层
     std::string wrap_path, unwrap_path, unwrap_out, wrap_out;
-    std::string wrap_alg = "kwp";   // kwp|aes-kw|pubkey
+    std::string wrap_alg = "kwp";   // 包装算法
     std::string wrap_to, unwrap_identity;
     bool wrap_mode = false, unwrap_mode = false;
-    std::string keylib_refs;    // -K <name>[,...]：密钥库引用（加密=收件人；解密=身份）
-    std::string keylib_as;      // --as <name>：-L add 的库内名称
-    std::string keylib_alias;   // --alias <text>：-L add 的展示别名
-    std::string keylib_notes;   // --notes <text>：-L add 的备注
-    int compress_level=0;       // -z/--compress 或 --compression-level N：zstd 级别；0=不压缩
-    uint64_t split_bytes=0;     // --split <size>：加密后分卷大小（0=不分卷）；只走命令行，不进 yaml
-    bool pack_mode=false;       // --pack：把目录树/多文件打成单个归档再加密
-    bool yes_source_delete=false;// --source-delete-ok：源目录删除已由宿主确认过
-    bool no_extract=false;      // --no-extract：解密归档时只出单文件，不展开目录树
-    std::string new_keyfile_path; // --new-key-file <file>：rewrap 的新密码密钥文件
-    bool new_key_from_stdin=false;// --new-key-stdin：rewrap 的新密码从 stdin 读取
+    std::string keylib_refs;    // 密钥库引用
+    std::string keylib_as;      // 库内名称
+    std::string keylib_alias;   // 展示别名
+    std::string keylib_notes;   // 备注
+    int compress_level=0;       // 压缩级别
+    uint64_t split_bytes=0;     // 分卷大小
+    bool pack_mode=false;       // 打包归档
+    bool yes_source_delete=false;// 删源已确认
+    bool no_extract=false;      // 不展开目录
+    std::string new_keyfile_path; // 新密钥文件
+    bool new_key_from_stdin=false;// 新密钥输入
 
-    // 帮助 / 无参数：保持原 print_usage() 文案，解析前短路（CLI11 不触发自带 help）
+    // 帮助 / 无参数
     if(argc<=1) { print_usage(); return 0; }
     for(int k=1; k<argc; ++k) {
         std::string a=argv[k];
@@ -1793,7 +1927,7 @@ int main(int argc,char* argv[]) {
 
     CLI::App app("FileEncryptor command-line interface");
 
-    // 临时布尔：CLI11 add_flag 绑定，解析后并入动作/开关
+    // 临时布尔
     bool f_encrypt=false, f_decrypt=false, f_bencrypt=false, f_bdecrypt=false,
          f_keygen=false, f_derive=false, f_pubkey=false, f_info=false,
          f_verify=false, f_recover=false, f_keylib=false, f_rewrap=false, f_randomread=false;
@@ -1803,9 +1937,9 @@ int main(int argc,char* argv[]) {
     std::string split_str;
     uint64_t random_offset=0, random_length=65536;
     std::string random_out; uint32_t random_repeat=1;
-    // 加密盘（M1）：库管理动作 + 加密入盘开关（按目录参数是否为空判定动作）。
+    // 加密盘
     std::string vault_init_dir, vault_list_dir, vault_reindex_dir, into_vault_dir;
-    // M3 挂载点持久化 / M4 恢复密钥 / M4 改密与库内重加密
+    // M3 挂载点持久化 / M4 恢
     std::string vault_mount_dir, vault_mount_point;
     std::string vault_recovery_dir, vault_recovery_arg;
     std::string vault_rekey_dir, vault_recrypt_dir;
@@ -1814,98 +1948,102 @@ int main(int argc,char* argv[]) {
     std::vector<std::string> explicit_inputs;
     bool src_del=false, src_wipe=false, src_recycle=false;
     bool features_mode=false;
+    bool f_json=false, f_dry_run=false, f_progress_events=false;
     bool cl_given=false;
 
-    // ===== 动作（互斥；解析后合并） =====
-    app.add_flag("-e", f_encrypt);
-    app.add_flag("-d", f_decrypt);
-    app.add_flag("--be", f_bencrypt);
-    app.add_flag("--bd", f_bdecrypt);
-    app.add_flag("-g", f_keygen);
-    app.add_flag("-G", f_derive);
-    app.add_flag("-Y", f_pubkey);
-    app.add_flag("-H,--info", f_info);
-    app.add_flag("-V,--verify", f_verify);
-    app.add_flag("-R,--recover-name", f_recover);
-    app.add_flag("-L,--keylib", f_keylib);
-    app.add_flag("--rewrap", f_rewrap);
+    // 动作
+    app.add_flag("-e,--encrypt", f_encrypt);                    // 加密
+    app.add_flag("-d,--decrypt", f_decrypt);                    // 解密
+    app.add_flag("--be,--batch-encrypt", f_bencrypt);           // 批量加密
+    app.add_flag("--bd,--batch-decrypt", f_bdecrypt);           // 批量解密
+    app.add_flag("-g,--keygen", f_keygen);                      // 生成密钥
+    app.add_flag("-G,--derive", f_derive);                      // 派生密钥
+    app.add_flag("-Y,--pubkey", f_pubkey);                      // 导出公钥
+    app.add_flag("-H,--info", f_info);                          // 文件信息
+    app.add_flag("-V,--verify", f_verify);                      // 校验文件
+    app.add_flag("-R,--recover-name", f_recover);               // 恢复文件名
+    app.add_flag("-L,--keylib", f_keylib);                      // 密钥库
+    app.add_flag("--rw,--rewrap", f_rewrap);                    // 重包密钥
 
-    // ===== 通用选项 =====
-    app.add_option("-m,--mode", mode_strs, "crypto mode: xchacha20|aegis256|aes-gcm|sm4|x25519|x448")
+    // 通用选项
+    app.add_option("-m,--mode", mode_strs, "crypto mode: xchacha20|aegis256|aes-gcm|sm4|x25519|x448")  // 加密模式
         ->multi_option_policy(CLI::MultiOptionPolicy::TakeAll);
-    app.add_flag("--x448", x448_mode);
-    app.add_option("-o,--output", output_dir, "output directory");
-    app.add_flag("--de", src_del);
-    app.add_flag("--wipe-source", src_wipe);
-    app.add_flag("--recycle-source", src_recycle);
-    app.add_option("--new-key-file", new_keyfile_path, "rewrap new key file");
-    app.add_flag("--new-key-stdin", new_key_from_stdin);
-    app.add_option("--as", keylib_as, "keylib entry name");
-    app.add_option("--alias", keylib_alias, "keylib display alias");
-    app.add_option("--notes", keylib_notes, "keylib notes");
-    app.add_option("-K", keylib_refs, "-K <name>[,...]");
-    app.add_option("--salt", salt_spec, "-G derive salt <hex|file>");
-    app.add_option("-k,--keyfile", keyfile_path, "key file -k <file>");
-    app.add_option("-r,--recipient", recipient_spec, "recipient -r <pub|file>");
-    app.add_flag("--key-stdin", key_from_stdin);
-    app.add_flag("--restore-name,--rn", restore_name);
-    app.add_flag("--obfuscate-name,--on", obfuscate_name);
-    app.add_flag("--sha256", force_sha256);
-    app.add_flag("--rename", recover_rename);
-    app.add_flag("-z,--compress", f_compress);
-    app.add_flag("--zstd", f_compress);
-    app.add_option("--compression-level,--cl", compress_level, "zstd level 1..22 or -1..-5")
+    app.add_flag("-X,--x448", x448_mode);                       // X448曲线
+    app.add_option("-o,--output", output_dir, "output directory");  // 输出目录
+    app.add_flag("--de,--delete-source", src_del);              // 删除源文件
+    app.add_flag("--ws,--wipe-source", src_wipe);               // 安全擦除源
+    app.add_flag("--rs,--recycle-source", src_recycle);         // 源入回收站
+    app.add_option("--nk,--new-key-file", new_keyfile_path, "rewrap new key file");  // 新密钥文件
+    app.add_flag("--ns,--new-key-stdin", new_key_from_stdin);   // 新密钥输入
+    app.add_option("-A,--as,--keylib-as", keylib_as, "keylib entry name");  // 库内名称
+    app.add_option("--al,--alias", keylib_alias, "keylib display alias");  // 展示别名
+    app.add_option("--nt,--notes", keylib_notes, "keylib notes");  // 备注
+    app.add_option("-K,--keylib-ref", keylib_refs, "-K <name>[,...]");  // 密钥库引用
+    app.add_option("--st,--salt", salt_spec, "-G derive salt <hex|file>");  // 派生盐
+    app.add_option("-k,--keyfile", keyfile_path, "key file -k <file>");  // 密钥文件
+    app.add_option("-r,--recipient", recipient_spec, "recipient -r <pub|file>");  // 收件人公钥
+    app.add_flag("--ks,--key-stdin", key_from_stdin);           // 密钥走输入
+    app.add_flag("--rn,--restore-name", restore_name);          // 还原文件名
+    app.add_flag("--on,--obfuscate-name", obfuscate_name);      // 混淆文件名
+    app.add_flag("-q,--sha256", force_sha256);                  // 生成校验单
+    app.add_flag("--ren,--rename", recover_rename);             // 原地重命名
+    app.add_flag("-z,--compress", f_compress);                  // 压缩
+    app.add_flag("--zstd,--use-zstd", f_compress);              // zstd压缩
+    app.add_option("--cl,--compression-level", compress_level, "zstd level 1..22 or -1..-5")  // 压缩级别
         ->each([&](std::string){ cl_given=true; });
-    app.add_flag("-p,--pack,--archive", pack_mode);
-    app.add_flag("--source-delete-ok", yes_source_delete);
-    app.add_flag("--no-extract", no_extract);
-    app.add_option("-s,--split,--split-size", split_str, "split volume size, e.g. 4GB");
-    app.add_flag("--features", features_mode);
-    app.add_flag("--preview", f_preview);
-    app.add_flag("--stdout", f_stdout);   // 解密明文直写 stdout（不落盘）；与 -o/--output 互斥
-    app.add_option("--max-bytes", preview_max, "preview max bytes (default 4096)");
-    app.add_flag("--force-decrypt", force_decrypt);
-    app.add_flag("-y,--force", force_overwrite);
-    app.add_flag("-v,--verbose", f_verbose);
-    app.add_flag("--pqc", f_pqc);
-    app.add_flag("--no-pqc", f_nopqc);
-    app.add_flag("--watermark", f_wm);
-    app.add_flag("--no-watermark", f_nowm);
-    app.add_option("--wm-sign", wm_spec.sign_key, "watermark signing key (ML-DSA-65/RSA)");
-    app.add_option("--wm-verify", wm_verify_pem, "watermark verify public key PEM");
-    app.add_option("--wm-keygen", wm_keygen_path, "generate watermark keypair");
-    app.add_option("--wrap-key", wrap_path, "wrap a 32-byte DEK into a FEKW blob");
-    app.add_option("--unwrap-key", unwrap_path, "unwrap a FEKW blob back to the DEK");
-    app.add_option("--unwrap-out", unwrap_out, "output path for --unwrap-key");
-    app.add_option("--wrap-out", wrap_out, "output path for --wrap-key (default: <input>.fekw)");
-    app.add_option("--wrap-alg", wrap_alg, "wrap algorithm: kwp|aes-kw|pubkey");
-    app.add_option("--wrap-to", wrap_to, "recipient public key (or file) for --wrap-key --wrap-alg pubkey");
-    app.add_option("--identity", unwrap_identity, "recipient identity (private key or file) for --unwrap-key");
-    app.add_option("--watermark-extract", wm_extract_path, "extract tail watermark (read-only)");
-    app.add_option("-i,--input", explicit_inputs, "explicit input path");
-    app.add_option("inputs", input_paths, "input files or directories");
-    app.add_flag("--random-read", f_randomread, "random-read: extract a plaintext range from a .ptd without full decryption (non-compressed blocks)");
-    app.add_option("--offset", random_offset, "byte offset to start reading (random-read)");
-    app.add_option("--length", random_length, "bytes to read (random-read, default 65536)");
-    app.add_option("--out", random_out, "write extracted plaintext to file (default: stdout)");
-    app.add_option("--repeat", random_repeat, "repeat count for benchmarking (random-read)");
-    // 加密盘（M1）：库管理动作 + 加密入盘开关。
-    app.add_option("--vault-init", vault_init_dir, "initialize a vault at <dir> (creates vault.meta with random salt)");
-    app.add_option("--vault-list", vault_list_dir, "decrypt and list the vault index at <dir>");
-    app.add_option("--vault-reindex", vault_reindex_dir, "rescan <dir> and rebuild the encrypted index from .ptd headers");
-    app.add_option("--into-vault", into_vault_dir, "encrypt into <dir> as a vault: write each .ptd and append an index entry");
-    // M3：挂载点持久化到 vault.meta（"-" 表示清除）
-    app.add_option("--vault-mount", vault_mount_dir, "record/clear the mount point of <dir> (use with --mount-point)");
-    app.add_option("--mount-point", vault_mount_point, "mount point to record (drive letter like V: or a Linux dir; '-' clears)");
-    // M4：恢复密钥（§4.4）
-    app.add_option("--vault-recovery", vault_recovery_dir,
-        "recovery key ops on <dir>: gen|create [code]|open <code>|remove (use with --recovery-arg)");
-    app.add_option("--recovery-arg", vault_recovery_arg, "argument for --vault-recovery (subcommand / code)");
-    // M4：改主密码（连带 rewrap 库内 .ptd）与库内重加密（1MiB 旧块 -> 64KB）
-    app.add_option("--vault-rekey", vault_rekey_dir, "change vault passphrase: rewrap every .ptd + re-seal index (needs old+new key)");
-    app.add_option("--vault-recrypt", vault_recrypt_dir, "re-encrypt vault contents to 64KB blocks (non-compressed), eliminating 1MiB legacy path");
-    // 格式化：清空盘内全部内容（索引置空 + 擦除所有 .ptd），保留库身份与密码
-    app.add_option("--vault-format", vault_format_dir, "format the vault at <dir>: wipe every stored file and reset the index (keeps vault.meta/password)");
+    app.add_flag("-p,--pack,--archive", pack_mode);             // 打包归档
+    app.add_flag("--sd,--source-delete-ok", yes_source_delete); // 删源已确认
+    app.add_flag("--ne,--no-extract", no_extract);              // 不展开目录
+    app.add_option("-s,--split,--split-size", split_str, "split volume size, e.g. 4GB");  // 分卷大小
+    app.add_flag("-f,--features", features_mode);               // 能力探测
+    app.add_flag("--json", f_json);                             // 机器可读输出
+    app.add_flag("-n,--dry-run", f_dry_run);                    // 只出计划不写盘
+    app.add_flag("--progress-events", f_progress_events);        // JSONL 进度旁路
+    app.add_flag("--pv,--preview", f_preview);                  // 预览明文
+    app.add_flag("--so,--stdout", f_stdout);                    // 写标准输出
+    app.add_option("--mb,--max-bytes", preview_max, "preview max bytes (default 4096)");  // 预览字节数
+    app.add_flag("--fd,--force-decrypt", force_decrypt);        // 强制解密
+    app.add_flag("-y,--force", force_overwrite);                // 覆盖已有
+    app.add_flag("-v,--verbose", f_verbose);                    // 详细输出
+    app.add_flag("--pqc,--post-quantum", f_pqc);                // 后量子
+    app.add_flag("--npqc,--no-post-quantum", f_nopqc);          // 关后量子
+    app.add_flag("--wm,--watermark", f_wm);                     // 水印
+    app.add_flag("--nwm,--no-watermark", f_nowm);               // 关水印
+    app.add_option("--wms,--wm-sign", wm_spec.sign_key, "watermark signing key (ML-DSA-65/RSA)");  // 水印签名密钥
+    app.add_option("--wmv,--wm-verify", wm_verify_pem, "watermark verify public key PEM");  // 水印验签
+    app.add_option("--wmk,--wm-keygen", wm_keygen_path, "generate watermark keypair");  // 生成水印密钥
+    app.add_option("--wk,--wrap-key", wrap_path, "wrap a 32-byte DEK into a FEKW blob");  // 包装密钥
+    app.add_option("--uk,--unwrap-key", unwrap_path, "unwrap a FEKW blob back to the DEK");  // 解包密钥
+    app.add_option("--uo,--unwrap-out", unwrap_out, "output path for --unwrap-key");  // 解包输出
+    app.add_option("--wo,--wrap-out", wrap_out, "output path for --wrap-key (default: <input>.fekw)");  // 包装输出
+    app.add_option("--wa,--wrap-alg", wrap_alg, "wrap algorithm: kwp|aes-kw|pubkey");  // 包装算法
+    app.add_option("--wt,--wrap-to", wrap_to, "recipient public key (or file) for --wrap-key --wrap-alg pubkey");  // 包装收件人
+    app.add_option("--id,--identity", unwrap_identity, "recipient identity (private key or file) for --unwrap-key");  // 解包身份
+    app.add_option("--wme,--watermark-extract", wm_extract_path, "extract tail watermark (read-only)");  // 提取水印
+    app.add_option("-i,--input", explicit_inputs, "explicit input path");  // 显式输入
+    app.add_option("inputs", input_paths, "input files or directories");  // 输入路径
+    app.add_flag("--rr,--random-read", f_randomread, "random-read: extract a plaintext range from a .ptd (compressed containers use a decrypt window)");  // 随机读片段
+    app.add_option("--off,--offset", random_offset, "byte offset to start reading (random-read)");  // 起始偏移
+    app.add_option("--len,--length", random_length, "bytes to read (random-read, default 65536)");  // 读取长度
+    app.add_option("--out,--random-out", random_out, "write extracted plaintext to file (default: stdout)");  // 片段输出
+    app.add_option("--rep,--repeat", random_repeat, "repeat count for benchmarking (random-read)");  // 重复次数
+    // 加密盘
+    app.add_option("--vi,--vault-init", vault_init_dir, "initialize a vault at <dir> (creates vault.meta with random salt)");  // 建加密盘
+    app.add_option("--vl,--vault-list", vault_list_dir, "decrypt and list the vault index at <dir>");  // 列盘内文件
+    app.add_option("--vri,--vault-reindex", vault_reindex_dir, "rescan <dir> and rebuild the encrypted index from .ptd headers");  // 重建索引
+    app.add_option("--iv,--into-vault", into_vault_dir, "encrypt into <dir> as a vault: write each .ptd and append an index entry");  // 加密入盘
+    // 挂载点
+    app.add_option("--vm,--vault-mount", vault_mount_dir, "record/clear the mount point of <dir> (use with --mount-point)");  // 记挂载点
+    app.add_option("--mp,--mount-point", vault_mount_point, "mount point to record (drive letter like V: or a Linux dir; '-' clears)");  // 挂载点
+    // 恢复密钥
+    app.add_option("--vrec,--vault-recovery", vault_recovery_dir,
+        "recovery key ops on <dir>: gen|create [code]|open <code>|remove (use with --recovery-arg)");  // 恢复密钥
+    app.add_option("--ra,--recovery-arg", vault_recovery_arg, "argument for --vault-recovery (subcommand / code)");  // 恢复密钥参数
+    // 改密/重加密
+    app.add_option("--vrk,--vault-rekey", vault_rekey_dir, "change vault passphrase: rewrap every .ptd + re-seal index (needs old+new key)");  // 改盘密码
+    app.add_option("--vrc,--vault-recrypt", vault_recrypt_dir, "re-encrypt vault contents to 64KB blocks (non-compressed), eliminating 1MiB legacy path");  // 盘内重加密
+    // 格式化盘
+    app.add_option("--vf,--vault-format", vault_format_dir, "format the vault at <dir>: wipe every stored file and reset the index (keeps vault.meta/password)");  // 格式化盘
 
     try {
         app.parse(argc, argv);
@@ -1913,12 +2051,39 @@ int main(int argc,char* argv[]) {
         return 0;
     } catch(const CLI::ParseError& e) {
         std::cerr<<e.what()<<"\n";
-        return 1;
+        return FE_EXIT_USAGE;
     }
 
     for(auto& s: explicit_inputs) input_paths.push_back(s);
 
-    // ===== 解析后合并/校验 =====
+    // 机器可读契约初
+    g_contract.json = f_json;
+    g_contract.dry_run = f_dry_run;
+    g_contract.progress_events = f_progress_events;
+    if (f_progress_events) {
+        // 非 tty 下旧帧模式默
+        // 旧帧仍
+#ifdef _WIN32
+        _putenv_s("FILEENCRYPTOR_PROGRESS_EVENTS", "1");
+        _putenv_s(FE_FRAME_ENV, "1");
+#else
+        setenv("FILEENCRYPTOR_PROGRESS_EVENTS", "1", 1);
+        setenv(FE_FRAME_ENV, "1", 1);
+#endif
+    }
+    {
+        const char* env_audit = std::getenv("FE_AUDIT_LOG");
+        if (env_audit && *env_audit) g_contract.audit_path = env_audit;
+        else if (!cfg.log_file.empty()) g_contract.audit_path = cfg.log_file + ".audit.jsonl";
+        const char* did = std::getenv("FE_DEVICE_ID");
+        g_contract.device_id = (did && *did) ? did : "local";
+        saf_set_audit_hook([](const SafAuditEvent& ev) {
+            fe_audit_emit(ev.op.c_str(), ev.key, (int)ev.status,
+                          ev.bytes, ev.elapsed_ms, ev.error_code);
+        });
+    }
+
+    // 解析后合并/校验
     if(features_mode) {
 #ifdef FE_WITH_ZSTD
         std::cout<<"zstd=1\n";
@@ -1933,14 +2098,14 @@ int main(int argc,char* argv[]) {
         std::cout<<"split=1\n";
         std::cout<<"pack=1\n";
         std::cout<<"confirm=1\n";
-        std::cout<<"vault=1\n";      // 加密盘能力（M1+：--into-vault / vault-init/list/reindex/format/recovery/rekey/recrypt）
-        std::cout<<"vault_rw=1\n";   // 加密盘可写挂载能力（M6：FE-Mounter --rw 提供可写挂载）
+        std::cout<<"vault=1\n";      // 加密盘能力
+        std::cout<<"vault_rw=1\n";   // 加密盘可写挂载
         return 0;
     }
 
     if(f_verbose) set_verbose(true);
 
-    // -m 模式校验（保序；非对称可与载荷模式共存）
+    // m 模式校验
     for(auto& ms : mode_strs) {
         if(ms=="xchacha20") mode=CryptoMode::XCHACHA20;
         else if(ms=="aegis256") mode=CryptoMode::AEGIS256;
@@ -1983,7 +2148,28 @@ int main(int argc,char* argv[]) {
         else if(!vault_format_dir.empty()) action=ACTION_VAULT_FORMAT;
     }
 
-    // --watermark-extract：只读尾部水印，非普通动作
+
+    {
+        static const char* const kActNames[] = {
+            "none","encrypt","decrypt","batch-encrypt","batch-decrypt","keygen","derive",
+            "pubkey","info","verify","recover","keylib","rewrap","watermark","wrap-key",
+            "unwrap-key","random-read","vault-init","vault-list","vault-reindex","vault-mount",
+            "vault-recovery","vault-rekey","vault-recrypt","vault-format"
+        };
+        g_contract.action = kActNames[(int)action];
+        g_contract.inputs = input_paths;
+        g_contract.output_dir = output_dir;
+        g_contract.compress_level = compress_level;
+        switch (mode) {
+        case CryptoMode::XCHACHA20: g_contract.cipher = "xchacha20"; break;
+        case CryptoMode::AEGIS256:  g_contract.cipher = "aegis256"; break;
+        case CryptoMode::AES_GCM:   g_contract.cipher = "aes-gcm"; break;
+        case CryptoMode::SM4:       g_contract.cipher = "sm4"; break;
+        default: g_contract.cipher = asym_mode ? "asymmetric" : "xchacha20"; break;
+        }
+    }
+
+    // -watermark-extract：只读尾部水
     if(!wm_extract_path.empty()) {
         if(action!=ACTION_NONE) { std::cerr<<"Multiple modes specified.\n"; return 1; }
         action=ACTION_WATERMARK;
@@ -2039,11 +2225,21 @@ int main(int argc,char* argv[]) {
     bool is_encrypt=(action==ACTION_ENCRYPT||action==ACTION_BATCH_ENCRYPT);
     bool is_decrypt=(action==ACTION_DECRYPT||action==ACTION_BATCH_DECRYPT);
 
+    // dry-run
+    if (g_contract.dry_run) {
+        if (action == ACTION_NONE) { print_usage(); return FE_EXIT_OK; }
+        std::vector<std::string> files;
+        g_contract.total_bytes = fe_collect_plan(input_paths, files);
+        fe_print_plan(files, g_contract.total_bytes);
+        return FE_EXIT_OK;
+    }
+    fe_audit_emit("cli_action", g_contract.action, FE_EXIT_OK, 0, 0, 0);
+
 if(wrap_mode || unwrap_mode) {
-        // 包装层与加密流程正交：密码只用来派生 KEK，不进载荷加密路径。
-        // --wrap-alg pubkey 路线走X25519 ECDH，不需要密码。
+        // 包装层
+        // -wrap-alg pubkey
         const bool pub_route = wrap_mode && keywrap_alg_from_name(wrap_alg) == 2;
-        // 解包路线要读 blob 头才知道是不是公钥路线；读不到就按需要密码处理
+        // 解包路线要读 blob 头
         bool unwrap_pub = false;
         if(unwrap_mode) {
             std::vector<unsigned char> probe;
@@ -2053,9 +2249,9 @@ if(wrap_mode || unwrap_mode) {
         }
         SecureBuffer wrap_pwd;
         if(!pub_route && !unwrap_pub) {
-            // 密钥源优先级沿用主流程：-k <file> > ENCRYPTOR_KEY > --key-stdin > 交互
+            // 密钥源优先级沿
             if(!keyfile_path.empty()) {
-                // 与主流程同口径：流式读取并封顶 1 MB，防超大文件耗尽内存
+                // 与主流程同口径
                 std::ifstream kf;
                 if(!open_stream(kf, keyfile_path, std::ios::binary)) {
                     std::cerr<<"Cannot open key file: "<<keyfile_path<<"\n";
@@ -2102,7 +2298,7 @@ if(wrap_mode || unwrap_mode) {
             }
         }
         if(wrap_mode) {
-            // --wrap-out 优先；否则沿用 -o 目录（此时文件名固定 wrapped.fekw）
+            // -wrap-out 优先
             std::string out = wrap_out.empty() ? (wrap_path + ".fekw") : wrap_out;
             if(wrap_out.empty() && !output_dir.empty()) {
                 if(!create_directory_recursive(output_dir)) {
@@ -2136,21 +2332,21 @@ if(wrap_mode || unwrap_mode) {
         return 0;
     }
 
-    // 密钥生成无需输入文件：-g [-o <dir>] [-x448] [--no-pqc]
+    // 密钥生成无需输
     if(action==ACTION_KEYGEN) {
         uint8_t kalgo = RECIP_ALGO_X25519;
-        if(pqc_on)                     kalgo = RECIP_ALGO_MLKEM;   // 默认：X25519 + ML-KEM-768
+        if(pqc_on)                     kalgo = RECIP_ALGO_MLKEM;   // 默认
         else if(x448_mode)             kalgo = RECIP_ALGO_X448;
         return run_keygen(output_dir,force_overwrite,kalgo) ? 0 : 1;
     }
-    // --wm-keygen 分支已上移至 usage 短路之前（见上方）
+    // -wm-keygen 分支已上移至
 
-    // 功能1：密钥库管理（-L）。子命令与操作数走位置参数（list/add/remove/show/pub/export）
+    // 功能1
     if(action==ACTION_KEYLIB) {
         return run_keylib(input_paths,keylib_as,keylib_alias,keylib_notes) ? 0 : 1;
     }
 
-    // 功能2：文件头信息查看器（只读，无需密钥）
+    // 功能2
     if(action==ACTION_INFO) {
         if(input_paths.empty()) { std::cerr<<"No input files specified.\n"; return 1; }
         bool all=true;
@@ -2158,7 +2354,7 @@ if(wrap_mode || unwrap_mode) {
         return all?0:1;
     }
 
-    // 水印查看：--watermark-extract（尾部只读，可批量）
+    // 水印查看
     if(action==ACTION_WATERMARK) {
         if(input_paths.empty()) { std::cerr<<"No input files specified.\n"; return 1; }
         bool all=true;
@@ -2166,7 +2362,6 @@ if(wrap_mode || unwrap_mode) {
         return all?0:1;
     }
 
-    // -G（密码派生）/ -Y（公钥导出）/ -V（校验）/ -R（还原名）/ -H（查看头）只需密钥材料或输入文件
     if(input_paths.empty()&&action!=ACTION_DERIVE&&action!=ACTION_PUBKEY
        &&action!=ACTION_VERIFY&&action!=ACTION_RECOVER&&action!=ACTION_INFO
        &&action!=ACTION_WATERMARK
@@ -2179,15 +2374,15 @@ if(wrap_mode || unwrap_mode) {
         return 1;
     }
 
-    // --pack 本来就是「多输入打成一个」，不受单文件模式的单路径限制
+    // -pack 本来
     if(!is_batch&&!pack_mode&&input_paths.size()>1) {
         std::cerr<<"Single mode accepts only one input path.\n";
         return 1;
     }
 
-    // 源文件处置对加密（删明文）与解密（删 .ptd）均有效，非对称分支同样支持。
+    // 源文件处置对加
 
-    // 压缩选项校验：仅对称加密可用；未集成 zstd 时拒绝；级别需在 zstd 支持范围内
+    // 压缩选项校验
     if(compress_level!=0) {
 #ifndef FE_WITH_ZSTD
         std::cerr<<"Compression requested but this build was compiled without zstd support.\n";
@@ -2197,7 +2392,7 @@ if(wrap_mode || unwrap_mode) {
             std::cerr<<"-z/--compression-level is only valid for encryption (-e/-be).\n";
             return 1;
         }
-        // zstd 级别范围：常规 1..22，快速档 -1..-5（“参照 zstd”约定）
+        // zstd 级别范围
         if(compress_level<-5 || compress_level>22) {
             std::cerr<<"Invalid compression level "<<compress_level
                 <<": zstd accepts 1..22 (normal) or -1..-5 (fast).\n";
@@ -2205,7 +2400,7 @@ if(wrap_mode || unwrap_mode) {
         }
     }
 
-    // 归档打包：仅加密可用（-e 单文件 / -be 批量，两者都打进同一个 .ptd）。批量逐个加密再各自成包不是该开关含义
+    // 归档打包
     if(pack_mode) {
         if(!is_encrypt) {
             std::cerr<<"--pack is only valid for encryption (-e/-be).\n";
@@ -2221,7 +2416,7 @@ if(wrap_mode || unwrap_mode) {
         return 1;
     }
 
-    // 分卷校验：仅加密可用；下限 1MB（容器头 + 至少一个数据块）
+    // 分卷校验
     if(split_bytes>0) {
         if(!is_encrypt) {
             std::cerr<<"--split is only valid for encryption (-e/-be).\n";
@@ -2233,12 +2428,12 @@ if(wrap_mode || unwrap_mode) {
         }
     }
 
-    // 功能1：-K 从密钥库解析收件人（加密）或身份（解密）。
-    // 必须在密钥文件加载（-k 读取）之前完成，解密路径才能直接复用 -k 通道。
+    // 功能1
+    // 必须
     std::vector<std::string> lib_recipients;
     if(!keylib_refs.empty()&&action!=ACTION_KEYLIB) {
         std::vector<std::string> names;
-        {   // 逗号 / 分号分隔，去空项
+        {   // 逗号 / 分号分隔
             std::string cur;
             for(char c: keylib_refs) {
                 if(c==','||c==';') { names.push_back(cur); cur.clear(); }
@@ -2279,8 +2474,8 @@ if(wrap_mode || unwrap_mode) {
         }
     }
 
-    // AEGIS-256 可用性：缺 AES-NI 时，交互终端询问是否降级（默认降级）； 非交互（GUI 管道 / --key-stdin /
-    // cron）明确拒绝并以非零码退出，绝不自动降级。 同时覆盖单文件与批量两种入口，process_files 内部仅作防御性兜底。
+    // AEGIS-256 可用性
+    // cron）明确拒绝并
     if(is_encrypt&&mode==CryptoMode::AEGIS256) {
         bool interactive = stdin_is_interactive() && !key_from_stdin;
         bool refuse=false;
@@ -2288,22 +2483,22 @@ if(wrap_mode || unwrap_mode) {
         mode = resolve_encrypt_mode(mode, interactive, refuse, aegis_msg);
         if(refuse) {
             std::cerr<<aegis_msg<<"\n";
-            return 4;   // 语义化退出码：硬件不支持且非交互，禁止自动降级
+            return 4;   // 语义化退出码
         }
     }
 
-    // 密码输入（RAII SecureBuffer 持有，析构自动清零 + 解锁）
-    // 密钥来源优先级：-k <keyfile> > ENCRYPTOR_KEY 环境变量 > 交互式输入
+    // 密码输入
+    // 密钥来源优先级
     SecureBuffer password;
-    bool used_key_source=false; // 非交互密钥源（密钥文件或环境变量）
+    bool used_key_source=false; // 非交互密钥源
     if(!keyfile_path.empty()) {
-        // 读取密钥文件原始字节作为密码材料（适合无人值守 / 自动化场景）
+        // 读取密钥文件原
         std::ifstream kf;
         if(!open_stream(kf,keyfile_path,std::ios::binary)) {
             std::cerr<<"Cannot open key file: "<<keyfile_path<<"\n";
             return 1;
         }
-        // 流式读取密钥文件并封顶 1 MB，防止超大文件/管道耗尽内存
+        // 流式读取密钥文
         std::vector<char> kbuf;
         {
             const size_t kMaxKeyBytes = size_t(1) << 20;
@@ -2331,9 +2526,9 @@ if(wrap_mode || unwrap_mode) {
         log_event(LOG_INFO,"key_source",{{"type","keyfile"},{"path",keyfile_path}});
     }
     else if(key_from_stdin) {
-        // 安全通道：整段 stdin（二进制安全、读到 EOF）作密钥材料；对称→密码，非对称解密→
-        // age 身份；GUI 经此通道传入，避免经环境变量/命令行泄露
-        // 流式读取并封顶 1 MB，防止恶意大管道撑爆内存。
+        // 安全通道
+        // age 身份
+        // 流式读取并封顶 1 MB
         std::vector<char> sbuf;
         {
             const size_t kMaxStdinKeyBytes = size_t(1) << 20;
@@ -2349,8 +2544,8 @@ if(wrap_mode || unwrap_mode) {
                 }
             }
         }
-        // 交互与 GUI 管道常以回车结尾（PowerShell 管道会附加换行、终端输入按回车确认），
-        // 剥离尾部换行，否则密码含 \r\n 导致派生出的 KEK 与加密时不一致、解不开文件。
+        // 交互
+        // 剥离尾部换行
         while(!sbuf.empty() && (sbuf.back()=='\n'||sbuf.back()=='\r')) sbuf.pop_back();
         if(sbuf.empty()) {
             std::cerr<<"No key material received from stdin (--key-stdin).\n";
@@ -2367,8 +2562,7 @@ if(wrap_mode || unwrap_mode) {
             password = SecureBuffer(ek, std::strlen(ek));
             used_key_source=true;
             log_event(LOG_INFO,"key_source",{{"type","env"}});
-            // 已拷入 SecureBuffer：立即从进程环境块擦除原串，缩短明文残留窗口
-            // （env 方式本就不如 --key-stdin，仅作兼容保留）。
+            // 已拷入 SecureBuffer
 #ifdef _WIN32
             _putenv("ENCRYPTOR_KEY=");
 #else
@@ -2377,8 +2571,8 @@ if(wrap_mode || unwrap_mode) {
         }
     }
 
-    // 解密侧自动识别非对称：输入是 .ptd 且密钥材料本身就是身份私钥时走非对称通道，
-    // 不必再显式写 -m x25519（两个 GUI 都只给「私钥文件」一个入口直接解密）。
+    // 解密侧自动识别
+    // 不必
     if(!asym_mode && !is_encrypt && used_key_source && looks_like_identity(password)) {
         for(const std::string& p: input_paths) {
             std::string low=p;
@@ -2392,8 +2586,8 @@ if(wrap_mode || unwrap_mode) {
         }
     }
 
-    // ACTION_RANDOM_READ： 虚拟盘随机块读（M0 技术预研）。 按偏移/长度从 .ptd 非压缩块 O(1) 定位提取明文，
-    // 不整文件解密； 压缩文件标记不可随机读（须先全量解密）。
+    // ACTION_RANDOM_READ
+    // 压缩容器
     if(action==ACTION_RANDOM_READ) {
         if(input_paths.empty()) {
             std::cerr<<"No input .ptd specified for random-read.\n";
@@ -2420,15 +2614,14 @@ if(wrap_mode || unwrap_mode) {
             if(!ok) break;
         }
         auto t1=std::chrono::steady_clock::now();
-        if(compressed) {
-            std::cerr<<"This .ptd uses compression; random read is not supported. Use full decrypt.\n";
-            return 1;
-        }
         if(!ok) {
             std::cerr<<"Random read failed (wrong password or unsupported container).\n";
             return 1;
         }
-        // 二进制输出： 默认 stdout（Windows 需切 _O_BINARY），--out 写文件
+        // 压缩容器已
+        if(compressed)
+            std::cerr<<"random-read: compressed container, whole-file decrypt window used.\n";
+        // 二进制输出
         if(random_out.empty()) {
 #ifdef _WIN32
             _setmode(_fileno(stdout),_O_BINARY);
@@ -2436,7 +2629,7 @@ if(wrap_mode || unwrap_mode) {
             std::cout.write(reinterpret_cast<const char*>(buf.data()),(std::streamsize)buf.size());
             std::cout.flush();
         } else {
-            // 低危（A 组）：与解密输出同策略，no-follow 创建，拒绝经符号链接写穿
+            // 低危
             if(!fe_create_output_no_follow(random_out)) return 1;
             std::ofstream of;
             if(!open_stream(of,random_out,std::ios::out|std::ios::binary|std::ios::trunc)) {
@@ -2456,7 +2649,7 @@ if(wrap_mode || unwrap_mode) {
         return 0;
     }
 
-    // 加密盘库管理动作（M1）
+    // 加密盘库管理动
     if(action==ACTION_VAULT_MOUNT) {
         if(vault_mount_dir.empty()||vault_mount_point.empty()) {
             std::cerr<<"--vault-mount requires a vault dir and a mount point (drive letter like V: or a Linux mount dir).\n";
@@ -2474,7 +2667,7 @@ if(wrap_mode || unwrap_mode) {
         if(!vault_meta_save(vault_mount_dir, meta, err)) { std::cerr<<"vault-mount failed: "<<err<<"\n"; return 1; }
         return 0;
     }
-    // M4 恢复密钥（§4.4）：gen/create/open/remove 都不需要现有密码——忘密码正是其用途
+    // M4 恢复密钥
     if(action==ACTION_VAULT_RECOVERY) {
         VaultMeta meta; std::string err;
         if(!vault_meta_load(vault_recovery_dir, meta, err)) {
@@ -2501,7 +2694,7 @@ if(wrap_mode || unwrap_mode) {
             if(!vault_recovery_load(vault_recovery_dir, rest, pw, err)) {
                 std::cerr<<"vault-recovery open failed: "<<err<<"\n"; return 1;
             }
-            std::cout.write(pw.cdata(), (std::streamsize)pw.size())<<"\n";   // cdata() 不保证 NUL 结尾，按长度输出
+            std::cout.write(pw.cdata(), (std::streamsize)pw.size())<<"\n";   // cdata
             std::cout<<"（上面是主密码；请立即改密并重新生成恢复密钥）\n";
             return 0;
         }
@@ -2525,7 +2718,7 @@ if(wrap_mode || unwrap_mode) {
         return 1;
     }
 
-    // M4 改主密码：库内每个 .ptd rewrap（v6 载荷不动）+ 索引新盐重封 + 重建保险文件
+    // M4 改主密码
     if(action==ACTION_VAULT_REKEY) {
         VaultMeta meta; std::string err;
         if(!vault_meta_load(vault_rekey_dir, meta, err)) {
@@ -2543,7 +2736,7 @@ if(wrap_mode || unwrap_mode) {
             std::cerr<<"vault-rekey: cannot unlock index ("<<err<<")\n"; return 1;
         }
         SecureBuffer newpw;
-        if(new_key_from_stdin) {                 // 非交互：整段 stdin 作新密码
+        if(new_key_from_stdin) {                 // 非交互
             std::vector<char> sbuf((std::istreambuf_iterator<char>(std::cin)),
                                    std::istreambuf_iterator<char>());
             if(sbuf.empty()) { std::cerr<<"No new key material received from stdin.\n"; return 1; }
@@ -2564,7 +2757,7 @@ if(wrap_mode || unwrap_mode) {
             else { n_fail++; std::cerr<<"  rewrap failed: "<<e.rel_path<<"\n"; }
         }
         if(n_fail) { std::cerr<<"vault-rekey aborted: "<<n_fail<<" container(s) failed, index untouched.\n"; return 1; }
-        // 索引换盐重封 + 保险文件重建（§4.4：改主密码必须同步，否则旧密码副本失效）
+        // 索引换盐重封 + 保
         VaultMeta nm = meta;
         nm.salt.assign(crypto_pwhash_SALTBYTES, 0);
         randombytes_buf(nm.salt.data(), nm.salt.size());
@@ -2574,7 +2767,7 @@ if(wrap_mode || unwrap_mode) {
             std::cerr<<"vault-rekey: index re-seal failed: "<<err<<"\n"; return 1;
         }
         if(vault_recovery_exists(vault_rekey_dir)) {
-            // 保险文件里是旧密码副本，改密后必然失效；无恢复码无法重封 → 移除并提示重新生成
+            // 保险文件里是旧
             std::string rerr;
             vault_recovery_remove(vault_rekey_dir, rerr);
             std::cout<<"注意：原恢复密钥已随旧密码失效并移除，请用 --vault-recovery create 重新生成。\n";
@@ -2583,7 +2776,7 @@ if(wrap_mode || unwrap_mode) {
         return 0;
     }
 
-    // M4 库内重加密（§4.2）：把历史大块/压缩文件重加密为 64KB 非压缩小块，消除整文件解密缓存路径
+    // M4 库内重加密
     if(action==ACTION_VAULT_RECRYPT) {
         VaultMeta meta; std::string err;
         if(!vault_meta_load(vault_recrypt_dir, meta, err)) {
@@ -2600,12 +2793,12 @@ if(wrap_mode || unwrap_mode) {
         if(!vault_read_index(vault_recrypt_dir, meta, password, entries, err)) {
             std::cerr<<"vault-recrypt: cannot unlock index ("<<err<<")\n"; return 1;
         }
-        // 只对「压缩」或「块 > 64KB」的文件动手：这两类都要整文件解密，无法 O(1) 随机读
+        // 只对「压缩」或「块 > 64KB」
         const uint32_t kTargetChunk = 64u*1024u;
         std::error_code ec;
         auto U = [](const std::string& s){ return std::filesystem::u8path(s); };
-        // M18：rel 来自索引（持密钥者可写），投毒索引可借 ".."/绝对路径/
-        // 反斜杠让明文落到 tmpdir 之外，逐条校验拒绝。
+        // M18
+        // 反斜杠让明文落
         auto rel_safe = [](const std::string& rel) {
             if (rel.empty()) return false;
             if (rel.find('\\') != std::string::npos) return false;
@@ -2621,8 +2814,8 @@ if(wrap_mode || unwrap_mode) {
             return true;
         };
         std::string tmpdir = vault_recrypt_dir + "/.recrypt.tmp";
-        // M18：.recrypt.tmp 名可预测，预置成符号链接时 create_directories
-        // 会跟随，明文便会落到库外。先判链接再创建（竞态残留风险见下方注释）。
+        // M18
+        // 会跟随，明文便
         if (path_is_symlink(tmpdir)) {
             std::cerr << "vault-recrypt: refusing to use a symlinked temp dir: " << tmpdir << "\n";
             return 1;
@@ -2634,7 +2827,7 @@ if(wrap_mode || unwrap_mode) {
         }
         size_t converted=0, skipped=0, failed=0;
         for(const auto& e : entries) {
-            // 随机命名后按 store 定位物理 .ptd（store 空=旧盘回退 rel 基名）
+            // 随机命名
             std::string ptd = vault_ptd_path(vault_recrypt_dir, e.rel_path, e.store);
             PtdMeta pm;
             if(!read_ptd_metadata(ptd, pm)) { failed++; continue; }
@@ -2644,10 +2837,10 @@ if(wrap_mode || unwrap_mode) {
                 failed++; continue;
             }
             std::string plain = tmpdir + "/" + e.rel_path;
-            // M18：plain 的各父分量（tmpdir 之下）逐一判链接——
-            // create_directories 会跟随已存在的符号链接目录，发现链接即拒绝，
-            // 避免 "tmpdir/sub -> 库外" 这类预置把明文写出去。
-            // TOCTOU：判定与创建之间被换链的残留风险无法在本层根治。
+            // M18
+            // create_directories 会跟随已存
+            // "tmpdir/sub -> 库外" 这类预置
+            // TOCTOU
             {
                 std::string acc = tmpdir;
                 std::string rest = plain.substr(tmpdir.size());
@@ -2681,9 +2874,9 @@ if(wrap_mode || unwrap_mode) {
                                    nullptr, nullptr, nullptr, nullptr, kTargetChunk);
             std::filesystem::remove(U(plain), ec);
             if(!ok) { std::cerr<<"  re-encrypt failed: "<<e.rel_path<<"\n"; failed++; continue; }
-            // 原子替换旧容器（同目录 rename 即覆盖）；u8path 避免 rel_path 含中文时被 ACP 误解。
-            // M19：去掉先 remove——remove 成功而 rename 失败会让库内文件永久丢失，
-            // rename 本身即原子覆盖（Windows 侧为 MoveFileExW 替换语义）。
+            // 原子替换旧容器
+            // M19
+            // rename 本身即原子覆盖
             std::filesystem::rename(U(newptd), U(ptd), ec);
             if(ec) { std::cerr<<"  replace failed: "<<e.rel_path<<"\n"; failed++; continue; }
             converted++;
@@ -2732,6 +2925,8 @@ if(wrap_mode || unwrap_mode) {
         }
         std::cout<<"Vault index ("<<entries.size()<<" entries):\n";
         for(const auto& e: entries) {
+            // 三端统一过滤
+            if(rel_first_reserved(e.rel_path)) continue;
             std::cout<<"  "<<e.rel_path<<"  ["<<e.algo<<"]  "<<e.size<<" bytes\n";
         }
         return 0;
@@ -2753,8 +2948,8 @@ if(wrap_mode || unwrap_mode) {
         std::cout<<"Vault reindexed.\n";
         return 0;
     }
-    // 格式化：清空盘内全部内容（删除所有 .ptd + 索引置空），保留库身份、密码与恢复码。
-    // 与「删库」不同：目录、vault.meta、.feindex 都保留，格式化后是个空盘，可继续用原密码入盘。
+    // 格式化
+    // 与「删库」不同
     if(action==ACTION_VAULT_FORMAT) {
         if(vault_format_dir.empty()) { std::cerr<<"--vault-format requires a directory.\n"; return 1; }
         VaultMeta meta; std::string err;
@@ -2771,9 +2966,9 @@ if(wrap_mode || unwrap_mode) {
             std::cerr<<"vault-format failed: "<<err<<"\n"; return 1;
         }
         size_t removed=0, failed_n=0;
-        // 全盘扫描删除所有 .ptd：索引只记录文件逻辑名，磁盘上才是真实存储（随机名/store 映射）；
-        // 仅按索引删会在「索引与磁盘不一致」时漏删，表现为「空间显示空了但源文件还在」。
-        // 直接扫目录删全部 .ptd 最稳：vault.meta / .feindex 不是 .ptd，会保留（身份与密码不变）。
+        // 全盘扫描删除
+        // 仅按索引删
+        // 扫目录删全部 .ptd
         {
             std::error_code ec;
             std::filesystem::path vdir = std::filesystem::u8path(vault_format_dir);
@@ -2782,21 +2977,30 @@ if(wrap_mode || unwrap_mode) {
                 for (auto& e : it) {
                     if (!e.is_regular_file()) continue;
                     if (e.path().extension().u8string() != ".ptd") continue;
+                    // 只读属性
+                    clear_readonly_attribute(e.path().u8string());
                     if (remove_file_utf8(e.path().u8string())) removed++;
                     else { failed_n++; std::cerr<<"Warning: cannot remove "<<e.path().u8string()<<"\n"; }
                 }
             }
         }
+        // 铁律
+        // 「格式化失败后文
+        // 失败时索引原样
+        if (failed_n) {
+            std::cerr<<"vault-format failed: "<<failed_n<<" 个 .ptd 文件无法删除"
+                     <<"（盘可能正被挂载或文件被占用）。索引未改动，盘内文件仍可访问；\n"
+                     <<"请先卸载该加密盘后重试；若索引与盘面已不一致，可执行 --vault-reindex 重建索引。\n";
+            return 1;
+        }
         if(!vault_write_index(vault_format_dir, meta, password, "[]", err)) {
             std::cerr<<"vault-format failed: "<<err<<"\n"; return 1;
         }
-        std::cout<<"Vault formatted: "<<removed<<" file(s) removed";
-        if(failed_n) std::cout<<", "<<failed_n<<" failed";
-        std::cout<<".\n";
-        return failed_n?1:0;
+        std::cout<<"Vault formatted: "<<removed<<" file(s) removed.\n";
+        return 0;
     }
 
-    // 因此必须在下面的“对称密码交互输入”之前拦截。
+    // 因此必须
     if(action==ACTION_DERIVE||action==ACTION_PUBKEY||
        action==ACTION_VERIFY||action==ACTION_RECOVER) {
         if(!used_key_source) {
@@ -2826,14 +3030,14 @@ if(wrap_mode || unwrap_mode) {
         }
         if(action==ACTION_PUBKEY) return run_pubkey(password)?0:1;
         if(action==ACTION_VERIFY) {
-            // 非对称容器的校验要用身份私钥解裹 DEK，对称密码文件不适用
+            // 非对称容器
             const std::string ident = (asym_mode||looks_like_identity(password))
                 ? normalize_identity(password) : std::string();
             bool all=true;
             for(const auto& p: input_paths) if(!run_verify(p,password,ident)) all=false;
             return all?0:1;
         }
-        // ACTION_RECOVER：--rename 启用原地重命名（内容不变）
+        // ACTION_RECOVER
         {
             const std::string ident = (asym_mode||looks_like_identity(password))
                 ? normalize_identity(password) : std::string();
@@ -2844,13 +3048,13 @@ if(wrap_mode || unwrap_mode) {
         }
     }
 
-    set_write_sha256(cfg.write_sha256 || force_sha256); // 功能10：校验单开关（--sha256 覆盖 YAML）
+    set_write_sha256(cfg.write_sha256 || force_sha256); // 功能10
 
     if(is_encrypt && !asym_mode) {
         if(used_key_source) {
-            // M27：非交互密钥源（-k / ENCRYPTOR_KEY / --key-stdin）同样应用
-            // password_policy 的 min_len/min_classes，与交互路径一致，
-            // 避免 6 位短口令经非交互通道旁路密码策略。
+            // M27
+            // password_policy 的 min_len
+            // 6 位短口令经非交
             std::string preason;
             const Config& cfg = global_config();
             size_t min_len = (cfg.min_password_length > 0)
@@ -2905,8 +3109,8 @@ if(wrap_mode || unwrap_mode) {
 
     bool all_ok=true;
 
-    // 密钥轮换：v6 容器 DEK 重裹（载荷密文不动）。旧密码走常规密码通道，
-    // 新密码必须显式提供（--new-key-file / --new-key-stdin），避免交互式中途输入歧义。
+    // 密钥轮换
+    // 新密码必须显式
     if(action==ACTION_REWRAP) {
         if(new_keyfile_path.empty()&&!new_key_from_stdin) {
             std::cerr<<"--rewrap requires a new key source: --new-key-file <file> or --new-key-stdin.\n";
@@ -2919,7 +3123,7 @@ if(wrap_mode || unwrap_mode) {
         return all?0:1;
     }
 
-    // 目录输入 + 删除类源处置：先确认一次，避免批量模式静默清掉整棵树。
+    // 目录输入 + 删除类
     if(is_encrypt && source_action!=0 && !pack_mode && !yes_source_delete) {
         if(!confirm_source_dir_removal(input_paths, source_action)) {
             std::cerr<<"Aborted.\n";
@@ -2929,9 +3133,12 @@ if(wrap_mode || unwrap_mode) {
 
     g_force_decrypt=force_decrypt;
 
-    // 加密盘入盘（M1）：逐文件加密进库，写 .ptd 并增量追加加密索引。
+    // 加密盘入盘
     if(!into_vault_dir.empty() && is_encrypt) {
-        // 入盘守卫：盘符挂载点是解密视图，非存储目录；直接写入会二次加密并污染索引。
+        // 挂载读已支持压
+        int vault_comp = compress_level;
+        if(!cl_given && !f_compress) vault_comp = FE_COMPRESS_AUTO;
+        // 入盘守卫
         std::string g_path = into_vault_dir;
         while (!g_path.empty() && (g_path.back()=='/' || g_path.back()=='\\')) g_path.pop_back();
         bool is_drive_root = (g_path.size()==2 && g_path[1]==':' && isalpha((unsigned char)g_path[0]));
@@ -2958,9 +3165,9 @@ if(wrap_mode || unwrap_mode) {
         if(!vault_meta_init(into_vault_dir, into_vault_dir, meta, err)) {
             std::cerr<<"加密盘初始化失败： "<<err<<"\n"; return 1;
         }
-        // MSVC 窄串按 ACP 解释，UTF-8 中文路径须走 u8path 避免迭代器崩溃。
+        // MSVC 窄串
         auto fs_p = [](const std::string& s){ return std::filesystem::u8path(s); };
-        // 收集文件（支持目录递归）
+        // 收集文件
         std::vector<std::string> files;
         for(const auto& p: input_paths) {
             std::error_code ec;
@@ -2987,14 +3194,62 @@ if(wrap_mode || unwrap_mode) {
             return s;
 #endif
         };
-        // 帧式进度：单线程驱动单槽，与普通加密视图一致。
+        auto rel_of = [&](const std::string& src) -> std::string {
+            std::string rel;
+            std::filesystem::path srcp = fs_p(src);
+            // 词法相对库根
+            // lexically_relative 纯词法、不碰 I/O，跨盘/
+            std::filesystem::path r = srcp.lexically_relative(fs_p(into_vault_dir));
+            if (!r.empty() && r.u8string().compare(0, 2, "..") != 0) {
+                rel = norm(r.u8string());
+            } else {
+                // 外部源/跨盘
+                // 带盘符才能区分
+                std::filesystem::path r2 = srcp.lexically_relative(srcp.root_path());
+                std::string tail = r2.empty() ? srcp.filename().u8string() : norm(r2.u8string());
+                std::string rn = srcp.root_name().u8string();   // Windows: "D:"；UNC: "\\srv\share"
+                while (!rn.empty() && (rn.back() == ':' || rn.back() == '/')) rn.pop_back();
+                const size_t np = rn.find_first_not_of('/');    // UNC 去掉前导分隔符
+                if (np == std::string::npos) rn.clear(); else if (np > 0) rn = rn.substr(np);
+                rn = norm(rn);
+                rel = (rn.empty() || tail.empty() || tail == ".") ? tail : norm(rn + "/" + tail);
+            }
+            return rel;
+        };
+
+        // 目录条目
+        // 整条消失
+        {
+            std::vector<std::string> dirs;
+            for (const auto& p : input_paths) {
+                std::error_code dec;
+                if (!fe_path_is_directory(p)) continue;
+                for (auto& de : std::filesystem::recursive_directory_iterator(fs_p(p), dec)) {
+                    if (de.is_directory()) dirs.push_back(de.path().u8string());
+                }
+            }
+            for (const auto& d : dirs) {
+                std::string rel = rel_of(d);
+                if (rel.empty() || rel == ".") continue;
+                VaultEntry dent;
+                dent.rel_path = rel;
+                dent.is_dir = true;
+                dent.mtime = (int64_t)std::time(nullptr);
+                dent.enc_ts = (uint64_t)dent.mtime;
+                std::string derr;
+                if (!vault_upsert_entry(into_vault_dir, meta, password, dent, derr))
+                    std::cerr << "目录登记失败：" << d << "\n";
+            }
+        }
+
+        // 帧式进度
         uint64_t total_bytes=0;
         for(const auto& s: files) {
             std::error_code sec;
             uintmax_t fs_sz=std::filesystem::file_size(fs_p(s), sec);
-            if(!sec && fs_sz!=(uintmax_t)-1) total_bytes += (uint64_t)fs_sz;   // 量不到则不计入
+            if(!sec && fs_sz!=(uintmax_t)-1) total_bytes += (uint64_t)fs_sz;   // 量不到
         }
-        // 并行：线程数=CPU 核数（受 max_open_files/3 封顶）；索引追加由 g_mtx 串行化。
+        // 并行
         int cfg_threads = global_config().worker_threads;
         int nt = cfg_threads > 0 ? cfg_threads : 0;
         if (nt <= 0) {
@@ -3008,10 +3263,9 @@ if(wrap_mode || unwrap_mode) {
         if ((size_t)nt > files.size()) nt = (int)files.size();
         if (nt < 1) nt = 1;
 
-        // 整批共享一份随机盐、只派生一次 KEK：入盘原本每个文件各自跑一次 Argon2
-        // （128MB / 4 轮），上千小文件时几乎全部耗时都花在 KDF 上（零散小文件实测
-        // 仅 ~53MB/s，而大文件 345MB/s）。每文件 nonce 仍独立随机，AEAD 安全性不变；
-        // 挂载盘读取时 KEK 缓存也能整批命中，顺带加快盘内读取。
+        // 整批共享一份随
+        // 仅 ~53MB/s
+        // 挂载盘读取时 KEK 缓
         unsigned char shared_salt[crypto_pwhash_SALTBYTES];
         unsigned char shared_kek[ARGON2_OUTPUT_LEN];
         randombytes_buf(shared_salt, sizeof(shared_salt));
@@ -3030,12 +3284,12 @@ if(wrap_mode || unwrap_mode) {
         std::atomic<bool> any_fail{false};
         const auto vault_start = std::chrono::steady_clock::now();
         std::atomic<bool> display_stop{false};
-        // worker 告警先入队，帧结束后再打印，避免打断光标定位。
+        // worker 告警先入队
         std::mutex note_mtx;
         std::vector<std::string> notes;
         auto note = [&](const std::string& s) { std::lock_guard<std::mutex> lk(note_mtx); notes.push_back(s); };
 
-        // 显示线程：帧模式按帧节流绘制；非帧模式打印单行汇总
+        // 显示线程
         std::thread display_thread;
         if (use_frame) {
             display_thread = std::thread([&] {
@@ -3062,34 +3316,10 @@ if(wrap_mode || unwrap_mode) {
                 size_t i = next_idx.fetch_add(1);
                 if (i >= files.size()) break;
                 const auto& src = files[i];
-                // rel_path：源在库内→相对库根保留内部结构；外部源→相对卷根保留完整目录树，不再拍平。
-                // 用 error_code 重载：relative() 跨盘时不抛异常而是置 ec，从而落到卷根分支，
-                // 避免被 catch 拍平成纯文件名（跨盘场景此前整棵目录树丢失、同名文件 rel_path 冲突导致读错）。
-                std::string rel;
-                {
-                    std::filesystem::path srcp = fs_p(src);
-                    // 词法相对库根：源已在库内（重加密/库内移动）→ 沿用相对库根路径，不重复盘符。
-                    // lexically_relative 纯词法、不碰 I/O，跨盘/路径不存在也不会抛或失败。
-                    std::filesystem::path r = srcp.lexically_relative(fs_p(into_vault_dir));
-                    if (!r.empty() && r.u8string().compare(0, 2, "..") != 0) {
-                        rel = norm(r.u8string());
-                    } else {
-                        // 外部源/跨盘：从卷根起保留整棵目录树，盘符作顶层目录
-                        // （D:\temp\aaa\x.txt → D/temp/aaa/x.txt，挂载盘里即 Z:\D\temp\aaa\x.txt）。
-                        // 带盘符才能区分不同盘的源：否则 D:\a\x.txt 与 E:\a\x.txt 会撞成同一 rel_path。
-                        std::filesystem::path r2 = srcp.lexically_relative(srcp.root_path());
-                        std::string tail = r2.empty() ? srcp.filename().u8string() : norm(r2.u8string());
-                        std::string rn = srcp.root_name().u8string();   // Windows: "D:"；UNC: "\\srv\share"
-                        while (!rn.empty() && (rn.back() == ':' || rn.back() == '/')) rn.pop_back();
-                        const size_t np = rn.find_first_not_of('/');    // UNC 去掉前导分隔符
-                        if (np == std::string::npos) rn.clear(); else if (np > 0) rn = rn.substr(np);
-                        rn = norm(rn);
-                        rel = (rn.empty() || tail.empty() || tail == ".") ? tail : norm(rn + "/" + tail);
-                    }
-                }
-                // 防御：解析为空时回退文件名，避免挂载盘出现不可访问的「无名」条目。
+                std::string rel = rel_of(src);
+                // 防御
                 if (rel.empty()) rel = fs_p(src).filename().u8string();
-                // 存储名：目录结构沿用 rel，基名为随机 hex（逻辑名存索引，实名不入盘面）
+                // 存储名
                 std::error_code ec;
                 std::string store = vault_random_store_name();
                 std::string target = vault_ptd_path(into_vault_dir, rel, store);
@@ -3098,7 +3328,7 @@ if(wrap_mode || unwrap_mode) {
                     target = vault_ptd_path(into_vault_dir, rel, store);
                 }
                 std::filesystem::create_directories(fs_p(target).parent_path(), ec);
-                // 源元数据（擦除前抓取）
+                // 源元数据
                 uint64_t src_size = 0; int64_t src_mtime = 0;
                 {
                     std::error_code sec;
@@ -3116,8 +3346,6 @@ if(wrap_mode || unwrap_mode) {
                 size_t last_pd = 0;
                 bool ok = false;
                 try {
-                    // 挂载读路径 random_read_ptd 不支持压缩分块，压缩文件在挂载盘里不可读。
-                    // 入盘写入一律不压缩，确保挂载可还原。
                     ok = encrypt_file(src, target, password, mode,
                         [&](size_t pd, size_t tt) {
                             size_t inc = (pd > last_pd) ? pd - last_pd : 0;
@@ -3125,7 +3353,7 @@ if(wrap_mode || unwrap_mode) {
                             processed_bytes.fetch_add(inc, std::memory_order_relaxed);
                             if (use_frame) prog.setSlot(slot, src, pd, tt, true);
                         },
-                        true, 0, false, nullptr, wm_spec.enabled ? &wm_spec : nullptr,
+                        true, vault_comp, false, nullptr, wm_spec.enabled ? &wm_spec : nullptr,
                         shared_salt, shared_kek);
                 } catch (const std::exception& e) {
                     note(std::string("Error: ") + e.what()); ok = false;
@@ -3141,7 +3369,7 @@ if(wrap_mode || unwrap_mode) {
                 e.rel_path = rel; e.store = store; e.orig_abs = src; e.size = src_size; e.mtime = src_mtime;
                 e.enc_ts = (uint64_t)time(nullptr); e.algo = vault_mode_str(mode); e.kdf = "argon2id";
                 std::string aerr;
-                // flush=false：只更新内存镜像，不每次重加密整份索引（消 O(N^2)），末尾统一落盘。
+                // flush=false
                 if (!vault_append_entry(into_vault_dir, meta, password, e, aerr, false)) {
                     note("索引追加失败：" + aerr);
                     failed.fetch_add(1, std::memory_order_relaxed);
@@ -3149,7 +3377,15 @@ if(wrap_mode || unwrap_mode) {
                     if (use_frame) prog.setSlot(slot, std::string(), 0, 0, false);
                     continue;
                 }
-                // 收尾对齐：回调未必命中末尾字节
+                // 周期性落盘
+                // 而源文件
+                // 最坏只丢尾批
+                if (((i + 1) & 15) == 0) {
+                    std::string ferr;
+                    if (!vault_flush_index(into_vault_dir, meta, password, ferr))
+                        note("索引周期性落盘失败：" + ferr);
+                }
+                // 收尾对齐
                 processed_bytes.fetch_add((src_size > last_pd) ? (src_size - last_pd) : 0, std::memory_order_relaxed);
                 done.fetch_add(1, std::memory_order_relaxed);
                 if (use_frame) prog.setSlot(slot, src, src_size, src_size, false);
@@ -3169,32 +3405,38 @@ if(wrap_mode || unwrap_mode) {
         display_stop.store(true, std::memory_order_relaxed);
         if (display_thread.joinable()) display_thread.join();
         if (use_frame) {
-            // 末帧用最终统计：显示线程已停，帧内计数会停在最后一拍，
-            // 直接以最终值刷新，避免收尾显示落后于实际完成数。
+            // 末帧用
+            // 以最终值刷新
             prog.setFileStats(done.load(std::memory_order_relaxed),
                               failed.load(std::memory_order_relaxed), 0, total_files);
-            prog.render(true);   // 收尾强制再刷一帧：避免「看着没动其实已跑完」
+            prog.render(true);   // 收尾强制
             prog.finish();
         }
         else if (total_bytes > 0) print_progress((size_t)total_bytes, (size_t)total_bytes, vault_start, true);
-        // 帧已收尾，此时再打印 worker 攒下的告警/错误
+        // 帧已收尾
         {
             std::lock_guard<std::mutex> lk(note_mtx);
             for (const auto& s : notes) std::cerr << s << "\n";
         }
 
-        // 显式 flush 索引：即使镜像已改为立即落盘，仍在收尾兜一层
+        // 显式 flush 索引
+        // 失败必须判负
+        // 只 Warning
         {
             std::string ferr;
-            if (!vault_flush_index(into_vault_dir, meta, password, ferr))
-                std::cerr << "Warning: index flush failed: " << ferr << "\n";
+            if (!vault_flush_index(into_vault_dir, meta, password, ferr)) {
+                std::cerr << "入盘失败：索引末尾落盘失败（" << ferr << "）。\n"
+                          << "最后一批文件的索引条目未写入，但其 .ptd 已在盘上、源文件已按策略处置。\n"
+                          << "请立即对 " << into_vault_dir << " 执行 --vault-reindex 从 .ptd 文件头重建索引找回。\n";
+                return 1;
+            }
         }
         const size_t n_done = done.load(), n_fail = failed.load();
-        // 写宿主（GUI）统计文件：入加密盘此前未写，导致 GUI 末态统计全为 0。
-        // 与 process_files 一致：经 FILEENCRYPTOR_STATS_FILE 环境变量指定路径，拒绝符号链接写穿。
+        // 写宿主统计文件
+        // 与 process_files 一致：经
         if (const char* stats_path = std::getenv("FILEENCRYPTOR_STATS_FILE")) {
-            // 低危（A 组）：统计文件同样拒绝符号链接写穿——末级与各级父目录都要查
-            // （父目录为链接时 fopen 会跟随写到库外），创建走 no-follow。
+            // 低危
+            // ，创建走 no
             std::string sp(stats_path);
             bool blocked = path_is_symlink(sp);
             if (!blocked) {
@@ -3225,21 +3467,21 @@ if(wrap_mode || unwrap_mode) {
                 }
             }
         }
-        // 退出码语义：仅当「未成功写入任何文件」才判失败；个别文件失败属部分成功，
-        // 视为任务完成（退出 0），失败明细在上方已逐条列出，便于排查。
+        // 退出码语义
+        // 视为任务完成
         if (n_done == 0 && n_fail > 0) {
             std::cerr << "入盘失败：未写入任何文件，失败 " << n_fail << " 个（详见上方日志）。\n";
             return 1;
         }
-        // 收尾统计必显式打印一行：帧收尾后各槽位即使满格，用户也需要一个明确的数字结果，
-        // 仅靠帧内 FILES 行在管道/日志回放场景容易看不到。
+        // 收尾统计必显式
+        // 仅靠帧内 FILES 行
         std::cout << "入盘完成：" << n_done << "/" << total_files << " 个文件已写入 " << into_vault_dir;
         if (n_fail > 0) std::cout << "（" << n_fail << " 个失败，详见上方日志）";
         std::cout << "\n" << std::flush;
         all_ok=true;
     }
     else if(asym_mode) {
-        // 输出名策略与对称路径一致：配置 obfuscate_names 默认开启时非对称也混淆，-on 可强制
+        // 输出名策略
         all_ok=run_asym(input_paths,output_dir,is_encrypt,source_action,force_overwrite,recipient_spec,keyfile_path,password,
             obfuscate_name||global_config().obfuscate_names,lib_recipients,mode,compress_level,split_bytes);
     }
@@ -3252,36 +3494,36 @@ if(wrap_mode || unwrap_mode) {
         all_ok=process_files(input_paths,output_dir,password,mode,is_encrypt,source_action,force_overwrite,num_threads,restore_name,compress_level,wm_spec.enabled?&wm_spec:nullptr,split_bytes);
     }
     else {
-        // 单文件处理放入 lambda：用 early-return 替代 goto cleanup_password，
-        // 避免跨过带非平凡析构的 std::ifstream 声明（严格 C++ 下 ill-formed，MSVC -W4 报 C4533）。
+        // 单文件处理放入 lambda
+        // 跨过带非平凡析
         all_ok = [&]() -> bool {
             const std::string& in_path=input_paths[0];
-            // 管道输入：'-' 表示明文来自 stdin（二进制模式避免 Windows CRLF 篡改）
+            // 管道输入
             std::istream* pipe_in=nullptr;
             if(in_path=="-") {
 #ifdef _WIN32
                 (void)_setmode(_fileno(stdin),_O_BINARY);
 #endif
-                // 解开 cerr/cin 对 cout 的 tie：默认 cerr 每次写都会 flush cout，
-                // 与 AggWriter 的大缓冲交错会导致密文块丢失（--stdout 输出字节不稳定）。
+                // 解开 cerr/cin 对 cout
+                // 与 AggWriter
                 std::cerr.tie(nullptr);
                 std::cin.tie(nullptr);
                 pipe_in=&std::cin;
             }
-            // --stdout：数据通道独占 stdout，进度/状态一律走 stderr
+            // -stdout
             if(f_stdout) {
                 std::cerr.tie(nullptr);
                 std::cin.tie(nullptr);
             }
-            // 目录不属于单文件动作：批量动作（-be/-bd）才有目录递归展开，
-            // 否则会打印 "Encrypting: <目录>" 后才报打不开，语义误导
+            // 目录不属于单文
+            // 会打印 "Encrypting: <目录>"
             if(fe_path_is_directory(in_path)) {
                 std::cerr<<"Input is a directory: "<<in_path<<"\n"
                          <<"Use -be / -bd (batch) to process directories.\n";
                 return false;
             }
-            // 分卷输入（foo.ptd 不存在、只有 foo.001.ptd）先合并成完整件。
-            // 合并产物在本 lambda 结束时由 MergedTemp 删掉。
+            // 分卷输入
+            // 合并产物
             SplitPlan plan;
             MergedTemp merged;
             std::string src_path=in_path;
@@ -3298,10 +3540,10 @@ if(wrap_mode || unwrap_mode) {
                              <<" volume(s), merging before decryption.\n";
                 }
             }
-            // 输出名按 base 推导：输入 foo.003.ptd 时应得 foo，而不是 foo.003
+            // 输出名
             std::string name_path=plan.from_volumes ? base_ptd_of(in_path) : in_path;
             if(name_path.empty()) name_path=in_path;
-            if(in_path=="-") name_path="stdin";   // 管道输入无真实名，用占位名推导输出
+            if(in_path=="-") name_path="stdin";   // 管道输入无真实
 
             std::string out_path;
             if(!output_dir.empty()) {
@@ -3320,11 +3562,11 @@ if(wrap_mode || unwrap_mode) {
             else {
                 out_path=name_path;
             }
-            out_path=to_native_path(out_path);   // Windows 下把 '/' 统一为 '\'，避免 "E:\1/name.ptd" 混排
+            out_path=to_native_path(out_path);   // Windows 下把 '/' 统一
 
             if(action==ACTION_DECRYPT) {
                 std::string lower=in_path;
-                // 仅对 ASCII 字节转小写（UTF-8 多字节字节值为负，直接传 ::tolower 是 UB）
+                // 仅对 ASCII 字节转小写
                 std::transform(lower.begin(),lower.end(),lower.begin(),
                     [](unsigned char c){ return (char)std::tolower(c); });
                 if(lower.size()<4||lower.substr(lower.size()-4)!=".ptd") {
@@ -3336,7 +3578,7 @@ if(wrap_mode || unwrap_mode) {
                         out_path.substr(out_path.size()-4)==".PTD")) {
                     out_path=out_path.substr(0,out_path.size()-4);
                 }
-                // 混淆文件名的逆过程：密文末尾若存有原始文件名，则还原它（兼容多语言文件名）
+                // 混淆文件名
                 {
                     std::string orig_name;
                     if(read_original_name(src_path,orig_name,password)&&!orig_name.empty()) {
@@ -3356,14 +3598,14 @@ if(wrap_mode || unwrap_mode) {
                 out_path+=".ptd";
             }
 
-            // 续传无缝衔接：若检测到续传元数据（加密看 .prs；解密需 .prs + 已写入的输出），
-            // 跳过覆盖确认，直接交给 encrypt/decrypt_file 续传，避免大文件中断后重跑被“覆盖？”打断。
+            // 续传无缝衔接
+            // 跳过覆盖确认
             bool has_resume_meta=false;
             {
-                // M21：加密的进度文件写在 AtomicOutput 的派生路径
-                // <out>.fe_tmp_<FNV>.prs 下，此前查 out_path+".prs" 恒不命中：
-                // 续传场景被「覆盖？」打断，且攻击者伪造 out.ptd.prs 即可让确认
-                // 短路、静默覆盖已有输出。改查真实路径，并做 magic/version 预校验。
+                // M21
+                // <out>.fe_tmp_<FNV>.prs
+                // 续传场景
+                // 短路、静默覆盖已
                 ProgressInfo pi;
                 if(fe_load_progress(is_encrypt?atomic_output_tmp_path(out_path):out_path,pi)) {
                     if(is_encrypt) has_resume_meta=true;
@@ -3377,8 +3619,8 @@ if(wrap_mode || unwrap_mode) {
                 }
             }
 
-            // 覆盖提示：基于最终输出路径（加密问 .ptd、解密问明文文件）
-            // 预览模式不落盘，无需覆盖确认
+            // 覆盖提示
+            // 预览模式不落盘
             if(!force_overwrite && !has_resume_meta && !preview_mode) {
                 std::ifstream test;
                 if(open_stream(test,out_path,std::ios::in)&&test.good()) {
@@ -3393,8 +3635,8 @@ if(wrap_mode || unwrap_mode) {
             bool ok;
             if(is_encrypt) {
                 if(f_stdout) {
-                    // 管道输出：密文直写 stdout，不落盘、不续传、不原子提交、不处置源文件。
-                    // 走 RawStreamBuf（FILE* 二进制），绕开 iostream 与 stderr 交错的缓冲问题。
+                    // 管道输出
+                    // 走 RawStreamBuf
                     std::cerr<<"Encrypting to stdout: "<<in_path<<"\n";
                     RawStreamBuf raw(stdout);
                     std::ostream data_out(&raw);
@@ -3409,17 +3651,17 @@ if(wrap_mode || unwrap_mode) {
                         fprintf(stderr,"Error: encryption failed (unexpected exception)\n");
                         ok=false;
                     }
-                    std::cout.flush();   // 密文全部刷出（管道语义：已写出不可撤回）
+                    std::cout.flush();   // 密文全部刷出
                     fflush(stdout);
                 } else {
                 std::cout<<"Encrypting: "<<in_path<<" -> "<<out_path<<"\n";
-                // 原子落盘：先写同目录临时文件，encrypt_file 内部自校验通过后再
-                // 替换到最终路径。进程被强杀（GUI 取消=杀进程树）或崩溃时，最终
-                // 路径上不会出现半截密文，只留可辨识的 .fe_tmp_ 残留。
+                // 原子落盘
+                // 替换到
+                // 路径
                 AtomicOutput atomic_out(out_path);
                 const std::string enc_target = atomic_out.path();
-                // 防御性兜底：任何未预期异常（如编码转换失败）都以干净错误退出，
-                // 而非未捕获导致 std::terminate/fastfail（GUI 侧表现为"进程崩溃"）。
+                // 防御性兜底
+                // 而非未捕获导致 std
                 try {
                     ok=encrypt_file(in_path,enc_target,password,mode,nullptr,true,compress_level,
                                     false,nullptr,wm_spec.enabled?&wm_spec:nullptr,
@@ -3431,7 +3673,7 @@ if(wrap_mode || unwrap_mode) {
                     fprintf(stderr,"Error: encryption failed (unexpected exception)\n");
                     ok=false;
                 }
-                // 自校验已过才提交：此刻最终路径上要么是完整密文，要么什么都没有
+                // 自校验已过才提
                 if(ok && !atomic_out.commit()) ok=false;
                 if(ok && source_action!=0) {
                     if(!secure_handle_source(in_path, static_cast<SourceDisposition>(source_action))) {
@@ -3440,7 +3682,7 @@ if(wrap_mode || unwrap_mode) {
                     }
                 }
                 }
-                if(ok && !f_stdout && write_sha256_enabled()) write_sha256_sidecar(out_path); // 功能10：校验单
+                if(ok && !f_stdout && write_sha256_enabled()) write_sha256_sidecar(out_path); // 功能10
                 if(ok && !f_stdout && split_bytes>0) {
                     std::string serr;
                     if(!finish_encrypt_split(out_path,split_bytes,
@@ -3452,13 +3694,13 @@ if(wrap_mode || unwrap_mode) {
             }
             else {
                 if(f_stdout) {
-                    // 管道输出：明文直写 stdout，不落盘、不展开归档、不处置源文件。
-                    // 走 RawStreamBuf（FILE* 二进制），绕开 iostream 与 stderr 交错的缓冲问题。
+                    // 管道输出
+                    // 走 RawStreamBuf
                     std::cerr<<"Decrypting to stdout: "<<src_path<<"\n";
                     RawStreamBuf raw(stdout);
                     std::ostream data_out(&raw);
                     try {
-                        // 状态走 stderr，明文独占 stdout；silent=true 避免内部信息污染 stdout
+                        // 状态走 stderr
                         std::function<void(size_t,size_t)> noop_cb=[](size_t,size_t){};
                         ok=decrypt_file(src_path, std::string(), password,
                             preview_mode?noop_cb:nullptr, /*silent=*/true, /*resume=*/true,
@@ -3471,7 +3713,7 @@ if(wrap_mode || unwrap_mode) {
                         fprintf(stderr,"Error: decryption failed (unexpected exception)\n");
                         ok=false;
                     }
-                    fflush(stdout);   // 明文全部刷出（管道语义：已写出不可撤回）
+                    fflush(stdout);   // 明文全部刷出
                     return ok;
                 }
                 if(preview_mode) {
@@ -3480,7 +3722,7 @@ if(wrap_mode || unwrap_mode) {
                     std::cout<<"Decrypting: "<<in_path<<" -> "<<out_path<<"\n";
                 }
                 try {
-                    // 预览：传入 preview_max，并用空回调抑制进度条（避免污染 stdout 的明文前缀）
+                    // 预览
                     std::function<void(size_t,size_t)> noop_cb=[](size_t,size_t){};
                     ok=decrypt_file(src_path,out_path,password,
                         preview_mode?noop_cb:nullptr,false,true,
@@ -3492,10 +3734,10 @@ if(wrap_mode || unwrap_mode) {
                     fprintf(stderr,"Error: decryption failed (unexpected exception)\n");
                     ok=false;
                 }
-                // 归档容器：明文落地后识别魔数，是归档就展开成目录树并删掉中间件。
-                // 放在源处置之前：展开成功才算真正拿到明文，此时 .ptd 才能删。
+                // 归档容器
+                // 放在源处置
                 if(ok && !no_extract && !preview_mode && archive_probe(out_path)) {
-                    // 归档铺进 -o 指定的目录；未给 -o 时用密文所在目录（同 unzip）
+                    // 归档铺进 -o 指定
                     std::string dest_dir = output_dir;
                     if(dest_dir.empty()) {
                         size_t sl = src_path.find_last_of("/\\");
@@ -3508,11 +3750,11 @@ if(wrap_mode || unwrap_mode) {
                         ok=unpack_archive(out_path,dest_dir,force_overwrite);
                     }
                 }
-                // 解密成功后同样按所选方式处理源文件（此处为 .ptd）：-de 删除、
-                // --wipe-source 安全擦除、--recycle-source 移入回收站。
+                // 解密成功后同样
+                // -wipe-source 安全擦除、-
                 if(ok && source_action!=0) {
-                    // 输入来自分卷时，每一卷都要按所选方式处置；
-                    // 归一没认出分卷时按 base 名兜底枚举，避免只删掉被挑中的那一卷
+                    // 输入来自分卷
+                    // 归一没认出分卷
                     std::vector<std::string> victims=plan.from_volumes
                         ? plan.volumes : std::vector<std::string>{in_path};
                     if(!plan.from_volumes) {
@@ -3533,4 +3775,51 @@ if(wrap_mode || unwrap_mode) {
     }
 
     return all_ok ? 0 : 1;
+}
+
+#ifdef _WIN32
+#define FE_DUP   _dup
+#define FE_DUP2  _dup2
+#define FE_FNO   _fileno
+#define FE_CLOSE _close
+#else
+#define FE_DUP   dup
+#define FE_DUP2  dup2
+#define FE_FNO   fileno
+#define FE_CLOSE close
+#endif
+
+// -json
+// 批量进度帧走 fputs
+// 既有 return 点
+int main(int argc, char* argv[]) {
+    bool json = false, help = false;
+    for (int i = 1; i < argc; ++i) {
+        std::string a = argv[i];
+        if (a == "--json") json = true;
+        if (a == "-h" || a == "-?" || a == "--help") help = true;
+    }
+    g_contract.json = json;
+    std::ostringstream sink;
+    std::streambuf* old = nullptr;
+    int saved_fd = -1;
+    FILE* sink_file = nullptr;
+    if (json && !help) {
+        std::fflush(stdout);
+        saved_fd = FE_DUP(FE_FNO(stdout));
+        sink_file = std::tmpfile();
+        if (saved_fd >= 0 && sink_file) FE_DUP2(FE_FNO(sink_file), FE_FNO(stdout));
+        else saved_fd = -1;
+        old = std::cout.rdbuf(sink.rdbuf());
+    }
+    int rc = main_impl(argc, argv);
+    if (json && !help) {
+        std::fflush(stdout);
+        std::cout.flush();
+        if (saved_fd >= 0) { FE_DUP2(saved_fd, FE_FNO(stdout)); FE_CLOSE(saved_fd); }
+        std::cout.rdbuf(old);
+        std::cout << fe_result_json(rc) << "\n";
+        std::cout.flush();
+    }
+    return rc;
 }

@@ -1,7 +1,7 @@
-// FE-Mounter — 加密盘 holder 进程（设计文档 §5 / §5.1 / §7 M2–M3）。
-// 本文件只做「命令行入口 + 模式分发 + FUSE(Linux) 挂载」；其余按职责拆到：
-//   fe_common.h  共享声明   fe_vdisk  加载/工具   fe_ipc  §5.1 控制面
-//   fe_service  服务注册   fe_winfsp  Windows 挂载
+// FE-Mounter — 加密盘 holder 进程
+// 本文件只做「命令
+// fe_common.h 共享声明   fe_vdisk  加载/工
+// fe_service 服务注册   fe_winfsp
 #include "fe_common.h"
 #include <cstdio>
 #include <cstring>
@@ -16,7 +16,7 @@
 #endif
 
 #if FE_HAVE_FUSE
-#  define FUSE_USE_VERSION 31      // fuse3 只支持 API ≥ 30；必须在包含 fuse.h 前定义
+#  define FUSE_USE_VERSION 31      // fuse3 只支持 API ≥ 30；必须
 #  include <fuse3/fuse.h>
 #  include <fuse3/fuse_lowlevel.h>
 #  include <sys/stat.h>
@@ -24,7 +24,7 @@
 #  include <cerrno>
 static VDiskApi     g_v;
 static VDiskHandle* g_h = nullptr;
-static bool         g_rw = false;   // M6 可写挂载：由 mount --rw 置位
+static bool         g_rw = false;   // M6 可写挂载
 static int fe_getattr(const char* path, struct stat* st, struct fuse_file_info*) {
     uint64_t size = 0, mtime = 0; uint8_t isdir = 0;
     if (g_v.getattr(g_h, path, &size, &mtime, &isdir) != VDISK_OK) return -ENOENT;
@@ -38,7 +38,7 @@ static int fe_readdir(const char* path, void* buf, fuse_fill_dir_t filler, off_t
                       struct fuse_file_info*, enum fuse_readdir_flags) {
     uint64_t n = 0;
     if (g_v.readdir(g_h, path, nullptr, &n) != VDISK_OK) return -ENOENT;
-    if (n > kFeMaxDirEntries) return -EIO;   // M5：条目数上限，防畸形索引 bad_alloc
+    if (n > kFeMaxDirEntries) return -EIO;   // M5
     std::vector<VDiskEntry> ents((size_t)n);
     VDiskEntry* parr = ents.data();
     if (n > 0 && g_v.readdir(g_h, path, &parr, &n) != VDISK_OK) return -ENOENT;
@@ -48,7 +48,7 @@ static int fe_readdir(const char* path, void* buf, fuse_fill_dir_t filler, off_t
     return 0;
 }
 static int fe_open(const char*, struct fuse_file_info* fi) {
-    if (!g_rw && (fi->flags & O_ACCMODE) != O_RDONLY) return -EROFS;   // 只读挂载拒绝写打开
+    if (!g_rw && (fi->flags & O_ACCMODE) != O_RDONLY) return -EROFS;   // 只读挂载拒绝写
     return 0;
 }
 static int fe_read(const char* path, char* buf, size_t size, off_t off, struct fuse_file_info*) {
@@ -58,7 +58,7 @@ static int fe_read(const char* path, char* buf, size_t size, off_t off, struct f
     return (int)len;
 }
 
-// ---- M6 写支持（仅 g_rw 时生效）----
+// M6 写支持
 static int fe_write(const char* path, const char* buf, size_t size, off_t off, struct fuse_file_info*) {
     if (!g_rw) return -EROFS;
     uint64_t len = size;
@@ -84,7 +84,7 @@ static int fe_unlink(const char* path, struct fuse_file_info*) {
 static int fe_create(const char* path, mode_t, struct fuse_file_info* fi) {
     if (!g_rw) return -EROFS;
     VDiskStatus st = g_v.create_file(g_h, path);
-    if (st == VDISK_E_BADARG) return -EEXIST;   // 已存在则拒绝覆盖
+    if (st == VDISK_E_BADARG) return -EEXIST;   // 已存
     if (st != VDISK_OK) return -EIO;
     fi->fh = 0;
     return 0;
@@ -101,7 +101,7 @@ static void usage() {
         "  bench     --vault <d> --pass-file <f> [--iters N] [--relock]  LRU warm/cold\n"
         "  m5test    --vault <d> --pass-file <f> [--path <v>] verify idle-timeout lock + read-ahead cache\n"
         "  m6test    --vault <d> --pass-file <f> [--path <v>] verify vault write (create/write/truncate/delete)\n"
-        "  ipc-call  --vault <d> (status|unlock --pass-file <f>|unlockr <code>|lock|reindex|idle N|cache BYTES AHEAD|eject)\n"
+        "  ipc-call  --vault <d> (status|unlock --pass-file <f>|unlockr <code>|lock|reindex|idle N|suspend MINUTES|cache BYTES AHEAD|eject)\n"
         "  vaults    list|add <dir>|remove <dir>             M5 multi-vault registry\n"
         "  recovery  --vault <d> (gen|create|open <code>|remove)  M4 recovery key (sec 4.4)\n"
         "  winmount  <drive> --vault <d> [--pass-file <f>] [--rw] [--idle-timeout SEC]\n"
@@ -114,23 +114,23 @@ static void usage() {
 
 int main(int argc, char** argv) {
 #ifdef _WIN32
-    _setmode(_fileno(stdout), _O_BINARY);   // 否则 cat 明文 \n 被文本模式转 \r\n
-    SetConsoleOutputCP(CP_UTF8);            // 控制台默认 GBK 会把 UTF-8 中文解码乱码，强制 UTF-8
+    _setmode(_fileno(stdout), _O_BINARY);   // cat 明文 \n
+    SetConsoleOutputCP(CP_UTF8);            // 控制台默认 GBK
     SetConsoleCP(CP_UTF8);
 #endif
-    // 进程加固（顺序要紧：加载策略须早于任何非系统 DLL 加载）
+    // 进程加固
     fe_harden_image_load_policy();   // P1-2 禁远程/低 IL 镜像
     fe_harden_process_dacl();        // P0-1 收紧进程对象 DACL
-    fe_harden_no_crash_dump();       // P1-3 排除出 WER，不产生崩溃转储
+    fe_harden_no_crash_dump();       // P1-3 排除出 WER
     if (argc < 2) { usage(); return 1; }
     std::string mode = argv[1];
     std::string vault, pass, passfile, vpath, lib, tmp;
     bool relock_flag = false;
     int bench_iters = 10;
-    uint32_t idle_timeout = 0;                 // M5 空闲超时自动锁（秒，0=关闭）
-    uint64_t cache_bytes = 256ull << 20;      // M5 预读缓存容量（默认 256MiB；0=关闭）
+    uint32_t idle_timeout = 0;                 // M5 空闲超时自动锁
+    uint64_t cache_bytes = 256ull << 20;      // M5 预读缓存容量
     uint32_t cache_ahead = 4;                  // M5 预读段数
-    bool rw_flag = false;                      // M6 可写挂载开关（--rw）
+    bool rw_flag = false;                      // M6 可写挂载开关
     std::vector<char*> fuse_args;
     for (int i = 2; i < argc; i++) {
         std::string a = argv[i];
@@ -150,10 +150,10 @@ int main(int argc, char** argv) {
     std::string mountpoint;
     if (mode == "mount" || mode == "winmount" || mode == "install-service") { mountpoint = fuse_args.empty() ? "" : fuse_args[0]; }
 
-    // M5 多库注册表：与具体库无关，需早于「--vault required」
+    // M5 多库注册表
     if (mode == "vaults") {
         std::string sub = fuse_args.empty() ? "list" : fuse_args[0];
-        // P1-2：批量视图（全部盘聚合状态 JSON / 批量 lock|eject）
+        // P1-2
         if (sub == "status") return vaults_status_json();
         if (sub == "batch") {
             std::string cmd = (fuse_args.size() > 1) ? fuse_args[1] : std::string();
@@ -177,11 +177,11 @@ int main(int argc, char** argv) {
     }
 
     if (mode == "power-test") {
-        // P2-2 诊断：不挂载加密盘即可验证电源通知注册与休眠/恢复标记流转。
-        //   power-test register          仅注册并报告是否成功
-        //   power-test suspend            模拟「即将休眠」→ 置待上锁标记
-        //   power-test resume             模拟「已恢复」→ 置恢复标记
-        //   power-test check              打印两个标记的当前值
+        // P2-2 诊断
+        // power-test register
+        // power-test suspend            模拟「即
+        // power-test resume             模拟「已恢
+        // power-test check              打印两个标
         std::string sub = fuse_args.empty() ? "register" : fuse_args[0];
         if (sub == "register") {
             power_register();
@@ -204,14 +204,14 @@ int main(int argc, char** argv) {
         return 0;
     }
 
-    // 口令只走 --pass-file：--pass / FE_MOUNTER_PASS 会出现在命令行/环境块中，同用户/管理员可读（低危 B 组），已全仓确认无调用方后移除。
+    // 口令只走 --pass-file
     if (pass.empty()) {
         if (!passfile.empty()) { if (!read_pass_file(passfile, pass)) { fprintf(stderr, "cannot read pass file\n"); return 1; } }
     }
     if (vault.empty()) { fprintf(stderr, "--vault required\n"); return 1; }
     g_ipc_vault = vault;
 
-    // IPC 客户端（纯管道，不需本地加载/解锁 vdisk）
+    // IPC 客户端
     if (mode == "ipc-call") {
         if (fuse_args.empty()) { fprintf(stderr, "ipc-call needs a command (status|unlock|lock|reindex|eject)\n"); return 1; }
         std::string cmd = fuse_args[0];
@@ -228,6 +228,11 @@ int main(int argc, char** argv) {
         } else if (cmd == "idle") {
             if (fuse_args.size() < 2) { fprintf(stderr, "ipc-call idle needs <seconds>\n"); return 1; }
             req = std::string("idle ") + fuse_args[1];
+        } else if (cmd == "suspend") {
+            // M8 暂时不锁定
+            // 走取消分支
+            if (fuse_args.size() < 2) { fprintf(stderr, "ipc-call suspend needs <minutes>\n"); return 1; }
+            req = std::string("suspend ") + fuse_args[1];
         } else if (cmd == "cache") {
             if (fuse_args.size() < 3) { fprintf(stderr, "ipc-call cache needs <bytes> <ahead>\n"); return 1; }
             req = std::string("cache ") + fuse_args[1] + " " + fuse_args[2];
@@ -249,7 +254,7 @@ int main(int argc, char** argv) {
             printf("service '%s' removed\n", kSvcName);
         }
 #else
-        // Linux：写 systemd --user unit（无需 root）。挂载点是目录，不占本地 vdisk 句柄。
+        // Linux
         if (mode == "install-service") {
             if (mountpoint.empty()) { fprintf(stderr, "install-service needs a mountpoint (e.g. install-service ~/fe-vault --vault ...)\n"); return 1; }
             if (!install_service(vault, mountpoint, passfile, err)) { fprintf(stderr, "install-service failed: %s\n", err.c_str()); return 1; }
@@ -263,13 +268,13 @@ int main(int argc, char** argv) {
     }
 
 #if FE_HAVE_WINFSP
-    // 「进程本身即服务」：SvcStart 自行从服务命令行打开/解锁 vault 并挂载（需 SCM 启动）
+    // 「进程本身即服务」
     if (mode == "winmount") {
         if (mountpoint.empty()) { fprintf(stderr, "winmount needs a drive letter or directory mountpoint (e.g. winmount V: or winmount C:\\mnt)\n"); return 1; }
         std::string mp = mountpoint;
-        // 盘符规范化：裸 "V"/"V:" → "\\.\V:"（WinFsp Mount Manager 全局盘符，需管理员、
-        // 跨会话/跨窗口可见，规避 DefineDosDeviceW 会话盘符在跨进程访问时 I/O 进不来的问题）。
-        // 含路径分隔符（\ /）或已是 \\.\X: 则原样传（目录挂载点 / 显式全局盘符）。
+        // 盘符规范化
+        // 跨会话/跨窗口
+        // 含路径分隔符
         if (mp.find_first_of("\\/:") == std::string::npos) {
             std::string letter = (mp.size() == 2 && mp[1] == ':') ? std::string(1, mp[0]) : mp;
             if (letter.size() != 1 || !((letter[0] >= 'A' && letter[0] <= 'Z') || (letter[0] >= 'a' && letter[0] <= 'z'))) {
@@ -278,7 +283,7 @@ int main(int argc, char** argv) {
             mp = "\\\\.\\" + letter + ":";
         }
         g_svc_vault = vault; g_svc_pass = pass; g_svc_mp = mp; g_svc_rw = rw_flag;
-        g_svc_idle = idle_timeout;   // M5 空闲自动锁：winmount 早于通用路径 return，须单独带进服务
+        g_svc_idle = idle_timeout;   // M5 空闲自动锁
         g_svc_lib = lib.empty() ? default_lib_path() : lib;
         return fe_winmount_service();
     }
@@ -290,14 +295,14 @@ int main(int argc, char** argv) {
     VDiskHandle* h = v.open(vault.c_str());
     if (!h) { fprintf(stderr, "vdisk_open failed (not a vault?)\n"); return 3; }
 
-    // M4 恢复密钥（§4.4）：gen/open/remove 不需要解锁——忘密码正是恢复密钥的用途
+    // M4 恢复密钥
     if (mode == "recovery") {
         std::string sub = fuse_args.empty() ? "" : fuse_args[0];
         if (sub == "gen") {
             if (!v.recovery_gen) { fprintf(stderr, "libvdisk lacks recovery API\n"); v.close(h); return 6; }
             char code[64] = {0};
             if (v.recovery_gen(code, sizeof code) != VDISK_OK) { fprintf(stderr, "gen failed\n"); v.close(h); return 6; }
-            printf("%s\n", code);   // 48 位十进制恢复密钥，仅此一次显示
+            printf("%s\n", code);   // 48 位十进制恢复密
             v.close(h);
             return 0;
         }
@@ -308,7 +313,7 @@ int main(int argc, char** argv) {
             VDiskStatus st = v.recovery_open ? v.recovery_open(h, code.c_str(), pw, &cap) : VDISK_E_NOTIMPL;
             v.close(h);
             if (st != VDISK_OK) { fprintf(stderr, "recovery open failed: %s\n", v.strerror(st)); return 1; }
-            fwrite(pw, 1, cap, stdout); fputc('\n', stdout);   // 按实际长度输出（密码可能含非 NUL 安全字节）
+            fwrite(pw, 1, cap, stdout); fputc('\n', stdout);   // 按实际长度输出
             secure_zero(pw, sizeof pw);
             return 0;
         }
@@ -320,7 +325,7 @@ int main(int argc, char** argv) {
             return 0;
         }
         if (sub == "create") {
-            // 需要当前密码：保险文件存的是主密码副本
+            // 当前密码
             if (pass.empty()) { fprintf(stderr, "recovery create needs --pass-file\n"); v.close(h); return 1; }
             if (v.unlock(h, pass.c_str(), 0) != VDISK_OK) { fprintf(stderr, "unlock failed\n"); v.close(h); return 4; }
             std::string code = (fuse_args.size() > 1) ? fuse_args[1] : std::string();
@@ -343,7 +348,7 @@ int main(int argc, char** argv) {
 
     if (v.unlock(h, pass.c_str(), 0) != VDISK_OK) { fprintf(stderr, "unlock failed (wrong passphrase?)\n"); v.close(h); return 4; }
 
-    // M5：空闲超时 + 预读缓存（挂载期间生效；ipc idle/cache 可运行时调整）
+    // M5
     if (idle_timeout > 0 && v.set_idle_timeout) v.set_idle_timeout(h, idle_timeout);
     if (cache_bytes > 0 && v.set_read_cache) v.set_read_cache(h, cache_bytes, cache_ahead);
 
@@ -388,7 +393,7 @@ int main(int argc, char** argv) {
         printf("BENCH %s iters=%d total=%.1fms avg=%.2fms\n",
                relock_flag ? "cold(relock)" : "warm(lru)", bench_iters, ms, ms / (bench_iters ? bench_iters : 1));
     } else if (mode == "m5test") {
-        // M5 自测：空闲超时自动锁 + 预读缓存（不走挂载，Windows/Linux 都能跑）
+        // M5 自测
         if (vpath.empty()) vpath = "/a.txt";
         int bad = 0;
         auto probe = [&](const char* what, VDiskStatus want) {
@@ -406,7 +411,7 @@ int main(int argc, char** argv) {
             std::this_thread::sleep_for(std::chrono::milliseconds(2500));
             probe("idle: after 2.5s idle", VDISK_E_LOCKED);
             v.unlock(h, pass.c_str(), 0);
-            v.set_idle_timeout(h, 0);   // 关掉超时，免得干扰后面的读
+            v.set_idle_timeout(h, 0);   // 关掉超
         }
         uint64_t sz = 0, mt = 0; uint8_t isdir = 0;
         if (v.getattr(h, vpath.c_str(), &sz, &mt, &isdir) != VDISK_OK) { printf("getattr failed\n"); bad++; }
@@ -420,7 +425,7 @@ int main(int argc, char** argv) {
                 if (v.read_file(h, vpath.c_str(), 0, b.data(), &lb) != VDISK_OK) { printf("read(cached) failed\n"); bad++; }
                 else if (la != lb || memcmp(a.data(), b.data(), (size_t)la) != 0) { printf("cache content mismatch\n"); bad++; }
                 else printf("%-30s -> identical(%lluB)\n", "cache: vs direct read", (unsigned long long)la);
-                // 锁定必须清掉明文段缓存：清不干净这里就会读到脏数据
+                // 锁定必须清掉明
                 v.lock(h); v.unlock(h, pass.c_str(), 0);
                 if (v.read_file(h, vpath.c_str(), 0, c.data(), &lc) != VDISK_OK) { printf("read(after relock) failed\n"); bad++; }
                 else if (lc != la || memcmp(a.data(), c.data(), (size_t)la) != 0) { printf("post-lock content mismatch\n"); bad++; }
@@ -430,11 +435,11 @@ int main(int argc, char** argv) {
         printf(bad ? "M5TEST_FAIL(%d)\n" : "M5TEST_OK\n", bad);
         rc = bad ? 7 : 0;
     } else if (mode == "m6test") {
-        // M6 自测：库层写支持（不依赖挂载，Windows/Linux 都能跑）。
+        // M6 自测
         int bad = 0;
-        v.mount_rw(h, "/");   // 显式置可写标志，验证库层写路径（不真正挂载盘符）
+        v.mount_rw(h, "/");   // 显式置可写标志
         std::string tp = "/m6_probe.txt";
-        {   // 1) 创建 + 写入 + 读回一致
+        {   // 创建 + 写入 + 读回一
             VDiskStatus st = v.create_file(h, tp.c_str());
             if (st != VDISK_OK) { printf("create: %s\n", v.strerror(st)); bad++; }
             else {
@@ -449,7 +454,7 @@ int main(int argc, char** argv) {
                 }
             }
         }
-        {   // 覆盖写（短写不截断，仅校验前缀）
+        {   // 覆盖写
             const char* msg = "OVERWRITE-SAME-LEN";
             VDiskStatus st = v.write_file(h, tp.c_str(), 0, (const uint8_t*)msg, strlen(msg));
             if (st != VDISK_OK) { printf("overwrite: %s\n", v.strerror(st)); bad++; }
@@ -460,7 +465,7 @@ int main(int argc, char** argv) {
                 else printf("overwrite -> prefix ok, size=%lluB\n", (unsigned long long)len);
             }
         }
-        {   // 3) truncate 缩小 + 扩展
+        {   // truncate 缩小 + 扩展
             VDiskStatus st = v.truncate_file(h, tp.c_str(), 4);
             if (st != VDISK_OK) { printf("truncate: %s\n", v.strerror(st)); bad++; }
             else {
@@ -478,7 +483,7 @@ int main(int argc, char** argv) {
                 else printf("extend(20) -> size=%llu (zero-padded)\n", (unsigned long long)len);
             }
         }
-        {   // 4) 删除后不可见
+        {   // 删除后不可见
             VDiskStatus st = v.delete_file(h, tp.c_str());
             if (st != VDISK_OK) { printf("delete: %s\n", v.strerror(st)); bad++; }
             else {
@@ -498,17 +503,17 @@ int main(int argc, char** argv) {
             if (rw_flag) v.mount_rw(h, mountpoint.c_str());
             else         v.mount_readonly(h, mountpoint.c_str());
             g_v = v; g_h = h;
-            // §5.1 控制面：FUSE 常驻期间供 ipc-call 做 lock/unlock/reindex
+            // §5.1 控制面
             g_ipc_v = &v; g_ipc_h = &g_h; g_ipc_unlocked = true; g_ipc_stop = false;
             std::thread(ipc_server_thread).detach();
-            // 卸载：进程退出即卸载 FUSE 挂载点（响应已先写回客户端）
+            // 卸载
             g_ipc_eject_hook = []() { _exit(0); };
-            // 挂载点位置参数已在解析时取出，按 fuse 约定放于所有选项之后；
-            // 其余 -f/-o 等原样转发给 fuse 解析。
+            // 挂载点位置参数
+            // 其余 -f/-o 等原样转发
             std::vector<char*> raw;
             raw.push_back(argv[0]);
             for (char* p : fuse_args) {
-                if (p == argv[2]) continue;          // 跳过作为挂载点的位置参数
+                if (p == argv[2]) continue;          // 跳过作
                 raw.push_back(p);
             }
             raw.push_back(const_cast<char*>(mountpoint.c_str()));

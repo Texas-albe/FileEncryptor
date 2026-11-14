@@ -13,7 +13,7 @@ if(FE_CL_EXECUTABLE)
       CACHE FILEPATH "MSVC 链接器（不按 PATH 搜索）" FORCE)
 endif()
 
-project(FileEncryptorGUI VERSION 3.1.0 LANGUAGES CXX)
+project(FileEncryptorGUI VERSION 3.1.1 LANGUAGES CXX)
 
 # FileEncryptor GUI - Qt6 图形界面（Windows + Linux 双平台；Windows 另有 WinUI3 版本）
 
@@ -25,9 +25,9 @@ endif()
 # 输出文件名框架标识
 set(FE_GUI_FRAMEWORK "Qt")
 
-# Qt6 来源：Windows 用 ../third_party/smelibs（静态 Qt 随仓库）；Linux/WSL 用 /opt/smelibs，不存在则回退系统 Qt6；其它位置用 -DCMAKE_PREFIX_PATH=... 覆盖。
+# Qt6 来源：Windows 用 ../Third Party/smelibs（静态 Qt 随仓库）；Linux/WSL 用 /opt/smelibs，不存在则回退系统 Qt6；其它位置用 -DCMAKE_PREFIX_PATH=... 覆盖。
 if(WIN32)
-  list(APPEND CMAKE_PREFIX_PATH "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/smelibs")
+  list(APPEND CMAKE_PREFIX_PATH "${CMAKE_CURRENT_SOURCE_DIR}/../Third Party/smelibs")
 elseif(EXISTS "/opt/smelibs/lib/cmake/Qt6/Qt6Config.cmake")
   list(APPEND CMAKE_PREFIX_PATH "/opt/smelibs")
 endif()
@@ -226,7 +226,7 @@ set(CPACK_PACKAGE_DESCRIPTION
       "FileEncryptorGUI is the Qt6 Widgets frontend for FileEncryptor. It is statically linked \
 against Qt6, so the installed package requires no external Qt6 runtime. The GUI drives the companion \
 FileEncryptorCLI backend via QProcess for the actual encryption/decryption.")
-set(CPACK_PACKAGE_LICENSE "GPLv3")
+set(CPACK_PACKAGE_LICENSE "AGPLv3")
 if(EXISTS "${CMAKE_SOURCE_DIR}/LICENSE")
   set(CPACK_RESOURCE_FILE_LICENSE "${CMAKE_SOURCE_DIR}/LICENSE")
 endif()
@@ -242,7 +242,7 @@ set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS OFF)
 set(CPACK_DEBIAN_PACKAGE_DEPENDS "")
 
 # —— RPM ——
-set(CPACK_RPM_PACKAGE_LICENSE "GPLv3")
+set(CPACK_RPM_PACKAGE_LICENSE "AGPLv3")
 set(CPACK_RPM_PACKAGE_GROUP "Applications/System")
 set(CPACK_RPM_PACKAGE_AUTOREQ OFF)
 set(CPACK_RPM_PACKAGE_AUTOREQPROV OFF)

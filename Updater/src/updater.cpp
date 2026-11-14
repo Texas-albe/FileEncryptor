@@ -1,17 +1,12 @@
-// Updater.cpp — FileEncryptor 自动更新器（独立命令行工具，无自更新、无版本号）
-//
-// 技术栈：C++17 + libcurl(HTTPS, 静态链接 bundled 源码) + 内置 SHA-256 + 内置最小 JSON 解析。
-// 跨平台：Windows / Linux 同构；仅安装步骤按 OS 分支（Windows: msiexec / 直接复制；其他: 直接复制）。
-// TLS 后端：Windows 用原生 Schannel，Linux 用系统 OpenSSL（均零额外依赖）。
-//
-// 用法：
-//   Updater --check  --current <ver> --type <qt|winui> --platform <windows|linux> [--etag <e>]
-//   Updater --update --url <url> --sha256 <hex> --size <n> --install-dir <path> [--sig-url <url>]
-// 失败时 stdout 仍给出 JSON，error 为分类原因，detail 为具体说明（供 GUI 展示）。
-//
-// --check  ：查 GitHub 最新 release，匹配当前 type/platform 的资产，输出一行 JSON 到 stdout。
-// --update：下载资产到临时目录，校验大小 + SHA256（+ 可选 Minisign），成功后放入 install-dir。
-// 网络范围：默认只访问 GitHub 白名单域名，加 --allow-any-host 放开（仅调试用）。
+// Updater.cpp — FileEncryptor 自动
+// 技术栈
+// 跨平台
+// TLS 后端
+// 用法
+// 失败时 stdout 仍给出
+// -check
+// -update
+// 网络范围
 
 #include <curl/curl.h>
 
@@ -36,7 +31,7 @@
 #include <ctime>
 #endif
 
-// ===================== 最小 JSON 解析（够用即可） =====================
+// 最小 JSON 解析
 struct JsonValue {
     enum Type { Null, Bool, Num, Str, Arr, Obj } type = Null;
     bool b = false;
@@ -151,8 +146,8 @@ struct JsonParser {
     }
 };
 
-// ===================== 工具函数 =====================
-// UTF-8 路径 → 原生路径（Windows 需转宽字符；其他平台直接用）
+// 工具函数
+// UTF-8 路径 → 原生路径
 static std::filesystem::path nativePath(const std::string& utf8) {
 #ifdef _WIN32
     int n = MultiByteToWideChar(CP_UTF8, 0, utf8.c_str(), (int)utf8.size(), nullptr, 0);
@@ -199,7 +194,7 @@ static std::string randSuffix() {
     return std::string(buf);
 }
 
-// ===================== 内置 SHA-256（纯 C++17，跨平台） =====================
+// 内置 SHA-256
 namespace sha256 {
 static const uint32_t K[64] = {
     0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,
@@ -268,7 +263,7 @@ struct State {
 };
 } // namespace sha256
 
-// SHA256 文件 → 小写 hex；失败返回空串。
+// SHA256 文件 → 小写 hex；失败返
 static std::string sha256File(const std::string& pathUtf8) {
     std::ifstream f(nativePath(pathUtf8), std::ios::binary);
     if (!f) return std::string();
@@ -287,22 +282,22 @@ static std::string sha256File(const std::string& pathUtf8) {
     return hex;
 }
 
-// ===================== 访问范围：只放行 GitHub 域名 =====================
-// 本工具只取更新，非 GitHub 域一律拒绝（防被当任意 URL 下载器 / SSRF）
-// 白名单三端同步：kGitHubHosts(此处) / GUI-Qt kAllowedHosts / GUI-WinUI s_allowedHosts
+// 访问范围
+// 本工具只取
+// 白名单三端同步
 static const char* const kGitHubHosts[] = {
     "github.com", "api.github.com",
     "objects.githubusercontent.com", "codeload.github.com",
 };
-// release 资产下载时 GitHub 会 302 到该域，漏掉会导致「有更新但下载不到」
+// release 资产下载时 GitHub
 static const char* const kGitHubAssetHosts[] = {
     "release-assets.githubusercontent.com",
     "objects.githubusercontent.com", "codeload.github.com",
 };
-static bool g_allowAnyHost = false; // --allow-any-host 时放开
-static std::string g_proxy;         // 显式代理，空则用系统
+static bool g_allowAnyHost = false; // -allow-any-host 时放开
+static std::string g_proxy;         // 显式代理
 
-// 精确匹配白名单，不做后缀模糊（防 evilgithub.com 之类）
+// 精确匹配白名单
 static bool hostInList(const std::string& host, const char* const* list, size_t n) {
     if (host.empty()) return false;
     for (size_t i = 0; i < n; i++) if (host == list[i]) return true;
@@ -314,19 +309,19 @@ static bool isGitHubHost(const std::string& host) {
 static bool isGitHubAssetHost(const std::string& host) {
     return hostInList(host, kGitHubAssetHosts, sizeof(kGitHubAssetHosts) / sizeof(kGitHubAssetHosts[0]));
 }
-// API 请求只允许 GitHub 域；下载/签名 URL 额外允许对象存储域
+// API 请求只允许 GitHub 域
 static bool isGitHubOrAssetHost(const std::string& host) {
     return isGitHubHost(host) || isGitHubAssetHost(host);
 }
 
-// 取 URL 主机（小写、去端口、去凭据）
+// 取 URL 主机
 static std::string urlHost(const std::string& url) {
     size_t s = url.find("://");
     if (s == std::string::npos) return std::string();
     s += 3;
     size_t e = url.find_first_of("/?#", s);
     std::string h = url.substr(s, (e == std::string::npos) ? std::string::npos : e - s);
-    size_t c = h.find('@');                       // 去 user:pass@
+    size_t c = h.find('@');                       // 去 user
     if (c != std::string::npos) h = h.substr(c + 1);
     size_t p = h.find(':');                       // 去端口
     if (p != std::string::npos) h.resize(p);
@@ -334,9 +329,9 @@ static std::string urlHost(const std::string& url) {
     return h;
 }
 
-// 仅 https，且主机在 GitHub 白名单内（下载场景额外放行对象存储域）。
-// 不接受 http：明文传输等于没有 TLS，而本程序的可信链正是「TLS + SHA256」，
-// 放行 http 会让降级攻击直接绕过全部保障。
+// 仅 https
+// 不接受 http
+// 放行 http
 static bool urlAllowed(const std::string& url, std::string* hostOut, bool allowAssetHost = false) {
     std::string host = urlHost(url);
     if (hostOut) *hostOut = host;
@@ -348,18 +343,16 @@ static bool urlAllowed(const std::string& url, std::string* hostOut, bool allowA
     return allowAssetHost ? isGitHubOrAssetHost(host) : isGitHubHost(host);
 }
 
-// ===================== libcurl 回调与 GET / 下载 =====================
-// TLS 行为统一在这里设一次，两处lowGet 共用。
-//
-// 1) 吊销检查先用 BEST_EFFORT：内网/防火墙常把 CRL 分发点拦掉，Schannel
-//    拿不到吊销状态就直接 InitializeSecurityContext 失败
-//    （CRYPT_E_NO_REVOCATION_CHECK），表现是「所有 HTTPS 都 SSL connect error」。
-// 2) 但 BEST_EFFORT 并不保证一定放行：吊销站点不可达时 Schannel 仍可能直接握手
-//    失败（实测 curl 8.22 + Schannel 就是如此，只写 BEST_EFFORT 并不够）。所以失
-//    败后由调用方带 relaxRevoke=true 重试一次，改用 NO_CHECK 只跳过「这张证书是
-//    否已被吊销」这一步；证书链与域名校验照旧（VERIFYPEER/VERIFYHOST 始终为
-//    开），不会退化成不校验证书。
-// 3) 用系统证书库（Schannel 后端本就默认走它，这里写明以防构建切换后端）。
+// libcurl 回调
+// TLS 行为统一
+// 吊销检查先用 BEST_EFFORT：内
+// 拿不到吊销状态
+// ，表现是「所有 HTTPS
+// 但 BEST_EFFORT 并不保证一定
+// 失败
+// 否已
+// 开）
+// 用系统证书库
 static void applyTls(CURL* h, bool relaxRevoke = false) {
     long sslOpt = relaxRevoke
         ? (long)(CURLSSLOPT_NO_REVOKE | CURLSSLOPT_NATIVE_CA)
@@ -370,13 +363,11 @@ static void applyTls(CURL* h, bool relaxRevoke = false) {
 }
 
 #ifdef _WIN32
-// 读系统代理设置（Internet 选项 → 连接）。
-// Updater 是 GUI 拉起的独立进程，拿不到 GUI 进程的代理，只能自己读注册表。
-// 只在 --proxy 未显式指定时生效，显式指定永远优先。
-//
-// 读 HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings：
-//   ProxyEnable=1 时 ProxyServer 形如 "127.0.0.1:7890" 或 "http=…;https=…"
-//   AutoConfigURL非空表示走 PAC 脚本
+// 读系统代理设置
+// Updater 是 GUI 拉起
+// 只在 --proxy 未显式指定
+// 读 HKCU\\Software\\Micros
+// AutoConfigURL非空表示走 PAC 脚
 static std::string readRegistryStr(const wchar_t* name) {
     HKEY key = nullptr;
     if (RegOpenKeyExW(HKEY_CURRENT_USER,
@@ -417,7 +408,7 @@ static DWORD readRegistryDword(const wchar_t* name) {
     return val;
 }
 
-// 从 "http=1.2.3.4:80;https=1.2.3.4:443" 里挑出 https 对应项，没有就取第一项
+// 从 "http=1.2.3.4
 static std::string pickByScheme(const std::string& proxylist, const std::string& scheme) {
     std::string fallback;
     size_t pos = 0;
@@ -442,10 +433,10 @@ static std::string pickByScheme(const std::string& proxylist, const std::string&
     return fallback;
 }
 
-// 返回可直接喂给 CURLOPT_PROXY 的值，空串表示不用代理
+// 返回可直接喂给 CURLOPT_PROXY
 static std::string systemProxy() {
-    // PAC 脚本：curl 不执行 JS，只认静态代理串。
-    // 这里取不到 PAC 的解析结果，交给调用方回退到直连。
+    // PAC 脚本
+    // 取不到 PAC
     if (!readRegistryStr(L"AutoConfigURL").empty()) return {};
     if (readRegistryDword(L"ProxyEnable") != 1) return {};
     std::string list = readRegistryStr(L"ProxyServer");
@@ -458,8 +449,8 @@ static std::string systemProxy() {
 }
 #endif
 
-// 显式 --proxy 优先；没有就读系统代理设置（仅 Windows 有）。
-// 检查更新与下载必须调同一个函数，否则会出现「查得到新版本却下不下来」。
+// 显式 --proxy 优先
+// 检查
 static void applyProxy(CURL* h) {
     std::string proxy = g_proxy;
 #ifdef _WIN32
@@ -467,14 +458,14 @@ static void applyProxy(CURL* h) {
 #endif
     if (proxy.empty()) return;
     curl_easy_setopt(h, CURLOPT_PROXY, proxy.c_str());
-    // 代理认证需关主机门禁
+    // 代理认证需关主
     curl_easy_setopt(h, CURLOPT_HTTPAUTH, (long)CURLAUTH_ANY);
     curl_easy_setopt(h, CURLOPT_UNRESTRICTED_AUTH, 1L);
 }
 
-// CA 证书包：Windows 上 curl 的 OpenSSL 后端不读系统证书库，缺 CAINFO 时 HTTPS 直接
-// 报证书校验失败（表现为「检查不了更新」）；Linux 的 OpenSSL 默认路径已覆盖，这里也
-// 允许 CURL_CA_BUNDLE / SSL_CERT_FILE 覆盖以便自带 CA 分发。
+// CA 证书包
+// 报证书校验失败
+// 允许 CURL_CA_BUNDLE /
 static void applyCaBundle(CURL* h) {
 #ifdef _WIN32
     std::vector<std::string> cands;
@@ -533,31 +524,31 @@ static size_t getHeaderCb(char* buffer, size_t size, size_t nmemb, void* userdat
         std::string key = line.substr(0, colon);
         std::string lk; for (char ch : key) lk += (char)tolower((unsigned char)ch);
         if (lk == "etag" && c->etag) *c->etag = trim(line.substr(colon + 1));
-        // 3xx 的 Location 逐跳复检：CURLOPT_FOLLOWLOCATION 不受白名单约束，
-        // 只在入口查一次 URL 是不够的，中途被引到别处一样能拿到东西。
+        // 3xx
+        // 只在入口查一次
         if (lk == "location" && c->allowAssetHost) {
             std::string loc = trim(line.substr(colon + 1));
             if (!urlAllowed(loc, nullptr, true))
-                return 0;   // 中止传输：交白名单外的主机
+                return 0;   // 中止传输
         }
     }
     return n;
 }
 
-// HTTP 结果：ok=false 时 error 为可展示给用户的分类原因，detail 带 curl 原文
+// HTTP 结果
 struct HttpResult {
     bool ok = false;
     long status = 0;
-    std::string error;   // 分类原因：network_unreachable / tls_verify_failed / ...
+    std::string error;   // 分类原因
     std::string detail;  // curl 错误串或 respone 说明
     std::string etag;
     std::string effectiveUrl;
 };
 
-// 把 curl 失败 / HTTP 状态码翻译成 GUI 能理解的原因（GUI 只拿到 error 字段）
+// 把 curl 失败 / HTTP 状态码翻
 static void classify(int curlCode, const std::string& curlErr, long status, HttpResult* r) {
-    // 错误码比错误串稳：代理类失败在 Windows 上的 strerror 未必带 "proxy"
-    // curl 8.x 公开头不再导出这几个旧枚举，按 curl.h 里的历史数值硬写
+    // 错误码比错误串
+    // curl 8.x 公开头
     if (curlCode == 3 /*COULDNT_RESOLVE_PROXY*/ || curlCode == 5 /*COULDNT_CONNECT_PROXY*/ ||
         curlCode == 403 /*PROXY*/) { r->error = "proxy_failed"; return; }
     if (curlCode == 401 /*PROXY_AUTH*/) { r->error = "proxy_auth_failed"; return; }
@@ -565,7 +556,7 @@ static void classify(int curlCode, const std::string& curlErr, long status, Http
     if (status == 404) { r->error = "release_not_found"; return; }
     if (status >= 500) { r->error = "server_error"; return; }
     if (!curlErr.empty()) {
-        // 代理失败须单独报清
+        // 代理失败须单独
         if (curlErr.find("proxy") != std::string::npos) {
             if (curlErr.find("authentication") != std::string::npos) r->error = "proxy_auth_failed";
             else if (curlErr.find("resolve") != std::string::npos ||
@@ -586,7 +577,7 @@ static void classify(int curlCode, const std::string& curlErr, long status, Http
     r->error = "network_failed";
 }
 
-// 低层 GET（跟随重定向，最多 6 次；支持 If-None-Match、Range 头）。
+// 低层 GET
 static HttpResult lowGet(const std::string& url, std::vector<char>* out,
                          long* statusOut, std::string* etagOut, std::string* finalUrlOut,
                          const std::string& etagIn, const std::string& rangeHeader,
@@ -597,7 +588,7 @@ static HttpResult lowGet(const std::string& url, std::vector<char>* out,
     if (!h) { r.error = "curl_init_failed"; r.detail = "curl_easy_init returned null"; return r; }
     GetCtx ctx{out, etagOut, finalUrlOut, allowAssetHost};
     curl_easy_setopt(h, CURLOPT_URL, url.c_str());
-    // 无超时会让 GUI 一直转圈：连不上/被墙时必须有上限
+    // 无超
     curl_easy_setopt(h, CURLOPT_CONNECTTIMEOUT, 15L);
     curl_easy_setopt(h, CURLOPT_TIMEOUT, 30L);
     curl_easy_setopt(h, CURLOPT_NOSIGNAL, 1L);
@@ -609,7 +600,7 @@ static HttpResult lowGet(const std::string& url, std::vector<char>* out,
     curl_easy_setopt(h, CURLOPT_FOLLOWLOCATION, 1L);
     curl_easy_setopt(h, CURLOPT_MAXREDIRS, 6L);
     curl_easy_setopt(h, CURLOPT_USERAGENT, "FileEncryptorUpdater/1.0");
-    curl_easy_setopt(h, CURLOPT_IPRESOLVE, CURL_IPRESOLVE_V4); // 避免无 IPv6 路由失败
+    curl_easy_setopt(h, CURLOPT_IPRESOLVE, CURL_IPRESOLVE_V4); // 无 IPv6 路
     struct curl_slist* hdr = nullptr;
     hdr = curl_slist_append(hdr, "Accept: application/vnd.github+json");
     if (!etagIn.empty()) {
@@ -645,12 +636,11 @@ static HttpResult lowGet(const std::string& url, std::vector<char>* out,
     return r;
 }
 
-// Schannel 在吊销站点不可达时会直接握手失败（CRYPT_E_NO_REVOCATION_CHECK），
-// 表现为所有 HTTPS 都 SSL connect error / network_failed。此时重试一次并只跳过
-// 「证书是否已被吊销」这一步（证书链与域名校验照旧）。仅在 TLS 类失败时重试，
-// 免得把超时/404 也重跑一遍。仅 Windows 走 Schannel 需要这层。
-// 吊销相关握手失败的特征串。Schannel 的报错文本随版本变过，两条都认；
-// 下载路径原先只匹配其中一条，导致同一种故障在下载时不重试、在检查时重试。
+// Schannel 在吊销站点
+// 所有 HTTPS
+// 「证书是否已
+// 吊销相关握手失
+// 下载路径原先只
 static bool isTlsHandshakeDetail(const std::string& detail) {
     return detail.find("SSL connect error") != std::string::npos
         || detail.find("SCHANNEL") != std::string::npos;
@@ -665,21 +655,20 @@ static bool isTlsHandshakeFail(const HttpResult& r) {
 #endif
 }
 
-// 统一的「先按标准吊销策略，握手失败再放宽重试一次」GET
+// 统一
 static HttpResult lowGetWithRevokeFallback(const std::string& url, std::vector<char>* out,
                                            long* statusOut, std::string* etagOut,
                                            std::string* finalUrlOut, const std::string& etagIn,
                                            const std::string& rangeHeader) {
     HttpResult r = lowGet(url, out, statusOut, etagOut, finalUrlOut, etagIn, rangeHeader);
     if (!r.ok && isTlsHandshakeFail(r)) {
-        // 放宽吊销检查必须留痕：静默降级会让人误以为证书验过。
-        // 放宽后仍然校验证书链与域名（VERIFYPEER/VERIFYHOST 恒为 1），
-        // 只是不再查「这张证书是否已被吊销」——泄露私钥的 CA 场景下弱于原策略。
+        // 放宽吊销检查必
+        // 放宽后仍然校验
         fprintf(stderr,
                 "[updater] WARNING: TLS handshake failed (%s); retrying with revocation check "
                 "disabled (certificate chain and hostname are still verified)\n",
                 r.detail.c_str());
-        // 重试前清空半截响应
+        // 重试前清空半截
         if (out) out->clear();
         r = lowGet(url, out, statusOut, etagOut, finalUrlOut, etagIn, rangeHeader,
                    nullptr, nullptr, true /* relaxRevoke */);
@@ -691,7 +680,7 @@ struct DlCtx {
     std::ofstream* f = nullptr;
     long long* written = nullptr;
     long long total = 0;
-    long long base = 0; // 已续传的偏移
+    long long base = 0; // 已续传
     const std::function<void(long long, long long)>* prog = nullptr;
 };
 static size_t dlWriteCb(void* ptr, size_t size, size_t nmemb, void* userdata) {
@@ -703,8 +692,8 @@ static size_t dlWriteCb(void* ptr, size_t size, size_t nmemb, void* userdata) {
     if (c->prog) (*c->prog)(*c->written, c->total);
     return n;
 }
-// 下载时 GitHub 会 302 到 release-assets.githubusercontent.com；跟到白名单外的主机
-// 等于把安装包交给任意第三方，返回 0 中止传输。
+// 下载时 GitHub
+// 等于
 static size_t dlHeaderCb(char* buffer, size_t size, size_t nmemb, void* userdata) {
     auto* c = static_cast<DlCtx*>(userdata);
     size_t n = size * nmemb;
@@ -715,26 +704,26 @@ static size_t dlHeaderCb(char* buffer, size_t size, size_t nmemb, void* userdata
         std::string lk; for (char ch : key) lk += (char)tolower((unsigned char)ch);
         if (lk == "content-length") {
             long long len = atoll(trim(line.substr(colon + 1)).c_str());
-            // 续传总长按完整大小算
+            // 续传总长
             if (len > 0) c->total = (c->base > 0) ? (len + c->base) : len;
         }
-        // 重定向逐跳复检：下载必然跟随 GitHub 的 302，但跟随目标同样得在白名单内，
-        // 否则入口校验形同虚设，中途被引到别处也能把包写下来。
+        // 重定向逐跳复检
+        // 入口校验形同虚
         if (lk == "location") {
             std::string loc = trim(line.substr(colon + 1));
             if (!urlAllowed(loc, nullptr, true)) {
                 fprintf(stderr, "[update] redirect to disallowed host rejected: %s\n", loc.c_str());
-                return 0;   // 中止：主机越权
+                return 0;   // 中止
             }
         }
     }
     return n;
 }
 
-// 最近一次下载失败的原因：downloadToFile 只返回 -1，错误细节要靠它带出去
+// 最近一次下载失
 static std::string g_dlError;
 
-// 下载到文件（支持 Range 续传、进度回调）。返回实际写入字节数；失败时返回 -1。
+// 下载到文件
 static long long downloadToFile(const std::string& url, const std::string& outPathUtf8,
                                  long long resumeFrom,
                                  const std::function<void(long long, long long)>& onProgress,
@@ -756,7 +745,7 @@ static long long downloadToFile(const std::string& url, const std::string& outPa
     if (resumeFrom > 0) f.seekp((std::streamoff)resumeFrom, std::ios::beg);
 
     long long written = resumeFrom;
-    long long total = resumeFrom; // dlHeaderCb 改写总长为剩余+偏移
+    long long total = resumeFrom; // dlHeaderCb 改写总长
     DlCtx ctx{&f, &written, total, resumeFrom, &onProgress};
 
     curl_easy_setopt(h, CURLOPT_URL, url.c_str());
@@ -767,10 +756,10 @@ static long long downloadToFile(const std::string& url, const std::string& outPa
     curl_easy_setopt(h, CURLOPT_FOLLOWLOCATION, 1L);
     curl_easy_setopt(h, CURLOPT_MAXREDIRS, 6L);
     curl_easy_setopt(h, CURLOPT_USERAGENT, "FileEncryptorUpdater/1.0");
-    curl_easy_setopt(h, CURLOPT_IPRESOLVE, CURL_IPRESOLVE_V4); // 避免无 IPv6 路由失败
+    curl_easy_setopt(h, CURLOPT_IPRESOLVE, CURL_IPRESOLVE_V4); // 无 IPv6 路
     curl_easy_setopt(h, CURLOPT_CONNECTTIMEOUT, 20L);
     curl_easy_setopt(h, CURLOPT_NOSIGNAL, 1L);
-    // 大文件不限时，久无响应判断流
+    // 大文件不限
     curl_easy_setopt(h, CURLOPT_TIMEOUT, 0L);
     curl_easy_setopt(h, CURLOPT_LOW_SPEED_LIMIT, 4096L);
     curl_easy_setopt(h, CURLOPT_LOW_SPEED_TIME, 60L);
@@ -786,7 +775,7 @@ static long long downloadToFile(const std::string& url, const std::string& outPa
     char* eff = nullptr;
     curl_easy_getinfo(h, CURLINFO_EFFECTIVE_URL, &eff);
     bool ok = (rc == CURLE_OK);
-    // 须查状态码，否则误存错页
+    // 须查状态码
     if (ok && resumeFrom == 0 && code != 200 && code != 206) {
         ok = false;
         g_dlError = "http status " + std::to_string(code);
@@ -802,7 +791,8 @@ static long long downloadToFile(const std::string& url, const std::string& outPa
     return ok ? written : -1;
 }
 
-// 语义化版本比较：a<b 返回 <0，a==b 返回 0，a>b 返回 >0（仅比较前三个整数段）
+// 语义化版本比较
+// 先比前三个整数
 static int versionCmp(const std::string& a, const std::string& b) {
     auto split = [](const std::string& s) {
         std::vector<int> v(3, 0); size_t i = 0, n = 0;
@@ -815,12 +805,29 @@ static int versionCmp(const std::string& a, const std::string& b) {
         }
         return v;
     };
+    // 拆 -后缀 段
+    auto preRank = [](const std::string& s) {
+        size_t d = s.find('-');
+        if (d == std::string::npos) return std::make_pair(4, 0);
+        std::string p = s.substr(d + 1);
+        size_t k = 0;
+        while (k < p.size() && isalpha((unsigned char)p[k])) k++;
+        std::string word = p.substr(0, k);
+        int num = atoi(p.c_str() + k);
+        if (iequals(word, "alpha")) return std::make_pair(1, num);
+        if (iequals(word, "beta")) return std::make_pair(2, num);
+        if (iequals(word, "rc")) return std::make_pair(3, num);
+        return std::make_pair(4, 0);
+    };
     auto va = split(a), vb = split(b);
     for (int i = 0; i < 3; i++) if (va[i] != vb[i]) return va[i] < vb[i] ? -1 : 1;
+    auto pa = preRank(a), pb = preRank(b);
+    if (pa.first != pb.first) return pa.first < pb.first ? -1 : 1;
+    if (pa.second != pb.second) return pa.second < pb.second ? -1 : 1;
     return 0;
 }
 
-// 从数字起点起摘一段版本号，只保留 x.y.z 三段
+// 从数字起点起摘
 static std::string takeNumVer(const std::string& s, size_t from) {
     size_t i = from;
     while (i < s.size() && !isdigit((unsigned char)s[i])) i++;
@@ -835,9 +842,9 @@ static std::string takeNumVer(const std::string& s, size_t from) {
     return out;
 }
 
-// 从 tag 提取 GUI 版本：兼容 GUI2.1.0 / GUI-Qt-2.1.0 / gui-2.1.0 / CLI2.7.0_GUI2.1.0。
-// 认不出 GUI 段时退化为 tag 里最后一个版本号——否则换 tag 命名后会静默判定「已是最新」，
-// 表现为「明明有新版本却总说没更新」。
+// 从 tag 提取 GUI 版本
+// 认不出 GUI 段时退化
+// 「明明有新版本却
 static std::string guiVerFromTag(const std::string& tag) {
     for (size_t p = 0; p + 3 <= tag.size(); p++)
         if (iequals(tag.substr(p, 3), "GUI")) {
@@ -853,7 +860,42 @@ static std::string guiVerFromTag(const std::string& tag) {
     return last;
 }
 
-// 根据 type/platform 从资产名匹配下载资产（大小写不敏感）
+// 从任意位置摘一
+static std::string takeVer(const std::string& s, size_t from) {
+    size_t i = from;
+    while (i < s.size() && !isdigit((unsigned char)s[i])) i++;
+    size_t st = i;
+    while (i < s.size() && (isdigit((unsigned char)s[i]) || s[i] == '.')) i++;
+    if (i == st) return "";
+    std::string v = s.substr(st, i - st);
+    if (i < s.size() && s[i] == '-') {
+        size_t j = i + 1;
+        while (j < s.size() && (isalnum((unsigned char)s[j]) || s[j] == '-' || s[j] == '.')) j++;
+        if (j > i + 1) v += s.substr(i, j - i);
+    }
+    return v;
+}
+
+// Release 标题规
+// 形如「CLI 1.0.0 + GUI
+// 认不出返回空串
+static std::string verFromTitle(const std::string& title, bool wantMobile) {
+    // 必须 CLI 段
+    size_t cli = std::string::npos;
+    for (size_t p = 0; p + 3 <= title.size(); p++)
+        if (iequals(title.substr(p, 3), "CLI")) { cli = p + 3; break; }
+    if (cli == std::string::npos) return "";
+    size_t g = std::string::npos;
+    for (size_t p = cli; p + 3 <= title.size(); p++)
+        if (iequals(title.substr(p, 3), "GUI")) { g = p + 3; break; }
+    if (g == std::string::npos) return "";
+    if (!wantMobile) return takeVer(title, g);
+    size_t us = title.find('_', g);
+    if (us == std::string::npos) return "";
+    return takeVer(title, us + 1);
+}
+
+// 根据 type/platform
 static int matchAsset(const JsonValue& assets, const std::string& type, const std::string& platform) {
     auto lower = [](const std::string& s) {
         std::string o = s; for (char& c : o) c = (char)tolower((unsigned char)c); return o;
@@ -868,7 +910,7 @@ static int matchAsset(const JsonValue& assets, const std::string& type, const st
         const std::string ln = lower(n->asStr());
         bool ok = false;
         if (isWinui && win)
-            // WinUI 既有 msi 也有 exe
+            // WinUI 既有 msi
             ok = (ln.find("winui") != std::string::npos || ln.find("winui3") != std::string::npos)
                  && (ln.find("windows") != std::string::npos || ln.find("win") != std::string::npos)
                  && (ln.find(".msi") != std::string::npos || ln.find(".exe") != std::string::npos);
@@ -903,10 +945,10 @@ static std::string jsonEscape(const std::string& s) {
     return o;
 }
 
-// ===================== --check =====================
 static int doCheck(const std::string& current, const std::string& type, const std::string& platform,
                    const std::string& etagIn) {
-    const std::string api = "https://api.github.com/repos/Texas-albe/FileEncryptor/releases/latest";
+    // 取列表首条
+    const std::string api = "https://api.github.com/repos/Texas-albe/FileEncryptor/releases?per_page=5";
     std::string host;
     if (!urlAllowed(api, &host)) {
         printf("{\"ok\":false,\"error\":\"host_not_allowed\",\"host\":\"%s\"}\n", jsonEscape(host).c_str());
@@ -917,7 +959,7 @@ static int doCheck(const std::string& current, const std::string& type, const st
     HttpResult hr = lowGetWithRevokeFallback(api, &body, &status, &etagNew, &finalUrl,
                                              etagIn, std::string());
     if (!hr.ok) {
-        // 把具体原因（DNS/超时/TLS/限流）透出，GUI 才不会只显示一句「网络失败」
+        // 把具体原因
         printf("{\"ok\":false,\"error\":\"%s\",\"detail\":\"%s\",\"http_status\":%ld}\n",
                jsonEscape(hr.error).c_str(), jsonEscape(hr.detail).c_str(), hr.status);
         return 1;
@@ -936,20 +978,30 @@ static int doCheck(const std::string& current, const std::string& type, const st
         printf("{\"ok\":false,\"error\":\"json_parse:%s\"}\n", parser.err.c_str());
         return 1;
     }
-    const JsonValue* tagV = root.find("tag_name");
-    const JsonValue* assetsV = root.find("assets");
-    const JsonValue* bodyV = root.find("body");
+    // 列表端点返回数
+    const JsonValue* rel = root.at(0);
+    const JsonValue* tagV = rel ? rel->find("tag_name") : nullptr;
+    const JsonValue* assetsV = rel ? rel->find("assets") : nullptr;
+    const JsonValue* bodyV = rel ? rel->find("body") : nullptr;
+    const JsonValue* nameV = rel ? rel->find("name") : nullptr;
     if (!tagV || !assetsV) {
         printf("{\"ok\":false,\"error\":\"malformed_api\"}\n");
         return 1;
     }
     std::string tag = tagV->asStr();
-    std::string latest = guiVerFromTag(tag);
+    std::string title = nameV ? nameV->asStr() : "";
+    bool ghPre = rel->find("prerelease") ? rel->find("prerelease")->asBool() : false;
+    // 标题规
+    // 标题认不出时退
+    bool wantMobile = (type == "android");
+    std::string latest = verFromTitle(title, wantMobile);
+    if (latest.empty()) latest = guiVerFromTag(tag);
     int idx = matchAsset(*assetsV, type, platform);
     bool hasUpdate = !latest.empty() && versionCmp(latest, current) > 0;
 
     printf("{\"ok\":true,");
     printf("\"has_update\":%s,", hasUpdate ? "true" : "false");
+    printf("\"is_prerelease\":%s,", ghPre ? "true" : "false");
     printf("\"current_version\":\"%s\",", jsonEscape(current).c_str());
     printf("\"latest_version\":\"%s\",", jsonEscape(latest.empty() ? current : latest).c_str());
     printf("\"tag\":\"%s\",", jsonEscape(tag).c_str());
@@ -963,7 +1015,7 @@ static int doCheck(const std::string& current, const std::string& type, const st
         if (dig) { sha = dig->asStr(); if (sha.rfind("sha256:", 0) == 0) sha = sha.substr(7); }
         printf("\"asset_name\":\"%s\",", jsonEscape(name).c_str());
         printf("\"download_url\":\"%s\",", jsonEscape(url).c_str());
-        printf("\"sig_url\":\"%s\",", jsonEscape(url + ".minisig").c_str()); // 无则 404，--update 时跳过
+        printf("\"sig_url\":\"%s\",", jsonEscape(url + ".minisig").c_str()); // 无则 404
         printf("\"sha256\":\"%s\",", sha.c_str());
         printf("\"size\":%lld,", (long long)size);
     } else {
@@ -981,7 +1033,6 @@ static int doCheck(const std::string& current, const std::string& type, const st
     return 0;
 }
 
-// ===================== --update =====================
 static int doUpdate(const std::string& url, const std::string& expectedSha,
                     long long expectedSize, const std::string& installDir, const std::string& sigUrl) {
     std::string host;
@@ -1026,7 +1077,7 @@ static int doUpdate(const std::string& url, const std::string& expectedSha,
 
     printf("{\"progress\":0,\"stage\":\"downloading\"}\n"); fflush(stdout);
     long long got = downloadToFile(url, tmpPathUtf8, 0, progress);
-    // 吊销挡下时重试一次
+    // 吊销挡下时重试
     if (got < 0 && isTlsHandshakeDetail(g_dlError)) {
         fprintf(stderr, "[update] WARNING: download handshake failed; retrying with revocation check "
                         "disabled (certificate chain and hostname are still verified)\n");
@@ -1043,7 +1094,7 @@ static int doUpdate(const std::string& url, const std::string& expectedSha,
     long long fsize = 0;
     auto szec = std::error_code{};
     fsize = (long long)std::filesystem::file_size(tmpFile, szec);
-    // 须核对大小防截断半包
+    // 须核对大小防截
     if (expectedSize > 0 && fsize != expectedSize) {
         printf("{\"progress\":100,\"stage\":\"error\",\"error\":\"size_mismatch\","
                "\"expected\":%lld,\"actual\":%lld}\n", (long long)expectedSize, fsize);
@@ -1058,7 +1109,7 @@ static int doUpdate(const std::string& url, const std::string& expectedSha,
         return 1;
     }
     // 缺摘要宁可拒装
-    // 攻击者能改 JSON 响应，就能把 digest 字段抹掉；这里空值直接失败。
+    // 攻击者能改 JSON 响应
     if (expectedSha.empty()) {
         printf("{\"progress\":100,\"stage\":\"error\",\"error\":\"sha256_missing\"}\n");
         fprintf(stderr, "[update] expected sha256 absent; refusing to install unverified package\n");
@@ -1075,10 +1126,10 @@ static int doUpdate(const std::string& url, const std::string& expectedSha,
         return 1;
     }
 
-    // 签名校验未实现：minisign 公钥未内置，这里不假装验过。
-    // 当前可信链是「TLS 证书链 + 域名校验 + SHA256 摘要比对」；
-    // 摘要来自同一条 TLS 通道，因此并不能独立于 TLS 抵抗中间人。
-    // 要脱离这个依赖，需给 release 附 .minisig 并把公钥内置进本程序。
+    // 签名校验未实现
+    // 当前可信链是「TLS 证
+    // 摘要来自同一条
+    // 要脱离这个依赖
     if (!sigUrl.empty()) {
         fprintf(stderr, "[update] sig_url given but Minisign is NOT verified (no embedded public key); "
                         "relying on TLS + sha256 only\n");
@@ -1090,8 +1141,8 @@ static int doUpdate(const std::string& url, const std::string& expectedSha,
     if (isMsi) {
 #ifdef _WIN32
         printf("{\"progress\":100,\"stage\":\"installing\"}\n"); fflush(stdout);
-        // 直接启动 msiexec.exe，不经 cmd.exe/_wsystem：临时路径来自 TMP 环境变量，
-        // 含元字符时经 shell 有注入面。路径参数单独加引号，固定参数无需引号。
+        // 启动 msiexec.exe
+        // 含元字符时经 shell 有
         std::wstring wpath = to_wide(tmpPathUtf8);
         std::wstring wcmd = L"msiexec.exe /i \"" + wpath + L"\" /qn /norestart";
         STARTUPINFOW si;
@@ -1134,7 +1185,6 @@ static int doUpdate(const std::string& url, const std::string& expectedSha,
     return 0;
 }
 
-// ===================== main =====================
 int main(int argc, char** argv) {
     if (curl_global_init(CURL_GLOBAL_DEFAULT) != CURLE_OK) {
         fprintf(stderr, "[update] curl_global_init failed\n");

@@ -1,0 +1,81 @@
+﻿#nullable enable
+AndroidX.Paging.AsyncPagedListDiffer
+AndroidX.Paging.AsyncPagedListDiffer.AsyncPagedListDiffer(AndroidX.RecyclerView.Widget.IListUpdateCallback! listUpdateCallback, AndroidX.RecyclerView.Widget.AsyncDifferConfig! config) -> void
+AndroidX.Paging.AsyncPagedListDiffer.AsyncPagedListDiffer(AndroidX.RecyclerView.Widget.RecyclerView.Adapter! adapter, AndroidX.RecyclerView.Widget.DiffUtil.ItemCallback! diffCallback) -> void
+AndroidX.Paging.AsyncPagedListDiffer.AsyncPagedListDiffer(nint javaReference, Android.Runtime.JniHandleOwnership transfer) -> void
+AndroidX.Paging.AsyncPagedListDiffer.IPagedListListener
+AndroidX.Paging.AsyncPagingDataDiffer
+AndroidX.Paging.AsyncPagingDataDiffer.AddOnPagesUpdatedListener(Kotlin.Jvm.Functions.IFunction0! listener) -> void
+AndroidX.Paging.AsyncPagingDataDiffer.AsyncPagingDataDiffer(AndroidX.RecyclerView.Widget.DiffUtil.ItemCallback! diffCallback, AndroidX.RecyclerView.Widget.IListUpdateCallback! updateCallback) -> void
+AndroidX.Paging.AsyncPagingDataDiffer.AsyncPagingDataDiffer(AndroidX.RecyclerView.Widget.DiffUtil.ItemCallback! diffCallback, AndroidX.RecyclerView.Widget.IListUpdateCallback! updateCallback, Kotlin.Coroutines.ICoroutineContext! mainDispatcher) -> void
+AndroidX.Paging.AsyncPagingDataDiffer.AsyncPagingDataDiffer(AndroidX.RecyclerView.Widget.DiffUtil.ItemCallback! diffCallback, AndroidX.RecyclerView.Widget.IListUpdateCallback! updateCallback, Kotlin.Coroutines.ICoroutineContext! mainDispatcher, Kotlin.Coroutines.ICoroutineContext! workerDispatcher) -> void
+AndroidX.Paging.AsyncPagingDataDiffer.AsyncPagingDataDiffer(AndroidX.RecyclerView.Widget.DiffUtil.ItemCallback? diffCallback, AndroidX.RecyclerView.Widget.IListUpdateCallback? updateCallback, Xamarin.KotlinX.Coroutines.CoroutineDispatcher? mainDispatcher) -> void
+AndroidX.Paging.AsyncPagingDataDiffer.AsyncPagingDataDiffer(AndroidX.RecyclerView.Widget.DiffUtil.ItemCallback? diffCallback, AndroidX.RecyclerView.Widget.IListUpdateCallback? updateCallback, Xamarin.KotlinX.Coroutines.CoroutineDispatcher? mainDispatcher, Xamarin.KotlinX.Coroutines.CoroutineDispatcher? workerDispatcher) -> void
+AndroidX.Paging.AsyncPagingDataDiffer.GetItem(int index) -> Java.Lang.Object?
+AndroidX.Paging.AsyncPagingDataDiffer.ItemCount.get -> int
+AndroidX.Paging.AsyncPagingDataDiffer.OnPagesUpdatedFlow.get -> Xamarin.KotlinX.Coroutines.Flow.IFlow!
+AndroidX.Paging.AsyncPagingDataDiffer.Peek(int index) -> Java.Lang.Object?
+AndroidX.Paging.AsyncPagingDataDiffer.Refresh() -> void
+AndroidX.Paging.AsyncPagingDataDiffer.RemoveOnPagesUpdatedListener(Kotlin.Jvm.Functions.IFunction0! listener) -> void
+AndroidX.Paging.AsyncPagingDataDiffer.Retry() -> void
+AndroidX.Paging.AsyncPagingDataDifferKt
+AndroidX.Paging.LivePagedListBuilder
+AndroidX.Paging.LivePagedListBuilder.SetCoroutineScope(Xamarin.KotlinX.Coroutines.ICoroutineScope! coroutineScope) -> AndroidX.Paging.LivePagedListBuilder!
+AndroidX.Paging.LivePagedListBuilder.SetFetchExecutor(Java.Util.Concurrent.IExecutor! fetchExecutor) -> AndroidX.Paging.LivePagedListBuilder!
+AndroidX.Paging.LivePagedListBuilder.SetInitialLoadKey(Java.Lang.Object? key) -> AndroidX.Paging.LivePagedListBuilder!
+AndroidX.Paging.LivePagedListKt
+AndroidX.Paging.LoadStateAdapter
+AndroidX.Paging.LoadStateAdapter.LoadStateAdapter() -> void
+AndroidX.Paging.LoadStateAdapter.LoadStateAdapter(nint javaReference, Android.Runtime.JniHandleOwnership transfer) -> void
+AndroidX.Paging.PagedListAdapter
+AndroidX.Paging.PagedListAdapter.PagedListAdapter(AndroidX.RecyclerView.Widget.AsyncDifferConfig! config) -> void
+AndroidX.Paging.PagedListAdapter.PagedListAdapter(AndroidX.RecyclerView.Widget.DiffUtil.ItemCallback! diffCallback) -> void
+AndroidX.Paging.PagedListAdapter.PagedListAdapter(nint javaReference, Android.Runtime.JniHandleOwnership transfer) -> void
+AndroidX.Paging.PagedListAdapter.WithLoadStateFooter(AndroidX.Paging.LoadStateAdapter! footer) -> AndroidX.RecyclerView.Widget.ConcatAdapter!
+AndroidX.Paging.PagedListAdapter.WithLoadStateHeader(AndroidX.Paging.LoadStateAdapter! header) -> AndroidX.RecyclerView.Widget.ConcatAdapter!
+AndroidX.Paging.PagedListAdapter.WithLoadStateHeaderAndFooter(AndroidX.Paging.LoadStateAdapter! header, AndroidX.Paging.LoadStateAdapter! footer) -> AndroidX.RecyclerView.Widget.ConcatAdapter!
+AndroidX.Paging.PagingDataAdapter
+AndroidX.Paging.PagingDataAdapter.AddOnPagesUpdatedListener(Kotlin.Jvm.Functions.IFunction0! listener) -> void
+AndroidX.Paging.PagingDataAdapter.GetItem(int position) -> Java.Lang.Object?
+AndroidX.Paging.PagingDataAdapter.OnPagesUpdatedFlow.get -> Xamarin.KotlinX.Coroutines.Flow.IFlow!
+AndroidX.Paging.PagingDataAdapter.PagingDataAdapter(AndroidX.RecyclerView.Widget.DiffUtil.ItemCallback! diffCallback) -> void
+AndroidX.Paging.PagingDataAdapter.PagingDataAdapter(AndroidX.RecyclerView.Widget.DiffUtil.ItemCallback! diffCallback, Kotlin.Coroutines.ICoroutineContext! mainDispatcher) -> void
+AndroidX.Paging.PagingDataAdapter.PagingDataAdapter(AndroidX.RecyclerView.Widget.DiffUtil.ItemCallback! diffCallback, Kotlin.Coroutines.ICoroutineContext! mainDispatcher, Kotlin.Coroutines.ICoroutineContext! workerDispatcher) -> void
+AndroidX.Paging.PagingDataAdapter.PagingDataAdapter(AndroidX.RecyclerView.Widget.DiffUtil.ItemCallback? diffCallback, Xamarin.KotlinX.Coroutines.CoroutineDispatcher? mainDispatcher) -> void
+AndroidX.Paging.PagingDataAdapter.PagingDataAdapter(AndroidX.RecyclerView.Widget.DiffUtil.ItemCallback? diffCallback, Xamarin.KotlinX.Coroutines.CoroutineDispatcher? mainDispatcher, Xamarin.KotlinX.Coroutines.CoroutineDispatcher? workerDispatcher) -> void
+AndroidX.Paging.PagingDataAdapter.PagingDataAdapter(nint javaReference, Android.Runtime.JniHandleOwnership transfer) -> void
+AndroidX.Paging.PagingDataAdapter.Peek(int index) -> Java.Lang.Object?
+AndroidX.Paging.PagingDataAdapter.Refresh() -> void
+AndroidX.Paging.PagingDataAdapter.RemoveOnPagesUpdatedListener(Kotlin.Jvm.Functions.IFunction0! listener) -> void
+AndroidX.Paging.PagingDataAdapter.Retry() -> void
+AndroidX.Paging.PagingDataAdapter.WithLoadStateFooter(AndroidX.Paging.LoadStateAdapter! footer) -> AndroidX.RecyclerView.Widget.ConcatAdapter!
+AndroidX.Paging.PagingDataAdapter.WithLoadStateHeader(AndroidX.Paging.LoadStateAdapter! header) -> AndroidX.RecyclerView.Widget.ConcatAdapter!
+AndroidX.Paging.PagingDataAdapter.WithLoadStateHeaderAndFooter(AndroidX.Paging.LoadStateAdapter! header, AndroidX.Paging.LoadStateAdapter! footer) -> AndroidX.RecyclerView.Widget.ConcatAdapter!
+AndroidX.Paging.PagingLiveData
+AndroidX.Paging.PlaceholderPaddedListDiffHelperKt
+override AndroidX.Paging.AsyncPagedListDiffer.JniPeerMembers.get -> Java.Interop.JniPeerMembers!
+override AndroidX.Paging.AsyncPagedListDiffer.ThresholdClass.get -> nint
+override AndroidX.Paging.AsyncPagedListDiffer.ThresholdType.get -> System.Type!
+override AndroidX.Paging.AsyncPagingDataDiffer.JniPeerMembers.get -> Java.Interop.JniPeerMembers!
+override AndroidX.Paging.AsyncPagingDataDifferKt.JniPeerMembers.get -> Java.Interop.JniPeerMembers!
+override AndroidX.Paging.LivePagedListBuilder.JniPeerMembers.get -> Java.Interop.JniPeerMembers!
+override AndroidX.Paging.LivePagedListKt.JniPeerMembers.get -> Java.Interop.JniPeerMembers!
+override AndroidX.Paging.LoadStateAdapter.ItemCount.get -> int
+override AndroidX.Paging.LoadStateAdapter.JniPeerMembers.get -> Java.Interop.JniPeerMembers!
+override AndroidX.Paging.LoadStateAdapter.ThresholdClass.get -> nint
+override AndroidX.Paging.LoadStateAdapter.ThresholdType.get -> System.Type!
+override AndroidX.Paging.PagedListAdapter.ItemCount.get -> int
+override AndroidX.Paging.PagedListAdapter.JniPeerMembers.get -> Java.Interop.JniPeerMembers!
+override AndroidX.Paging.PagedListAdapter.ThresholdClass.get -> nint
+override AndroidX.Paging.PagedListAdapter.ThresholdType.get -> System.Type!
+override AndroidX.Paging.PagingDataAdapter.ItemCount.get -> int
+override AndroidX.Paging.PagingDataAdapter.JniPeerMembers.get -> Java.Interop.JniPeerMembers!
+override AndroidX.Paging.PagingDataAdapter.ThresholdClass.get -> nint
+override AndroidX.Paging.PagingDataAdapter.ThresholdType.get -> System.Type!
+override AndroidX.Paging.PagingLiveData.JniPeerMembers.get -> Java.Interop.JniPeerMembers!
+override AndroidX.Paging.PlaceholderPaddedListDiffHelperKt.JniPeerMembers.get -> Java.Interop.JniPeerMembers!
+override sealed AndroidX.Paging.LoadStateAdapter.GetItemViewType(int position) -> int
+override sealed AndroidX.Paging.LoadStateAdapter.OnBindViewHolder(AndroidX.RecyclerView.Widget.RecyclerView.ViewHolder! holder, int position) -> void
+override sealed AndroidX.Paging.PagingDataAdapter.GetItemId(int position) -> long
+virtual AndroidX.Paging.AsyncPagedListDiffer.ItemCount.get -> int
+virtual AndroidX.Paging.PagedListAdapter.GetItem(int position) -> Java.Lang.Object?

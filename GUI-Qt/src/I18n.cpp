@@ -27,7 +27,7 @@ void I18n::init() {
     QSettings s = langSettings();
     m_lang = s.value(QStringLiteral("language")).toString();
     if (m_lang.isEmpty()) {
-        // 首次启动跟随系统语言
+        // 首次启动跟随系
         m_lang = QLocale::system().name().startsWith(QStringLiteral("zh"))
             ? QStringLiteral("zh")
             : QStringLiteral("en");
@@ -67,7 +67,7 @@ void I18n::changeLanguage(const QString& lang, QWidget* parent) {
     }
     m_lang = lang;
 
-    // 提示文案随界面语言翻译（I18n context）
+    // 提示文案随界面
     QMessageBox box(parent);
     box.setWindowTitle(QCoreApplication::translate("I18n", "语言"));
     box.setText(QCoreApplication::translate("I18n", "语言设置已保存，重启应用后完整生效。"));

@@ -10,12 +10,12 @@
 
 namespace {
 
-// 进程级 KDF 内存预算：并发进入 Argon2 前取信号量许可，避免批量解密 N 线程同时跑大内存
-// Argon2 导致 OOM。预算 = max_memory_bytes/128MB；为 0 表示不限制。惰性初始化。
+// 进程级 KDF 内存预算
+// Argon2 导致 OOM
 struct KdfSemaphore {
     std::mutex mtx;
     std::condition_variable cv;
-    std::atomic<long> permits{0};   // 0 = 不限制（无锁快路径读，消除 data race）
+    std::atomic<long> permits{0};   // 0 = 不限制
     std::atomic<bool> init{false};
     void ensure() {
         if(init.load(std::memory_order_acquire)) return;   // 无锁快路径
@@ -24,13 +24,13 @@ struct KdfSemaphore {
         const uint64_t budget = global_config().max_memory_bytes;
         long cap = 0;
         if(budget > 0) {
-            cap = (long)(budget / (128ULL*1024*1024));   // 以标准预设 128MB 为单份
+            cap = (long)(budget / (128ULL*1024*1024));   // 以标准预设 128MB
             if(cap < 1) cap = 1;
         }
         else {
-            // 未显式配置预算时也要限流：Argon2id 是内存带宽瓶颈型，并发度超过 4 后
-            // 墙钟几乎不再下降，峰值内存却线性增长（16 并发 × 128MiB ≈ 2GiB）。
-            // 默认封顶 4 并发 ≈ 512MiB，吞吐基本无损。
+            // 未显式配置预算
+            // 墙钟几乎
+            // 默认封顶 4 并发 ≈ 512MiB，吞
             unsigned hw = std::thread::hardware_concurrency();
             if(hw == 0) hw = 4;
             cap = (long)std::min<unsigned>(hw, 4);
@@ -40,7 +40,7 @@ struct KdfSemaphore {
         init.store(true, std::memory_order_release);
     }
     void acquire() {
-        if(permits.load(std::memory_order_acquire) == 0) return;   // 无锁读，无 data race
+        if(permits.load(std::memory_order_acquire) == 0) return;   // 无锁读
         std::unique_lock<std::mutex> lk(mtx);
         cv.wait(lk, [&]{ return permits.load(std::memory_order_relaxed) > 0; });
         permits.fetch_sub(1, std::memory_order_acq_rel);
@@ -71,7 +71,7 @@ bool derive_key(const unsigned char* password, size_t pwd_len,
     unsigned int opslimit,
     size_t memlimit,
     size_t key_len) {
-    // 参数超界说明文件头被篡改或伪造：直接拒绝（零资源消耗），不降级
+    // 参数超界说明文
     if(opslimit>KDF_OPS_LIMIT_MAX||memlimit>KDF_MEM_LIMIT_MAX_BYTES) {
         fprintf(stderr,
             "Refusing to process file: KDF parameters in the header are out of range "
@@ -81,7 +81,7 @@ bool derive_key(const unsigned char* password, size_t pwd_len,
             (unsigned long long)memlimit,(unsigned long long)KDF_MEM_LIMIT_MAX_BYTES);
         return false;
     }
-    // 头里可能填 0（伪造），补齐 crypto_pwhash 要求的下界
+    // 头里可能填 0
     if(memlimit<crypto_pwhash_MEMLIMIT_MIN) memlimit=crypto_pwhash_MEMLIMIT_MIN;
     if(opslimit<1) opslimit=1;
     g_kdf_sem.ensure();
@@ -113,7 +113,7 @@ void derive_progress_auth_key(const unsigned char* master_key,
     std::vector<unsigned char> in(tag, tag+sizeof(tag)-1);
     in.insert(in.end(), master_key, master_key+ARGON2_OUTPUT_LEN);
     crypto_generichash(auth_key, crypto_auth_KEYBYTES, in.data(), in.size(), nullptr, 0);
-    // in 内含主密钥副本（普通堆 vector，未锁页、析构不清零）：散列后立即擦除，避免残留。
+    // in 内含主密钥副本
     sodium_memzero(in.data(), in.size());
 }
 

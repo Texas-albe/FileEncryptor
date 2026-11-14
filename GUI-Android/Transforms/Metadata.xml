@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<metadata>
+  <!-- 移除 4 个 renderer/decoder 类的 C# 绑定：
+       FfmpegAudioDecoder 是 package-private 无法生成（CS0234），
+       FfmpegAudio/VideoRenderer 对 DecoderAudioRenderer 的 createDecoder/getOutputFormat
+       是协变返回，C# 非法（CS0534）。
+       运行时全部由 NextRenderersFactory 内部实例化，C# 侧无需直接引用。 -->
+  <remove-node path="/api/package[@name='io.github.anilbeesetti.nextlib.media3ext.ffdecoder']/class[@name='FfmpegAudioRenderer']" />
+  <remove-node path="/api/package[@name='io.github.anilbeesetti.nextlib.media3ext.ffdecoder']/class[@name='FfmpegVideoRenderer']" />
+  <remove-node path="/api/package[@name='io.github.anilbeesetti.nextlib.media3ext.ffdecoder']/class[@name='FfmpegAudioDecoder']" />
+  <remove-node path="/api/package[@name='io.github.anilbeesetti.nextlib.media3ext.ffdecoder']/class[@name='FfmpegVideoDecoder']" />
+</metadata>

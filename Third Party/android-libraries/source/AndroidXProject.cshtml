@@ -1,0 +1,184 @@
+@model AndroidBinderator.BindingProjectModel
+@using System
+@using System.Collections.Generic
+@using System.Linq
+@{
+  // Compose packages that ship real C# bindings (do not append the "C# bindings are not provided" note).
+  var ComposePackagesWithBindings = new HashSet<string>(StringComparer.Ordinal)
+  {
+    "Xamarin.AndroidX.Compose.Runtime",
+    "Xamarin.AndroidX.Compose.Runtime.Android",
+    "Xamarin.AndroidX.Compose.UI",
+    "Xamarin.AndroidX.Compose.UI.Android",
+    "Xamarin.AndroidX.Compose.Foundation",
+    "Xamarin.AndroidX.Compose.Foundation.Android",
+    "Xamarin.AndroidX.Compose.Foundation.Layout",
+    "Xamarin.AndroidX.Compose.Foundation.Layout.Android",
+    "Xamarin.AndroidX.Compose.UI.Graphics",
+    "Xamarin.AndroidX.Compose.UI.Graphics.Android",
+    "Xamarin.AndroidX.Compose.UI.Text",
+    "Xamarin.AndroidX.Compose.UI.Text.Android",
+    "Xamarin.AndroidX.Compose.UI.Unit",
+    "Xamarin.AndroidX.Compose.UI.Unit.Android",
+  };
+}
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Build properties -->
+  <PropertyGroup>
+    <TargetFrameworks>$(_DefaultTargetFrameworks)</TargetFrameworks>
+    <IsBindingProject>true</IsBindingProject>
+    <AssemblyName>@Model.GetAssemblyName()</AssemblyName>
+    <AndroidUseIntermediateDesignerFile>false</AndroidUseIntermediateDesignerFile>
+    <AndroidUseDesignerAssembly>false</AndroidUseDesignerAssembly>   
+    <RootNamespace>@Model.GetRootNamespace()</RootNamespace>
+    
+    <!--
+      No warnings for:
+       - CS0618: 'member' is obsolete: 'text'
+       - CS0109: The member 'member' does not hide an inherited member. The new keyword is not required
+       - CS0114: 'function1' hides inherited member 'function2'. To make the current method override that implementation, add the override keyword. Otherwise add the new keyword.
+       - CS0628: 'member' : new protected member declared in sealed class
+       - CS0108: 'member1' hides inherited member 'member2'. Use the new keyword if hiding was intended.
+       - CS0809: Obsolete member 'member' overrides non-obsolete member 'member'
+       - CS1572: XML comment has a param tag for '', but there is no parameter by that name
+       - XAOBS001: While this member is 'public', Google considers it internal API and reserves the right to modify or delete it in the future. Use at your own risk. 
+       - NU1605: Detected package downgrade
+    -->
+    <NoWarn>$(NoWarn);0618;0109;0114;0628;0108;0809;1572;XAOBS001;NU1605</NoWarn>
+
+@if (Model.AllowPrereleaseDependencies) {
+    <!-- Allow this package to have prerelease dependencies -->
+    <NoWarn>$(NoWarn);NU5104</NoWarn>
+}
+  </PropertyGroup>
+
+  <!-- NuGet package properties -->
+  <PropertyGroup>
+    <PackageId>@(Model.NuGetPackageId)</PackageId>
+    <Title>.NET for Android and MAUI bindings for the Android Java library '@(Model.MavenGroupId):@(Model.Name)'.</Title>
+    <Description>
+      $(Title)@(Model.NuGetPackageId.StartsWith("Xamarin.AndroidX.Compose") && !ComposePackagesWithBindings.Contains(Model.NuGetPackageId) ? " Note this package only adds the Java library to the application. C# bindings are not provided." : string.Empty)
+
+@(!string.IsNullOrWhiteSpace(Model.MavenDescription) ? $"Library description: {Model.MavenDescription}" : string.Empty)
+    </Description>
+    <PackageTags>xamarin artifact=@(Model.MavenGroupId):@(Model.Name) artifact_versioned=@(Model.MavenGroupId):@(Model.Name):@(Model.GetArtifactVersion())</PackageTags>
+@if (Model.CanUseSpdx)
+{
+    <PackageLicenseExpression>@Model.GetSpdxExpression()</PackageLicenseExpression>
+} else
+{
+    <PackageLicenseFile>LICENSE.md</PackageLicenseFile>
+}
+    <PackageIcon>icon.png</PackageIcon>
+    <PackageVersion>@(Model.NuGetVersion)$(PackageVersionSuffix)</PackageVersion>
+    <!-- Include symbol files (*.pdb) in the built .nupkg -->
+    <AllowedOutputExtensionsInPackageBuildOutputFolder>$(AllowedOutputExtensionsInPackageBuildOutputFolder);.pdb</AllowedOutputExtensionsInPackageBuildOutputFolder>
+  </PropertyGroup>
+
+  <!-- Packaging files -->
+  <ItemGroup>
+    <None Include="..\..\source\PackageLicense.md" Pack="True" PackagePath="LICENSE.md" />
+    <None Include=".\External-Dependency-Info.txt" Pack="True" PackagePath="THIRD-PARTY-NOTICES.txt" />
+    <None Include="..\..\build\icon.png" Pack="True" PackagePath="icon.png" />
+    <None Include=".\readme.md" Pack="True" PackagePath="readme.md" />
+  </ItemGroup>
+
+  <!-- Proguard files -->
+  @if (@Model.MavenArtifacts.Count > 0) {
+  <ItemGroup>
+    @foreach (var art in @Model.MavenArtifacts) {
+      if (art.ProguardFile != null) {
+    <None Include="..\..\@(art.ProguardFile)" Pack="True" PackagePath="proguard/" />
+      }
+    }
+  </ItemGroup>
+  }
+
+  <!-- Binding compilation files -->
+  <ItemGroup>
+    <!-- Include AssemblyInfo.cs -->
+    <Compile Include="..\..\source\AssemblyInfo.cs" />
+    
+    <!-- Include any Additions .cs file(s) -->
+    <Compile Include="..\..\source\@(Model.MavenGroupId)\@(Model.Name)\Additions\*.cs">
+      <Link>Additions/%(RecursiveDir)/%(Filename)%(Extension)</Link>
+    </Compile>
+
+    <!-- Include common metadata file -->
+    <TransformFile Include="..\..\source\Metadata.common.xml" >
+      <Link>Transforms/Metadata.common.xml</Link>
+    </TransformFile>
+
+@if (Model.Type == AndroidBinderator.BindingType.XamarinBuildDownload) {
+    <!-- This needs to be before package-level metadata to prevent api-diff changes in GPS -->
+    <TransformFile Include="..\..\source\GPS.Metadata.Common.xml" Link="Transforms/GPS.Metadata.Common.xml" />
+}
+    
+    <!-- Include any transform file(s) that are not TargetFramework specific -->
+    <TransformFile Include="..\..\source\@(Model.MavenGroupId)\@(Model.Name)\Transforms\*.xml" Exclude="$(DefaultTransformExcludes)">
+      <Link>Transforms/%(RecursiveDir)/%(Filename)%(Extension)</Link>
+    </TransformFile>
+    
+    <!-- Include any TargetFramework specific transform file(s) for this TF -->
+    <TransformFile Include="..\..\source\@(Model.MavenGroupId)\@(Model.Name)\Transforms\*.$(TargetFramework).xml">
+      <Link>Transforms/%(RecursiveDir)/%(Filename)%(Extension)</Link>
+    </TransformFile>
+
+    @foreach (var art in @Model.MavenArtifacts)
+    {
+      @if (art.DocumentationType == AndroidBinderator.DocumentationType.JavaDoc)
+      {
+    <JavaDocJar Include="..\..\externals\@(art.MavenGroupId)\@(art.MavenArtifactId)-javadoc.jar" />
+      }
+      @if (art.DocumentationType == AndroidBinderator.DocumentationType.JavaSource)
+      {
+    <JavaSourceJar Include="..\..\externals\@(art.MavenGroupId)\@(art.MavenArtifactId)-sources.jar" />
+      }
+    }
+
+  </ItemGroup>
+
+@if (Model.Type == AndroidBinderator.BindingType.Targets) {
+  await IncludeAsync("source/_TargetsProjectType.cshtml", Model);
+}
+@if (Model.Type == AndroidBinderator.BindingType.AndroidLibrary) {
+  await IncludeAsync("source/_AndroidLibraryProjectType.cshtml", Model);
+}
+@if (Model.Type == AndroidBinderator.BindingType.XamarinBuildDownload) {
+  await IncludeAsync("source/_XBDProjectType.cshtml", Model);
+}
+@if (Model.Type == AndroidBinderator.BindingType.NoBindings) {
+  await IncludeAsync("source/_NoBindingsProjectType.cshtml", Model);
+}
+
+  <!-- ProjectReferences -->
+  <ItemGroup>
+    @foreach (var dep in @Model.NuGetDependencies) {
+      if (dep.IsProjectReference) {
+    <ProjectReference Include="..\..\generated\@(dep.MavenArtifact.MavenGroupId).@(dep.MavenArtifact.MavenArtifactId)\@(dep.MavenArtifact.MavenGroupId).@(dep.MavenArtifact.MavenArtifactId).csproj" PrivateAssets="none" PackageVersion="@dep.GetProjectVersionString()" />
+      }
+    }
+  </ItemGroup>
+
+  <!-- PackageReferences -->
+  <ItemGroup>
+    @foreach (var dep in @Model.NuGetDependencies) {
+      if (!dep.IsProjectReference) {
+    <PackageReference Include="@(dep.NuGetPackageId)" Version="@dep.GetPackageVersionString()" PrivateAssets="none" />
+      }
+    }
+  </ItemGroup>
+
+  <!-- Public API files -->
+  <PropertyGroup>
+    <PublicAPIShippedFile>..\..\source\@(Model.MavenGroupId)\@(Model.Name)\PublicAPI\PublicAPI.Shipped.txt</PublicAPIShippedFile>
+    <PublicAPIUnshippedFile>..\..\source\@(Model.MavenGroupId)\@(Model.Name)\PublicAPI\PublicAPI.Unshipped.txt</PublicAPIUnshippedFile>
+  </PropertyGroup>
+  <ItemGroup>
+    <PublicAPIFiles Include="$(PublicAPIShippedFile);$(PublicAPIUnshippedFile)" />
+  </ItemGroup>
+
+  @{ await IncludeAsync("source/_PackageLevelCustomizations.cshtml", Model); }
+
+</Project>

@@ -2,20 +2,44 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Threading;
 using FileEncryptorGUI.Models;
 
 namespace FileEncryptorGUI.Services;
 
-// 直接启动 CLI 并回传输出
+// 启动 CLI 并回传输出
 public class CliProcessService
 {
     public event Action<CommandResult>? Finished;
-    // 子进程逐行输出事件
+    // 子进程逐行输出
     public event Action<string>? OutputLine;
-    // raw 模式：stdout 原始字节（不经行解析），供预览解密显示二进制明文前缀
+    // raw 模式
     public event Action<byte[]>? RawStdout;
-    // CLI 请求 y/n 确认，参数为完整问题（已含 y/N 提示）
+    // CLI 请求 y/n 确认
     public event Action<string>? ConfirmPrompt;
+
+    // 聚合输出
+    public static event Action<string>? GlobalOutput;
+
+    // 有 CLI
+    // 用计数
+    public static event Action? RunStarted;
+    public static event Action? RunEnded;
+    private static int s_activeRuns;
+    private bool _countedRun;   // 本次执行是否已
+
+    private static void NotifyRunStarted()
+    {
+        if (Interlocked.Increment(ref s_activeRuns) == 1) RunStarted?.Invoke();
+    }
+
+    private static void NotifyRunEnded()
+    {
+        int n = Interlocked.Decrement(ref s_activeRuns);
+        if (n > 0) return;
+        Interlocked.Exchange(ref s_activeRuns, 0);   // 异常路径下别
+        RunEnded?.Invoke();
+    }
 
     private Process? _process;
     private bool _cancelled;
@@ -25,8 +49,8 @@ public class CliProcessService
     private readonly StringBuilder _stderr = new();
     private bool _raw;
 
-    // 握手确认：CLI 把问题写进 _confirmFile，宿主弹窗后把 y/n 写回。
-    // 走文件而非 stdin —— stdin 已被 --key-stdin 读到 EOF 占满，宿主无法再应答。
+    // 握手确认
+    // 走文件
     private string _confirmFile = "";
     private volatile bool _confirmPending;
     private volatile bool _confirmAnswered;
@@ -38,12 +62,12 @@ public class CliProcessService
     public int FilesSkip { get; private set; }
     public int FilesFail { get; private set; }
 
-    // 预览解密要用：stdout 是二进制明文，不能按行切
+    // 预览解密要用
     public void SetRawMode(bool on) => _raw = on;
 
-    // 握手文件轮询。CLI 写问题 -> 宿主弹窗 -> 宿主写答案 -> CLI 取走后清空文件。
-    // 三态严格串行：pending（等回答）/ answered（等 CLI 取走）/ 空（可接受新问题），
-    // 缺了这层串行就会把刚写进去的答案当成新问题再弹一次。
+    // 握手文件轮询
+    // 三态严格串行
+    // 缺了这层串行
     private void StartConfirmWatch(string file)
     {
         StopConfirmWatch();
@@ -51,7 +75,7 @@ public class CliProcessService
         if (string.IsNullOrEmpty(file)) return;
         _confirmPending = false;
         _confirmAnswered = false;
-        // 上一轮的残留内容不能被这轮读到
+        // 上一轮
         try { if (File.Exists(file)) File.Delete(file); } catch { }
 
         var cts = new CancellationTokenSource();
@@ -68,7 +92,7 @@ public class CliProcessService
                         content = File.ReadAllText(file, Encoding.UTF8).Trim();
                     if (content.Length == 0)
                     {
-                        // CLI 取走答案后会清空文件，此时才允许下一次询问
+                        // CLI 取走答案
                         _confirmPending = false;
                         _confirmAnswered = false;
                     }
@@ -86,7 +110,7 @@ public class CliProcessService
         }, token);
     }
 
-    // 回答 CLI 的 y/n 询问
+    // 回答 CLI
     public void AnswerConfirm(bool yes)
     {
         if (!_confirmPending || _confirmAnswered || string.IsNullOrEmpty(_confirmFile)) return;
@@ -94,7 +118,7 @@ public class CliProcessService
         {
             if (File.Exists(_confirmFile)) File.Delete(_confirmFile);
             File.WriteAllText(_confirmFile, yes ? "y\n" : "n\n", new UTF8Encoding(false));
-            _confirmAnswered = true;   // 等 CLI 清空文件后才复位
+            _confirmAnswered = true;   // 等 CLI 清空文件后才
         }
         catch (IOException)
         {
@@ -120,11 +144,14 @@ public class CliProcessService
     {
         _cancelled = false;
         _finishedEmitted = false;
+        // 预览解密是 raw 模式
+        _countedRun = !_raw;
+        if (_countedRun) NotifyRunStarted();
         TotalBytes = 0;
         FilesDone = FilesSkip = FilesFail = 0;
         lock (_stderr) { _stderr.Clear(); }
 
-        // 统计文件随机命名入用户目录
+        // 统计文件随机命
         var statsDir = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "FileEncryptor", "GUI");
@@ -134,26 +161,26 @@ public class CliProcessService
 
         StartConfirmWatch(request.ConfirmFile);
 
-        // 控制台模式：直接拉起 CLI（控制台子系统进程由 OS 分配独立控制台窗口显示进度/密码）。
-        // 用 ArgumentList 传参（UTF-16 精确，免 cmd.exe 按 OEM 代码页解参导致中文乱码），
-        // 不再经 cmd.exe /c fe_run_xxx.cmd 包裹——这样 _process 直接是 CLI，取消时 Kill 能精准杀掉它。
+        // 控制台模式
+        // 用 ArgumentList 传参
+        // 经 cmd.exe /c
         if (request.ShowConsole && OperatingSystem.IsWindows())
             StartConsole(request);
         else
             StartRedirected(request);
     }
 
-    // 系统控制台模式：直接拉起 CLI，由 OS 给控制台子系统进程分配独立窗口显示进度/密码。
-    // 密码仍走 stdin 管道（与 Qt 一致），控制台只负责显示输出。
+    // 系统控制台模式
+    // 密码仍走 stdin 管道
     private void StartConsole(CommandRequest request)
     {
         var psi = new ProcessStartInfo
         {
             FileName = request.ProgramPath,
             UseShellExecute = false,
-            // 窗口可见：进度与结果都在控制台里
+            // 窗口可见
             CreateNoWindow = false,
-            // 密码走 stdin 管道；stdout/stderr 不重定向 → 直接显示在控制台窗口
+            // 密码走 stdin 管道
             RedirectStandardInput = true,
             RedirectStandardOutput = false,
             RedirectStandardError = false,
@@ -175,7 +202,7 @@ public class CliProcessService
                 {
                     _process.StandardInput.BaseStream.Write(request.StdinData);
                     _process.StandardInput.Flush();
-                    // 密码字节写入后立即清零
+                    // 密码字节写入
                     Array.Clear(request.StdinData, 0, request.StdinData.Length);
                 }
                 _process.StandardInput.Close();
@@ -188,7 +215,7 @@ public class CliProcessService
         });
     }
 
-    // 结束后保留 3 秒再关窗；延迟展开取 CLI 真实退出码（保留原注释意图：此处不再经 cmd.exe）。
+    // 结束后保留 3 秒
     private void CleanupConsoleCmd() { }
 
     private void StartRedirected(CommandRequest request)
@@ -201,9 +228,9 @@ public class CliProcessService
             // 必须重定向 stdout/stderr
             RedirectStandardOutput = true,
             RedirectStandardError = true,
-            // 不弹出控制台窗口
+            // 不弹出控制台窗
             CreateNoWindow = true,
-            // CLI 输出固定 UTF-8：不显式指定会按系统代码页解码，中文路径/日志会变乱码
+            // CLI 输出固定 UTF-8
             StandardOutputEncoding = new UTF8Encoding(false),
             StandardErrorEncoding = new UTF8Encoding(false),
         };
@@ -214,13 +241,14 @@ public class CliProcessService
         foreach (var kv in request.ExtraEnv) psi.Environment[kv.Key] = kv.Value;
 
         _process = new Process { StartInfo = psi, EnableRaisingEvents = true };
-        // 异步逐行读取输出；raw 模式改由 ReadRawStdout 直读字节流
+        // 异步逐行读取输
         if (!_raw)
         {
             _process.OutputDataReceived += (_, e) =>
             {
                 if (e.Data == null) return;
                 OutputLine?.Invoke(e.Data);
+                GlobalOutput?.Invoke(e.Data);
             };
         }
         _process.ErrorDataReceived += (_, e) =>
@@ -228,6 +256,7 @@ public class CliProcessService
             if (e.Data == null) return;
             lock (_stderr) { _stderr.AppendLine(e.Data); }
             OutputLine?.Invoke(e.Data);
+            GlobalOutput?.Invoke(e.Data);
         };
         _process.Exited += (_, _) => OnProcessExited();
 
@@ -245,13 +274,13 @@ public class CliProcessService
             }
             catch (Exception ex)
             {
-                // 启动失败直接结束
+                // 启动失败直接结
                 EmitFinished(new CommandResult { ExitCode = -1, ErrorString = ex.Message });
                 try { _process?.Dispose(); } catch { }
             }
             finally
             {
-                // 密码字节写入后立即清零
+                // 密码字节写入
                 if (request.StdinData.Length > 0)
                     Array.Clear(request.StdinData, 0, request.StdinData.Length);
             }
@@ -267,7 +296,7 @@ public class CliProcessService
         }
     }
 
-    // 预览解密：stdout 是二进制明文前缀，按字节读，不做行切分与字符解码
+    // 预览解密
     private async Task ReadRawStdout(Process proc)
     {
         try
@@ -285,7 +314,7 @@ public class CliProcessService
         }
         catch (Exception ex) when (ex is IOException or ObjectDisposedException or InvalidOperationException)
         {
-            // 进程被 kill 或管道关闭：属正常收尾
+            // 进程
         }
     }
 
@@ -297,9 +326,9 @@ public class CliProcessService
             if (proc == null) return;
             proc.WaitForExit();
             int code = proc.ExitCode;
-            // 临时批处理用完即删
+            // 临时批处理用完
             CleanupConsoleCmd();
-            // 独占打开统计文件
+            // 独占打开统计文
             try
             {
                 using var fs = new FileStream(_statsFile, FileMode.Open, FileAccess.Read, FileShare.None);
@@ -332,7 +361,7 @@ public class CliProcessService
         }
         finally
         {
-            // 统一释放进程句柄
+            // 统一释放进程句
             try { proc?.Dispose(); } catch { }
             _process = null;
         }
@@ -343,6 +372,7 @@ public class CliProcessService
         if (_finishedEmitted) return;
         _finishedEmitted = true;
         StopConfirmWatch();
+        if (_countedRun) { _countedRun = false; NotifyRunEnded(); }
         Finished?.Invoke(r);
     }
 }

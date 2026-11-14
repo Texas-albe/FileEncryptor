@@ -1,9 +1,10 @@
-// 通用批量层：遍历 / 搬运 / 续传簿记 / 审计日志
+// 通用批量层
 #include "saf_batch.hpp"
 
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <mutex>
 
 namespace {
 
@@ -24,7 +25,29 @@ std::string num(uint64_t v) {
     return std::string(buf);
 }
 
-// 逐段切分读取一行（'\n' 分隔）
+
+SafAuditLog g_audit_log;
+SafAuditHook g_audit_hook;
+std::mutex g_audit_mutex;
+
+std::string json_escape(const std::string& s) {
+    std::string o;
+    for (unsigned char c : s) {
+        switch (c) {
+        case '"':  o += "\\\""; break;
+        case '\\': o += "\\\\"; break;
+        case '\n': o += "\\n"; break;
+        case '\r': o += "\\r"; break;
+        case '\t': o += "\\t"; break;
+        default:
+            if (c < 0x20) { char b[8]; std::snprintf(b, sizeof(b), "\\u%04x", c); o += b; }
+            else o += (char)c;
+        }
+    }
+    return o;
+}
+
+// 逐段切分读取一
 bool next_line(const std::string& s, size_t& pos, std::string& out) {
     if (pos >= s.size()) return false;
     size_t e = s.find('\n', pos);
@@ -81,25 +104,43 @@ SafStatus saf_transfer_file(StorageBackend& src, const std::string& src_path,
                             const SafTransferProgress& prog,
                             uint64_t* out_copied) {
     if (out_copied) *out_copied = 0;
+    struct AuditGuard {
+        std::string key;
+        std::chrono::steady_clock::time_point t0;
+        uint64_t copied = 0;
+        SafStatus st = SAF_OK;
+        ~AuditGuard() {
+            SafAuditEvent e;
+            e.op = "transfer_file";
+            e.key = key;
+            e.status = st;
+            e.bytes = copied;
+            e.elapsed_ms = (uint64_t)std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - t0).count();
+            e.error_code = (int)st;
+            saf_audit_log().append(e);
+        }
+    } audit{src_path, std::chrono::steady_clock::now(), 0, SAF_OK};
+    auto done = [&](SafStatus s) -> SafStatus { audit.st = s; return s; };
 
     std::string sp, dp;
-    if (!saf_path_normalize(src_path, sp)) return SAF_E_BADARG;
-    if (!saf_path_normalize(dst_path, dp)) return SAF_E_BADARG;
+    if (!saf_path_normalize(src_path, sp)) return done(SAF_E_BADARG);
+    if (!saf_path_normalize(dst_path, dp)) return done(SAF_E_BADARG);
 
     std::shared_ptr<Stream> rs;
     SafStatus st = src.open(sp, 'r', rs);
-    if (st != SAF_OK) return st;
+    if (st != SAF_OK) return done(st);
 
     std::shared_ptr<Stream> ws;
     if (skip_bytes > 0) {
         st = dst.open(dp, 'a', ws);
-        if (st == SAF_E_NOTIMPL) return SAF_E_NOTIMPL;   // 目标不支持追加 = 不能续传
+        if (st == SAF_E_NOTIMPL) return done(SAF_E_NOTIMPL);   // 目标不支持追加 =
     } else {
         st = dst.open(dp, 'w', ws);
     }
-    if (st != SAF_OK) return st;
+    if (st != SAF_OK) return done(st);
 
-    // 搬运循环统一走 saf_pump（含续传跳过 / 进度 / 中止 / 锁定缓冲），此处只做开关流
+    // 搬运循环统一走 saf_pump
     SafPumpProgress pp;
     pp.on_bytes = prog.on_bytes;
     pp.cancelled = prog.cancelled;
@@ -108,10 +149,11 @@ SafStatus saf_transfer_file(StorageBackend& src, const std::string& src_path,
     SafStatus pr = saf_pump(*rs, *ws, skip_bytes, pp, &copied);
     SafStatus fc = ws->close();
     rs->close();
-    if (pr != SAF_OK) return pr;
-    if (fc != SAF_OK) return fc;
+    if (pr != SAF_OK) return done(pr);
+    if (fc != SAF_OK) return done(fc);
+    audit.copied = copied;
     if (out_copied) *out_copied = copied;
-    return SAF_OK;
+    return done(SAF_OK);
 }
 
 // 续传簿记
@@ -210,18 +252,36 @@ SafStatus saf_transfer_tree(StorageBackend& src, const std::string& src_root,
                             SafResumeBook& book, const std::string& key_prefix,
                             const SafTransferProgress& prog,
                             SafTransferStats& out_stats) {
+    struct TreeAudit {
+        std::string key;
+        std::chrono::steady_clock::time_point t0;
+        uint64_t bytes = 0;
+        SafStatus st = SAF_OK;
+        ~TreeAudit() {
+            SafAuditEvent e;
+            e.op = "transfer_tree";
+            e.key = key;
+            e.status = st;
+            e.bytes = bytes;
+            e.elapsed_ms = (uint64_t)std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - t0).count();
+            e.error_code = (int)st;
+            saf_audit_log().append(e);
+        }
+    } audit{src_root, std::chrono::steady_clock::now(), 0, SAF_OK};
+    auto done = [&](SafStatus s) -> SafStatus { audit.st = s; return s; };
     std::vector<SafWalkItem> items;
     SafStatus st = saf_walk(src, src_root, items);
-    if (st != SAF_OK) return st;
+    if (st != SAF_OK) return done(st);
 
     std::string sr, dr;
-    if (!saf_path_normalize(src_root, sr)) return SAF_E_BADARG;
-    if (!saf_path_normalize(dst_root, dr)) return SAF_E_BADARG;
+    if (!saf_path_normalize(src_root, sr)) return done(SAF_E_BADARG);
+    if (!saf_path_normalize(dst_root, dr)) return done(SAF_E_BADARG);
 
     for (const auto& it : items) {
-        if (prog.cancelled && prog.cancelled()) return SAF_E_BADARG;
+        if (prog.cancelled && prog.cancelled()) return done(SAF_E_BADARG);
 
-        std::string rel = it.path;                 // 相对 src_root 的逻辑路径
+        std::string rel = it.path;                 // 相对 src_root
         if (!sr.empty()) {
             if (rel.size() > sr.size() && rel.compare(0, sr.size(), sr) == 0 &&
                 rel[sr.size()] == '/') rel = rel.substr(sr.size() + 1);
@@ -235,7 +295,7 @@ SafStatus saf_transfer_tree(StorageBackend& src, const std::string& src_root,
         std::string key = key_prefix + "|" + rel;
 
         if (it.is_dir) {
-            if (dst.can_write()) dst.mkdir(join_path(dr, dst_rel));   // 不支持则忽略
+            if (dst.can_write()) dst.mkdir(join_path(dr, dst_rel));   // 不支持
             continue;
         }
 
@@ -246,7 +306,7 @@ SafStatus saf_transfer_tree(StorageBackend& src, const std::string& src_root,
         uint64_t skip = 0;
         if (const SafResumeEntry* e = book.find(key)) skip = e->bytes;
 
-        // 目标子目录在对象存储类后端上不存在，建目录失败忽略即可
+        // 目标子目录
         size_t slash = dst_rel.find_last_of('/');
         if (slash != std::string::npos && dst.can_write())
             dst.mkdir(join_path(dr, dst_rel.substr(0, slash)));
@@ -254,22 +314,22 @@ SafStatus saf_transfer_tree(StorageBackend& src, const std::string& src_root,
         uint64_t copied = 0;
         st = saf_transfer_file(src, it.path, dst, join_path(dr, dst_rel), skip, prog, &copied);
         if (st == SAF_OK && skip + copied != it.size) {
-            // 低危：簿记损坏（如旧簿记 bytes 大于源实际大小）——不信簿记，删掉半成品目标后从零整文件重做；只删自己刚写的目标，不碰别处
+            // 低危
             std::string dfull = join_path(dr, dst_rel);
             SafStatus dr_st = dst.delete_file(dfull);
             if (dr_st == SAF_OK || dr_st == SAF_E_NOTFOUND) {
                 skip = 0;
                 st = saf_transfer_file(src, it.path, dst, dfull, 0, prog, &copied);
             } else {
-                st = SAF_E_IO;   // 半成品删不掉，无法干净重做
+                st = SAF_E_IO;   // 半成品删不掉
             }
         }
         if (st != SAF_OK) {
-            if (st == SAF_E_BADARG && prog.cancelled && prog.cancelled()) return st;   // 中止
+            if (st == SAF_E_BADARG && prog.cancelled && prog.cancelled()) return done(st);   // 中止
             out_stats.files_fail++;
             continue;
         }
-        if (skip + copied != it.size) {   // 重做后仍不符：源大小可疑，按失败计，绝不 mark_done
+        if (skip + copied != it.size) {   // 重做后仍不符
             out_stats.files_fail++;
             continue;
         }
@@ -277,14 +337,21 @@ SafStatus saf_transfer_tree(StorageBackend& src, const std::string& src_root,
         out_stats.files_done++;
         out_stats.bytes += copied + skip;
     }
-    return SAF_OK;
+    audit.bytes = out_stats.bytes;
+    return done(SAF_OK);
 }
 
 // 审计日志
 void SafAuditLog::append(const SafAuditEvent& ev) {
     SafAuditEvent e = ev;
     if (e.ts == 0) e.ts = now_sec();
-    evs_.push_back(e);
+    SafAuditHook hook;
+    {
+        std::lock_guard<std::mutex> lk(g_audit_mutex);
+        evs_.push_back(e);
+        hook = g_audit_hook;
+    }
+    if (hook) hook(e);   // 解锁
 }
 
 const std::vector<SafAuditEvent>& SafAuditLog::events() const { return evs_; }
@@ -309,6 +376,30 @@ std::string SafAuditLog::serialize() const {
         o += "\n";
     }
     return o;
+}
+
+
+std::string SafAuditLog::to_jsonl() const {
+    std::string o;
+    for (const auto& e : evs_) {
+        o += "{\"schema\":1,\"ts\":" + num(e.ts)
+           + ",\"op\":\"" + json_escape(e.op)
+           + "\",\"key\":\"" + json_escape(e.key)
+           + "\",\"status\":" + num((uint64_t)e.status)
+           + ",\"bytes\":" + num(e.bytes)
+           + ",\"elapsed_ms\":" + num(e.elapsed_ms)
+           + ",\"error_code\":" + std::to_string(e.error_code)
+           + ",\"device_id\":\"" + json_escape(e.device_id)
+           + "\"}\n";
+    }
+    return o;
+}
+
+SafAuditLog& saf_audit_log() { return g_audit_log; }
+
+void saf_set_audit_hook(SafAuditHook hook) {
+    std::lock_guard<std::mutex> lk(g_audit_mutex);
+    g_audit_hook = std::move(hook);
 }
 
 bool SafAuditLog::deserialize(const std::string& text) {

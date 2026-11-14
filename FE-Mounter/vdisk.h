@@ -5,12 +5,12 @@
  */
 #ifndef VDISK_H
 #define VDISK_H
+// vdisk.h 副本提示
+// 本文件是 CLI/include/vdisk.h
+// 。改 ABI 时必须两边同
+// 校验
+// 副本提示结束
 
-// --- vdisk.h 副本提示（本段在校验时剔除）---
-// 本文件是 CLI/include/vdisk.h 的副本，供 FE-Mounter 独立构建 / 只同步单个目录时使用
-// （定位逻辑见 FE-Mounter/CMakeLists.txt）。改 ABI 时必须两边同步。
-// 校验：python .workbuddy/check_vdisk_hdr.py
-// --- 副本提示结束 ---
 #include <stdint.h>
 
 #ifdef __cplusplus
@@ -46,6 +46,14 @@ typedef enum {
     VDISK_E_EXIST = -10,      /* 目标已存在（重命名冲突） */
     VDISK_E_INTERNAL = -99
 } VDiskStatus;
+
+/*
+ * ABI 版本（构建期常量）。加载方（FE-Mounter / SAF vdisk host）绑定符号后必须调 vdisk_abi_version() 校验，
+ * 与构建期 VDISK_ABI_VERSION 不符即拒绝加载——旧版/第三方 DLL 可能符号齐全但语义或结构体布局已漂移。
+ * 破坏性变更（函数语义 / VDiskEntry 布局）必须递增此版本号；仅新增符号可不增。
+ */
+#define VDISK_ABI_VERSION 0x00010000u
+VDISK_API uint32_t vdisk_abi_version(void);
 
 /* 生命周期 */
 VDISK_API VDiskHandle* vdisk_open(const char* library_dir);   /* 打开库（不解锁） */
@@ -105,7 +113,8 @@ VDISK_API const char* vdisk_strerror(VDiskStatus);
 VDISK_API VDiskStatus vdisk_recovery_gen(char* out_code, uint64_t code_cap);
 /* 建立/重建保险文件 .fevault（存主密码副本；已有则覆盖）。 */
 VDISK_API VDiskStatus vdisk_recovery_create(VDiskHandle*, const char* code);
-/* 用恢复密钥解出主密码副本（写入 out，*len 为容量/实际长度）；不入常驻状态。 */
+/* 用恢复密钥解出主密码副本。*len 入参为 out_pass 容量，成功时出参为实际长度；
+ * 容量不足返回 VDISK_E_BADARG 且 *len 保持调用方原值不被改写（需要更大缓冲由调用方自行决定）。不入常驻状态。 */
 VDISK_API VDiskStatus vdisk_recovery_open(VDiskHandle*, const char* code,
                                           char* out_pass, uint64_t* len);
 VDISK_API VDiskStatus vdisk_recovery_remove(VDiskHandle*);
@@ -120,6 +129,19 @@ VDISK_API VDiskStatus vdisk_set_read_cache(VDiskHandle*, uint64_t cap_bytes, uin
 /* 容量统计：已用 = 索引内所有文件明文大小之和；total 由 max_bytes 限制（0 = 用默认动态上限）。
  * 供挂载层按实际占用回填卷容量，避免固定 1TiB 造成磁盘管理误导。 */
 VDISK_API VDiskStatus vdisk_stat_space(VDiskHandle*, uint64_t* out_used, uint64_t* out_total);
+
+/* ---- M5+ 忙闲续期（挂载层防误锁）---- */
+/* note_activity：把空闲计时推到当前。前台程序持着打开的文件句柄时（播放器读缓存命中后
+ * 不再发读 I/O，touch_activity 无从刷新），或外部进程正在写库时，挂载层调它续期，
+ * 避免「电影看一半被自动锁」「入盘入一半盘被锁」。锁态下为空操作。 */
+VDISK_API void        vdisk_note_activity(VDiskHandle*);
+/* 索引版本戳（.feindex.d/.stamp 单调计数）。外部进程（GUI/CLI 入盘、recrypt 等）每写一次
+ * 索引戳就变；挂载层据此判定「库正被外部使用」，与前台句柄同等续期。句柄无效返回 0。 */
+VDISK_API uint64_t    vdisk_index_stamp(VDiskHandle*);
+/* 真实锁态查询（1=已解锁，0=已锁）。idle_remaining 在「超时关闭(0)」时也返回 UINT32_MAX，
+ * 与「已锁定」无法区分；挂载层纠正 g_ipc_unlocked 标志必须用本函数，否则 suspend 关掉
+ * 库层计时后会被误判成已锁（曾真实发生：设了暂停 1 秒内盘就被标锁）。 */
+VDISK_API int         vdisk_is_unlocked(VDiskHandle*);
 
 #ifdef __cplusplus
 }

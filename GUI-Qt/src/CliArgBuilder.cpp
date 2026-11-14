@@ -18,9 +18,9 @@
 #include <unistd.h>
 #endif
 
-// 命令预览随界面语言
+// 命令预览随界面
 
-// -m 取值：GUI 的选项下标与 CLI 模式名一一对应
+// m 取值
 static const char* modeToken(CryptoMode m) {
     switch (m) {
     case CryptoMode::Aegis256: return "aegis256";
@@ -38,8 +38,8 @@ static const char* wrapAlgToken(WrapAlg a) {
     }
 }
 
-// 密码框里存的是私钥明文，而 CLI 的 --wm-sign 只收文件路径：
-// 是密钥材料就落一份临时文件给 CLI 用，路径在任务结束时清掉。
+// 密码框里存
+// 是密钥材料
 static QString s_wmKeyTempPath;
 
 bool CliArgBuilder::isPrivateKeyMaterial(const QString& key)
@@ -47,9 +47,9 @@ bool CliArgBuilder::isPrivateKeyMaterial(const QString& key)
     return key.contains(QStringLiteral("PRIVATE KEY"));
 }
 
-// P2-3：删前先零填充。只 remove 的话明文私钥仍留在磁盘可恢复区，恢复工具能读出来。
-// H6a：必须用 ReadWrite 打开——WriteOnly 一打开就截断，size() 恒为 0，零填充从未执行。
-// flush() 只刷用户态缓冲，还要 FlushFileBuffers/fsync 才能真正落盘后再删。
+// P2-3
+// H6a
+// flush 只刷用户态缓冲
 static void shred_file(const QString& path) {
     if (path.isEmpty()) return;
     QFile f(path);
@@ -70,9 +70,9 @@ static void shred_file(const QString& path) {
     QFile::remove(path);
 }
 
-// H6b：把敏感临时文件的 DACL 收紧为「当前用户 + SYSTEM」，去掉继承来的
-// Administrators 完全控制。Windows 上 setPermissions(0600) 只是注释（Qt 只映射
-// 只读属性），必须显式 SetNamedSecurityInfoW；非 Windows 回落 0600 权限位。
+// H6b
+// Administrators 完全控制。Windows
+// 只读属性）
 void CliArgBuilder::setTempFileAcl(const QString& path) {
     if (path.isEmpty()) return;
 #ifdef Q_OS_WIN
@@ -107,7 +107,7 @@ void CliArgBuilder::setTempFileAcl(const QString& path) {
     }
     PACL dacl = NULL;
     if (SetEntriesInAclW(n, ea, NULL, &dacl) == ERROR_SUCCESS && dacl) {
-        // PROTECTED：阻断从 %TEMP% 继承的宽松 ACE
+        // PROTECTED
         SetNamedSecurityInfoW(
             reinterpret_cast<LPWSTR>(const_cast<ushort*>(path.utf16())),
             SE_FILE_OBJECT,
@@ -121,23 +121,23 @@ void CliArgBuilder::setTempFileAcl(const QString& path) {
 #endif
 }
 
-// 私钥明文落 0600 临时文件；成功返回 true。失败一律返回 false，
-// 调用方必须放弃任务——绝不能把明文私钥当 argv 元素下发（/proc/<pid>/cmdline 世界可读）。
+// 私钥明文落 0600 临
+// 调用方必须放弃
 static bool write_wm_key_temp(const QString& pem) {
-    // X 必须收尾：Qt 只替换模板末尾 6 个字符位，写 ".pem" 后缀会把后缀一起换掉
+    // X 必须收尾
     QTemporaryFile tmp(QDir::temp().absoluteFilePath(
         QStringLiteral("fe_wm_XXXXXX")));
-    // 不自动删：文件要活到 CLI 读完，统一由 cleanupWatermarkTemp() 收尾
+    // 不自动删
     tmp.setAutoRemove(false);
-    // 0600：多用户 POSIX 下默认 0644 会让同机其他用户读到签名私钥
+    // 0600
     tmp.setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner);
-    // 无参 open() 是 public；带参数的重载在 QTemporaryFile 里是 protected
+    // 无参 open
     if (!tmp.open()) return false;
-    // H6b：创建后立即收紧 DACL（Windows 0600 权限位是 no-op）
+    // H6b
     CliArgBuilder::setTempFileAcl(tmp.fileName());
     QByteArray blob = pem.toUtf8();
     if (tmp.write(blob) != static_cast<qint64>(blob.size())) {
-        // 半截私钥不能留在磁盘，粉碎后报失败
+        // 半截私钥不能留
         tmp.close();
         shred_file(tmp.fileName());
         secure_zero(blob.data(), static_cast<size_t>(blob.size()));
@@ -146,12 +146,12 @@ static bool write_wm_key_temp(const QString& pem) {
     }
     tmp.flush();
     s_wmKeyTempPath = tmp.fileName();
-    secure_zero(blob.data(), static_cast<size_t>(blob.size()));   // P2-3：明文缓冲立即清零
+    secure_zero(blob.data(), static_cast<size_t>(blob.size()));   // P2-3
     return true;
 }
 
-// 以 '-' 开头的路径值会被 CLI11 当选项解析（报错或被误判）：统一加 "./" 前缀，
-// 强制回落成普通取值 / 位置参数。只动取值位，选项本身与 -m/--split 等非路径值不动。
+// 以 '-' 开头
+// 强制回落成普通
 static QStringList guardDashPaths(const QStringList& args) {
     static const QSet<QString> kValueFlags = {
         QStringLiteral("-o"), QStringLiteral("-i"), QStringLiteral("-k"),
@@ -167,7 +167,6 @@ static QStringList guardDashPaths(const QStringList& args) {
     bool expectValue = false;
     for (const QString& a : args) {
         if (afterDashDash) {
-            // -- 之后一律是输入文件，同样要防
             out << (a.startsWith(QLatin1Char('-')) ? QStringLiteral("./") + a : a);
             continue;
         }
@@ -182,12 +181,12 @@ static QStringList guardDashPaths(const QStringList& args) {
     return out;
 }
 
-// M49：落盘路径（execute 前用）与纯构建（预览用）分离：
-// allowKeyFileWrite=false 时绝不在预览里落水印私钥临时文件。
+// M49
+// allowKeyFileWrite=false
 static QStringList buildArgumentsImpl(const ShellOptions& o, bool allowKeyFileWrite) {
     QStringList args;
 
-    // 三个密钥动作无需输入文件
+    // 三个密钥动作无
     if (o.action == CryptoAction::KeyGen) {
         args << QStringLiteral("-g");
         if (o.useX448) {
@@ -216,8 +215,8 @@ static QStringList buildArgumentsImpl(const ShellOptions& o, bool allowKeyFileWr
         }
         return guardDashPaths(args);
     }
-    // 密钥包装：与加解密流程完全独立，只有 --wrap-key / --unwrap-key 一组参数。
-    // 密码 / 私钥不落 argv：统一走 --key-stdin 或 -k <file>，理由同水印私钥。
+    // 密钥包装
+    // 密码 / 私钥不落 argv
     if (o.action == CryptoAction::WrapKey) {
         args << QStringLiteral("--wrap-key") << o.wrapInput;
         args << QStringLiteral("--wrap-alg") << wrapAlgToken(o.wrapAlg);
@@ -225,7 +224,7 @@ static QStringList buildArgumentsImpl(const ShellOptions& o, bool allowKeyFileWr
             args << QStringLiteral("--wrap-out") << o.wrapOutput;
         }
         if (o.wrapAlg == WrapAlg::Pubkey) {
-            // 公钥路线：--wrap-to 接字符串或文件都认，这里优先给路径
+            // 公钥路线
             args << QStringLiteral("--wrap-to") << o.recipientPath;
         } else if (!o.keyfilePath.isEmpty()) {
             args << QStringLiteral("-k") << o.keyfilePath;
@@ -238,7 +237,7 @@ static QStringList buildArgumentsImpl(const ShellOptions& o, bool allowKeyFileWr
     if (o.action == CryptoAction::UnwrapKey) {
         args << QStringLiteral("--unwrap-key") << o.wrapInput;
         if (o.wrapAlg != WrapAlg::Pubkey) {
-            // 解包时算法存在 blob 头里，但 GUI 侧的 alg 选择也用于决定「要不要密码」
+            // 解包时算法存
             if (!o.keyfilePath.isEmpty()) {
                 args << QStringLiteral("-k") << o.keyfilePath;
             } else {
@@ -260,7 +259,7 @@ static QStringList buildArgumentsImpl(const ShellOptions& o, bool allowKeyFileWr
     const bool isBatch = (o.action == CryptoAction::BatchEncrypt ||
                           o.action == CryptoAction::BatchDecrypt);
 
-    // 处理单/批加密解密
+    // 处理单/批加密解
     switch (o.action) {
     case CryptoAction::Encrypt:       args << QStringLiteral("-e");  break;
     case CryptoAction::Decrypt:      args << QStringLiteral("-d");  break;
@@ -271,12 +270,12 @@ static QStringList buildArgumentsImpl(const ShellOptions& o, bool allowKeyFileWr
     case CryptoAction::PubKey:
     case CryptoAction::WrapKey:
     case CryptoAction::UnwrapKey:
-        break;   // 包装动作在上面的分支里已各自 return
+        break;   // 包装动作
     }
 
-    // CLI 的 -m 后写覆盖前写，但 -m x25519/x448 只置 asym 标志、不改算法，
-    // 所以两条都带上即为「非对称封装 + 指定文件载荷对称算法」。
-    // 解密一律不带 -m：非对称通道由 CLI 按「.ptd + 身份私钥文件」自动识别。
+    // CLI 的 -m 后写覆盖前写
+    // 两条
+    // 解密一律不带 -m
     if (isEnc) {
         if (isAsym) {
             args << QStringLiteral("-m") << (o.useX448 ? QStringLiteral("x448") : QStringLiteral("x25519"));
@@ -286,7 +285,7 @@ static QStringList buildArgumentsImpl(const ShellOptions& o, bool allowKeyFileWr
         }
     }
 
-    // 加密盘入盘（M1/M4）：勾了「入盘」就走 --into-vault，产物入索引；与 -o 互斥（由界面保证）
+    // 加密盘入盘
     if (isEnc && !o.intoVault.isEmpty()) {
         args << QStringLiteral("--into-vault") << o.intoVault;
     }
@@ -295,7 +294,7 @@ static QStringList buildArgumentsImpl(const ShellOptions& o, bool allowKeyFileWr
         args << QStringLiteral("-o") << o.outputDir;
     }
 
-    // 分卷：把产出的 .ptd 切成 <base>.001.ptd/002/…；值是尺寸串（2GB/512MB/4096）
+    // 分卷
     if (isEnc && o.split) {
         static const char* kUnit[3] = { "MB", "GB", "TB" };
         const char* unit = kUnit[(o.splitUnit >= 0 && o.splitUnit <= 2) ? o.splitUnit : 0];
@@ -303,12 +302,12 @@ static QStringList buildArgumentsImpl(const ShellOptions& o, bool allowKeyFileWr
              << QString::number(o.splitSize > 0 ? o.splitSize : 1) + QLatin1String(unit);
     }
 
-    // 加密压缩包：目录树 / 多文件打成单个 .ptd。短选项 -p，长选项 --pack。必须在 -- 之前。
+    // 加密压缩包
     if (o.pack && isEnc) {
         args << QStringLiteral("-p");
     }
 
-    // 源文件处理（仅加密动作）
+    // 源文件处理
     if (isEnc) {
         if (o.sourceDisposition == 1) {
             args << QStringLiteral("-de");
@@ -317,7 +316,7 @@ static QStringList buildArgumentsImpl(const ShellOptions& o, bool allowKeyFileWr
         } else if (o.sourceDisposition == 3) {
             args << QStringLiteral("--recycle-source");
         }
-        // 目录 + 删除类处置：界面已弹窗确认，告知 CLI 免掉交互询问
+        // 目录 + 删除类处置
         if (o.sourceDeleteOk && o.sourceDisposition != 0) {
             args << QStringLiteral("--source-delete-ok");
         }
@@ -327,8 +326,8 @@ static QStringList buildArgumentsImpl(const ShellOptions& o, bool allowKeyFileWr
         args << QStringLiteral("-y");
     }
 
-    // 密钥文件：界面把「对称密码文件」与「非对称身份私钥」都填到这里，
-    // 非对称时它走 identityPath，因此此处按原样下发即同时覆盖两种用途。
+    // 密钥文件
+    // 非对称时它走 identityPath，因
     if (!o.keyfilePath.isEmpty()) {
         args << QStringLiteral("-k") << o.keyfilePath;
     }
@@ -345,33 +344,34 @@ static QStringList buildArgumentsImpl(const ShellOptions& o, bool allowKeyFileWr
         args << QStringLiteral("--sha256");
     }
 
-    // 后量子开关：CLI 仅在密钥生成、水印签名 / 验签处读取该开关（纯对称加密无影响），
-    // 因此只在真正受影响的下发路径上带参数，避免给不认它的旧 CLI 造成未知开关报错。
+    // 后量子开关
+    // 因此只
     const bool pqcAffects = (o.action == CryptoAction::KeyGen) || o.watermark;
     if (pqcAffects && !o.pqc) {
         args << QStringLiteral("--no-pqc");
     }
 
-    // 尾部水印：仅加密动作下发；带签名私钥时一并下发 --wm-sign
+    // 尾部水印
     if (o.watermark && isEnc) {
         args << QStringLiteral("--watermark");
         QString key = o.watermarkKeyPath.trimmed();
         if (!key.isEmpty()) {
-            if (isPrivateKeyMaterial(key)) {
+            // buildArgumentsImpl 是文件级静态函
+            if (CliArgBuilder::isPrivateKeyMaterial(key)) {
                 if (allowKeyFileWrite) {
-                    // 唯一出口是 0600 临时文件：落盘失败即中止，不回退明文
+                    // 唯一出口是 0600 临
                     if (s_wmKeyTempPath.isEmpty() && !write_wm_key_temp(key)) return {};
                     if (s_wmKeyTempPath.isEmpty()) return {};
                     key = s_wmKeyTempPath;
                 }
-                // 预览（allowKeyFileWrite=false）：PEM 原样留在 args 里，
-                // buildPreview 会显示为 <private-key> 占位符，不落盘
+                // 预览
+                // buildPreview 会显示
             }
             args << QStringLiteral("--wm-sign") << key;
         }
     }
 
-    // 压缩：开关 + 级别（非对称 .ptd 同样支持，CLI run_asym 会把级别透传给 encrypt_file）
+    // 压缩
     if (o.compress && isEnc) {
         args << QStringLiteral("-zstd");
         if (o.compressionLevel != 0) {
@@ -379,12 +379,12 @@ static QStringList buildArgumentsImpl(const ShellOptions& o, bool allowKeyFileWr
         }
     }
 
-    // 密码经 stdin 注入：必须早于输入路径，否则会被 -- 吞成输入文件
+    // 密码经 stdin 注入
     if (!isAsym && o.keyfilePath.isEmpty()) {
         args << QStringLiteral("--key-stdin");
     }
 
-    // 输入路径放最后：CLI 用 -- 终止选项解析，其后的参数一律是输入文件
+    // 输入路径放
     if (isBatch) {
         for (const QString& p : o.inputPaths) {
             args << QStringLiteral("-i") << p;
@@ -410,12 +410,12 @@ QProcessEnvironment CliArgBuilder::buildEnvironment(const ShellOptions& ) {
 
 void CliArgBuilder::cleanupWatermarkTemp() {
     if (s_wmKeyTempPath.isEmpty()) return;
-    shred_file(s_wmKeyTempPath);   // P2-3：私钥明文先清零再删
+    shred_file(s_wmKeyTempPath);   // P2-3
     s_wmKeyTempPath.clear();
 }
 
 QString CliArgBuilder::buildPreview(const QString& programPath, const ShellOptions& o) {
-    // 命令预览的引号策略
+    // 命令预览
     QString cmd = QStringLiteral("\"%1\"").arg(QDir::toNativeSeparators(programPath));
 
     static const QStringList valueFlags = {
@@ -429,26 +429,26 @@ QString CliArgBuilder::buildPreview(const QString& programPath, const ShellOptio
         QStringLiteral("--identity")
     };
 
-    // M49：预览只走纯构建，绝不触发水印私钥落盘
+    // M49
     const QStringList args = buildArgumentsForPreview(o);
     bool expectValue = false;
     bool expectKey = false;
     for (int i=0; i<args.size(); ++i) {
         const QString& a = args[i];
-        // 密钥取值只显示占位符：临时文件落盘失败时这里是私钥明文
+        // 密钥取值只显示
         if (!a.startsWith(QLatin1Char('-')) && (expectKey || isPrivateKeyMaterial(a))) {
             cmd += QCoreApplication::translate("CliArgBuilder", " <private-key>");
             expectValue = false;
             expectKey = false;
             continue;
         }
-        // 预览显示收件人数而非路径
+        // 预览显示收件人
         if (expectValue && o.recipientCount > 1 && a == o.recipientPath) {
             cmd += QCoreApplication::translate("CliArgBuilder", " %1 个收件人").arg(o.recipientCount);
             expectValue = false;
             continue;
         }
-        // 预览引号策略与 WinUI 版对齐：选项本身不加引号，取值一律加引号
+        // 预览引号策略
         QString shown;
         if (a.startsWith(QLatin1Char('-'))) {
             shown = a;
@@ -472,7 +472,7 @@ QString CliArgBuilder::buildPreview(const QString& programPath, const ShellOptio
     if (o.action == CryptoAction::PubKey) {
         return cmd + QCoreApplication::translate("CliArgBuilder", "   [私钥来自 -k 文件]");
     }
-    // 包装动作：密码路线走 stdin，公钥路线靠收件人密钥材料，都不经 -m
+    // 包装动作
     if (o.action == CryptoAction::WrapKey || o.action == CryptoAction::UnwrapKey) {
         if (o.wrapAlg == WrapAlg::Pubkey) {
             return cmd + QCoreApplication::translate("CliArgBuilder", "   [使用收件人密钥材料]");

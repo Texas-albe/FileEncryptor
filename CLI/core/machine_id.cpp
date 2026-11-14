@@ -1,5 +1,5 @@
-// 机器指纹采集：MAC 地址与主板序列号是两类独立来源，任一采集失败只丢弃该项，
-// 最终指纹只取 SHA-256 前 16 字节，不含任何可复原的明文主机标识。
+// 机器指纹采集
+// 最终指纹只取 SHA-256
 #include "machine_id.hpp"
 
 #include <sodium.h>
@@ -11,7 +11,7 @@
 #include <vector>
 
 #ifdef _WIN32
-// NOMINMAX：Windows.h 的 min/max 宏会打断 std::min
+// NOMINMAX
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
@@ -35,11 +35,11 @@
 #include <sys/types.h>
 #include <unistd.h>
 #if defined(__linux__)
-#include <linux/if_packet.h>   // sockaddr_ll（首个网卡 MAC，ifaddrs.h 只前向声明）
+#include <linux/if_packet.h>   // sockaddr_ll
 #endif
 #endif
 
-// 区块 trim：去除首尾空白与不可打印字符（BIOS 序列号常带尾随空格）
+// 区块 trim
 static std::string trim_ctrl(const std::string& s) {
     size_t b = 0, e = s.size();
     while (b < e && (unsigned char)s[b] <= 0x20) ++b;
@@ -57,7 +57,7 @@ static void append_hex(std::string& out, const unsigned char* p, size_t n) {
 
 #ifdef _WIN32
 
-// 区块 WMI：Win32_BaseBoard.SerialNumber（主板序列号的标准来源，缺权限时回退注册表）
+// 区块 WMI
 static std::string wmi_board_serial() {
     std::string out;
     const HRESULT hr0 = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
@@ -105,7 +105,7 @@ static std::string wmi_board_serial() {
     return trim_ctrl(out);
 }
 
-// 区块 注册表：WMI 不可用（精简镜像/服务未注册）时读 SMBIOS 遗留键
+// 区块 注册表
 static std::string reg_board_serial() {
     HKEY hk = nullptr;
     if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, "HARDWARE\\DESCRIPTION\\System\\BIOS",
@@ -127,7 +127,7 @@ static std::string reg_board_serial() {
     return out;
 }
 
-// 区块 win MAC：第一块已启用网卡的物理地址（跳过回环与全零地址）
+// 区块 win MAC
 static bool win_first_mac(std::string& mac_hex) {
     ULONG size = 0;
     if (GetAdaptersAddresses(AF_UNSPEC, GAA_FLAG_INCLUDE_ALL_INTERFACES, nullptr,
@@ -155,7 +155,7 @@ static bool win_first_mac(std::string& mac_hex) {
 
 #ifndef _WIN32
 
-// 区块 dmi：Linux 主板序列号（/sys/class/dmi 优先，容器里退到 dbus machine-id）
+// 区块 dmi
 static std::string read_text_file(const char* path) {
     std::FILE* fp = std::fopen(path, "rb");
     if (!fp) return std::string();
@@ -169,7 +169,7 @@ static std::string read_text_file(const char* path) {
 
 static std::string linux_board_serial() {
 #ifdef __ANDROID__
-    return std::string();   // Android 无 dmi，/var/lib/dbus/machine-id 也不可读
+    return std::string();   // Android 无 dmi
 #endif
     static const char* paths[] = {
         "/sys/class/dmi/id/product_uuid",
@@ -185,11 +185,11 @@ static std::string linux_board_serial() {
     return std::string();
 }
 
-// 区块 linux MAC：第一块已启用且非回环的链路层地址
+// 区块 linux MAC
 static bool linux_first_mac(std::string& mac_hex) {
 #ifdef __ANDROID__
     (void)mac_hex;
-    return false;   // Android 10+ 限制 MAC 访问，getifaddrs 只返回全零地址
+    return false;   // Android 10+ 限制 MAC
 #endif
     struct ifaddrs* ifa = nullptr;
     if (getifaddrs(&ifa) != 0 || !ifa) return false;

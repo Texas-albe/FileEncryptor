@@ -4,406 +4,60 @@
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:controls="using:Microsoft.UI.Xaml.Controls"
     xmlns:models="using:FileEncryptorGUI.Models"
+    xmlns:local="using:FileEncryptorGUI"
     Title="FileEncryptorGUI">
 
-    <Grid x:Name="RootGrid" RowDefinitions="Auto,*,Auto,Auto">
+    <Grid x:Name="RootGrid" RowDefinitions="*,Auto,Auto">
 
-        <!-- 顶部标题栏（自定义，Acrylic 延伸至此） -->
-        <Grid x:Name="TitleBarGrid" Grid.Row="0" ColumnDefinitions="Auto,Auto,Auto,*" Height="36">
-            <!-- 节日红条：仅国庆窗口由代码上色，平时保持透明 -->
-            <Border x:Name="TitleAccentBar" Grid.Column="0" Width="3" Height="16"
-                    CornerRadius="2" VerticalAlignment="Center" Margin="10,0,0,0"
-                    Background="Transparent" />
-            <TextBlock Grid.Column="1" x:Name="TitleText" Text="FileEncryptorGUI" VerticalAlignment="Center" Margin="10,0,12,0" FontWeight="SemiBold" />
-            <Border x:Name="DragRegion" Grid.Column="3" Background="Transparent" />
-            <!-- 菜单按桌面应用常见顺序排列：功能类（编辑/视图/工具）在前，信息类（关于）最后 -->
-            <controls:MenuBar Grid.Column="2" x:Name="MenuBar" Height="36" HorizontalAlignment="Left">
-                <controls:MenuBarItem x:Name="MenuEdit" Title="编辑">
-                    <MenuFlyoutItem x:Name="MenuEditConfig" Text="编辑 CLI 配置" Click="OnEditConfig" />
-                </controls:MenuBarItem>
-                <controls:MenuBarItem x:Name="MenuView" Title="视图">
-                    <MenuFlyoutItem x:Name="MenuViewSettings" Text="背景设置..." Click="OnViewSettings" />
-                        <!-- 主题：Light/Dark/System，选择即生效并保存，重启后沿用 -->
-                    <MenuFlyoutSubItem x:Name="MenuTheme" Text="主题">
-                        <ToggleMenuFlyoutItem x:Name="MenuThemeLight" Text="浅色" Click="OnThemeLight" />
-                        <ToggleMenuFlyoutItem x:Name="MenuThemeDark" Text="深色" Click="OnThemeDark" />
-                        <ToggleMenuFlyoutItem x:Name="MenuThemeSystem" Text="跟随系统" Click="OnThemeSystem" />
-                    </MenuFlyoutSubItem>
-                </controls:MenuBarItem>
-                <controls:MenuBarItem x:Name="MenuTools" Title="工具">
-                    <MenuFlyoutItem x:Name="MenuRetryCli" Text="重新检测 CLI 程序" Click="OnRetryCliDetection" />
-                    <MenuFlyoutSeparator />
-                    <!-- 语言 / Language（Updates/007 i18n）：切换保存设置，重启后完整生效 -->
-                    <MenuFlyoutSubItem x:Name="MenuLanguage" Text="语言 / Language">
-                        <ToggleMenuFlyoutItem x:Name="MenuLangZh" Text="简体中文" Click="OnLangZh" />
-                        <ToggleMenuFlyoutItem x:Name="MenuLangEn" Text="English" Click="OnLangEn" />
-                        <ToggleMenuFlyoutItem x:Name="MenuLangRu" Text="Русский" Click="OnLangRu" />
-                    </MenuFlyoutSubItem>
-                    <MenuFlyoutSeparator />
-                    <!-- 加密盘：库管理（CLI 子命令）+ 挂载控制端（FE-Mounter 常驻持有，锁定/解锁走受限 IPC） -->
-                    <MenuFlyoutSubItem x:Name="MenuVault" Text="加密盘" IsEnabled="{x:Bind ViewModel.VaultAvailable, Mode=OneWay}">
-                        <MenuFlyoutItem x:Name="MenuVaultManager" Text="加密盘管理..." Click="OnVaultManager" />
-                        <MenuFlyoutSeparator />
-                        <MenuFlyoutItem x:Name="MenuVaultInit" Text="新建加密盘..." Click="OnVaultInit" />
-                        <MenuFlyoutItem x:Name="MenuVaultList" Text="查看盘内文件..." Click="OnVaultList" />
-                        <MenuFlyoutSeparator />
-                        <MenuFlyoutItem x:Name="MenuVaultRekey" Text="修改加密盘密码..." Click="OnVaultRekey" />
-                        <MenuFlyoutItem x:Name="MenuVaultRecoveryCreate" Text="生成恢复码..." Click="OnVaultRecoveryCreate" />
-                        <MenuFlyoutItem x:Name="MenuVaultRecoveryOpen" Text="用恢复码找回密码..." Click="OnVaultRecoveryOpen" />
-                        <MenuFlyoutSeparator />
-                        <MenuFlyoutItem x:Name="MenuVaultMount" Text="挂载为磁盘..." Click="OnVaultMount" />
-                        <MenuFlyoutItem x:Name="MenuVaultMounted" Text="已挂载加密盘..." Click="OnMountedVaults" />
-                        <MenuFlyoutItem x:Name="MenuVaultUnmount" Text="卸载磁盘..." Click="OnVaultUnmount" />
-                        <MenuFlyoutItem x:Name="MenuVaultFormat" Text="格式化加密盘..." Click="OnVaultFormat" />
-                        <MenuFlyoutItem x:Name="MenuVaultLock" Text="暂时锁定" Click="OnVaultLock" />
-                        <MenuFlyoutItem x:Name="MenuVaultUnlock" Text="重新解锁..." Click="OnVaultUnlock" />
-                    </MenuFlyoutSubItem>
-                </controls:MenuBarItem>
-                <controls:MenuBarItem x:Name="MenuAbout" Title="关于">
-                    <MenuFlyoutItem x:Name="MenuCheckUpdate" Text="检查更新..." Click="OnCheckForUpdate" />
-                    <MenuFlyoutItem x:Name="MenuCredits" Text="鸣谢..." Click="OnCredits" />
-                    <MenuFlyoutItem x:Name="MenuReadme" Text="README 摘要..." Click="OnReadme" />
-                </controls:MenuBarItem>
-            </controls:MenuBar>
-        </Grid>
+        <!-- 标签页：Explorer 式标题栏。TabView 自己接管标题栏并预留系统按钮位；
+             标签条右侧空白由代码用 SetDragRectangles 精确设为拖拽区，
+             这样标签的「×」与内置「+」才能收到点击（WinUI issue #3193）。 -->
+        <!-- TabView 默认样式带 VerticalAlignment="Top"，不显式 Stretch 的话
+             整个标签控件只占内容高度，页面里的卡片就「上下撑不满」 -->
+        <controls:TabView x:Name="MainTabView" Grid.Row="0" VerticalAlignment="Stretch"
+                          IsAddTabButtonVisible="True"
+                          AddTabButtonClick="OnAddTabButtonClick"
+                          TabCloseRequested="OnTabCloseRequested"
+                          SelectionChanged="OnTabSelectionChanged">
+            <!-- 标签条右侧空白：窗口拖拽区。撑满剩余宽度（右侧留出系统按钮位置），
+                 拖拽区再由代码用 SetDragRectangles 精确限定到这里 -->
+            <controls:TabView.TabStripFooter>
+                <Grid x:Name="TitleBarDragRegion" Background="Transparent"
+                      HorizontalAlignment="Stretch" MinWidth="80" Margin="0,0,146,0" />
+            </controls:TabView.TabStripFooter>
 
-        <!-- 主体：左文件列表 1/3 + 右功能区 2/3 -->
-        <Grid Grid.Row="1" ColumnDefinitions="*,2*" Margin="12,8,12,4">
+            <!-- 启动只有主页一个标签：设置 / 加密盘管理由「+」按需新开，
+                 终端由执行状态自动开合（见 EnsureTerminalTab / CloseTerminalTab） -->
+            <controls:TabViewItem x:Name="TabHome" Header="主页" IsClosable="True">
+                <local:HomeTabView x:Name="HomeView" />
+            </controls:TabViewItem>
 
-            <!-- 左侧：文件选择 -->
-            <controls:Border Grid.Column="0" x:Name="LeftPanel"
-                             Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
-                             BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-                             BorderThickness="1" CornerRadius="8" Padding="8">
-                <Grid RowDefinitions="Auto,*,Auto">
-                    <TextBlock Grid.Row="0" Text="文件选择" FontWeight="SemiBold" Margin="0,0,0,6" HorizontalAlignment="Center" />
-                    <controls:ListView Grid.Row="1" x:Name="FileList"
-                                       ItemsSource="{x:Bind ViewModel.InputPaths, Mode=OneWay}"
-                                       AllowDrop="True"
-                                       DragOver="OnFileListDragOver" Drop="OnFileListDrop">
-                        <controls:ListView.ItemTemplate>
-                            <!-- IsChecked 不用 {x:Bind}：XamlCompiler 会编译成对 Primitives.ToggleButton.IsChecked
-                                 的附加属性赋值，运行时对 CheckBox 赋值失败导致 InitializeComponent 抛 XamlParseException。
-                                 选中态改由 Checked/Unchecked 事件 + DataContext 同步。 -->
-                            <DataTemplate x:DataType="models:SelectablePath">
-                                <CheckBox HorizontalAlignment="Stretch"
-                                          Loaded="OnItemLoaded"
-                                          Checked="OnItemCheckedChanged" Unchecked="OnItemCheckedChanged">
-                                    <TextBlock Text="{x:Bind Path}" TextTrimming="CharacterEllipsis" />
-                                </CheckBox>
-                            </DataTemplate>
-                        </controls:ListView.ItemTemplate>
-                    </controls:ListView>
-                    <StackPanel Grid.Row="2" Margin="0,6,0,0" Spacing="4">
-                        <Grid ColumnDefinitions="*,*">
-                            <Button Grid.Column="0" Content="添加文件..." Click="OnAddFiles" Margin="0,0,2,0" HorizontalAlignment="Stretch" />
-                            <Button Grid.Column="1" Content="添加目录..." Click="OnAddDir" Margin="2,0,0,0" HorizontalAlignment="Stretch" />
-                        </Grid>
-                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8">
-                            <Button Content="预览..." Click="OnPreviewClicked"
-                                    ToolTipService.ToolTip="仅查看密文内容，不写出解密文件" />
-                            <Button Content="清空" Click="OnClearFiles" />
-                        </StackPanel>
-                    </StackPanel>
-                </Grid>
-            </controls:Border>
+        </controls:TabView>
 
-            <!-- 右侧：功能区 -->
-            <controls:Border Grid.Column="1" x:Name="CenterPanel" Margin="12,0,0,0"
-                             Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
-                             BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-                             BorderThickness="1" CornerRadius="8" Padding="12">
-              <Grid RowDefinitions="*,Auto">
-                <ScrollViewer x:Name="MainScroll" Grid.Row="0" VerticalScrollMode="Auto" VerticalScrollBarVisibility="Auto"
-                              Padding="0,2,14,14">
-                    <StackPanel Spacing="8">
-
-                        <!-- 操作 -->
-                        <Grid ColumnDefinitions="120,*">
-                            <TextBlock Grid.Column="0" Text="操作" VerticalAlignment="Center" TextWrapping="Wrap" />
-                            <ScrollViewer Grid.Column="1" HorizontalScrollBarVisibility="Auto"
-                                          HorizontalScrollMode="Auto" VerticalScrollMode="Disabled"
-                                          VerticalScrollBarVisibility="Disabled" Padding="0,2,14,14">
-                            <StackPanel x:Name="ActionRow" Orientation="Horizontal" Spacing="16">
-                                <RadioButton x:Name="RbEncrypt" Content="加密" GroupName="Action" Checked="OnActionRadioChecked" />
-                                <RadioButton x:Name="RbDecrypt" Content="解密" GroupName="Action" Checked="OnActionRadioChecked" />
-                                <RadioButton x:Name="RbBatchEncrypt" Content="批量加密" GroupName="Action" Checked="OnActionRadioChecked" />
-                                <RadioButton x:Name="RbBatchDecrypt" Content="批量解密" GroupName="Action" Checked="OnActionRadioChecked" />
-                            </StackPanel>
-                            </ScrollViewer>
-                        </Grid>
-
-                        <!-- 密钥管理 -->
-                        <Grid ColumnDefinitions="120,*">
-                            <TextBlock Grid.Column="0" Text="密钥管理" VerticalAlignment="Center" TextWrapping="Wrap" />
-                            <ScrollViewer Grid.Column="1" HorizontalScrollBarVisibility="Auto"
-                                          HorizontalScrollMode="Auto" VerticalScrollMode="Disabled"
-                                          VerticalScrollBarVisibility="Disabled" Padding="0,2,14,14">
-                            <StackPanel x:Name="KeyMgmtRow" Orientation="Horizontal" Spacing="16">
-                                <RadioButton x:Name="RbKeyGen" Content="生成密钥对" GroupName="KeyMgmt" Checked="OnKeyMgmtRadioChecked" />
-                                <RadioButton x:Name="RbDerive" Content="密码派生密钥对" GroupName="KeyMgmt" Checked="OnKeyMgmtRadioChecked" />
-                                <RadioButton x:Name="RbPubKey" Content="导出公钥" GroupName="KeyMgmt" Checked="OnKeyMgmtRadioChecked" />
-                            </StackPanel>
-                            </ScrollViewer>
-                        </Grid>
-
-                        <!-- 与「密钥管理」互斥的第三组单选 -->
-                        <Grid ColumnDefinitions="120,*">
-                            <TextBlock Grid.Column="0" Text="密钥包装" VerticalAlignment="Center" TextWrapping="Wrap" />
-                            <ScrollViewer Grid.Column="1" HorizontalScrollBarVisibility="Auto"
-                                          HorizontalScrollMode="Auto" VerticalScrollMode="Disabled"
-                                          VerticalScrollBarVisibility="Disabled" Padding="0,2,14,14">
-                            <StackPanel x:Name="WrapRow" Orientation="Horizontal" Spacing="16">
-                                <RadioButton x:Name="RbWrapKey" Content="包装密钥" GroupName="Wrap" Checked="OnWrapRadioChecked"
-                                             ToolTipService.ToolTip="将一份 32 字节数据密钥单独封装进 .fekw 文件，用密码或收件人公钥保护" />
-                                <RadioButton x:Name="RbUnwrapKey" Content="解包密钥" GroupName="Wrap" Checked="OnWrapRadioChecked"
-                                             ToolTipService.ToolTip="将 .fekw 中的数据密钥还原为 32 字节文件" />
-                            </StackPanel>
-                            </ScrollViewer>
-                        </Grid>
-
-                        <!-- 产物路径由这里的输出行决定 -->
-                        <!-- Spacing 与外层一致：外层间距只作用到 WrapPanel 这一层，行距得自己给 -->
-                        <StackPanel x:Name="WrapPanel" Visibility="Collapsed" Spacing="8">
-                            <Grid ColumnDefinitions="120,*">
-                                <TextBlock Grid.Column="0" x:Name="WrapFileLabel" Text="32 字节密钥文件" VerticalAlignment="Center" TextWrapping="Wrap" />
-                                <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="4">
-                                    <TextBox x:Name="WrapFileEdit" PlaceholderText="恰好 32 字节的数据密钥（DEK）文件" Width="320" TextChanged="OnWrapInputChanged" />
-                                    <Button Content="浏览..." Click="OnBrowseWrapFile" />
-                                </StackPanel>
-                            </Grid>
-                            <Grid ColumnDefinitions="120,*">
-                                <TextBlock Grid.Column="0" x:Name="WrapOutLabel" Text="包装输出" VerticalAlignment="Center" TextWrapping="Wrap" />
-                                <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="4">
-                                    <TextBox x:Name="WrapOutEdit" PlaceholderText="留空则用 &lt;密钥文件&gt;.fekw" Width="320" TextChanged="OnWrapOutputChanged" />
-                                    <Button Content="浏览..." Click="OnBrowseWrapOut" />
-                                </StackPanel>
-                            </Grid>
-                            <Grid ColumnDefinitions="120,*">
-                                <TextBlock Grid.Column="0" x:Name="WrapAlgLabel" Text="包装算法" VerticalAlignment="Center" TextWrapping="Wrap" />
-                                <controls:ComboBox x:Name="WrapAlgCombo" Grid.Column="1" HorizontalAlignment="Left" Width="320"
-                                                   SelectionChanged="OnWrapAlgChanged"
-                                                   ToolTipService.ToolTip="包装密钥的算法">
-                                    <controls:ComboBoxItem Content="AES-256-KWP（推荐，长度不限）" />
-                                    <controls:ComboBoxItem Content="AES-KW（兼容旧工具）" />
-                                    <controls:ComboBoxItem Content="收件人公钥（不需要密码）" />
-                                </controls:ComboBox>
-                            </Grid>
-                            <TextBlock x:Name="WrapIntroText" TextWrapping="Wrap"
-                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-                        </StackPanel>
-
-                        <!-- 加密模式：解密 / 批量解密 / 密钥管理下一律整行隐藏（含左侧标签） -->
-                        <Grid x:Name="EncryptModeRow" ColumnDefinitions="120,*">
-                            <TextBlock Grid.Column="0" Text="加密模式" VerticalAlignment="Center" TextWrapping="Wrap" />
-                            <!-- 模式与文件算法共用两等分列，两个选择框永远同宽对齐 -->
-                            <Grid Grid.Column="1" ColumnDefinitions="1*,1*">
-                                <controls:ComboBox x:Name="ModeCombo" Grid.Column="0" HorizontalAlignment="Stretch"
-                                                   SelectionChanged="OnModeChanged">
-                                    <controls:ComboBoxItem Content="XChaCha20-Poly1305" />
-                                    <controls:ComboBoxItem Content="AEGIS-256" />
-                                    <controls:ComboBoxItem Content="AES-256-GCM" />
-                                    <controls:ComboBoxItem Content="SM4-GCM" />
-                                    <controls:ComboBoxItem Content="X25519 非对称" />
-                                </controls:ComboBox>
-                                <!-- 仅在选中 X25519 非对称模式时出现：非对称只加密此处所选算法生成的会话密钥 -->
-                                <Grid Grid.Column="1" x:Name="FileCipherCell" ColumnDefinitions="Auto,*" Visibility="Collapsed">
-                                    <TextBlock Grid.Column="0" Text="文件算法：" VerticalAlignment="Center" x:Name="FileCipherLabel" />
-                                    <controls:ComboBox x:Name="FileCipherCombo" Grid.Column="1" HorizontalAlignment="Stretch"
-                                                       SelectionChanged="OnFileCipherChanged"
-                                                       ToolTipService.ToolTip="非对称模式下的文件载荷加密算法；非对称部分只加密此处所选算法生成的密钥">
-                                        <controls:ComboBoxItem Content="XChaCha20-Poly1305（默认）" />
-                                        <controls:ComboBoxItem Content="AEGIS-256" />
-                                        <controls:ComboBoxItem Content="AES-256-GCM" />
-                                        <controls:ComboBoxItem Content="SM4-GCM" />
-                                    </controls:ComboBox>
-                                </Grid>
-                            </Grid>
-                        </Grid>
-
-        <!-- 压缩：非对称（.ptd）同样支持 zstd，CLI 的 run_asym 会把级别透传给 encrypt_file -->
-        <Grid x:Name="CompressionRow" ColumnDefinitions="120,*">
-            <TextBlock Grid.Column="0" Text="压缩（zstd）" VerticalAlignment="Center" TextWrapping="Wrap" />
-                            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
-                                <CheckBox x:Name="ChkCompress" Content="压缩数据" Checked="OnOptionChanged" Unchecked="OnOptionChanged" VerticalAlignment="Center" />
-                                <TextBlock Text="压缩级别（-5 到 22）：" VerticalAlignment="Center" />
-                                <controls:NumberBox x:Name="CompressLevel" Value="3" Minimum="-5" Maximum="22" SmallChange="1" Width="60" SpinButtonPlacementMode="Hidden" ValueChanged="OnCompressLevelChanged" Foreground="{ThemeResource TextFillColorPrimaryBrush}" />
-                            </StackPanel>
-                        </Grid>
-
-                        <!-- 输出目录 -->
-                        <Grid ColumnDefinitions="120,*" x:Name="OutDirRow">
-                            <TextBlock Grid.Column="0" Text="输出目录" VerticalAlignment="Center" TextWrapping="Wrap" />
-                            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="4">
-                                <TextBox x:Name="OutDirEdit" PlaceholderText="留空 = 输出到源文件目录" Width="320" TextChanged="OnOutDirChanged" />
-                                <Button Content="浏览..." Click="OnBrowseOutDir" />
-                            </StackPanel>
-                        </Grid>
-
-                        <!-- 加密盘：勾选后产物入盘并登记进加密索引（CLI 3.0.1+） -->
-                        <Grid ColumnDefinitions="120,*" x:Name="VaultRow" Visibility="Collapsed">
-                            <TextBlock Grid.Column="0" Text="加密盘" VerticalAlignment="Center" TextWrapping="Wrap" />
-                            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
-                                <CheckBox x:Name="ChkIntoVault" Content="入加密盘" Checked="OnIntoVaultChanged" Unchecked="OnIntoVaultChanged"
-                                          VerticalAlignment="Center" ToolTipService.ToolTip="勾选后产物写入加密盘目录并登记进加密索引；不勾选则为普通加密" />
-                                <TextBox x:Name="VaultDirEdit" PlaceholderText="加密盘存储目录（如 D:\Vault）" Width="240" IsEnabled="False" TextChanged="OnVaultDirChanged" />
-                                <Button x:Name="BtnVaultBrowse" Content="浏览..." Click="OnBrowseVaultDir" IsEnabled="False" />
-                            </StackPanel>
-                        </Grid>
-
-                        <!-- 密钥文件 -->
-                        <Grid ColumnDefinitions="120,*">
-                            <TextBlock Grid.Column="0" Text="密钥文件" VerticalAlignment="Center" TextWrapping="Wrap" />
-                            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="4">
-                                <TextBox x:Name="KeyfileEdit" PlaceholderText="留空 = 运行时弹窗输入" Width="320" TextChanged="OnKeyfileChanged" />
-                                <Button Content="浏览..." Click="OnBrowseKeyfile" />
-                            </StackPanel>
-                        </Grid>
-
-                        <!-- 选项 -->
-                        <Grid ColumnDefinitions="120,*">
-                            <TextBlock Grid.Column="0" Text="选项" VerticalAlignment="Center" TextWrapping="Wrap" />
-                            <ScrollViewer Grid.Column="1" HorizontalScrollBarVisibility="Auto"
-                                          HorizontalScrollMode="Auto" VerticalScrollMode="Disabled"
-                                          VerticalScrollBarVisibility="Disabled" Padding="0,2,14,14">
-                            <StackPanel x:Name="OptionsRow" Orientation="Horizontal" Spacing="12" VerticalAlignment="Center">
-                                <controls:ComboBox x:Name="SourceCombo" Width="140" SelectionChanged="OnSourceChanged">
-                                    <controls:ComboBoxItem Content="保留源文件" />
-                                    <controls:ComboBoxItem Content="删除源文件" />
-                                    <controls:ComboBoxItem Content="安全擦除" />
-                                    <controls:ComboBoxItem Content="移至回收站" />
-                                </controls:ComboBox>
-                                <CheckBox x:Name="ChkForce" Content="覆盖已存在文件" Checked="OnOptionChanged" Unchecked="OnOptionChanged" VerticalAlignment="Center" />
-                                <CheckBox x:Name="ChkPack" Content="打包为单个文件" Checked="OnOptionChanged" Unchecked="OnOptionChanged"
-                                          VerticalAlignment="Center" IsEnabled="{x:Bind ViewModel.PackAvailable, Mode=OneWay}"
-                                          ToolTipService.ToolTip="将整个目录树或多个文件打包为单个文件，不删除源文件" />
-                                <CheckBox x:Name="ChkSplit" Content="分卷输出" Checked="OnOptionChanged" Unchecked="OnOptionChanged"
-                                          VerticalAlignment="Center" ToolTipService.ToolTip="将密文切分为多个 .001/.002 分卷；解密时任选一卷即可自动合并" />
-                                <CheckBox x:Name="ChkSha256" Content="生成校验单" Checked="OnOptionChanged" Unchecked="OnOptionChanged" VerticalAlignment="Center" />
-                                <CheckBox x:Name="ChkPqc" Content="后量子 PQC" Checked="OnOptionChanged" Unchecked="OnOptionChanged"
-                                          VerticalAlignment="Center" ToolTipService.ToolTip="非对称收件人用 X25519（或 X448）+ ML-KEM-768 混合密钥，水印签名用 ML-DSA-65" />
-                                <CheckBox x:Name="ChkX448" Content="使用 X448" Checked="OnOptionChanged" Unchecked="OnOptionChanged"
-                                          VerticalAlignment="Center" ToolTipService.ToolTip="勾选后非对称封装使用 X448，不勾选则使用 X25519" />
-                                <CheckBox x:Name="ChkWatermark" Content="签名水印" Checked="OnOptionChanged" Unchecked="OnOptionChanged"
-                                          VerticalAlignment="Center" ToolTipService.ToolTip="在密文尾部追加一条签名水印" />
-                            </StackPanel>
-                            </ScrollViewer>
-                        </Grid>
-
-                        <!-- 分卷：勾选「分卷输出」后显示大小与单位 -->
-                        <Grid x:Name="SplitSizeRow" ColumnDefinitions="120,*" Visibility="Collapsed">
-                            <TextBlock Grid.Column="0" Text="分卷大小" VerticalAlignment="Center" TextWrapping="Wrap" />
-                            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
-                                <!-- 数字框：微调按钮放右侧（Compact 会挤占输入区，
-                                     打字时字符被按钮盖住看不见），并给足宽度 -->
-                                <controls:NumberBox x:Name="SplitSizeBox" Value="100" Minimum="1" Maximum="1048576"
-                                                    SmallChange="10" Width="180" SpinButtonPlacementMode="Compact"
-                                                    Foreground="{ThemeResource TextFillColorPrimaryBrush}"
-                                                    ValueChanged="OnSplitSizeChanged" />
-                                <controls:ComboBox x:Name="SplitUnitCombo" Width="84" SelectionChanged="OnSplitUnitChanged">
-                                    <controls:ComboBoxItem Content="MB" />
-                                    <controls:ComboBoxItem Content="GB" />
-                                    <controls:ComboBoxItem Content="TB" />
-                                </controls:ComboBox>
-                            </StackPanel>
-                        </Grid>
-
-                        <!-- 水印签名私钥：勾选「签名水印」后才显示；走密码框输入，不明文回显 -->
-                        <Grid ColumnDefinitions="120,*" x:Name="WatermarkKeyRow" Visibility="Collapsed">
-                            <TextBlock Grid.Column="0" Text="水印签名密钥" VerticalAlignment="Center" TextWrapping="Wrap" />
-                            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
-                                <PasswordBox x:Name="WatermarkKeyEdit" Width="300" PasswordChar="•"
-                                             PasswordChanged="OnOptionChanged"
-                                             PlaceholderText="私钥 PEM（在密码框中输入，不回显明文）" />
-                                <Button Content="浏览..." Click="OnBrowseWatermarkKey" />
-                                <TextBlock Text="留空 = 只写水印记录不签名" VerticalAlignment="Center" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-                            </StackPanel>
-                        </Grid>
-
-                        <!-- 密钥轮换 + 运行/取消 -->
-                        <Grid ColumnDefinitions="Auto,*,Auto" Margin="0,4,0,0">
-                            <Button Grid.Column="0" x:Name="BtnRewrap" Content="密钥轮换" Click="OnRewrapClicked" />
-                            <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="8">
-                                <Button x:Name="BtnRun" Content="▶ 运行" Click="OnRunClicked"
-                                        Background="#107C10" Foreground="White" MinWidth="80">
-                                    <Button.Resources>
-                                        <SolidColorBrush x:Key="ButtonBackgroundPointerOver" Color="#0E6B0E" />
-                                        <SolidColorBrush x:Key="ButtonBackgroundPressed" Color="#0A5A0A" />
-                                        <SolidColorBrush x:Key="ButtonForegroundPointerOver" Color="White" />
-                                        <SolidColorBrush x:Key="ButtonForegroundPressed" Color="White" />
-                                    </Button.Resources>
-                                </Button>
-                                <Button x:Name="BtnCancel" Content="■ 取消" Click="OnCancelClicked" IsEnabled="False"
-                                        Background="#C42B1C" Foreground="White" MinWidth="80">
-                                    <Button.Resources>
-                                        <SolidColorBrush x:Key="ButtonBackgroundPointerOver" Color="#A32417" />
-                                        <SolidColorBrush x:Key="ButtonBackgroundPressed" Color="#8A1E13" />
-                                        <SolidColorBrush x:Key="ButtonBackgroundDisabled" Color="#555555" />
-                                        <SolidColorBrush x:Key="ButtonForegroundPointerOver" Color="White" />
-                                        <SolidColorBrush x:Key="ButtonForegroundPressed" Color="White" />
-                                        <SolidColorBrush x:Key="ButtonForegroundDisabled" Color="#AAAAAA" />
-                                    </Button.Resources>
-                                </Button>
-                            </StackPanel>
-                        </Grid>
-
-                        <!-- 非对称：收件人 -->
-                        <StackPanel x:Name="RecipientPanel" Orientation="Horizontal" Spacing="4" Visibility="Collapsed">
-                            <TextBlock x:Name="RecipientLabel" Text="收件人：" VerticalAlignment="Center" Width="72" />
-                            <TextBox x:Name="RecipientEdit" PlaceholderText="公钥或公钥文件路径" Width="320" TextChanged="OnRecipientChanged" />
-                            <Button Content="浏览..." Click="OnBrowseRecipient" />
-                        </StackPanel>
-
-                        <!-- 非对称：身份私钥 -->
-                        <StackPanel x:Name="IdentityPanel" Orientation="Horizontal" Spacing="4" Visibility="Collapsed">
-                            <TextBlock x:Name="IdentityLabel" Text="身份文件：" VerticalAlignment="Center" Width="72" />
-                            <TextBox x:Name="IdentityEdit" PlaceholderText="私钥文件路径" Width="320" TextChanged="OnIdentityChanged" />
-                            <Button Content="浏览..." Click="OnBrowseIdentity" />
-                        </StackPanel>
-
-                        <!-- 批量解密还原文件名 -->
-                        <CheckBox x:Name="ChkRestoreName" Content="还原完整原始文件名（批量解密，较慢）"
-                                  Checked="OnOptionChanged" Unchecked="OnOptionChanged"
-                                  Visibility="Collapsed" />
-
-                    </StackPanel>
-                </ScrollViewer>
-
-                <!-- 国庆祝福：放在滚动区之外的固定行，英俄文长句也整行可见不被裁 -->
-                <Border Grid.Row="1" x:Name="BirthdayBar" Visibility="Collapsed"
-                        Margin="0,10,0,0" Padding="0,8,0,0"
-                        BorderThickness="0,1,0,0"
-                        BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}">
-                    <TextBlock x:Name="BirthdayText"
-                               Text="祝祖国{0}岁生日快乐！永远繁荣昌盛！"
-                               TextWrapping="Wrap"
-                               TextAlignment="Center"
-                               FontWeight="SemiBold"
-                               FontSize="14"
-                               Foreground="#DE2910" />
-                </Border>
-              </Grid>
-            </controls:Border>
-        </Grid>
-
-        <!-- 底部：命令预览 -->
-        <Grid Grid.Row="2" Margin="12,4,12,4" RowDefinitions="Auto">
-            <!-- 只反映即将执行的参数；运行输出走系统控制台 -->
-            <Grid Grid.Row="0" ColumnDefinitions="Auto,*,Auto">
-                <TextBlock Grid.Column="0" Text="命令预览" FontWeight="SemiBold" VerticalAlignment="Center" Margin="0,0,8,0" />
+        <!-- 底部：命令预览。独立表面 + 顶部分割线，与页面内容分开 -->
+        <Border Grid.Row="1"
+                Background="{ThemeResource LayerFillColorDefaultBrush}"
+                BorderBrush="{ThemeResource DividerStrokeColorDefaultBrush}"
+                BorderThickness="0,1,0,0" Padding="12,8">
+            <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="8">
+                <TextBlock Grid.Column="0" Text="命令预览" Style="{StaticResource AppCaptionTextStyle}"
+                           VerticalAlignment="Center" />
                 <TextBox Grid.Column="1" IsReadOnly="True" TextWrapping="NoWrap"
                          Text="{x:Bind ViewModel.CommandPreview, Mode=OneWay}"
-                         FontFamily="Consolas" Height="28" Padding="4,2"
+                         FontFamily="Consolas" Height="36" Padding="6,4,6,12"
                          ScrollViewer.HorizontalScrollBarVisibility="Auto"
                          ScrollViewer.VerticalScrollBarVisibility="Disabled" />
-                <Button Grid.Column="2" Content="任务历史..." Click="OnOpenTaskHistory" Height="28" Padding="8,0" Margin="8,0,0,0" VerticalAlignment="Center" />
+                <Button Grid.Column="2" Content="任务历史..." Click="OnOpenTaskHistory"
+                        Height="32" Padding="10,0" VerticalAlignment="Center" />
             </Grid>
-        </Grid>
+        </Border>
 
-        <!-- 状态栏 -->
-        <Grid Grid.Row="3" ColumnDefinitions="*,Auto" Padding="12,4">
-            <TextBlock x:Name="StatusLabel" Text="{x:Bind ViewModel.StatusText, Mode=OneWay}" VerticalAlignment="Center" />
-            <TextBlock Grid.Column="1" x:Name="ProgressLabel" Text="{x:Bind ViewModel.ProgressLabel, Mode=OneWay}" VerticalAlignment="Center" />
+        <!-- 状态栏：弱化的辅助文字，不抢内容区注意力 -->
+        <Grid Grid.Row="2" ColumnDefinitions="*,Auto" Padding="12,6">
+            <TextBlock x:Name="StatusLabel" Text="{x:Bind ViewModel.StatusText, Mode=OneWay}"
+                       Style="{StaticResource AppSecondaryTextStyle}" VerticalAlignment="Center" />
+            <TextBlock Grid.Column="1" x:Name="ProgressLabel" Text="{x:Bind ViewModel.ProgressLabel, Mode=OneWay}"
+                       Style="{StaticResource AppCaptionTextStyle}" VerticalAlignment="Center" />
         </Grid>
     </Grid>
 </Window>

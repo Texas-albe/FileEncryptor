@@ -29,7 +29,7 @@ static QString resolvedVersion() {
         : qApp->applicationVersion();
 }
 
-// 鸣谢正文：随当前语言整段切换
+// 鸣谢正文
 static QString creditsBodyHtml() {
     if (I18n::instance().currentLanguage() == QStringLiteral("en"))
         return QStringLiteral(
@@ -94,7 +94,7 @@ CreditsDialog::CreditsDialog(QWidget* parent): QDialog(parent) {
         .arg(en ? QStringLiteral("Credits") : QStringLiteral("鸣谢"))
         .arg(creditsBodyHtml()),
         p, resolvedVersion()));
-    // 国庆节窗口内追加祝福语
+    // 国庆节窗口内追
     if (ThemeManager::isNationalDay()) {
         const QString extra = QStringLiteral(
             "<p style='color:%1; font-weight:bold; font-size:15px; margin-top:12px;'>%2</p>")
@@ -114,7 +114,7 @@ CreditsDialog::CreditsDialog(QWidget* parent): QDialog(parent) {
     lay->addWidget(btns);
 }
 
-// README 摘要正文：随当前语言整段切换，避免中英混排
+// README 摘要正文
 static QString readmeBodyHtml() {
     if (I18n::instance().currentLanguage() == QStringLiteral("en"))
         return QStringLiteral(
@@ -142,7 +142,9 @@ static QString readmeBodyHtml() {
             "<p><code>-k &lt;keyfile&gt;</code> (key file) &gt; <code>--key-stdin</code> (stdin pipe) "
             "&gt; <code>ENCRYPTOR_KEY</code> (environment variable) &gt; interactive input; "
             "asymmetric mode uses an X25519 identity private key &gt; interactive input</p>"
-            "<h3>License: GPLv3</h3>"
+            "<h3>License: AGPLv3</h3>"
+            "<p><a href='https://www.gnu.org/licenses/agpl-3.0.html' style='color:%{linkColor};'>"
+            "GNU Affero General Public License v3.0</a></p>"
             "<hr/>"
             "<p style='color:%{mutedFg}; font-size:small;'>This is a README summary; see "
             "README.md in the project root for full documentation.</p>");
@@ -168,7 +170,8 @@ static QString readmeBodyHtml() {
         "<p><code>-k &lt;keyfile&gt;</code>（密钥文件） &gt; <code>--key-stdin</code>（stdin 管道） &gt; <code>ENCRYPTOR_KEY</code>（环境变量） &gt; 交互式输入；非对称模式用 X25519 身份私钥"
         " &gt; 交互式输入</p>"
         "<h3>许可证</h3>"
-        "<p>GPLv3</p>"
+        "<p><a href='https://www.gnu.org/licenses/agpl-3.0.html' style='color:%{linkColor};'>"
+        "GNU Affero General Public License v3.0（AGPLv3）</a></p>"
         "<hr/>"
         "<p style='color:%{mutedFg}; font-size:small;'>本窗口为 README 摘要，完整文档请见项目根目录 README.md</p>");
 }

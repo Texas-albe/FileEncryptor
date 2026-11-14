@@ -1,0 +1,419 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             xmlns:services="clr-namespace:FileEncryptorMobile.Services"
+             xmlns:local="clr-namespace:FileEncryptorMobile"
+             xmlns:controls="clr-namespace:FileEncryptorMobile.Controls"
+             x:Class="FileEncryptorMobile.VaultPage"
+             Title="{local:Zh 加密库}">
+
+    <ContentPage.ToolbarItems>
+        <!-- 主操作留在标题 -->
+        <ToolbarItem Text="{local:Zh 恢复密钥}" Order="Secondary" Clicked="OnRecovery" />
+        <ToolbarItem Text="{local:Zh 搜索}" Order="Secondary" Clicked="OnSearch" />
+        <ToolbarItem Text="{local:Zh 收藏}" Order="Secondary" Clicked="OnFavorites" />
+        <ToolbarItem Text="{local:Zh 排序}" Order="Secondary" Clicked="OnSort" />
+        <ToolbarItem Text="{local:Zh 回收站}" Order="Secondary" Clicked="OnTrash" />
+        <ToolbarItem Text="{local:Zh 完整性自检}" Order="Secondary" Clicked="OnIntegrityCheck" />
+        <ToolbarItem Text="{local:Zh 局域网共享}" Order="Secondary" Clicked="OnLanShare" />
+        <ToolbarItem Text="{local:Zh 重建索引}" Order="Secondary" Clicked="OnReindex" />
+        <ToolbarItem x:Name="BioItem" Text="{local:Zh 指纹或面容}" Order="Secondary" Clicked="OnBioManage" />
+        <ToolbarItem x:Name="PqcItem" Text="{local:Zh 开启后量子保护}" Order="Secondary" Clicked="OnPqcManage" />
+        <ToolbarItem Text="{local:Zh 库设置}" Clicked="OnVaultSettings" />
+    </ContentPage.ToolbarItems>
+
+    <Grid RowDefinitions="*">
+        <Grid RowDefinitions="Auto,Auto,Auto,*">
+
+        <!-- 权限横幅 -->
+        <Border Grid.Row="0" Padding="12,8"
+                BackgroundColor="{AppThemeBinding Light={StaticResource WarningBgLight}, Dark={StaticResource WarningBgDark}}"
+                Stroke="{AppThemeBinding Light={StaticResource WarningStrokeLight}, Dark={StaticResource WarningStrokeDark}}"
+                StrokeThickness="1" StrokeShape="RoundRectangle 0"
+                IsVisible="False" x:Name="PermBanner">
+            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="{StaticResource SpaceLg}">
+                <Label Grid.Column="0" Text="{local:Zh 需要「所有文件访问」权限才能读取此加密库}"
+                       FontSize="{StaticResource FontSizeCaption}"
+                       TextColor="{AppThemeBinding Light={StaticResource WarningFgLight}, Dark={StaticResource WarningFgDark}}"
+                       VerticalOptions="Center" />
+                <Button Grid.Column="1" x:Name="BtnGrantPerm" Text="{local:Zh 去授权}" FontSize="{StaticResource FontSizeCaption}"
+                        Style="{StaticResource SmallPrimaryButton}"
+                        VerticalOptions="Center"
+                        Clicked="OnGrantPerm" />
+            </Grid>
+        </Border>
+
+        <!-- 库目录信息 + 更改 -->
+        <Grid Grid.Row="2" Padding="12,10" ColumnDefinitions="*,Auto" ColumnSpacing="{StaticResource SpaceLg}">
+            <Label x:Name="DirLabel" Grid.Column="0" Text="{local:Zh 库目录：}"
+                   Style="{StaticResource Caption}" VerticalOptions="Center"
+                   LineBreakMode="MiddleTruncation" />
+            <Button x:Name="BtnChangeDir" Grid.Column="1" Text="{local:Zh 更改目录}"
+                    Style="{StaticResource SmallSecondaryButton}" Clicked="OnChangeDir" />
+        </Grid>
+
+        <!-- 三态内容 -->
+        <Grid Grid.Row="3">
+
+            <!-- 建库 -->
+            <VerticalStackLayout x:Name="SetupView" Padding="{StaticResource ViewPadding}" Spacing="0"
+                                 VerticalOptions="Center" IsVisible="False">
+                <Border Style="{StaticResource Card}" Padding="20">
+                    <VerticalStackLayout Spacing="{StaticResource SpaceXl}">
+                        <Label Text="{local:Zh 创建加密库}" Style="{StaticResource DialogTitle}" />
+                        <Label Text="{local:Zh 此密码加密库内全部文件，丢失无法找回；请先保存恢复密钥。}"
+                               Style="{StaticResource MutedText}" />
+                        <Border Style="{StaticResource FieldBorder}">
+                            <Entry x:Name="SetupPwd" Style="{StaticResource FieldEntry}"
+                                   Placeholder="{local:Zh 设置密码}" IsPassword="True" />
+                        </Border>
+                        <Border Style="{StaticResource FieldBorder}">
+                            <Entry x:Name="SetupPwd2" Style="{StaticResource FieldEntry}"
+                                   Placeholder="{local:Zh 确认密码}" IsPassword="True" />
+                        </Border>
+                        <Label Text="{local:Zh 默认算法}" Style="{StaticResource Caption}" />
+                        <VerticalStackLayout x:Name="SetupAlgoChoices" Spacing="{StaticResource SpaceMd}" />
+                        <Label x:Name="SetupAlgoDetail" Style="{StaticResource Caption}" />
+                        <Label Text="{local:Zh 压缩}" Style="{StaticResource Caption}" />
+                        <FlexLayout x:Name="SetupCompressChoices" Direction="Row" Wrap="Wrap"
+                                    AlignItems="Start" />
+                        <Label x:Name="SetupCompressHint" Style="{StaticResource Caption}" />
+                        <VerticalStackLayout Spacing="{StaticResource SpaceXs}">
+                            <Label Text="{local:Zh 后量子保护（默认开启）}" FontSize="{StaticResource FontSizeBody}" />
+                            <Label Text="{local:Zh 用后量子算法保护密钥和生物ID；密码也一直可用。}"
+                                   Style="{StaticResource Caption}" />
+                        </VerticalStackLayout>
+                        <Button Text="{local:Zh 创建}" Clicked="OnCreateVault"
+                                Style="{StaticResource PrimaryButton}" Margin="0,4,0,0" />
+                        <Label x:Name="SetupMsg" Style="{StaticResource ErrorText}" IsVisible="False" />
+                    </VerticalStackLayout>
+                </Border>
+            </VerticalStackLayout>
+
+            <!-- 解锁 -->
+            <VerticalStackLayout x:Name="UnlockView" Padding="{StaticResource ViewPadding}" Spacing="0"
+                                 VerticalOptions="Center" IsVisible="False">
+                <Border Style="{StaticResource Card}" Padding="20">
+                    <VerticalStackLayout Spacing="{StaticResource SpaceLg}">
+                        <Label Text="{local:Zh 加密库已锁定}" Style="{StaticResource DialogTitle}" />
+                        <Label x:Name="LblLockReason" Style="{StaticResource Caption}"
+                               IsVisible="False" />
+                        <Border Style="{StaticResource FieldBorder}">
+                            <Entry x:Name="UnlockPwd" Style="{StaticResource FieldEntry}"
+                                   Placeholder="{local:Zh 输入密码}" IsPassword="True" />
+                        </Border>
+                        <Button Text="{local:Zh 解锁}" Clicked="OnUnlock"
+                                Style="{StaticResource PrimaryButton}" Margin="0,4,0,0" />
+                        <Button x:Name="BtnBioUnlock" Text="{local:Zh 用指纹或面容解锁}" Clicked="OnBioUnlock"
+                                Style="{StaticResource SecondaryButton}" IsVisible="False" />
+                        <Button Text="{local:Zh 使用恢复密钥解锁}" Clicked="OnUnlockRecovery"
+                                Style="{StaticResource SecondaryButton}" />
+                        <!-- 同一个按钮按开 -->
+                        <Button x:Name="BtnBioToggle" Text="{local:Zh 开启指纹或面容解锁}" Clicked="OnBioToggle"
+                                Style="{StaticResource QuietButton}" IsVisible="False" />
+                        <Label x:Name="UnlockMsg" Style="{StaticResource ErrorText}" IsVisible="False" />
+                    </VerticalStackLayout>
+                </Border>
+            </VerticalStackLayout>
+
+            <!-- 浏览 -->
+            <Grid x:Name="BrowseView" RowDefinitions="Auto,Auto,Auto,*,Auto" IsVisible="False">
+
+                <!-- 索引损坏放行横 -->
+                <Border Grid.Row="0" Padding="12,8"
+                        BackgroundColor="{AppThemeBinding Light={StaticResource DangerBgLight}, Dark={StaticResource DangerBgDark}}"
+                        Stroke="{AppThemeBinding Light={StaticResource DangerStrokeLight}, Dark={StaticResource DangerStrokeDark}}"
+                        StrokeThickness="1" StrokeShape="RoundRectangle 0" IsVisible="False"
+                        x:Name="DamageBanner">
+                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="{StaticResource SpaceLg}">
+                        <Label Grid.Column="0"
+                               Text="{local:Zh 索引读取失败，已按空库显示；点「重建索引」可恢复列表。}"
+                               FontSize="{StaticResource FontSizeCaption}"
+                               TextColor="{AppThemeBinding Light={StaticResource DangerFgLight}, Dark={StaticResource DangerFgDark}}"
+                               VerticalOptions="Center" />
+                        <Button Grid.Column="1" Text="{local:Zh 重建索引}" FontSize="{StaticResource FontSizeCaption}" Clicked="OnReindex"
+                                Style="{StaticResource SmallSecondaryButton}"
+                                VerticalOptions="Center" />
+                    </Grid>
+                </Border>
+
+                <HorizontalStackLayout Grid.Row="1" Padding="12,10" Spacing="{StaticResource SpaceLg}">
+                    <Button x:Name="BtnUp" Text="{local:Zh 上级}" Clicked="OnUp" IsEnabled="False"
+                            Style="{StaticResource SmallSecondaryButton}" VerticalOptions="Center" />
+                    <Label x:Name="PathLabel" Text="/" VerticalOptions="Center"
+                           FontSize="{StaticResource FontSizeField}" FontAttributes="Bold"
+                           TextColor="{AppThemeBinding Light={StaticResource TextPrimaryLight}, Dark={StaticResource TextPrimaryDark}}" />
+                </HorizontalStackLayout>
+
+                <Label Grid.Row="2" x:Name="SpaceLabel" Padding="12,0,12,6"
+                       Text="{local:Zh 已用 —}"
+                       Style="{StaticResource Caption}" />
+
+                <CollectionView Grid.Row="3" x:Name="FileList"
+                                BackgroundColor="{AppThemeBinding Light={StaticResource CanvasLight}, Dark={StaticResource CanvasDark}}"
+                                SelectionMode="None"
+                                Scrolled="OnListScrolled">
+                    <CollectionView.ItemTemplate>
+                        <DataTemplate x:DataType="services:VaultItem">
+                            <SwipeView Threshold="80" SwipeEnded="OnSwipeEnded">
+                                <!-- 左滑到底直接选 -->
+                                <SwipeView.RightItems>
+                                    <SwipeItems Mode="Execute">
+                                        <SwipeItemView WidthRequest="80"
+                                                       BackgroundColor="{AppThemeBinding Light={StaticResource SurfaceMutedLight}, Dark={StaticResource SurfaceMutedDark}}"
+                                                       CommandParameter="{Binding .}"
+                                                       Invoked="OnSelectSwipe">
+                                            <Grid BackgroundColor="{AppThemeBinding Light={StaticResource SurfaceMutedLight}, Dark={StaticResource SurfaceMutedDark}}">
+                                                <Label Text="{Binding SwipeHint}" FontSize="{StaticResource FontSizeSm}"
+                                                       TextColor="{AppThemeBinding Light={StaticResource Primary}, Dark={StaticResource PrimaryDark}}"
+                                                       HorizontalTextAlignment="Center"
+                                                       VerticalTextAlignment="Center"
+                                                       HorizontalOptions="Center"
+                                                       VerticalOptions="Center"
+                                                       InputTransparent="True" />
+                                            </Grid>
+                                        </SwipeItemView>
+                                    </SwipeItems>
+                                </SwipeView.RightItems>
+                                <Grid Padding="14,12" ColumnDefinitions="Auto,*,Auto"
+                                      RowDefinitions="Auto,Auto" ColumnSpacing="{StaticResource SpaceLg}"
+                                      BackgroundColor="{Binding RowBg}"
+                                      HandlerChanged="OnItemGridHandlerChanged">
+                                        <Grid.GestureRecognizers>
+                                            <TapGestureRecognizer Tapped="OnItemTapped"
+                                                                  CommandParameter="{Binding .}" />
+                                        </Grid.GestureRecognizers>
+                                    <!-- 文件名前的预览 -->
+                                    <Border Grid.RowSpan="2" Grid.Column="0"
+                                            WidthRequest="44" HeightRequest="44"
+                                            StrokeThickness="0"
+                                            BackgroundColor="{AppThemeBinding Light={StaticResource SurfaceMutedLight}, Dark={StaticResource SurfaceMutedDark}}"
+                                            StrokeShape="RoundRectangle 7"
+                                            VerticalOptions="Center">
+                                        <Grid>
+                                            <Label Text="{Binding Placeholder}" FontSize="{StaticResource FontSizeCaption}"
+                                                   TextColor="{AppThemeBinding Light={StaticResource TextMutedLight}, Dark={StaticResource TextMutedDark}}"
+                                                   IsVisible="{Binding ShowPlaceholder}"
+                                                   HorizontalOptions="Center"
+                                                   VerticalOptions="Center" />
+                                            <Image Source="{Binding ThumbSource}"
+                                                   Aspect="AspectFill"
+                                                   IsVisible="{Binding HasThumb}" />
+                                        </Grid>
+                                    </Border>
+                                    <Label Grid.Row="0" Grid.Column="1" Text="{Binding Name}"
+                                           FontSize="{StaticResource FontSizeField}" LineBreakMode="MiddleTruncation"
+                                           TextColor="{Binding TitleFg}" />
+                                    <Label Grid.Row="0" Grid.Column="2" Text="{Binding SizeText}"
+                                           FontSize="{StaticResource FontSizeCaption}" TextColor="{Binding MetaFg}"
+                                           VerticalOptions="Center" />
+                                    <Label Grid.Row="1" Grid.Column="1"
+                                           Text="{Binding Mtime, StringFormat='{0:yyyy-MM-dd HH:mm}'}"
+                                           FontSize="{StaticResource FontSizeSm}" TextColor="{Binding MetaFg}" />
+                                </Grid>
+                            </SwipeView>
+                        </DataTemplate>
+                    </CollectionView.ItemTemplate>
+                    <CollectionView.EmptyView>
+                        <VerticalStackLayout x:Name="EmptyBox" Spacing="6" Padding="24,36"
+                                             IsVisible="False"
+                                             HorizontalOptions="Center" VerticalOptions="Center">
+                            <Label Text="{local:Zh 暂无文件}" Style="{StaticResource SectionTitle}"
+                                   HorizontalTextAlignment="Center" HorizontalOptions="Center" />
+                            <Label Text="{local:Zh 点底部「移入…」导入文件，或新建目录。}"
+                                   Style="{StaticResource Caption}"
+                                   HorizontalTextAlignment="Center" HorizontalOptions="Center" />
+                        </VerticalStackLayout>
+                    </CollectionView.EmptyView>
+                </CollectionView>
+
+                <!-- 普通态 / 多选态底 -->
+                <Grid Grid.Row="4" x:Name="NormalBar" Padding="12"
+                      ColumnDefinitions="*,*,*" ColumnSpacing="{StaticResource GridGapSm}" IsVisible="True">
+                    <Button Grid.Column="0" Text="{local:Zh 移入…}"
+                            Style="{StaticResource SmallSecondaryButton}" Clicked="OnMoveIn" />
+                    <Button Grid.Column="1" Text="{local:Zh 新建目录}"
+                            Style="{StaticResource SmallPrimaryButton}" Clicked="OnNewFolder" />
+                    <Button Grid.Column="2" Text="{local:Zh 锁定}"
+                            Style="{StaticResource SmallSecondaryButton}" Clicked="OnLock" />
+                </Grid>
+                <Grid Grid.Row="4" x:Name="SelectBar" Padding="12"
+                      ColumnDefinitions="*,*,*" ColumnSpacing="{StaticResource GridGapSm}" IsVisible="False">
+                    <Button Grid.Column="0" Text="{local:Zh 全选}"
+                            Style="{StaticResource SmallSecondaryButton}" Clicked="OnSelectAll" />
+                    <Button Grid.Column="1" Text="{local:Zh 取消}"
+                            Style="{StaticResource SmallSecondaryButton}" Clicked="OnSelectNone" />
+                    <Button Grid.Column="2" Text="{local:Zh 反选}"
+                            Style="{StaticResource SmallSecondaryButton}" Clicked="OnSelectInvert" />
+                </Grid>
+
+            </Grid>
+
+            <ActivityIndicator x:Name="Busy" IsRunning="False" IsVisible="False"
+                               WidthRequest="36" HeightRequest="36"
+                               HorizontalOptions="Center" VerticalOptions="Center" />
+
+        </Grid>
+
+        </Grid>
+
+        <!-- 浮层与内容同级 -->
+        <!-- 权限引导浮层 -->
+        <Grid RowDefinitions="*" x:Name="PermOverlay" IsVisible="False"
+              BackgroundColor="{StaticResource Scrim}">
+            <Border Style="{StaticResource DialogCard}"
+                    Margin="{StaticResource DialogMargin}" MaximumWidthRequest="420"
+                    HorizontalOptions="Fill" VerticalOptions="Center">
+                <VerticalStackLayout Spacing="{StaticResource SpaceXl}">
+                    <Label Text="{local:Zh 需要存储权限}" Style="{StaticResource DialogTitle}" />
+                    <Label Style="{StaticResource MutedText}"
+                           Text="{local:Zh 加密库保存在外部存储，卸载应用后仍在；需先授予「所有文件访问」权限。}" />
+                    <Label Style="{StaticResource Caption}"
+                           Text="{local:Zh 找不到开关？请在系统设置的「应用」→「文件加密」→「权限」中开启（部分机型叫「文件和媒体」）。}" />
+                    <Grid ColumnDefinitions="*,*" ColumnSpacing="{StaticResource SpaceLg}" Margin="0,4,0,0">
+                        <Button Grid.Column="0" Text="{local:Zh 暂不}" Clicked="OnPermLater"
+                                Style="{StaticResource SecondaryButton}" />
+                        <Button Grid.Column="1" Text="{local:Zh 去授权}" Clicked="OnGrantPerm"
+                                Style="{StaticResource PrimaryButton}" />
+                    </Grid>
+                </VerticalStackLayout>
+            </Border>
+        </Grid>
+
+        <!-- 批量重命名 -->
+        <Grid RowDefinitions="*" x:Name="RenameOverlay" IsVisible="False"
+              BackgroundColor="{StaticResource Scrim}">
+            <Border Style="{StaticResource DialogCard}"
+                    Margin="{StaticResource DialogMargin}" MaximumWidthRequest="420"
+                    HorizontalOptions="Fill" VerticalOptions="Center">
+                <VerticalStackLayout Spacing="{StaticResource SpaceLg}">
+                    <Label Text="{local:Zh 批量重命名}" Style="{StaticResource DialogTitle}" />
+                    <Label Style="{StaticResource Caption}">
+                        <Label.Text><local:Zh>按正则匹配原名，替换串可用 $1、{n}、{name}、{ext}。</local:Zh></Label.Text>
+                    </Label>
+                    <Border Style="{StaticResource FieldBorder}">
+                        <Entry x:Name="RenamePattern" Style="{StaticResource FieldEntry}"
+                               TextChanged="OnRenameTextChanged">
+                            <Entry.Placeholder><local:Zh>匹配正则，如 ^IMG_(\d+)</local:Zh></Entry.Placeholder>
+                        </Entry>
+                    </Border>
+                    <Border Style="{StaticResource FieldBorder}">
+                        <Entry x:Name="RenameReplace" Style="{StaticResource FieldEntry}"
+                               Placeholder="{local:Zh 替换为，如 照片_$1}"
+                               TextChanged="OnRenameTextChanged" />
+                    </Border>
+                    <Label x:Name="RenamePreview" Style="{StaticResource MutedText}" MaxLines="9"
+                           LineBreakMode="WordWrap" />
+                    <Grid ColumnDefinitions="*,*" ColumnSpacing="{StaticResource SpaceLg}" Margin="0,4,0,0">
+                        <Button Grid.Column="0" Text="{local:Zh 取消}" Clicked="OnRenameCancel"
+                                Style="{StaticResource SecondaryButton}" />
+                        <Button Grid.Column="1" Text="{local:Zh 应用}" Clicked="OnRenameApply"
+                                Style="{StaticResource PrimaryButton}" />
+                    </Grid>
+                </VerticalStackLayout>
+            </Border>
+        </Grid>
+
+        <!-- 密码输入 -->
+        <Grid RowDefinitions="*" x:Name="PwdOverlay" IsVisible="False">
+            <Grid Grid.Row="0" VerticalOptions="Fill" HorizontalOptions="Fill" BackgroundColor="{StaticResource Scrim}">
+                <Grid.GestureRecognizers>
+                    <TapGestureRecognizer Tapped="OnPwdBackdropTapped" />
+                </Grid.GestureRecognizers>
+            </Grid>
+            <Border Style="{StaticResource DialogCard}"
+                    Margin="{StaticResource DialogMargin}" MaximumWidthRequest="420"
+                    HorizontalOptions="Fill" VerticalOptions="Center">
+                <VerticalStackLayout Spacing="{StaticResource SpaceXl}">
+                    <Label x:Name="PwdTitle" Style="{StaticResource DialogTitle}" />
+                    <Label x:Name="PwdHint" Style="{StaticResource Caption}" />
+                    <Border Style="{StaticResource FieldBorder}">
+                        <Entry x:Name="PwdEntry" Style="{StaticResource FieldEntry}"
+                               IsPassword="True" Placeholder="{local:Zh 密码}" />
+                    </Border>
+                    <Grid ColumnDefinitions="*,*" ColumnSpacing="{StaticResource SpaceLg}" Margin="0,4,0,0">
+                        <Button Grid.Column="0" Text="{local:Zh 取消}" Clicked="OnPwdCancel"
+                                Style="{StaticResource SecondaryButton}" />
+                        <Button Grid.Column="1" Text="{local:Zh 确定}" Clicked="OnPwdOk"
+                                Style="{StaticResource PrimaryButton}" />
+                    </Grid>
+                </VerticalStackLayout>
+            </Border>
+        </Grid>
+
+        <!-- 属性页 -->
+        <Grid RowDefinitions="*" x:Name="PropsOverlay" IsVisible="False">
+            <Grid Grid.Row="0" VerticalOptions="Fill" HorizontalOptions="Fill" BackgroundColor="{StaticResource Scrim}">
+                <Grid.GestureRecognizers>
+                    <TapGestureRecognizer Tapped="OnPropsBackdropTapped" />
+                </Grid.GestureRecognizers>
+            </Grid>
+            <Border Style="{StaticResource DialogCardFlush}"
+                    Margin="{StaticResource DialogMargin}" MaximumWidthRequest="420"
+                    HorizontalOptions="Fill" VerticalOptions="Center">
+                <VerticalStackLayout Spacing="0">
+                    <Label Text="{local:Zh 属性}" Style="{StaticResource DialogTitle}"
+                           Margin="20,18,20,4" />
+                    <Label x:Name="PropsName" Style="{StaticResource Caption}"
+                           Margin="20,0,20,14" LineBreakMode="MiddleTruncation" />
+                    <BoxView Style="{StaticResource Divider}" />
+                    <Grid Padding="20,14" ColumnDefinitions="Auto,*" ColumnSpacing="16"
+                          RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto" RowSpacing="{StaticResource GridGap}">
+                        <Label Grid.Row="0" Grid.Column="0" Text="{local:Zh 类型}" Style="{StaticResource MutedText}" />
+                        <Label Grid.Row="0" Grid.Column="1" x:Name="PropsType" FontSize="{StaticResource FontSizeSub}" />
+                        <Label Grid.Row="1" Grid.Column="0" Text="{local:Zh 大小}" Style="{StaticResource MutedText}" />
+                        <Label Grid.Row="1" Grid.Column="1" x:Name="PropsSize" FontSize="{StaticResource FontSizeSub}" />
+                        <Label Grid.Row="2" Grid.Column="0" x:Name="PropsCountLabel" Text="{local:Zh 包含文件}"
+                               Style="{StaticResource MutedText}" />
+                        <Label Grid.Row="2" Grid.Column="1" x:Name="PropsCount" FontSize="{StaticResource FontSizeSub}" />
+                        <Label Grid.Row="3" Grid.Column="0" Text="{local:Zh 修改时间}" Style="{StaticResource MutedText}" />
+                        <Label Grid.Row="3" Grid.Column="1" x:Name="PropsMtime" FontSize="{StaticResource FontSizeSub}" />
+                        <Label Grid.Row="4" Grid.Column="0" Text="{local:Zh 算法}" Style="{StaticResource MutedText}" />
+                        <Label Grid.Row="4" Grid.Column="1" x:Name="PropsAlgo" FontSize="{StaticResource FontSizeSub}" />
+                        <Label Grid.Row="5" Grid.Column="0" Text="{local:Zh 压缩}" Style="{StaticResource MutedText}" />
+                        <Label Grid.Row="5" Grid.Column="1" x:Name="PropsCompress" FontSize="{StaticResource FontSizeSub}" />
+                    </Grid>
+                    <BoxView Style="{StaticResource Divider}" />
+                    <Label x:Name="PropsStatus" Margin="20,12,20,2"
+                           Style="{StaticResource Caption}" />
+                    <Button Text="{local:Zh 关闭}" Margin="20,2,20,16"
+                            Style="{StaticResource SmallSecondaryButton}"
+                            HorizontalOptions="End" Clicked="OnPropsClose" />
+                </VerticalStackLayout>
+            </Border>
+        </Grid>
+
+        <!-- 库设置 -->
+        <Grid RowDefinitions="*" x:Name="VaultSettingsOverlay" IsVisible="False">
+            <Grid Grid.Row="0" VerticalOptions="Fill" HorizontalOptions="Fill" BackgroundColor="{StaticResource Scrim}">
+                <Grid.GestureRecognizers>
+                    <TapGestureRecognizer Tapped="OnVaultSettingsBackdropTapped" />
+                </Grid.GestureRecognizers>
+            </Grid>
+            <Border Style="{StaticResource DialogCard}"
+                    Margin="{StaticResource DialogMargin}" MaximumWidthRequest="420"
+                    HorizontalOptions="Fill" VerticalOptions="Center">
+                <Grid RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto" RowSpacing="{StaticResource SpaceLg}">
+                    <Label Grid.Row="0" Text="{local:Zh 库设置}" Style="{StaticResource DialogTitle}" />
+                    <Label Grid.Row="1" Text="{local:Zh 只影响之后写入的文件，已有文件不变。}" Style="{StaticResource MutedText}" />
+                    <Label Grid.Row="2" x:Name="VaultSettingsAlgoLabel" Text="{local:Zh 默认算法}"
+                           Style="{StaticResource SectionTitle}" Margin="0,4,0,0" />
+                    <VerticalStackLayout Grid.Row="3" Spacing="{StaticResource SpaceMd}">
+                        <VerticalStackLayout x:Name="VaultSettingsAlgoChoices" Spacing="{StaticResource SpaceMd}" />
+                        <Label x:Name="VaultSettingsAlgoDetail" Style="{StaticResource Caption}" />
+                    </VerticalStackLayout>
+                    <Label Grid.Row="4" x:Name="VaultSettingsCompressLabel" Text="{local:Zh 压缩策略}"
+                           Style="{StaticResource SectionTitle}" Margin="0,4,0,0" />
+                    <FlexLayout Grid.Row="5" x:Name="VaultSettingsCompressChoices" Direction="Row"
+                                Wrap="Wrap" AlignItems="Start" />
+                    <Label Grid.Row="6" x:Name="VaultSettingsCompressHint" Style="{StaticResource Caption}" />
+                    <Button Grid.Row="7" Text="{local:Zh 关闭}" Margin="0,4,0,0" Clicked="OnVaultSettingsClose"
+                            Style="{StaticResource SmallSecondaryButton}" HorizontalOptions="End" />
+                </Grid>
+            </Border>
+        </Grid>
+
+        <controls:MenuSheet x:Name="Sheet" />
+
+    </Grid>
+</ContentPage>

@@ -24,6 +24,8 @@ TaskHistoryDialog::TaskHistoryDialog(QWidget* parent) : QDialog(parent) {
     resize(860,520);
 
     auto* lay=new QVBoxLayout(this);
+    lay->setContentsMargins(14,12,14,12);
+    lay->setSpacing(8);
 
     m_stats=new QLabel;
     m_stats->setWordWrap(true);
@@ -54,6 +56,11 @@ TaskHistoryDialog::TaskHistoryDialog(QWidget* parent) : QDialog(parent) {
     m_btnDelete=new QPushButton(tr("删除选中"));
     m_btnClear=new QPushButton(tr("清空历史"));
     m_btnClose=new QPushButton(tr("关闭"));
+    // 删除与清空是破坏性操作，走危险描边；刷新与关闭保持次级
+    m_btnDelete->setProperty("uiRole","danger");
+    m_btnClear->setProperty("uiRole","danger");
+    m_btnRefresh->setProperty("uiRole","secondary");
+    m_btnClose->setProperty("uiRole","secondary");
     btnRow->addWidget(m_btnRefresh);
     btnRow->addWidget(m_btnDelete);
     btnRow->addWidget(m_btnClear);

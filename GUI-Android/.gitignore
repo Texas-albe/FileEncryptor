@@ -1,0 +1,20 @@
+# Build outputs
+bin/
+obj/
+
+# User-specific files
+.vs/
+*.user
+*.suo
+
+# OS-generated files
+.DS_Store
+
+# IDE
+.idea/
+
+# 打包产物（正常落在 bin/，这里兜底）
+*.apk
+*.aab
+
+# 注意：Musics/ 是随包音乐的构建输入（AndroidAsset），不要忽略

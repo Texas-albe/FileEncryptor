@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             xmlns:services="clr-namespace:FileEncryptorMobile.Services"
+             x:Class="FileEncryptorMobile.DirPickerPage"
+             xmlns:local="clr-namespace:FileEncryptorMobile"
+             Title="{local:Zh 选择目标目录}">
+
+    <Grid RowDefinitions="Auto,*,Auto" Padding="12">
+        <HorizontalStackLayout Grid.Row="0" Spacing="{StaticResource SpaceLg}" Margin="0,0,0,8">
+            <Button Text="{local:Zh 上级}" Clicked="OnUp" Style="{StaticResource SmallSecondaryButton}" />
+            <Label x:Name="PathLabel" Text="/" Style="{StaticResource Caption}"
+                   VerticalOptions="Center" LineBreakMode="MiddleTruncation" />
+        </HorizontalStackLayout>
+
+        <Grid Grid.Row="1">
+            <CollectionView x:Name="DirList" SelectionMode="None">
+                <CollectionView.ItemTemplate>
+                    <DataTemplate x:DataType="services:VaultItem">
+                        <Grid Padding="14,12" ColumnDefinitions="*,Auto">
+                            <Grid.GestureRecognizers>
+                                <TapGestureRecognizer Tapped="OnDirTapped"
+                                                      CommandParameter="{Binding .}" />
+                            </Grid.GestureRecognizers>
+                            <Label Grid.Column="0" Text="{Binding Name}" FontSize="{StaticResource FontSizeField}" />
+                            <Label Grid.Column="1" Text="{local:Zh 进入 ›}" Style="{StaticResource Caption}"
+                                   VerticalOptions="Center" />
+                        </Grid>
+                    </DataTemplate>
+                </CollectionView.ItemTemplate>
+                <CollectionView.EmptyView>
+                    <Label Text="{local:Zh 当前目录没有子目录}" Style="{StaticResource Caption}"
+                           HorizontalOptions="Center" Margin="0,30" />
+                </CollectionView.EmptyView>
+            </CollectionView>
+            <ActivityIndicator x:Name="Busy" IsRunning="False" IsVisible="False"
+                               VerticalOptions="Center" HorizontalOptions="Center" />
+        </Grid>
+
+        <Grid Grid.Row="2" ColumnDefinitions="*,*" ColumnSpacing="{StaticResource SpaceLg}" Margin="0,10,0,0">
+            <Button Grid.Column="0" Text="{local:Zh 移到此处}" Clicked="OnPickHere"
+                    Style="{StaticResource PrimaryButton}" />
+            <Button Grid.Column="1" Text="{local:Zh 取消}" Clicked="OnClose"
+                    Style="{StaticResource SecondaryButton}" />
+        </Grid>
+    </Grid>
+</ContentPage>

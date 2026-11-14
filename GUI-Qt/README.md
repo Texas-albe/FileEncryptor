@@ -26,7 +26,7 @@ FileEncryptor **图形界面**。Windows 侧使用 **WinUI 3**（Windows App SDK
 - **C++17** 编译器（MSVC / g++ / Clang）。
 - **CMake ≥ 3.16**。
 - **Qt 6.3+ Widgets**（`TaskHistory` 用 `QStringConverter`，6.2 无此 API）。静态 / 动态 Qt 均可构建（源码已用 `QT_STATIC` 宏自动区分）：
-  - **Windows**：仓库自带 `../third_party/smelibs/` 静态 Qt，CMake 自动选用，无需额外安装。
+  - **Windows**：仓库自带 `../Third Party/smelibs/` 静态 Qt，CMake 自动选用，无需额外安装。
   - **Linux/WSL**：优先 `/opt/smelibs`（静态 Qt），没有则回退系统 `qt6-base-dev`（动态，运行时依赖 Qt6 *.so）。
   - **macOS**：`brew install qt`。
 - **运行时依赖**：`FileEncryptorCLI(.exe)` 须位于 GUI exe 同目录，或通过 `FILEENCRYPTOR_EXE` 环境变量指向，或在 PATH 中可找到。
@@ -46,10 +46,10 @@ cmake --build --preset windows-vs2026-release --config Release
 #     （完全自包含：无 Qt6Core.dll / Qt6Gui.dll / Qt6Widgets.dll / platforms/qwindows.dll 依赖）
 ```
 
-静态 Qt 分发已随仓库放于 `../third_party/smelibs/`，CMake 只使用这一条仓库相对路径（不再引用任何本机绝对路径）。如使用其他位置的静态 Qt，在命令行覆盖：
+静态 Qt 分发已随仓库放于 `../Third Party/smelibs/`，CMake 只使用这一条仓库相对路径（不再引用任何本机绝对路径）。如使用其他位置的静态 Qt，在命令行覆盖：
 ```powershell
 cmake -S . -B build -G "Visual Studio 18 2026" -A x64 `
-      -DCMAKE_PREFIX_PATH="<静态 Qt 根目录>"   # 例: ../third_party/smelibs
+      -DCMAKE_PREFIX_PATH="<静态 Qt 根目录>"   # 例: "../Third Party/smelibs"
 ```
 
 > **关键前提（Windows）**：`Qt6::Core` / `Qt6::Gui` / `Qt6::Widgets` 必须是 **STATIC IMPORTED** 目标（`add_library(Qt6::Core STATIC IMPORTED)`，见 `lib/cmake/Qt6Core/Qt6CoreTargets.cmake`）才能得到零 DLL 的自包含 exe。动态构建的 Qt（官方 msvc2022_64 默认）也能构建成功，但会链接到 `Qt6Core.dll`，运行时需把 Qt DLL 放在 exe 同目录（与本项目"不依赖 Qt DLL"目标不符）。Linux / macOS 使用系统动态 Qt 时同理（运行时依赖 Qt6 *.so / framework）。
@@ -185,7 +185,7 @@ FileEncryptor/
 | `windows-vs2026-release` | Windows | Visual Studio 18 2026 | Release | **VS2026 一键编译** |
 | `windows-vs2026-debug` | Windows | Visual Studio 18 2026 | Debug | **VS2026 一键调试** |
 
-预设不写入任何本机绝对路径，Qt 一律取自仓库相对路径 `../third_party/smelibs/`；如静态 Qt 放在别处，请在命令行用 `-DCMAKE_PREFIX_PATH=...` 覆盖。
+预设不写入任何本机绝对路径，Qt 一律取自仓库相对路径 `../Third Party/smelibs/`；如静态 Qt 放在别处，请在命令行用 `-DCMAKE_PREFIX_PATH=...` 覆盖。
 
 ---
 

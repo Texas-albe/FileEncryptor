@@ -1,4 +1,4 @@
-// Cipher 工厂实现：XChaCha20 / AEGIS-256 / AES-GCM（仅解密旧格式）/ SM4-GCM。
+// Cipher 工厂实现
 #include "cipher.hpp"
 #include <sodium.h>
 #include <vector>
@@ -43,7 +43,7 @@ public:
         const unsigned char* aad, size_t aad_len,
         const unsigned char* nonce, const unsigned char* key,
         unsigned char* ct_out, unsigned long long& ct_len) override {
-        // AEGIS-256 同样依赖 AES-NI；libsodium 未提供 is_available，用项目内的探测函数兜底
+        // AEGIS-256 同样依赖 AES-NI；libsodium 未提
         if(!aegis256_supported()) return -1;
         return crypto_aead_aegis256_encrypt(ct_out, &ct_len,
             pt, pt_len, aad, aad_len, nullptr, nonce, key);
@@ -58,8 +58,10 @@ public:
     }
 };
 
-// AES-256-GCM：96 位 nonce，故每个文件必须新 DEK（容器已保证）。
-// 硬件 AES-NI + CLMUL 下吞吐远高于 XChaCha20，但无 AES-NI 的老 CPU 上不可用。
+// AES-256-GCM
+// 优先走 OpenSSL EVP
+// CPU 是否带 AES-NI 限制）；未编
+// 两条实现
 class AesGcmCipher final : public Cipher {
 public:
     CryptoMode mode() const override { return CryptoMode::AES_GCM; }
@@ -70,7 +72,10 @@ public:
         const unsigned char* aad, size_t aad_len,
         const unsigned char* nonce, const unsigned char* key,
         unsigned char* ct_out, unsigned long long& ct_len) override {
-        // 无 AES-NI 时 libsodium 的 GCM 实现不可用，直接失败而非产出坏密文
+#ifdef FE_WITH_OPENSSL
+        if(EvpGcmEncrypt(pt, pt_len, aad, aad_len, nonce, key, ct_out, ct_len) == 0) return 0;
+#endif
+        // 无 AES-NI 时 libsodium
         if(crypto_aead_aes256gcm_is_available()==0) return -1;
         return crypto_aead_aes256gcm_encrypt(ct_out, &ct_len,
             pt, pt_len, aad, aad_len, nullptr, nonce, key);
@@ -79,15 +84,80 @@ public:
         const unsigned char* aad, size_t aad_len,
         const unsigned char* nonce, const unsigned char* key,
         unsigned char* pt_out, unsigned long long& pt_len) override {
+#ifdef FE_WITH_OPENSSL
+        if(EvpGcmDecrypt(ct, ct_len, aad, aad_len, nonce, key, pt_out, pt_len) == 0) return 0;
+#endif
         if(crypto_aead_aes256gcm_is_available()==0) return -1;
         return crypto_aead_aes256gcm_decrypt(pt_out, &pt_len, nullptr,
             ct, ct_len, aad, aad_len, nonce, key);
     }
+
+#ifdef FE_WITH_OPENSSL
+private:
+    static int EvpGcmEncrypt(const unsigned char* pt, size_t pt_len,
+        const unsigned char* aad, size_t aad_len,
+        const unsigned char* nonce, const unsigned char* key,
+        unsigned char* ct_out, unsigned long long& ct_len) {
+        EVP_CIPHER* aes = EVP_CIPHER_fetch(nullptr, "AES-256-GCM", nullptr);
+        if(!aes) return -1;
+        EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
+        if(!ctx) { EVP_CIPHER_free(aes); return -1; }
+        int rc = -1, len = 0;
+        do {
+            if(EVP_EncryptInit_ex(ctx, aes, nullptr, nullptr, nullptr) != 1) break;
+            if(EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_IVLEN, 12, nullptr) != 1) break;
+            if(EVP_EncryptInit_ex(ctx, nullptr, nullptr, key, nonce) != 1) break;
+            if(aad && aad_len && EVP_EncryptUpdate(ctx, nullptr, &len, aad, (int)aad_len) != 1) break;
+            if(EVP_EncryptUpdate(ctx, ct_out, &len, pt, (int)pt_len) != 1) break;
+            int ct_off = len;
+            if(EVP_EncryptFinal_ex(ctx, ct_out + ct_off, &len) != 1) break;
+            ct_len = (unsigned long long)(ct_off + len);
+            if(EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_GET_TAG, 16, ct_out + ct_len) != 1) break;
+            ct_len += 16;
+            rc = 0;
+        } while(false);
+        EVP_CIPHER_CTX_free(ctx);
+        EVP_CIPHER_free(aes);
+        return rc;
+    }
+
+    static int EvpGcmDecrypt(const unsigned char* ct, size_t ct_len,
+        const unsigned char* aad, size_t aad_len,
+        const unsigned char* nonce, const unsigned char* key,
+        unsigned char* pt_out, unsigned long long& pt_len) {
+        if(ct_len < 16) return -1;
+        const size_t body = ct_len - 16;
+        EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
+        if(!ctx) return -1;
+        EVP_CIPHER* aes = EVP_CIPHER_fetch(nullptr, "AES-256-GCM", nullptr);
+        if(!aes) { EVP_CIPHER_CTX_free(ctx); return -1; }
+        int rc = -1, len = 0;
+        do {
+            if(EVP_DecryptInit_ex(ctx, aes, nullptr, nullptr, nullptr) != 1) break;
+            if(EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_IVLEN, 12, nullptr) != 1) break;
+            if(EVP_DecryptInit_ex(ctx, nullptr, nullptr, key, nonce) != 1) break;
+            if(aad && aad_len && EVP_DecryptUpdate(ctx, nullptr, &len, aad, (int)aad_len) != 1) break;
+            // tag 校验通
+            std::vector<unsigned char> tmp(body ? body : 1);
+            if(EVP_DecryptUpdate(ctx, tmp.data(), &len, ct, (int)body) != 1) break;
+            int pt_off = len;
+            if(EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_TAG, 16,
+                                    const_cast<unsigned char*>(ct + body)) != 1) break;
+            if(EVP_DecryptFinal_ex(ctx, tmp.data() + pt_off, &len) != 1) break;
+            if(pt_off + len > 0) std::memcpy(pt_out, tmp.data(), (size_t)(pt_off + len));
+            pt_len = (unsigned long long)(pt_off + len);
+            rc = 0;
+        } while(false);
+        EVP_CIPHER_CTX_free(ctx);
+        EVP_CIPHER_free(aes);
+        return rc;
+    }
+#endif
 };
 
-// SM4-GCM：国密 SM4 的 AEAD 封装（OpenSSL 3.0+ 提供者的 "SM4-GCM"）。密钥 16 字节、
-// nonce 12 字节、tag 16 字节。OpenSSL 4.x 已移除旧式 EVP_sm4_gcm() 便捷函数，改用
-// EVP_CIPHER_fetch 取提供者实现；仅在 FE_WITH_OPENSSL 时可用，否则工厂返回 nullptr。
+// SM4-GCM
+// nonce 12 字节、tag 16
+// EVP_CIPHER_fetch 取提供者实现
 #ifdef FE_WITH_OPENSSL
 class Sm4GcmCipher final : public Cipher {
 public:
@@ -138,7 +208,7 @@ public:
             if(EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_IVLEN, (int)nonce_size(), nullptr) != 1) break;
             if(EVP_DecryptInit_ex(ctx, nullptr, nullptr, key, nonce) != 1) break;
             if(aad && aad_len && EVP_DecryptUpdate(ctx, nullptr, &len, aad, (int)aad_len) != 1) break;
-            // tag 认证通过前不得向 pt_out 写任何字节：先解到局部缓冲，EVP_DecryptFinal_ex 验 tag 成功后再拷贝（与 libsodium 各 AEAD 接口「验证先于输出」的语义一致）；失败路径不产出任何明文字节
+            // tag 认证通
             std::vector<unsigned char> tmp(body ? body : 1);
             if(EVP_DecryptUpdate(ctx, tmp.data(), &len, ct, (int)body) != 1) break;
             int pt_off = len;

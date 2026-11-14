@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<ContentView xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             x:Class="FileEncryptorMobile.BackgroundTaskFooter"
+             xmlns:local="clr-namespace:FileEncryptorMobile">
+    <VerticalStackLayout x:Name="Root" IsVisible="False" Spacing="6" Padding="14,4,14,14">
+        <BoxView Style="{StaticResource Divider}" />
+        <Label Text="{local:Zh 后台任务}" Style="{StaticResource SubSectionTitle}" />
+        <Grid x:Name="Row" Padding="0,12" BackgroundColor="Transparent">
+            <Grid.GestureRecognizers>
+                <TapGestureRecognizer Tapped="OnOpen" />
+            </Grid.GestureRecognizers>
+            <Label x:Name="LblTask" LineBreakMode="TailTruncation"
+                   VerticalOptions="Center" />
+        </Grid>
+    </VerticalStackLayout>
+</ContentView>

@@ -64,18 +64,18 @@ Thumbs.db
 
 *.qm
 
-third_party/smelibs/
-third_party/libsodium/
-third_party/yaml-cpp/
-third_party/zstd/
-third_party/rage/
-third_party/openssl/*.lib
-third_party/openssl/test/
-third_party/openssl/doc/
-third_party/openssl/demos/
-third_party/curl/*.lib
-third_party/curl/docs/
-third_party/curl/tests/
+Third Party/smelibs/
+Third Party/libsodium/
+Third Party/yaml-cpp/
+Third Party/zstd/
+Third Party/rage/
+Third Party/openssl/*.lib
+Third Party/openssl/test/
+Third Party/openssl/doc/
+Third Party/openssl/demos/
+Third Party/curl/*.lib
+Third Party/curl/docs/
+Third Party/curl/tests/
 
 *.key
 *.pem
@@ -95,5 +95,16 @@ CERT/
 *.keystore
 *.asc
 docs/
-scripts/
+# build scripts: allowlist only
+# Local one-click build helpers (_win_build, build_cli, build_mounter, build_gui, build_with_vcvars) are intentionally untracked.
+scripts/*
+!scripts/verify_android_release.py
+!scripts/toolchain.py
+!scripts/build_media3_bindings.py
+!scripts/build_android_apk.py
+!scripts/build_openssl_android.py
 Updates/
+
+keystore.local.props
+
+!GUI-Android/Platforms/Android/native/**/*.so

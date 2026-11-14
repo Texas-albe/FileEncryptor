@@ -17,7 +17,7 @@
 
 #include "secure_zero.h"
 
-// 用 QLineEdit 尾部动作实现眼睛
+// 用 QLineEdit 尾部动作实现
 
 // 眼睛图标绘制
 static QIcon makeEyeIcon(bool visible, const QColor& color) {
@@ -49,6 +49,7 @@ PasswordDialog::PasswordDialog(QWidget* parent) : QDialog(parent) {
     setMinimumWidth(380);
 
     auto* lay = new QVBoxLayout(this);
+    lay->setContentsMargins(14, 12, 14, 12);
     lay->setSpacing(8);
 
     auto* purpose = new QLabel(tr("请输入密码："));
@@ -61,7 +62,7 @@ PasswordDialog::PasswordDialog(QWidget* parent) : QDialog(parent) {
     setupEye(m_pw);
     lay->addWidget(m_pw);
 
-    // 强度提示（实时）
+    // 强度提示
     auto* strengthRow = new QHBoxLayout;
     auto* lblStrength = new QLabel(tr("强度："));
     m_strength = new QLabel(tr("未输入"));
@@ -75,7 +76,7 @@ PasswordDialog::PasswordDialog(QWidget* parent) : QDialog(parent) {
     strengthRow->addStretch();
     lay->addLayout(strengthRow);
 
-    // 二次确认（默认隐藏）
+    // 二次确认
     m_confirm = new QLineEdit;
     m_confirm->setEchoMode(QLineEdit::Password);
     m_confirm->setPlaceholderText(tr("再次输入以确认"));
@@ -87,6 +88,8 @@ PasswordDialog::PasswordDialog(QWidget* parent) : QDialog(parent) {
     auto* btnRow = new QHBoxLayout;
     m_ok = new QPushButton(tr("确定"));
     auto* cancel = new QPushButton(tr("取消"));
+    m_ok->setProperty("uiRole", "primary");
+    cancel->setProperty("uiRole", "secondary");
     btnRow->addStretch();
     btnRow->addWidget(m_ok);
     btnRow->addWidget(cancel);
@@ -154,7 +157,7 @@ void PasswordDialog::onAccept() {
         MsgBox::error(this, tr("密码无效"), reason);
         return;
     }
-    // 取出密码并清零缓冲
+    // 取出密码并清零
     QByteArray b = m_pw->text().toUtf8();
     m_secret.assign(b.begin(), b.end());
     secure_zero(b.data(), size_t(b.size()));

@@ -1,4 +1,4 @@
-// 安全擦除公共实现
+// 安全擦除公共实
 // volatile 写零防优化
 #pragma once
 #include <cstddef>

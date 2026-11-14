@@ -12,7 +12,7 @@ struct TaskRecord {
     QString action;
     QString actionLabel;
     QString mode;
-    // 非对称模式下的文件载荷算法（xchacha20 / aegis256 / sm4），空 = 非非对称任务
+    // 非对称模式
     QString fileCipher;
     int     inputCount=0;
     QStringList inputPaths;
@@ -36,12 +36,12 @@ struct TaskRecord {
     QString keyfile;
     QString recipient;
     QString identity;
-    // 密钥包装：待包装/待解开的文件、产物路径与算法（kwp / aes-kw / pubkey）
+    // 密钥包装
     QString wrapInput;
     QString wrapOutput;
     QString wrapAlg;
     bool    restoreName=false;
-    // 打包为一个文件（--pack）与入加密盘（--into-vault）：复原历史任务时需一并回填
+    // 打包
     bool    pack=false;
     QString intoVault;
 };
@@ -53,12 +53,12 @@ public:
 
     // 追加一条记录
     static bool append(const TaskRecord& r,QString& err);
-    // 读取全部记录（最新在前）
+    // 读取全部记录
     static bool load(QVector<TaskRecord>& out,QString& err);
     static bool clear(QString& err);
     // 保存列表
     static bool save(const QVector<TaskRecord>& records,QString& err);
-    // 裁剪到最近 N 条
+    // 裁剪到
     static bool prune(int keepLatest,QString& err);
 
     static QString newId();

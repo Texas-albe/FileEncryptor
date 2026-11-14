@@ -4,6 +4,12 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/)。
 
+## 2026-11-14
+
+### Changed
+- **依赖目录改名 `third_party` → `Third Party`**：`add_subdirectory` 引入 bundled curl 与头文件的路径同步更新，目录名带空格，两处路径都补了引号；仓库内其它引用一起改过，历史变更记录里的旧路径不动。
+- **纳入 Windows 一键构建**：更新器与 CLI 在同一批 configure / build 里产出，产物随发布目录收集。构建辅助脚本不入库，换机需自备。
+
 ## 2026-10-03
 
 ### Changed

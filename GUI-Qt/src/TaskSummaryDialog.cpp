@@ -3,6 +3,7 @@
 #include <QDialogButtonBox>
 #include <QGridLayout>
 #include <QLabel>
+#include <QPushButton>
 #include <QVBoxLayout>
 
 TaskSummaryDialog::TaskSummaryDialog(const QString& title, const QString& duration,
@@ -14,21 +15,26 @@ TaskSummaryDialog::TaskSummaryDialog(const QString& title, const QString& durati
     resize(360, 220);
 
     auto* lay=new QVBoxLayout(this);
+    lay->setContentsMargins(14,12,14,12);
+    lay->setSpacing(10);
 
     auto* titleLabel=new QLabel(title);
-    titleLabel->setStyleSheet("font-size:16px;font-weight:bold;");
+    titleLabel->setStyleSheet("font-size:15px;font-weight:bold;");
     lay->addWidget(titleLabel);
 
     auto* grid=new QGridLayout;
     grid->setHorizontalSpacing(16);
-    grid->setVerticalSpacing(8);
+    grid->setVerticalSpacing(6);
 
     auto addItem=[&](int row,int col,const QString& label,const QString& value,bool warn=false){
         auto* l=new QLabel(label);
         l->setStyleSheet(QStringLiteral("color:%1;font-size:11px;")
             .arg(QLatin1String(ThemeManager::mutedTextHex())));
         auto* v=new QLabel(value);
-        v->setStyleSheet(warn?"color:#ff6b6b;font-size:14px;font-weight:bold;":"font-size:14px;font-weight:bold;");
+        v->setStyleSheet(warn
+            ? QStringLiteral("color:%1;font-size:14px;font-weight:bold;")
+                .arg(QLatin1String(ThemeManager::dangerHex()))
+            : QStringLiteral("font-size:14px;font-weight:bold;"));
         grid->addWidget(l,row,col*2);
         grid->addWidget(v,row,col*2+1);
     };
@@ -44,6 +50,8 @@ TaskSummaryDialog::TaskSummaryDialog(const QString& title, const QString& durati
     lay->addStretch();
 
     auto* btnBox=new QDialogButtonBox(QDialogButtonBox::Ok);
+    if(auto* ok=btnBox->button(QDialogButtonBox::Ok))
+        ok->setProperty("uiRole","primary");
     connect(btnBox,&QDialogButtonBox::accepted,this,&QDialog::accept);
     lay->addWidget(btnBox);
 }

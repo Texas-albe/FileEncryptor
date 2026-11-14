@@ -6,6 +6,7 @@
 #include "FileEncryptorLocator.h"
 #include "I18n.h"
 #include <QApplication>
+#include <QStringList>
 #include <QStyleFactory>
 #include <QIcon>
 #include "CliNotFoundDialog.h"
@@ -30,10 +31,10 @@ Q_IMPORT_PLUGIN(QICOPlugin)
 #endif
 
 int main(int argc, char* argv[]) {
-    // 进程加固（顺序要紧：加载策略须早于任何非系统 DLL 加载）
+    // 进程加固
     OsHarden::hardenImageLoadPolicy();   // P1-2 禁远程/低 IL 镜像
     OsHarden::hardenProcessDacl();       // P0-1 收紧进程对象 DACL
-    OsHarden::disableCrashDump();        // P1-3 排除出 WER，不产生崩溃转储
+    OsHarden::disableCrashDump();        // P1-3 排除出 WER
 
     QApplication app(argc, argv);
     app.setApplicationName("FileEncryptorGUI");
@@ -57,8 +58,11 @@ int main(int argc, char* argv[]) {
 
     MainWindow w;
     w.show();
+    // 文件关联
+    const QStringList cli=QApplication::arguments();
+    if(cli.size()>1) w.addFilesFromArgs(cli.mid(1));
 
-    // P2 调试检测：仅告警，不阻断（附加调试属正常开发行为，不能拦）
+    // P2 调试检测
     if (OsHarden::isDebuggerAttached()) {
         QTimer::singleShot(800, []() {
             QMessageBox::warning(

@@ -1,19 +1,19 @@
-// fe_service：把 FE-Mounter 注册为 Windows 服务（开机自启），供盘符常驻。
+// fe_service
 #include "fe_common.h"
 #include <cstdio>
 #include <cstring>
 #if !defined(_WIN32)
-#  include <sys/stat.h>   // mkdir(2)：取代 system("mkdir -p")（M1 无 shell）
-#  include <errno.h>      // 区分 EEXIST（已存在）
+#  include <sys/stat.h>   // mkdir
+#  include <errno.h>      // 区分 EEXIST
 #endif
 
 #if defined(_WIN32)
-// 服务名必须与 FspServiceRun 的 L"FE-Mount" 一致：WinFSP 服务模型要求 SCM 注册名
-// 与进程内 FspServiceRun 名字匹配，否则服务启动后立即退出、盘符不出现。
+// 服务名必须
+// 与进程内 FspServiceRun 名字匹
 const char* kSvcName = "FE-Mount";
 
-// 服务以 LocalSystem 运行时工作目录是 %SystemRoot%\System32，相对路径会解析错→
-// 注册前把 vault/pass-file 绝对化，否则服务进程 v.open 失败秒退。
+// 服务
+// 注册
 static std::string abs_path(const std::string& p) {
     if (p.empty() || p.find(':') != std::string::npos || p[0] == '/' || p[0] == '\\') return p;
     wchar_t buf[MAX_PATH];
@@ -25,9 +25,9 @@ static std::string abs_path(const std::string& p) {
 bool install_service(const std::string& vault0, const std::string& drive,
                      const std::string& passfile0, const char* svcname, std::string& err) {
     std::string vault = abs_path(vault0);
-    // §4.1 默认锁定：服务启动**不**带 --pass-file → 锁定启动、等 IPC unlock。
-    // 不再支持开机自解锁：密码会随命令行进入服务进程并长期驻留内存，违反 §4.1。
-    // 需要开机即挂载的场景由用户在解锁后手动 winmount，或后续用受控凭据方案（DPAPI/服务管理器）。
+    // §4.1 默认锁定
+    // 支持开机自解锁
+    // 开机即挂载
     wchar_t self[MAX_PATH];
     if (!GetModuleFileNameW(nullptr, self, MAX_PATH)) { err = "GetModuleFileName failed"; return false; }
     std::wstring cmd = L"\"";
@@ -59,8 +59,8 @@ bool uninstall_service(const char* svcname, std::string& err) {
 
 #else  // Linux
 
-// Linux 常驻：systemd --user unit（无需 root，用户级自启）。
-// 不用系统级 unit 是刻意选择：库路径/挂载点属用户数据，用户级 unit 免 root 且能按用户隔离。
+// Linux 常驻
+// 不用系统级 unit 是刻
 static std::string unit_name_for(const std::string& vault) {
     uint64_t h = 0xcbf29ce484222325ULL;
     for (char c : vault) { h ^= (unsigned char)c; h *= 0x100000001b3ULL; }
@@ -75,7 +75,7 @@ static std::string unit_dir() {
     return std::string(home ? home : ".") + "/.config/systemd/user";
 }
 
-// M1：递归创建目录（不走 shell）。原实现 system("mkdir -p '<dir>'") 的 dir 由 XDG_CONFIG_HOME/HOME 派生，含单引号即 shell 注入；mkdir(2) 无此面。
+// M1
 static bool mkdir_p(const std::string& d) {
     if (d.empty()) return false;
     std::string cur;
@@ -94,7 +94,7 @@ static bool mkdir_p(const std::string& d) {
     return true;
 }
 
-// M2：systemd unit 指令注入防护。ExecStart 原样拼接这些路径：含 \n 可注入任意 unit 指令；% 是 systemd specifier 会被展开；$ / ` 触发命令展开。一律拒绝。
+// M2
 static bool unit_path_safe(const std::string& p) {
     for (char c : p)
         if (c == '\n' || c == '\r' || c == '%' || c == '$' || c == '`') return false;
@@ -104,7 +104,7 @@ static bool unit_path_safe(const std::string& p) {
 bool install_service(const std::string& vault0, const std::string& mountpoint,
                      const std::string& passfile0, std::string& err) {
     if (!getenv("XDG_RUNTIME_DIR") && access("/run/systemd/system", F_OK) != 0) {
-        // 无 user manager 时 unit 写了也不会被拉起，明确报错让用户知道原因
+        // 无 user manager 时 unit 写
         if (access("/run/user", F_OK) != 0) {
             err = "systemd user manager unavailable (need systemd session; e.g. run under a normal login session)";
             return false;
@@ -118,7 +118,7 @@ bool install_service(const std::string& vault0, const std::string& mountpoint,
     std::string dir = unit_dir();
     if (!mkdir_p(dir)) { err = "cannot create " + dir; return false; }
 
-    // 绝对路径：unit 的工作目录不是调用者 cwd，相对路径会解析到 $HOME
+    // 绝对路径
     char cwd[4096];
     std::string vault = vault0, passfile = passfile0;
     if (!vault.empty() && vault[0] != '/') {
@@ -127,7 +127,7 @@ bool install_service(const std::string& vault0, const std::string& mountpoint,
     if (!passfile.empty() && passfile[0] != '/') {
         if (getcwd(cwd, sizeof cwd)) passfile = std::string(cwd) + "/" + passfile;
     }
-    // M2：先校验再落盘。含 \n 可注入任意 unit 指令，%（specifier 展开）/$ / `（命令展开）一律拒绝。
+    // M2
     if (!unit_path_safe(mountpoint) || !unit_path_safe(vault) || !unit_path_safe(passfile)) {
         err = "path contains characters unsafe for systemd unit (newline, '%', '$', '`')";
         return false;
@@ -171,7 +171,7 @@ bool install_service(const std::string& vault0, const std::string& mountpoint,
 bool uninstall_service(const std::string& vault, std::string& err) {
     std::string unit = unit_name_for(vault);
     int rc = system(("systemctl --user disable --now " + unit + " >/dev/null 2>&1").c_str());
-    (void)rc;   // 单元可能本来就没启用；删文件成功即达成卸载
+    (void)rc;   // 单元可能本来
     std::string path = unit_dir() + "/" + unit;
     if (unlink(path.c_str()) != 0 && access(path.c_str(), F_OK) == 0) {
         err = "cannot remove " + path;

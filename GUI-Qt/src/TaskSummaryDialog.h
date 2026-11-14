@@ -1,4 +1,4 @@
-// 任务完成汇总弹窗
+// 任务完成汇总弹
 #pragma once
 #include <QDialog>
 

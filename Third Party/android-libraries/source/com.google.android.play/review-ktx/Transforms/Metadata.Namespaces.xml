@@ -1,0 +1,8 @@
+﻿<metadata>
+    <attr 
+        path="/api/package[@name='com.google.android.play.core.ktx']" 
+        name="managedName"
+        >
+        Google.Android.Play.Core.Ktx
+    </attr>
+</metadata>

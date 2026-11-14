@@ -14,16 +14,21 @@
          （曾表现为新版 XAML 的连接器与旧 DLL 错位，启动即 InvalidCastException 无窗口）。 -->
     <MajorUpgrade AllowSameVersionUpgrades="yes" Schedule="afterInstallValidate" DowngradeErrorMessage="A newer version of FileEncryptor GUI is already installed." />
 
-    <!-- 安装/卸载前关闭 GUI，避免文件占用 -->
-    <util:CloseApplication Id="CloseGui" Target="FileEncryptorGUI.WinUI3.exe" Description="FileEncryptor GUI is running. Close it to continue." RebootPrompt="no" />
-    <!-- FE-Mounter 占用 vdisk/winfsp 的 dll；不关它升级替换会失败 -->
-    <util:CloseApplication Id="CloseMounter" Target="FE-Mounter.exe" Description="FE-Mounter is running. Close it to continue." RebootPrompt="no" />
+    <!-- 安装/卸载前关闭自家进程，避免文件占用。CloseMessage 先发关闭消息，Timeout 秒后
+         仍在运行则 TerminateProcess 强杀（卸载流程不能被「程序正在运行」对话框卡住）；
+         RebootPrompt 必须为 no（与 TerminateProcess 互斥）。必须覆盖安装目录内全部 exe
+         （GUI/FE-Mounter/CLI/Updater/RestartAgent）——漏一个就会锁住文件，卸载后残留。 -->
+    <util:CloseApplication Id="CloseGui" Target="FileEncryptorGUI.WinUI3.exe" CloseMessage="yes" TerminateProcess="1" Timeout="3" RebootPrompt="no" />
+    <util:CloseApplication Id="CloseMounter" Target="FE-Mounter.exe" CloseMessage="yes" TerminateProcess="1" Timeout="3" RebootPrompt="no" />
+    <util:CloseApplication Id="CloseCli" Target="FileEncryptorCLI.exe" CloseMessage="yes" TerminateProcess="1" Timeout="3" RebootPrompt="no" />
+    <util:CloseApplication Id="CloseUpdater" Target="Updater.exe" CloseMessage="yes" TerminateProcess="1" Timeout="3" RebootPrompt="no" />
+    <util:CloseApplication Id="CloseRestartAgent" Target="RestartAgent.exe" CloseMessage="yes" TerminateProcess="1" Timeout="3" RebootPrompt="no" />
 
     <MediaTemplate EmbedCab="yes" />
 
     <Icon Id="app.ico" SourceFile="..\..\GUI-Qt\logogui.ico" />
 
-    <!-- GPLv3 许可证 -->
+    <!-- AGPLv3 许可证 -->
     <WixVariable Id="WixUILicenseRtf" Value="license.rtf" />
 
     <!-- 检测系统是否已安装 WinFSP（Program Files (x86)\WinFsp\bin\winfsp-x64.dll）。
@@ -45,6 +50,17 @@
                   Impersonate="no"
                   Return="asyncNoWait" />
 
+    <!-- 卸载收尾：MSI 只删自己登记的文件，运行时产物（如 GUI 更新暂存目录 update_staging）
+         会整目录留在 Program Files。真实卸载（REMOVE=ALL 且非大版本升级现场）在 RemoveFiles
+         之后强制清掉安装目录；升级安装时 UPGRADINGPRODUCTCODE 置位，跳过以免误删新文件。
+         Return=ignore：目录被占用时清不掉也不让卸载失败。 -->
+    <CustomAction Id="CleanInstallDir"
+                  Directory="INSTALLFOLDER"
+                  ExeCommand="cmd.exe /c rd /s /q &quot;[INSTALLFOLDER]&quot;"
+                  Execute="deferred"
+                  Impersonate="no"
+                  Return="ignore" />
+
     <!-- 安装后启动 GUI（工作目录=安装目录） -->
     <CustomAction Id="LaunchApp"
                   Directory="INSTALLFOLDER"
@@ -65,6 +81,7 @@
            （口令、派生 KEK、明文缓冲）整体写盘。安装器有管理员权限，可写 HKLM 覆盖所有用户。
            值格式经实证：...\ExcludedApplications 下的 DWORD 值 <exe 文件名>=1（不是子键）。 -->
       <ComponentRef Id="WerExclusions" />
+      <ComponentRef Id="PtdFileAssociation" />
       <!-- 加密盘挂载组件：与 vdisk.dll 捆绑（FE-Mounter 必须 dlopen 它，两者同装同卸）。
            CLI 本身不依赖 vdisk.dll，不选只影响盘符挂载，GUI 会自动隐藏加密盘入口。 -->
       <Feature Id="VaultFeature" Title="Encrypted vault mounting (FE-Mounter)" Level="1"
@@ -95,6 +112,8 @@
     <InstallExecuteSequence>
       <Custom Action="InstallWinFsp" After="InstallFiles" Condition="&amp;WinFspFeature=3 AND NOT WINFSP_INSTALLED" />
       <Custom Action="LaunchApp" After="InstallFinalize" Condition="WIXUI_EXITDIALOGOPTIONALCHECKBOX=1 AND NOT Installed" />
+      <!-- 仅真实卸载时清理安装目录（升级现场 UPGRADINGPRODUCTCODE 置位，旧产品卸载不得删目录） -->
+      <Custom Action="CleanInstallDir" After="RemoveFiles" Condition="NOT UPGRADINGPRODUCTCODE AND REMOVE~=&quot;ALL&quot;" />
     </InstallExecuteSequence>
 
   </Package>
@@ -116,27 +135,35 @@
   <Fragment>
     <!-- 主 exe（独立组件，便于快捷方式引用） -->
     <Component Id="MainExe" Directory="INSTALLFOLDER">
+      <!-- RemoveFile On="install"：覆盖安装时先把同名旧二进制删掉再复制。
+           否则 Windows Installer 按「已装文件版本 >= 新文件版本」直接跳过复制，
+           装完仍是上一版 exe/dll（表现为安装成功但功能没变）。 -->
+      <RemoveFile Id="rmMainExe" Name="FileEncryptorGUI.WinUI3.exe" On="install" />
       <File Id="MainExeFile" Source="$(var.PublishDir)\FileEncryptorGUI.WinUI3.exe" KeyPath="yes" />
     </Component>
 
     <!-- 自动更新助手：GUI 检查/应用更新所需 -->
     <Component Id="UpdaterExe" Directory="INSTALLFOLDER">
+      <RemoveFile Id="rmUpdaterExe" Name="Updater.exe" On="install" />
       <File Id="UpdaterExeFile" Source="$(var.PublishDir)\Updater.exe" KeyPath="yes" />
     </Component>
 
     <!-- CLI 命令行工具：随 GUI 一并安装，提供脚本化/加密盘挂载能力 -->
     <Component Id="CliExe" Directory="INSTALLFOLDER">
+      <RemoveFile Id="rmCliExe" Name="FileEncryptorCLI.exe" On="install" />
       <File Id="CliExeFile" Source="$(var.PublishDir)\FileEncryptorCLI.exe" KeyPath="yes" />
     </Component>
 
     <!-- 加密盘虚拟磁盘共享库（libvdisk 实现）。属可选功能 VaultFeature：CLI 不依赖它，
          但 FE-Mounter 必须 dlopen，故与 FeMounterExe 同装同卸。 -->
     <Component Id="VdiskDll" Directory="INSTALLFOLDER">
+      <RemoveFile Id="rmVdiskDll" Name="vdisk.dll" On="install" />
       <File Id="VdiskDllFile" Source="$(var.PublishDir)\vdisk.dll" KeyPath="yes" />
     </Component>
 
     <!-- FE-Mounter holder 进程：挂载/可写挂载 Windows 盘符。属可选功能 VaultFeature -->
     <Component Id="FeMounterExe" Directory="INSTALLFOLDER">
+      <RemoveFile Id="rmFeMounterExe" Name="FE-Mounter.exe" On="install" />
       <File Id="FeMounterExeFile" Source="$(var.PublishDir)\FE-Mounter.exe" KeyPath="yes" />
     </Component>
 
@@ -156,14 +183,14 @@
     <!-- WinFSP 安装包（捆绑进 MSI，落入 INSTALLFOLDER\redist）。由 WinFspFeature 控制安装，
          安装阶段由 InstallWinFsp 自定义操作静默装到系统。 -->
     <Component Id="WinFspRedist" Directory="REDISTDIR">
-      <File Id="WinFspMsi" Source="..\..\third_party\winfsp-2.1.25156.msi" KeyPath="yes" />
+      <File Id="WinFspMsi" Source="..\..\Third Party\winfsp-2.1.25156.msi" KeyPath="yes" />
     </Component>
 
 <?ifdef WINFSP_SYS?>
     <!-- WinFSP 内核驱动：与 winfsp-x64.dll 同目录时，FE-Mounter 以管理员身份首次挂载会由 DLL
          嵌入式自安装并启动内核驱动（WinFsp.Fsd）与 Launcher 服务，使未预装 WinFSP 的干净机
          （如 Win11 22H2 样机）也能盘符挂载。缺它则干净机挂载无效。
-         仅当构建期能在 SDK bin（winfsp-x64.sys）/ System32\drivers（winfsp.sys）/ third_party\winfsp\ 找到内核驱动时才编入。 -->
+         仅当构建期能在 SDK bin（winfsp-x64.sys）/ System32\drivers（winfsp.sys）/ Third Party\winfsp\ 找到内核驱动时才编入。 -->
     <Component Id="WinFspSys" Directory="INSTALLFOLDER">
       <File Id="WinFspSysFile" Source="$(var.PublishDir)\winfsp-x64.sys" KeyPath="yes" />
     </Component>
@@ -174,6 +201,12 @@
                 Name="FileEncryptor GUI"
                 Target="[#MainExeFile]"
                 WorkingDirectory="INSTALLFOLDER"
+                Icon="app.ico" />
+      <!-- 开始菜单「卸载」入口：直接调 Windows Installer 卸载本产品，不再随包附带卸载器。 -->
+      <Shortcut Id="UninstallSc"
+                Name="卸载 FileEncryptor"
+                Target="[SystemFolder]msiexec.exe"
+                Arguments="/x [ProductCode]"
                 Icon="app.ico" />
       <RemoveFolder Id="RemoveProgramMenu" Directory="ProgramMenuDir" On="uninstall" />
       <RegistryValue Root="HKCU" Key="Software\FileEncryptor\GUI"
@@ -209,6 +242,18 @@
       <RegistryValue Root="HKLM"
                      Key="SOFTWARE\Microsoft\Windows\Windows Error Reporting\ExcludedApplications"
                      Name="RestartAgent.exe" Type="integer" Value="1" />
+    </Component>
+
+    <!-- .ptd 文件关联 -->
+    <Component Id="PtdFileAssociation" Directory="INSTALLFOLDER">
+      <RegistryValue Root="HKCR" Key=".ptd"
+                     Value="FileEncryptor.WinUI.ptd" Type="string" KeyPath="yes" />
+      <RegistryValue Root="HKCR" Key="FileEncryptor.WinUI.ptd"
+                     Value="FileEncryptor Encrypted File (WinUI)" Type="string" />
+      <RegistryValue Root="HKCR" Key="FileEncryptor.WinUI.ptd\DefaultIcon"
+                     Value="&quot;[#MainExeFile]&quot;,0" Type="string" />
+      <RegistryValue Root="HKCR" Key="FileEncryptor.WinUI.ptd\shell\open\command"
+                     Value="&quot;[#MainExeFile]&quot; &quot;%1&quot;" Type="string" />
     </Component>
   </Fragment>
 

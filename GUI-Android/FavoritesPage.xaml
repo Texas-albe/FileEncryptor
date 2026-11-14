@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             xmlns:services="clr-namespace:FileEncryptorMobile.Services"
+             x:Class="FileEncryptorMobile.FavoritesPage"
+             xmlns:local="clr-namespace:FileEncryptorMobile"
+             Title="{local:Zh 收藏}">
+
+    <Grid RowDefinitions="Auto,*,Auto" Padding="16,12,16,12">
+        <Label x:Name="LblHint" Style="{StaticResource Caption}" Margin="0,0,0,8" />
+
+        <CollectionView Grid.Row="1" x:Name="FavList" SelectionMode="None">
+            <CollectionView.ItemTemplate>
+                <DataTemplate x:DataType="services:VaultItem">
+                    <Grid Padding="12,10" ColumnDefinitions="*,Auto" ColumnSpacing="{StaticResource GridGapSm}"
+                          RowDefinitions="Auto,Auto">
+                        <Grid.GestureRecognizers>
+                            <TapGestureRecognizer Tapped="OnItemTapped"
+                                                  CommandParameter="{Binding .}" />
+                        </Grid.GestureRecognizers>
+                        <Label Grid.Row="0" Grid.Column="0" Text="{Binding Name}"
+                               FontSize="{StaticResource FontSizeField}" LineBreakMode="TailTruncation" />
+                        <Label Grid.Row="1" Grid.Column="0" Text="{Binding RelPath}"
+                               Style="{StaticResource Caption}"
+                               LineBreakMode="MiddleTruncation" />
+                        <Button Grid.RowSpan="2" Grid.Column="1" Text="{local:Zh 移除}"
+                                Style="{StaticResource SmallSecondaryButton}"
+                                CommandParameter="{Binding .}" Clicked="OnRemove" />
+                    </Grid>
+                </DataTemplate>
+            </CollectionView.ItemTemplate>
+            <CollectionView.EmptyView>
+                <VerticalStackLayout Spacing="6" Padding="24,36"
+                                     HorizontalOptions="Center" VerticalOptions="Center">
+                    <Label Text="{local:Zh 还没有收藏}" Style="{StaticResource SectionTitle}"
+                           HorizontalTextAlignment="Center" HorizontalOptions="Center" />
+                    <Label Text="{local:Zh 在库内长按文件或目录，即可加入收藏。}"
+                           Style="{StaticResource Caption}"
+                           HorizontalTextAlignment="Center" HorizontalOptions="Center" />
+                </VerticalStackLayout>
+            </CollectionView.EmptyView>
+        </CollectionView>
+
+        <Button Grid.Row="2" Text="{local:Zh 返回}" Clicked="OnClose"
+                Style="{StaticResource SecondaryButton}" Margin="0,10,0,0" />
+    </Grid>
+</ContentPage>

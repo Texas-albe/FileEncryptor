@@ -1,7 +1,7 @@
-// 水印实现：记录组装 + OpenSSL 签名与验签（ML-DSA-65 优先，RSA 为经典回退）。
-// 签名对象固定为前 48 字节记录的 SHA-256，故改动时间戳或机器指纹都会验签失败。
-// ML-DSA 是纯签名算法，EVP_DigestSignInit 必须传 md=NULL（传 SHA-256 会被拒），
-// 因此这里把 32 字节摘要当作「消息」直接交给 ML-DSA 签名/验签。
+// 水印实现
+// 签名对象固定
+// ML-DSA 是纯签名算法
+// 因此这里
 #include "watermark.hpp"
 
 #include "FileEncryptor.hpp"
@@ -61,7 +61,7 @@ std::string to_hex(const unsigned char* p, size_t n) {
     return s;
 }
 
-// 读私钥/公钥 PEM（PEM_read_* 兼容 PKCS#8 与旧版传统格式），并按算法名校验是否匹配开关。
+// 读私钥/公钥 PEM
 bool load_private_key(const std::string& path, bool pqc, EVP_PKEY*& pkey) {
     FILE* fp = std::fopen(path.c_str(), "rb");
     if (!fp) return false;
@@ -92,10 +92,10 @@ bool load_public_key(const std::string& path, bool pqc, EVP_PKEY*& pkey) {
     return type_ok;
 }
 
-// 摘要长度恒为 32（记录前 48 字节的 SHA-256），RSA 与 ML-DSA 都按它取消息。
+// 摘要长度恒
 static const EVP_MD* wm_digest_fn(bool pqc) { return pqc ? nullptr : EVP_sha256(); }
 
-// 签名长度（由密钥决定）；失败返回 0
+// 签名长度
 size_t sig_length(EVP_PKEY* key, bool pqc) {
     if (!key) return 0;
     size_t len = 0;
@@ -108,7 +108,7 @@ size_t sig_length(EVP_PKEY* key, bool pqc) {
     return ok ? len : 0;
 }
 
-// 对 32 字节摘要做签名，返回签名长度（0=失败）
+// 对 32 字节摘要做签
 size_t sign_digest(EVP_PKEY* key, bool pqc, const unsigned char* digest,
                    unsigned char* sig, size_t cap) {
     size_t len = 0;
@@ -136,7 +136,7 @@ bool verify_digest(EVP_PKEY* key, bool pqc, const unsigned char* digest,
     return ok;
 }
 
-// 摘要：对固定 48 字节记录取 SHA-256
+// 摘要
 bool digest_record(const unsigned char* rec, unsigned char out[32]) {
     return SHA256(rec, WM_RECORD_FIXED, out) != nullptr;
 }
@@ -157,11 +157,11 @@ bool wm_sign_and_serialize(uint64_t timestamp,
     rec[5] = flags;
     put_be64(rec + 6, timestamp);
     memcpy(rec + 14, machine_id, 16);
-    randombytes_buf(rec + 30, 16);   // nonce：同机多次加密产出不同水印
+    randombytes_buf(rec + 30, 16);   // nonce
     put_be16(rec + 46, 0);           // sig_len 签名后回填
     if (priv_pem_path.empty()) {
         blob.assign(rec, rec + WM_RECORD_FIXED);
-        return true;                          // 未给私钥：记录仍写，不带签名
+        return true;                          // 未给私钥
     }
 
     EVP_PKEY* pkey = nullptr;
@@ -176,8 +176,8 @@ bool wm_sign_and_serialize(uint64_t timestamp,
         error = "watermark: digest failed";
         return false;
     }
-    // sig_len 参与摘要（它在 48 字节固定区内），故须先定长再摘要，
-    // 否则验签端读到的是回填后的 sig_len，两端摘要不同必然验签失败。
+    // sig_len 参与摘要
+    // 验签端读到
     const size_t sig_len = sig_length(pkey, pqc);
     if (sig_len == 0 || sig_len > WM_MAX_SIG || sig_len > 0xffff) {
         EVP_PKEY_free(pkey);
@@ -198,7 +198,7 @@ bool wm_sign_and_serialize(uint64_t timestamp,
         error = "watermark: signature length mismatch";
         return false;
     }
-    // 签名写在 blob 之后，不能写回 48 字节的 rec（ML-DSA 签名 3300 字节会越界）
+    // 签名写
     blob.resize(WM_RECORD_FIXED + sig_len);
     memcpy(blob.data(), rec, WM_RECORD_FIXED);
     memcpy(blob.data() + WM_RECORD_FIXED, sig, sig_len);
@@ -233,9 +233,9 @@ bool wm_parse_blob(const unsigned char* data, size_t len,
         out.error = "digest failed";
         return true;
     }
-    if (!pub_pem_path || pub_pem_path->empty()) return true;   // 不给公钥只展示内容
-    // 验签前两种算法都试：文件可能由 --no-pqc 的 RSA 签名，只按开关选一种会
-    // 变成「读不到公钥」而不是真正的验签结果，误报成格式问题。
+    if (!pub_pem_path || pub_pem_path->empty()) return true;   // 不给公钥只展示
+    // 验签前两种算法
+    // 变成「读不到公钥」
     const bool   try_pqc[2] = { pqc, !pqc };
     const char*  try_name[2] = { "ML-DSA-65", "RSA" };
     EVP_PKEY* pkey = nullptr;
@@ -250,7 +250,7 @@ bool wm_parse_blob(const unsigned char* data, size_t len,
         out.verify_attempted = true;
         return true;
     }
-    // 以载入密钥的真实算法决定验签路径（可能试成了另一种算法）
+    // 以载入密钥
     const bool key_is_pqc = EVP_PKEY_is_a(pkey, "ML-DSA-65") == 1;
     const bool ok = verify_digest(pkey, key_is_pqc, digest, data + WM_RECORD_FIXED, sig_len);
     EVP_PKEY_free(pkey);
@@ -260,8 +260,8 @@ bool wm_parse_blob(const unsigned char* data, size_t len,
     return true;
 }
 
-// 私钥落盘用专属函数：专有创建（不跟随符号链接、不覆盖已有私钥）。
-// 用 fopen("wb") 会静默截断已有文件，私钥一旦被覆盖就永久丢失。
+// 私钥落盘用专属
+// 用 fopen
 static bool open_priv_pem_exclusive(const std::string& path, FILE** out_fp) {
 #ifdef _WIN32
     const std::wstring wp=utf8_to_wstring(path);
@@ -279,7 +279,7 @@ static bool open_priv_pem_exclusive(const std::string& path, FILE** out_fp) {
     return true;
 }
 
-// 生成签名密钥对：ML-DSA-65（pqc）或 RSA-3072，私钥以 PKCS#8 PEM 落盘。
+// 生成签名密钥
 bool wm_generate_keypair(const std::string& priv_pem_path, bool pqc,
                          std::string& pub_pem, std::string& error) {
     EVP_PKEY* pkey = nullptr;
@@ -325,11 +325,11 @@ bool wm_generate_keypair(const std::string& priv_pem_path, bool pqc,
         return false;
     }
     std::fclose(fp);
-    // 私钥写完紧内容才紧权限：创建时的默认 ACL 会允许其他用户读取
+    // 私钥写完紧内容
     tighten_file_permissions(priv_pem_path);
 
-    // 公钥走 BIO + PEM_write_bio_PUBKEY：ML-DSA 的 get1_encoded_public_key 在本构建
-    // 返回 0（公钥编码器缺失），而 PEM 写路径对 RSA 与 ML-DSA 都成立。
+    // 公钥走 BIO +
+    // 返回 0
     BIO* bio = BIO_new(BIO_s_mem());
     if (!bio || PEM_write_bio_PUBKEY(bio, pkey) != 1) {
         if (bio) BIO_free(bio);
@@ -347,7 +347,7 @@ bool wm_generate_keypair(const std::string& priv_pem_path, bool pqc,
         error = "watermark: cannot read public key PEM";
         return false;
     }
-    // BIO 缓冲可能有前导 MetaText，只截取 BEGIN..END 之间的正文
+    // BIO 缓冲可能有前导
     std::string raw(mem, (size_t)n);
     BIO_free(bio);
     const size_t b = raw.find("-----BEGIN PUBLIC KEY-----");

@@ -52,8 +52,8 @@
 
 - **C++17** 编译器（MSVC / g++ / Clang）。
 - **CMake ≥ 3.15**。
-- **libsodium ≥ 1.0.19**（AEGIS-256 需要；1.0.22 及以上推荐）。预编译库已随仓库放于 `../third_party/libsodium/`，CMake 默认优先使用；系统安装（Linux 发行版包 / vcpkg）作为回退。CMake 会在配置阶段校验版本，过低会给出明确报错。
-- **yaml-cpp**（YAML 配置解析，v1.7.2 起依赖）。源码与预编译静态库（/MT）已随仓库放于 `../third_party/yaml-cpp/`（`include/` + `src/` + `lib/yaml-cpp.lib`），CMake 默认优先使用；也可用系统安装（Linux `libyaml-cpp-dev`，Windows 标准布局或 `YAMLCPP_ROOT` 指定）。
+- **libsodium ≥ 1.0.19**（AEGIS-256 需要；1.0.22 及以上推荐）。预编译库已随仓库放于 `../Third Party/libsodium/`，CMake 默认优先使用；系统安装（Linux 发行版包 / vcpkg）作为回退。CMake 会在配置阶段校验版本，过低会给出明确报错。
+- **yaml-cpp**（YAML 配置解析，v1.7.2 起依赖）。源码与预编译静态库（/MT）已随仓库放于 `../Third Party/yaml-cpp/`（`include/` + `src/` + `lib/yaml-cpp.lib`），CMake 默认优先使用；也可用系统安装（Linux `libyaml-cpp-dev`，Windows 标准布局或 `YAMLCPP_ROOT` 指定）。
 
 ---
 
@@ -94,8 +94,8 @@ sudo rpm -ivh file-encryptor-cli-3.0.1-Linux.rpm
 
 ### Windows（预编译 libsodium + MSVC）
 
-预编译包已随仓库放于 **`../third_party/libsodium/`**，CMake 默认直接使用，无需安装。
-若要用别的版本，传 `-DSODIUM_ROOT=<根目录>` 覆盖（相对路径如 `../third_party/libsodium` 亦可）。
+预编译包已随仓库放于 **`../Third Party/libsodium/`**，CMake 默认直接使用，无需安装。
+若要用别的版本，传 `-DSODIUM_ROOT=<根目录>` 覆盖（相对路径如 `../Third Party/libsodium` 亦可）。
 CMake 会自动按 `x64/Release/v143/static/` 找到静态库并完成静态链接（无需 DLL）：
 
 ```powershell
@@ -341,7 +341,7 @@ FileEncryptorCLI -bd ./encrypted_dir -o ./decrypted
 
 ### OpenSSL 依赖
 
-X25519 / X448、ML-KEM-768、ML-DSA-65 与 SM4-GCM 由静态链接的 OpenSSL（`third_party/openssl/`）提供。构建时未找到 OpenSSL 不会中断，`FE_WITH_OPENSSL` 不定义，非对称与 SM4 相关调用返回明确错误，`--features` 报告 `sm4=0`（PQC 不在 `-features` 里显式分档时按 OpenSSL 可用性判定，见 [后量子密码（PQC）](#后量子密码pqc)）。
+X25519 / X448、ML-KEM-768、ML-DSA-65 与 SM4-GCM 由静态链接的 OpenSSL（`Third Party/openssl/`）提供。构建时未找到 OpenSSL 不会中断，`FE_WITH_OPENSSL` 不定义，非对称与 SM4 相关调用返回明确错误，`--features` 报告 `sm4=0`（PQC 不在 `-features` 里显式分档时按 OpenSSL 可用性判定，见 [后量子密码（PQC）](#后量子密码pqc)）。
 
 ---
 

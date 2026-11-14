@@ -68,7 +68,7 @@ TaskRecord fromJson(const QJsonObject& o) {
     r.finishedAt  =o.value(QStringLiteral("finishedAt")).toString();
     r.durationMs  =static_cast<qint64>(o.value(QStringLiteral("durationMs")).toDouble(0));
     r.action      =o.value(QStringLiteral("action")).toString();
-    // 动作名一律按当前语言重新生成：文件里存的是写入时的语言，直接用会中英混杂
+    // 动作名一律
     r.actionLabel = TaskHistory::actionLabel(r.action);
     r.mode        =o.value(QStringLiteral("mode")).toString();
     r.inputCount  =o.value(QStringLiteral("inputCount")).toInt(0);
@@ -141,7 +141,7 @@ QString TaskHistory::newId() {
     return QUuid::createUuid().toString(QUuid::WithoutBraces);
 }
 
-// 动作名面向用户展示，随界面语言翻译（英文不附 CLI 参数）
+// 动作名面向用户
 namespace {
 QString th(const char* s) {
     return QCoreApplication::translate("TaskHistory", s);
@@ -166,9 +166,9 @@ bool TaskHistory::append(const TaskRecord& r,QString& err) {
     if(path.isEmpty()) { err=th("无法确定用户配置目录"); return false; }
     QDir d;
     if(!d.mkpath(dir())) { err=th("无法创建历史目录"); return false; }
-    // 目录收紧为 0700。
-    // 注意：Windows 上 QFile::setPermissions 的权限位只映射只读属性，0700 实为 no-op，
-    // 文件实际继承所在目录 ACL；要真实收紧须显式 DACL（SetNamedSecurityInfo）。
+    // 目录收紧
+    // 注意
+    // 文件实际继承
     QFile::setPermissions(dir(),QFileDevice::ReadOwner|QFileDevice::WriteOwner|QFileDevice::ExeOwner);
 
     QFile f(path);
@@ -176,14 +176,14 @@ bool TaskHistory::append(const TaskRecord& r,QString& err) {
         err=f.errorString();
         return false;
     }
-    // 历史文件收紧为 0600（Windows 上同为 no-op，见上方说明）
+    // 历史文件收紧
     f.setPermissions(QFile::ReadOwner|QFile::WriteOwner);
     QTextStream ts(&f);
     ts.setEncoding(QStringConverter::Utf8);
     ts << QJsonDocument(toJson(r)).toJson(QJsonDocument::Compact) << '\n';
     ts.flush();
     if(ts.status()!=QTextStream::Ok) { err=th("写入历史失败"); return false; }
-    // 裁剪到最近 1000 条
+    // 裁剪到
     QString perr;
     prune(1000, perr);
     return true;
@@ -207,7 +207,7 @@ bool TaskHistory::load(QVector<TaskRecord>& out,QString& err) {
         if(pe.error!=QJsonParseError::NoError||!doc.isObject()) continue;
         out.push_back(fromJson(doc.object()));
     }
-    // 最新在前
+    // 最新
     std::reverse(out.begin(),out.end());
     return true;
 }
@@ -233,14 +233,14 @@ bool TaskHistory::save(const QVector<TaskRecord>& records,QString& err) {
     if(path.isEmpty()) { err=th("无法确定用户配置目录"); return false; }
     QDir d;
     if(!d.mkpath(dir())) { err=th("无法创建历史目录"); return false; }
-    // 0700：Windows 上为 no-op（只映射只读属性），真实收紧需显式 DACL
+    // 0700
     QFile::setPermissions(dir(),QFileDevice::ReadOwner|QFileDevice::WriteOwner|QFileDevice::ExeOwner);
     QFile f(path);
     if(!f.open(QIODevice::WriteOnly|QIODevice::Text|QIODevice::Truncate)) {
         err=f.errorString();
         return false;
     }
-    // 0600：Windows 上同为 no-op，见上方说明
+    // 0600
     f.setPermissions(QFile::ReadOwner|QFile::WriteOwner);
     QTextStream ts(&f);
     ts.setEncoding(QStringConverter::Utf8);

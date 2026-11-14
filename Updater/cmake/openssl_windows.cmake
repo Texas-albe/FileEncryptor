@@ -1,6 +1,6 @@
 # Windows 静态 OpenSSL：推导 MSVC/SDK 环境后源码构建
 # 幂等：齐备则跳过，不污染源码树
-# 用法：run_openssl_windows_build(SRC_DIR <third_party/openssl 绝对路径>)
+# 用法：run_openssl_windows_build(SRC_DIR <Third Party/openssl 绝对路径>)
 
 function(run_openssl_windows_build SRC_DIR)
 

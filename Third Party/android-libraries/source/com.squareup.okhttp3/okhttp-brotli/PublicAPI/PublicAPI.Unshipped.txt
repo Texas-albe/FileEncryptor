@@ -1,0 +1,9 @@
+﻿#nullable enable
+Square.OkHttp3.Brotli.Brotli
+Square.OkHttp3.Brotli.Brotli.Decompress(Square.OkIO.IBufferedSource! compressedSource) -> Square.OkIO.ISource!
+Square.OkHttp3.Brotli.Brotli.Encoding.get -> string!
+Square.OkHttp3.Brotli.BrotliInterceptor
+override Square.OkHttp3.Brotli.Brotli.JniPeerMembers.get -> Java.Interop.JniPeerMembers!
+override Square.OkHttp3.Brotli.BrotliInterceptor.JniPeerMembers.get -> Java.Interop.JniPeerMembers!
+static Square.OkHttp3.Brotli.Brotli.Instance.get -> Square.OkHttp3.Brotli.Brotli!
+static Square.OkHttp3.Brotli.BrotliInterceptor.Instance.get -> Square.OkHttp3.Brotli.BrotliInterceptor!

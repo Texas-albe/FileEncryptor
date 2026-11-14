@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<!-- 通知栏小图标：单色（系统会自动着色），画盾牌锁形 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M12,1 L4,5 L4,11 C4,16.5 7.4,21.6 12,23 C16.6,21.6 20,16.5 20,11 L20,5 Z M12,3.1 L18,5.8 L18,11 C18,15.6 15.5,19.6 12,20.9 C8.5,19.6 6,15.6 6,11 L6,5.8 Z M12,7 C10.9,7 10,7.9 10,9 L10,10 L9.5,10 C8.9,10 8.5,10.4 8.5,11 L8.5,16 C8.5,16.6 8.9,17 9.5,17 L14.5,17 C15.1,17 15.5,16.6 15.5,16 L15.5,11 C15.5,10.4 15.1,10 14.5,10 L14,10 L14,9 C14,7.9 13.1,7 12,7 Z M12,8.5 C12.4,8.5 12.5,8.6 12.5,9 L12.5,10 L11.5,10 L11.5,9 C11.5,8.6 11.6,8.5 12,8.5 Z" />
+</vector>

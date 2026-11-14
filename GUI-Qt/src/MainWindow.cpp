@@ -64,6 +64,8 @@
 #include <QGridLayout>
 #include <QSizePolicy>
 #include <QSplitter>
+#include <QScrollArea>
+#include <QStyle>
 #include <QGroupBox>
 #include <QMessageBox>
 #include <QCloseEvent>
@@ -109,20 +111,16 @@
 #include <atomic>
 #include <memory>
 
-namespace {
-// 中文一行排得下；英/俄文同一行文字长得多，横排会被列宽裁掉，改逐行显示
-bool rowStacksVertically() {
-    return I18n::instance().currentLanguage() != QStringLiteral("zh");
-}
-}
-
 MainWindow::MainWindow(QWidget* parent): QMainWindow(parent) {
     setWindowTitle(QStringLiteral("FileEncryptorGUI %1").arg(
         qApp->applicationVersion().isEmpty() ? FileEncryptorLocator::guiVersion()
         : qApp->applicationVersion()));
-    // 默认窗口 16:9，宽度定高（kDefaultWindowWidth 可调）
+    // 默认窗口 16
     const int defW=1351;
     resize(defW,qRound(defW*9.0/16.0));
+
+    // 桌面窗口下限
+    setMinimumSize(960, 600);
 
     m_trayIcon=new QSystemTrayIcon(this);
     m_trayIcon->setIcon(QIcon::fromTheme(QStringLiteral("fileencryptor"),
@@ -143,18 +141,28 @@ MainWindow::MainWindow(QWidget* parent): QMainWindow(parent) {
     buildMenu();
 
     auto* centralSplitter=new QSplitter(Qt::Horizontal);
+    centralSplitter->setHandleWidth(6);
+    centralSplitter->setChildrenCollapsible(false);
 
     auto* left=buildLeftPanel();
     auto* center=buildCenterPanel();
 
+    // 中间表单放进滚
+    auto* centerScroll=new QScrollArea;
+    centerScroll->setWidgetResizable(true);
+    centerScroll->setFrameShape(QFrame::NoFrame);
+    centerScroll->setWidget(center);
+
     centralSplitter->addWidget(left);
-    centralSplitter->addWidget(center);
+    centralSplitter->addWidget(centerScroll);
     centralSplitter->setStretchFactor(0,1);
     centralSplitter->setStretchFactor(1,3);
     centralSplitter->setSizes({300, 900});
 
     auto* bottom=buildBottomPanel();
     auto* outerSplitter=new QSplitter(Qt::Vertical);
+    outerSplitter->setHandleWidth(6);
+    outerSplitter->setChildrenCollapsible(false);
     outerSplitter->addWidget(centralSplitter);
     outerSplitter->addWidget(bottom);
     outerSplitter->setStretchFactor(0,6);
@@ -206,14 +214,14 @@ MainWindow::~MainWindow() {
     if(m_pendingTimer) m_pendingTimer->stop();
     if(m_scanCancel) m_scanCancel->store(true,std::memory_order_relaxed);
     if(m_scanWatcher&&m_scanWatcher->isRunning()) m_scanWatcher->waitForFinished();
-    // M45：qApp->quit()（立即重启）不触发 closeEvent，崩溃/强杀也绕过它，
-    // 析构是临时文件清理唯一的兜底
+    // M45
+    // 析构是临时文件
     cleanupTempFiles();
 }
 
-// P2-3：删前先零填充。只 remove 的话明文钥匙仍留在磁盘可恢复区，恢复工具能读出来。
-// H6a：必须用 ReadWrite 打开——WriteOnly 一打开就截断，size() 恒为 0，零填充从未执行。
-// flush() 只刷用户态缓冲，还要 FlushFileBuffers/fsync 才能真正落盘后再删。
+// P2-3
+// H6a
+// flush 只刷用户态缓冲
 static void shredFile(const QString& path) {
     if (path.isEmpty()) return;
     QFile f(path);
@@ -234,19 +242,19 @@ static void shredFile(const QString& path) {
     QFile::remove(path);
 }
 
-// M45：临时文件统一清理（析构与 closeEvent 共用）
+// M45
 void MainWindow::cleanupTempFiles() {
     if(!m_recipientTempFile.isEmpty()) {
         QFile::remove(m_recipientTempFile);
         m_recipientTempFile.clear();
     }
     if(!m_rewrapTempKey.isEmpty()) {
-        shredFile(m_rewrapTempKey);   // P2-3：重包装后的钥匙是明文，先清零再删
+        shredFile(m_rewrapTempKey);   // P2-3
         m_rewrapTempKey.clear();
     }
-    // 水印私钥：中途退出时 finished() 未必跑完，这里同步兜底
+    // 水印私钥
     CliArgBuilder::cleanupWatermarkTemp();
-    // 统计 JSON 同理（finishTaskRecord 没跑到就要删）
+    // 统计 JSON 同理
     if(!m_statsFile.isEmpty()) {
         QFile::remove(m_statsFile);
         m_statsFile.clear();
@@ -273,7 +281,7 @@ void MainWindow::buildMenu() {
     m_menuBar=menuBar();
 
 
-    // 菜单按功能顺序排列
+    // 菜单
     auto* editMenu=m_menuBar->addMenu(tr("编辑(&E)"));
     auto* actEditConfig=editMenu->addAction(tr("编辑 YAML 配置..."));
     connect(actEditConfig,&QAction::triggered,this,&MainWindow::onEditConfig);
@@ -283,7 +291,7 @@ void MainWindow::buildMenu() {
     connect(actViewSettings,&QAction::triggered,this,&MainWindow::onViewSettings);
     viewMenu->addSeparator();
 
-    // 主题：浅色 / 深色 / 跟随系统，与 WinUI 的「视图」菜单一致
+    // 主题
     auto* themeMenu=viewMenu->addMenu(tr("主题"));
     m_themeGroup=new QActionGroup(themeMenu);
     m_themeGroup->setExclusive(true);
@@ -309,8 +317,8 @@ void MainWindow::buildMenu() {
     connect(actRetryCli,&QAction::triggered,this,&MainWindow::onRetryCliDetection);
     toolsMenu->addSeparator();
 
-    // 加密盘：库管理（CLI 子命令）+ 挂载控制端。与 WinUI 前端保持同一套 8 项，
-    // 重建索引/库内重加密/删除恢复密钥属内部维护动作，不进 GUI
+    // 加密盘
+    // 重建索引/库内重
     m_vaultMenu=toolsMenu->addMenu(tr("加密盘"));
     auto addVaultAct=[&](const QString& label,const QString& tip,void(MainWindow::*slot)()) {
         auto* a=m_vaultMenu->addAction(label);
@@ -324,7 +332,7 @@ void MainWindow::buildMenu() {
     addVaultAct(tr("生成恢复码..."),tr("生成 48 位恢复码，忘密码时能取回原密码"),&MainWindow::onVaultRecoveryCreate);
     addVaultAct(tr("用恢复码找回密码..."),tr("输入当初抄下的恢复码，取回这块盘的密码"),&MainWindow::onVaultRecoveryOpen);
     m_vaultMenu->addSeparator();
-    // M3/M4 控制端：挂载由 FE-Mounter 常驻持有，锁定/解锁经受限 IPC（CLI 不持有挂载）
+    // M3/M4 控制端
     addVaultAct(tr("挂载为磁盘..."),tr("把加密盘挂成盘符，1 分钟不操作会自动锁定"),&MainWindow::onVaultMount);
     addVaultAct(tr("卸载磁盘..."),tr("卸载已挂载的加密盘，盘符随之消失"),&MainWindow::onVaultUnmount);
     addVaultAct(tr("格式化加密盘..."),tr("清空盘内全部文件，保留盘身份与密码；不可撤销"),&MainWindow::onVaultFormat);
@@ -340,9 +348,9 @@ void MainWindow::buildMenu() {
         langGroup->addAction(a);
         connect(a,&QAction::triggered,this,[this,id] {
             I18n::instance().changeLanguage(id,this);
-            // 祝福语是运行时拼的（tr() 不含年龄占位），语言切换后要重刷
+            // 祝福语是运行
             applyBirthdayStyle();
-            // 文案长度变了，横排/竖排的判断要跟着重算
+            // 文案长度变
             reflowOptionRows();
         });
     };
@@ -372,7 +380,7 @@ void MainWindow::buildMenu() {
     connect(actAboutQt,&QAction::triggered,qApp,&QApplication::aboutQt);
 }
 
-// 自动更新
+// 自动
 QString MainWindow::locateUpdater() const {
     const QString dir = QCoreApplication::applicationDirPath();
     const QStringList cands = {
@@ -389,8 +397,8 @@ QString MainWindow::locateUpdater() const {
     return {};
 }
 
-// 更新器报回的 error 码 → 中文说明（与 Updater/src/updater.cpp 的 error 字段对应）。
-// 文案直接以字面量写进 translate，便于 lupdate 收录译文。
+// 更新器报回
+// 文案直接
 static QString updaterErrorText(const QString& code) {
     auto t = [](const char* s) { return QCoreApplication::translate("MainWindow", s); };
     if (code == QStringLiteral("network_unreachable")) return QCoreApplication::translate("MainWindow", "网络连接不可用，请检查网络后重试。");
@@ -416,7 +424,7 @@ void MainWindow::onCheckForUpdate() {
     dlg->show();
 
     auto* proc = new QProcess(this);
-    // M48：finished 先于超时触发时 proc 已 deleteLater，定时器回调必须持 QPointer
+    // M48
     QPointer<QProcess> procGuard = proc;
     const QString platform = []() {
 #ifdef Q_OS_WIN
@@ -437,7 +445,7 @@ void MainWindow::onCheckForUpdate() {
         proc->deleteLater();
         handleCheckResult(out, updater);
     });
-    // 更新器起不来（缺 dll / 被杀软拦）时 finished 不会来，只连 finished 会让进度框一直转
+    // 更新器起不来
     connect(proc, &QProcess::errorOccurred, this, [this, dlg, proc](QProcess::ProcessError) {
         dlg->close(); dlg->deleteLater();
         proc->deleteLater();
@@ -466,11 +474,10 @@ void MainWindow::handleCheckResult(const QByteArray& out, const QString& updater
         return;
     }
     const QJsonObject o = doc.object();
-    // 本地的 GUI 与配套 CLI 版本，任何结果都带上，避免只看 GUI 版本号
     const QString curVer = tr("GUI %1 / CLI %2")
         .arg(FileEncryptorLocator::guiVersion(), FileEncryptorLocator::version());
     if (!o.value(QStringLiteral("ok")).toBool()) {
-        // 把更新器给的具体原因（网络/超时/证书/限流）显示出来，别只丢一个错误码
+        // 把更新器给
         const QString code = o.value(QStringLiteral("error")).toString();
         const QString detail = o.value(QStringLiteral("detail")).toString();
         QMessageBox::warning(this, tr("检查更新"),
@@ -479,7 +486,10 @@ void MainWindow::handleCheckResult(const QByteArray& out, const QString& updater
         return;
     }
     if (o.value(QStringLiteral("has_update")).toBool(false)) {
-        const QString latest = o.value(QStringLiteral("latest_version")).toString();
+        QString latest = o.value(QStringLiteral("latest_version")).toString();
+        // 更新器标记
+        if (o.value(QStringLiteral("is_prerelease")).toBool(false))
+            latest += tr("（Pre-Release 版）");
         const QString notes = o.value(QStringLiteral("notes")).toString();
         QMessageBox box(this);
         box.setWindowTitle(tr("发现新版本"));
@@ -518,7 +528,7 @@ void MainWindow::doUpdaterUpdate(const QString& updater, const QString& url,
     dlg->show();
 
     auto* proc = new QProcess(this);
-    // M48：同上，超时回调捕获 QPointer 防 use-after-free
+    // M48
     QPointer<QProcess> procGuard = proc;
     QStringList args = {
         QStringLiteral("--update"),
@@ -570,7 +580,7 @@ void MainWindow::doUpdaterUpdate(const QString& updater, const QString& url,
     proc->start(updater, args);
 }
 
-// 主题菜单：勾选态跟随 ThemeManager 当前选择
+// 主题菜单
 void MainWindow::onThemeActionTriggered() {
     auto* a=qobject_cast<QAction*>(sender());
     if(!a) return;
@@ -587,7 +597,7 @@ void MainWindow::onThemeDarkChanged(bool ) {
         const bool on=a->data().toInt()==static_cast<int>(cur);
         if(a->isChecked()!=on) {
             a->setChecked(on);
-            break;  // exclusive group：设一个即取消其余
+            break;  // exclusive group
         }
     }
     applyButtonStyles();
@@ -598,9 +608,9 @@ void MainWindow::onThemeDarkChanged(bool ) {
 // 底色随配色
 void MainWindow::applyFlagRedTheme() {
     const auto& r=ThemeManager::ui();
-    // 不能用 setStyleSheet 设窗口底色：Qt 给顶层窗口设样式表会重置整棵子控件树的
-    // 调色板，输入框/列表会退回系统默认（浅色主题下就成了黑底配白控件）。
-    // 改走 QPalette::Window 这一条正路。
+    // 不能用 setStyleSheet 设窗口底
+    // 调色板
+    // 改走 QPalette
     QPalette p=palette();
     p.setColor(QPalette::Window, QColor(r.window));
     p.setColor(QPalette::WindowText, QColor(r.text));
@@ -611,7 +621,7 @@ void MainWindow::applyFlagRedTheme() {
     applyBirthdayStyle();
 }
 
-// 祝福语固定国旗红，不随深浅档变化（跟 WinUI 侧一致）
+// 祝福语固定国旗
 void MainWindow::applyBirthdayStyle() {
     if(!m_birthdayLabel) return;
     const bool active=ThemeManager::isNationalDay();
@@ -622,7 +632,7 @@ void MainWindow::applyBirthdayStyle() {
         .arg(QLatin1String(ThemeManager::chinaRedHex())));
 }
 
-// 预览解密：新开窗口显示明文前缀，不写出任何文件
+// 预览解密
 void MainWindow::onPreviewClicked() {
     QListWidgetItem* cur = m_fileList ? m_fileList->currentItem() : nullptr;
     if (!cur) {
@@ -639,7 +649,7 @@ void MainWindow::openPreviewFor(const QString& path) {
         return;
     }
     const int act = m_actionGroup->checkedId();
-    // 预览是解密行为：加密/密钥动作下没有预览语义
+    // 预览是解密行
     if (act != static_cast<int>(CryptoAction::Decrypt)
         && act != static_cast<int>(CryptoAction::BatchDecrypt)) {
         MsgBox::warn(this, tr("无法预览"),
@@ -648,11 +658,11 @@ void MainWindow::openPreviewFor(const QString& path) {
     }
 
     QByteArray pw;
-    // 与 updateAsymVisibility 同一判据：解密时填了私钥文件即走非对称，不需要密码
+    // 与 updateAsymVisibility 同
     const bool asymDecrypt = (act == static_cast<int>(CryptoAction::Decrypt))
         && m_identityEdit && !m_identityEdit->text().trimmed().isEmpty();
     if (asymDecrypt) {
-        // 非对称解密靠私钥文件（CLI 自行识别），不问密码
+        // 非对称解密靠私
     } else {
         PasswordDialog dlg(this);
         dlg.setPurpose(tr("解密密码（用于预览）"));
@@ -662,7 +672,7 @@ void MainWindow::openPreviewFor(const QString& path) {
         if (v.empty()) return;
         pw = QByteArray(reinterpret_cast<const char*>(v.data()),
                         static_cast<int>(v.size()));
-        secure_zero(v.data(),v.size());   // 源缓冲立即清零，别只拷进 QByteArray
+        secure_zero(v.data(),v.size());   // 源缓冲立即清零
         v.clear();
     }
 
@@ -764,11 +774,9 @@ void MainWindow::resizeBgLabel() {
 }
 
 void MainWindow::applyPanelTransparency() {
-    const QString transparent=QStringLiteral("background:transparent;");
     const auto& r=ThemeManager::ui();
-    const QString chinaRed=QLatin1String(r.highlight);
-
-    // 区块底色随配色
+    // 面板只负责半透
+    // 每类控件各写一
     const QString panelStyle=QStringLiteral("background:%1;border-radius:6px;")
         .arg(QLatin1String(r.panelRgba));
     for(QWidget* p:{m_leftPanel, m_centerPanel, m_bottomPanel}) {
@@ -777,121 +785,7 @@ void MainWindow::applyPanelTransparency() {
         p->setAutoFillBackground(false);
         p->setStyleSheet(panelStyle);
     }
-
-    const QString fieldBg=QLatin1String(r.field);
-    const QString fieldFg=QLatin1String(r.text);
-    const QString fieldBor=QLatin1String(r.border);
-    const QString fieldSel=chinaRed;
-    const QString altBg=QLatin1String(r.alt);
-    const QString hoverBg=QLatin1String(r.ctrlHover);
-    const QString indBg=QLatin1String(r.indicator);
-    const QString indBor=QLatin1String(r.indicatorBorder);
-    const QString ctrlBg=QLatin1String(r.ctrl);
-    const QString ctrlFg=QLatin1String(r.text);
-    const QString ctrlBor=QLatin1String(r.border);
-    const QString ctrlHover=QLatin1String(r.ctrlHover);
-
-    if(m_fileList) {
-        m_fileList->setStyleSheet(QStringLiteral(
-            "QListWidget{background:%1;color:%2;border:1px solid %3;"
-            "border-radius:3px;outline:0;}"
-            "QListWidget::item{padding:2px 4px;}"
-            "QListWidget::item:alternate{background:%4;}"
-            "QListWidget::item:selected{background:%5;color:#FFFFFF;}"
-            "QListWidget::item:hover{background:%6;}"
-            "QListWidget::indicator{width:14px;height:14px;border:1px solid %7;"
-            "border-radius:2px;background:%8;}"
-            "QListWidget::indicator:checked{background:%5;border:1px solid %7;}"
-        ).arg(ctrlBg,ctrlFg,ctrlBor,altBg,fieldSel,hoverBg,indBor,indBg));
-    }
-
-    const QString fieldCss=QStringLiteral(
-        "background:%1;color:%2;border:1px solid %3;border-radius:3px;padding:2px 4px;"
-        "selection-background-color:%4;selection-color:#FFFFFF;")
-        .arg(fieldBg,fieldFg,fieldBor,fieldSel);
-    // 全部单行输入框共用同一套外观（含后加的水印私钥与密钥包装两处）
-    for(QLineEdit* e:{m_outDirEdit, m_keyfileEdit,
-                       m_recipientEdit, m_identityEdit,
-                       m_wmKeyEdit, m_wrapFileEdit, m_wrapOutEdit}) {
-        if(e) e->setStyleSheet(fieldCss);
-    }
-    if(m_outputView) {
-        const QString sbHandle=QLatin1String(r.scrollHandle);
-        const QString sbHover=QLatin1String(r.scrollHover);
-        m_outputView->setStyleSheet(QStringLiteral(
-            "QPlainTextEdit{%1}"
-            "QScrollBar:vertical{background:%5;width:12px;margin:0;}"
-            "QScrollBar::handle:vertical{background:%6;min-height:24px;"
-            "border-radius:5px;}"
-            "QScrollBar::handle:vertical:hover{background:%7;}"
-            "QScrollBar:horizontal{background:%5;height:12px;margin:0;}"
-            "QScrollBar::handle:horizontal{background:%6;min-width:24px;"
-            "border-radius:5px;}"
-            "QScrollBar::handle:horizontal:hover{background:%7;}"
-            "QScrollBar::add-line,QScrollBar::sub-line{width:0;height:0;}"
-            "QScrollBar::add-page,QScrollBar::sub-page{background:transparent;}"
-        ).arg(fieldCss,altBg,sbHandle,sbHover));
-    }
-
-    const QString optionStyle=QStringLiteral(
-        "QCheckBox,QRadioButton{background:%1;color:%2;"
-        "border:1px solid %3;border-radius:3px;padding:4px 6px;spacing:6px;}"
-        "QCheckBox::indicator,QRadioButton::indicator{width:14px;height:14px;"
-        "border:1px solid %4;background:%5;}"
-        "QCheckBox::indicator{border-radius:2px;}"
-        "QRadioButton::indicator{border-radius:7px;}"
-        "QCheckBox::indicator:hover,QRadioButton::indicator:hover{border:1px solid %7;}"
-        "QCheckBox::indicator:checked{background:%6;border:1px solid %4;}"
-        "QRadioButton::indicator:checked{background:%6;border:1px solid %4;}"
-    ).arg(fieldBg,fieldFg,fieldBor,indBor,indBg,fieldSel,chinaRed);
-    for(QWidget* c:{static_cast<QWidget*>(m_chkForce),
-                       static_cast<QWidget*>(m_chkPack),
-                       static_cast<QWidget*>(m_chkSha256),
-                       static_cast<QWidget*>(m_chkSplit),
-                       static_cast<QWidget*>(m_chkCompress),
-                       static_cast<QWidget*>(m_chkPqc),
-                       static_cast<QWidget*>(m_chkX448),
-                       static_cast<QWidget*>(m_chkWatermark),
-                       static_cast<QWidget*>(m_rbEncrypt), static_cast<QWidget*>(m_rbDecrypt),
-                       static_cast<QWidget*>(m_rbBatchEncrypt), static_cast<QWidget*>(m_rbBatchDecrypt),
-                       static_cast<QWidget*>(m_rbKeyGen), static_cast<QWidget*>(m_rbDerive),
-                       static_cast<QWidget*>(m_rbPubKey),
-                       static_cast<QWidget*>(m_rbWrapKey), static_cast<QWidget*>(m_rbUnwrapKey)}) {
-        if(c) c->setStyleSheet(optionStyle);
-    }
-
-    const QString comboStyle=QStringLiteral(
-        "QComboBox{background:%1;color:%2;border:1px solid %3;border-radius:3px;padding:2px 6px;min-width:60px;}"
-        "QComboBox::drop-down{border:none;width:18px;}"
-        "QComboBox::down-arrow{image:none;width:0;height:0;border-left:4px solid transparent;"
-        "border-right:4px solid transparent;border-top:5px solid %2;}"
-        "QComboBox QAbstractItemView{background:%1;color:%2;border:1px solid %3;"
-        "selection-background-color:%4;selection-color:#FFFFFF;outline:0;}"
-    ).arg(ctrlBg,ctrlFg,ctrlBor,fieldSel);
-    for(QComboBox* cb:{m_modeCombo, m_sourceCombo, m_fileCipherCombo, m_splitUnit,
-                           m_wrapAlgCombo}) {
-        if(cb) cb->setStyleSheet(comboStyle);
-    }
-
-    const QString spinStyle=QStringLiteral(
-        "QSpinBox{%1}"
-        "QSpinBox:disabled{background:%2;color:%4;border:1px solid %3;}"
-    ).arg(fieldCss,altBg,fieldBor,QLatin1String(r.placeholder));
-    if(m_compressLevel) m_compressLevel->setStyleSheet(spinStyle);
-    const QString btnStyle=QStringLiteral(
-        "QPushButton{background:%1;color:%2;border:1px solid %3;border-radius:3px;padding:4px 10px;}"
-        "QPushButton:hover{background:%4;}"
-        "QPushButton:disabled{background:%1;color:%5;}"
-    ).arg(ctrlBg,ctrlFg,ctrlBor,ctrlHover,QLatin1String(r.placeholder));
-    // 全部普通按钮共用同一套外观（含后加的「密钥轮换」「水印私钥浏览」）
-    for(QPushButton* b:{m_btnAddFiles, m_btnAddDir, m_btnClearFiles,
-                           m_btnOutDirBrowse, m_btnKeyfileBrowse,
-                           m_btnRecipientBrowse, m_btnIdentityBrowse, m_btnPreview,
-                           m_btnTaskHistory, m_btnRewrap, m_btnWmKeyBrowse,
-                           m_btnWrapFileBrowse, m_btnWrapOutBrowse}) {
-        if(b) b->setStyleSheet(btnStyle);
-    }
-
+    const QString transparent=QStringLiteral("background:transparent;");
     for(QWidget* s:{m_outerSplitter}) {
         if(!s) continue;
         s->setAttribute(Qt::WA_TranslucentBackground);
@@ -900,15 +794,14 @@ void MainWindow::applyPanelTransparency() {
     }
 }
 
-// 英/俄文文案长，但窗口够宽时横排更好看：实测所有项的 widthHint 之和，
-// 塞得进当前行宽就保持横排，塞不进才逐行显示（原先只看语言，够宽也是竖排）。
+// 选项行
+// 按语言固定横排
 void MainWindow::reflowOptionRows() {
     if(m_optionRows.isEmpty()) return;
-    const bool zh=!rowStacksVertically();
     QWidget* host=m_optionRows.first()->parentWidget();
     const int avail=host ? host->width() : 0;
-    // 窗口尚未布局时宽度未知（常为 0）：此时不做决定，保持默认横排，
-    // 交给 showEvent/resizeEvent 在几何确定后再校准，避免一上来就强制竖排
+    // 窗口尚未布局
+    // 交给 showEvent/resizeEvent
     if(avail<=0) return;
     for(int r=0;r<m_optionRows.size();++r) {
         QBoxLayout* row=m_optionRows[r];
@@ -916,26 +809,25 @@ void MainWindow::reflowOptionRows() {
         for(int i=0;i<row->count();++i) {
             QLayoutItem* it=row->itemAt(i);
             if(!it) continue;
-            // 弹簧/stretch 只是占位，不计入实际需要的宽度
+            // 弹簧/stretch 只是占位
             if(dynamic_cast<QSpacerItem*>(it)) continue;
             need+=it->sizeHint().width()+row->spacing();
         }
-        // 中文恒定横排；英/俄文仅当实测总宽塞不进当前行宽时才竖排
-        const bool stack=!zh && need>avail;
+        const bool stack=need>avail;
         row->setDirection(stack ? QBoxLayout::TopToBottom : QBoxLayout::LeftToRight);
     }
 }
 
 void MainWindow::showEvent(QShowEvent* e) {
     QMainWindow::showEvent(e);
-    // 首帧几何已确定，按真实宽度校准英/俄文选项行方向
+    // 首帧几何已确定
     reflowOptionRows();
 }
 
 void MainWindow::resizeEvent(QResizeEvent* e) {
     QMainWindow::resizeEvent(e);
     resizeBgLabel();
-    // 要在布局重算之后：拉宽窗口时英/俄文选项行才能从竖排回到横排
+    // 要在布局重算
     reflowOptionRows();
 }
 
@@ -1036,14 +928,14 @@ void MainWindow::showCliNotFoundError(const QString& context) {
     detail+=tr("\n当前程序目录：\n  %1\n").arg(FileEncryptorLocator::selfDir());
     detail+=tr("\n也可设置环境变量 FILEENCRYPTOR_EXE 指向 CLI 程序路径。");
 
-    // 与 WinUI 一致：对话框里直接给「下载 CLI」，下载成功后自动重新探测
+    // 与 WinUI 一致
     CliNotFoundDialog dlg(detail,this);
     const bool retry=dlg.exec()==QDialog::Accepted && dlg.retryPressed();
     if(!retry && !dlg.downloaded()) return;
     rescanCli();
 }
 
-// 重新探测 CLI 并刷新依赖它的界面状态（重试、手动检测、下载完成后共用）
+// 重新探测 CLI 并刷新
 void MainWindow::rescanCli() {
     if(FileEncryptorLocator::existsWithVersion(&m_fileEncryptorPath)) {
         setStatus(tr("就绪 | FileEncryptor: %1").arg(m_fileEncryptorPath));
@@ -1063,8 +955,8 @@ void MainWindow::probeZstdSupport() {
         m_probeProcess=new QProcess(this);
         connect(m_probeProcess,QOverload<int,QProcess::ExitStatus>::of(&QProcess::finished),
                 this,&MainWindow::onProbeFinished);
-        // 进程起不来（缺运行库 / 被杀软拦截 / 路径失效）时 finished() 不会发射，
-        // onProbeFinished 永不调用，压缩会被永久禁用。这里兜底 fail-open。
+        // 进程起不来
+        // onProbeFinished 永不调用，压缩
         connect(m_probeProcess,&QProcess::errorOccurred,this,[this](QProcess::ProcessError e){
             if(e==QProcess::FailedToStart) {
                 m_zstdAvailable=true;
@@ -1089,9 +981,9 @@ void MainWindow::onProbeFinished(int, QProcess::ExitStatus) {
     if(m_probeTimer) m_probeTimer->stop();
     if(!m_probeProcess) return;
     const QString out=QString::fromUtf8(m_probeProcess->readAllStandardOutput());
-    // 仅当 CLI 显式声明 zstd=0 才禁用；其余（含进程异常无输出）一律 fail-open。
-    // zstd 是 CLI 核心能力，所有版本都编译了；fail-closed 会让探测进程偶发失败
-    // （缺运行库 / 被杀软拦截 / 超时）时压缩永久灰掉，且难以诊断。
+    // 仅当 CLI 显式声明 zstd=0 才
+    // zstd 是 CLI 核心能力
+    // 时压缩永久灰掉
     m_zstdAvailable=!out.contains(QStringLiteral("zstd=0"));
     if(out.contains(QStringLiteral("aegis=0"))) m_aegisAvailable=false;
     else if(out.contains(QStringLiteral("aegis=1"))) m_aegisAvailable=true;
@@ -1099,19 +991,19 @@ void MainWindow::onProbeFinished(int, QProcess::ExitStatus) {
     else if(out.contains(QStringLiteral("aesgcm=1"))) m_aesGcmAvailable=true;
     if(out.contains(QStringLiteral("sm4=0"))) m_sm4Available=false;
     else if(out.contains(QStringLiteral("sm4=1"))) m_sm4Available=true;
-    // 旧 CLI 的 --features 没有 pqc 字段：按「不支持」处理，由勾选状态决定是否下发 --no-pqc。
-    // fail-open 会把 --no-pqc 转给不认它的旧 CLI，导致任务直接被拒。
+    // 旧 CLI
+    // fail-open 会把 --no-pqc 转给不认它
     if(out.contains(QStringLiteral("pqc=1"))) m_pqcAvailable=true;
     else if(out.contains(QStringLiteral("pqc=0"))) m_pqcAvailable=false;
-    // --pack 同理：字段缺失即视为不支持，宁可不勾也不给旧 CLI 发 -p
+    // -pack 同理
     m_packAvailable=out.contains(QStringLiteral("pack=1"));
-    // 包装层要 OpenSSL：字段缺失即视为不支持，否则会下发旧 CLI 不认的 --wrap-key
+    // 包装层要 OpenSSL
     m_keywrapAvailable=out.contains(QStringLiteral("keywrap=1"));
-    // 加密盘同理：vault=1 才有 --into-vault / vault-* 子命令（3.1.0 起）
+    // 加密盘同理
     m_vaultAvailable=out.contains(QStringLiteral("vault=1"));
-    // 可写挂载能力：vault_rw=1 才允许「可写挂载」（M6）
+    // 可写挂载能力
     m_vaultRwAvailable=out.contains(QStringLiteral("vault_rw=1"));
-    // 顺带探测 FE-Mounter（挂载组件），失败时挂载动作会提示用户
+    // 顺带探测 FE-Mounter
     locateMounter();
     if(m_vaultMenu) {
         m_vaultMenu->setEnabled(m_vaultAvailable);
@@ -1121,8 +1013,8 @@ void MainWindow::onProbeFinished(int, QProcess::ExitStatus) {
     updatePackVisibility();
     updateWrapKeyVisibility();
     updateAsymVisibility();
-    // 探测完成可能早于界面默认动作（m_rbEncrypt->setChecked 不发信号）落定：下一事件循环再刷一次，
-    // 确保「入加密盘」显隐与当前动作一致，免得要切模式才出现。
+    // 探测完成可能早
+    // 「入加密盘」显隐
     QTimer::singleShot(0, this, [this]{ updateAsymVisibility(); });
 }
 
@@ -1132,37 +1024,22 @@ void MainWindow::onRetryCliDetection() {
 }
 
 void MainWindow::applyButtonStyles() {
-    const bool dark=ThemeManager::isDarkActive();
-    // 国庆周走红色系
-    const bool red=ThemeManager::isNationalDay();
-    m_btnRun->setStyleSheet(red
-        // 国庆：运行键用国旗红原色，深浅一致；深色下悬停往亮里走才看得出状态变化
-        ? QStringLiteral("QPushButton{background:#DE2910;color:#FFFFFF;padding:6px 18px;font-weight:bold;border-radius:4px;}"
-                         "QPushButton:hover{background:#F04A30;}"
-                         "QPushButton:pressed{background:#A81F0A;}")
-        : (dark
-           ? QStringLiteral("QPushButton{background:#43A047;color:#FFFFFF;padding:6px 18px;font-weight:bold;border-radius:4px;}"
-                            "QPushButton:hover{background:#66BB6A;}")
-           : QStringLiteral("QPushButton{background:#4A7C50;color:white;padding:6px 18px;font-weight:bold;border-radius:4px;}"
-                            "QPushButton:hover{background:#3D6B4A;}")));
-    m_btnCancel->setStyleSheet(red
-        // 国庆：取消键同为红但明显加深，与运行键拉开层级
-        ? (dark
-           ? QStringLiteral("QPushButton{background:#8E2214;color:#FFFFFF;padding:6px 18px;font-weight:bold;border-radius:4px;}"
-                            "QPushButton:hover{background:#A82C1B;}"
-                            "QPushButton:pressed{background:#6E180E;}"
-                            "QPushButton:disabled{background:#242121;color:#6B605E;}")
-           : QStringLiteral("QPushButton{background:#9E2A1B;color:#FFFFFF;padding:6px 18px;font-weight:bold;border-radius:4px;}"
-                            "QPushButton:hover{background:#B83624;}"
-                            "QPushButton:pressed{background:#7C2014;}"
-                            "QPushButton:disabled{background:#D8D4D3;color:#8A8180;}"))
-        : (dark
-           ? QStringLiteral("QPushButton{background:#E53935;color:#FFFFFF;padding:6px 18px;font-weight:bold;border-radius:4px;}"
-                            "QPushButton:hover{background:#EF5350;}"
-                            "QPushButton:disabled{background:#555;color:#ccc;}")
-           : QStringLiteral("QPushButton{background:#C0392B;color:white;padding:6px 18px;font-weight:bold;border-radius:4px;}"
-                            "QPushButton:hover{background:#A93226;}"
-                            "QPushButton:disabled{background:#999;color:#eee;}")));
+    // 只标层级
+    // 主操作实色、次操
+    const struct { QWidget* w; const char* role; } roles[] = {
+        {m_btnRun, "primary"},
+        {m_btnCancel, "secondary"},
+        {m_btnRewrap, "secondary"},
+        {m_btnPreview, "secondary"},
+        {m_btnTaskHistory, "secondary"},
+        {m_btnClearFiles, "quiet"},
+    };
+    for (const auto& r : roles) {
+        if (!r.w) continue;
+        r.w->setProperty("uiRole", QString::fromLatin1(r.role));
+        r.w->style()->unpolish(r.w);
+        r.w->style()->polish(r.w);
+    }
 }
 
 // 文件选择面板
@@ -1170,6 +1047,8 @@ QWidget* MainWindow::buildLeftPanel() {
     auto* w=new QWidget;
     m_leftPanel=w;
     auto* lay=new QVBoxLayout(w);
+    lay->setContentsMargins(8,8,8,8);
+    lay->setSpacing(6);
 
     auto* title=new QLabel(tr("<b>文件选择</b>"));
     title->setAlignment(Qt::AlignCenter);
@@ -1205,7 +1084,9 @@ QWidget* MainWindow::buildCenterPanel() {
     m_centerPanel=w;
     auto* lay=new QGridLayout(w);
     lay->setColumnStretch(1,1);
-    lay->setVerticalSpacing(10);
+    lay->setContentsMargins(12,10,12,10);
+    lay->setHorizontalSpacing(12);
+    lay->setVerticalSpacing(8);
 
     int row=0;
 
@@ -1235,7 +1116,6 @@ QWidget* MainWindow::buildCenterPanel() {
     m_rbEncrypt->setChecked(true);
 
     auto* encRow=new QHBoxLayout;
-    // 方向由 reflowOptionRows 统一决定（英/俄文按实测宽度排，中文恒定横排）
     encRow->addWidget(m_rbEncrypt);
     encRow->addWidget(m_rbDecrypt);
     encRow->addWidget(m_rbBatchEncrypt);
@@ -1266,15 +1146,15 @@ QWidget* MainWindow::buildCenterPanel() {
     lay->addLayout(wrapRow,row,1);
     row++;
 
-    // 模式整行收进容器：密钥管理动作下整行一起藏，免得只藏控件留下孤零零的左侧标签
+    // 模式整行收进容
     m_modeRow=new QWidget;
     {
         auto* mr=new QHBoxLayout(m_modeRow);
         mr->setContentsMargins(0,0,0,0);
-        // 模式项不带括号说明，算法特性交给悬停提示
+        // 模式项不带括号
         m_modeTitle=new QLabel(tr("加密模式"));
         mr->addWidget(m_modeTitle);
-        // 模式与文件算法同排各占一半
+        // 模式
         m_modeCombo=new QComboBox;
         m_modeCombo->setSizePolicy(QSizePolicy::Expanding,QSizePolicy::Preferred);
         m_modeCombo->addItem(tr("XChaCha20-Poly1305"),static_cast<int>(CryptoMode::XChaCha20));
@@ -1284,7 +1164,7 @@ QWidget* MainWindow::buildCenterPanel() {
         m_modeCombo->addItem(tr("X25519 非对称"),static_cast<int>(CryptoMode::Asymmetric));
         mr->addWidget(m_modeCombo,1);
 
-        // 仅非对称模式显示；非对称只加密此算法生成的密钥
+        // 仅非对称模式显
         m_fileCipherLabel=new QLabel(tr("文件算法："));
         mr->addWidget(m_fileCipherLabel);
         m_fileCipherCombo=new QComboBox;
@@ -1301,14 +1181,14 @@ QWidget* MainWindow::buildCenterPanel() {
 
     m_compressTitle=new QLabel(tr("压缩"));
     lay->addWidget(m_compressTitle,row,0);
-    // 整行收进容器，显隐一次切换
+    // 整行收进容器
     m_compressRow=new QWidget;
     {
         auto* compRow=new QHBoxLayout(m_compressRow);
         compRow->setContentsMargins(0,0,0,0);
     m_chkCompress=new QCheckBox(tr("压缩数据"));
     m_chkCompress->setToolTip(tr("加密时逐块压缩，对称与非对称均生效"));
-    m_compressTipTemplate=m_chkCompress->toolTip();   // 能力探测后要还原默认说明
+    m_compressTipTemplate=m_chkCompress->toolTip();   // 能力探测后要
     m_compressLabel=new QLabel(tr("压缩级别（-5 到 22）："));
     m_compressLevel=new QSpinBox;
     m_compressLevel->setRange(-5,22);
@@ -1329,7 +1209,7 @@ QWidget* MainWindow::buildCenterPanel() {
     m_asymWidget=new QGroupBox(tr("非对称加密"));
     {
         auto* av=new QVBoxLayout(m_asymWidget);
-        // 顶部留白刚好放下组标题
+        // 顶部留白刚好放
         av->setContentsMargins(6,18,6,6);
         av->setSpacing(4);
 
@@ -1350,7 +1230,7 @@ QWidget* MainWindow::buildCenterPanel() {
     lay->addWidget(m_asymWidget,row,0,1,2);
     row++;
 
-    // 私钥文件行与说明同组：导出公钥时只看到「标题 + 私钥行 + 说明」一块，中间不留空白
+    // 私钥文件行
     m_keygenWidget=new QGroupBox(tr("非对称密钥管理"));
     {
         auto* kv=new QVBoxLayout(m_keygenWidget);
@@ -1377,7 +1257,7 @@ QWidget* MainWindow::buildCenterPanel() {
     lay->addWidget(m_keygenWidget,row,0,1,2);
     row++;
 
-    // 密钥包装：文件选择 + 算法下拉。密码/公钥沿用上面的收件人行与密钥行，不重复造。
+    // 密钥包装
     m_wrapWidget=new QGroupBox(tr("密钥包装"));
     {
         auto* wv=new QVBoxLayout(m_wrapWidget);
@@ -1471,16 +1351,16 @@ QWidget* MainWindow::buildCenterPanel() {
     m_chkPack->setToolTip(tr("将整个目录树或多个文件打包为单个 .ptd 容器，不删除源文件"));
     m_chkSha256=new QCheckBox(tr("生成校验单"));
     m_chkSha256->setToolTip(tr("额外生成 .sha256 校验单，便于校验传输完整性"));
-    // 与「生成校验单」同排，样式统一
+    // 与「生成校验单」同
     m_chkPqc=new QCheckBox(tr("后量子 PQC"));
     m_chkPqc->setChecked(true);
-    // 提示与 WinUI 一致
+    // 提示
     m_chkPqc->setToolTip(tr("非对称收件人用 X25519（或 X448）+ ML-KEM-768 混合密钥，水印签名用 ML-DSA-65"));
     m_chkX448=new QCheckBox(tr("使用 X448"));
     m_chkX448->setToolTip(tr("勾选后非对称封装使用 X448，不勾选则使用 X25519"));
     m_chkWatermark=new QCheckBox(tr("签名水印"));
     m_chkWatermark->setToolTip(tr("在密文尾部追加一条签名水印"));
-    // 加密盘（M1/M4）：入盘勾选 + 库目录
+    // 加密盘
     m_chkIntoVault=new QCheckBox(tr("入加密盘"));
     m_chkIntoVault->setToolTip(tr("勾选后产物写入加密盘目录并登记进加密索引；不勾选则为普通加密"));
     m_vaultDirEdit=new QLineEdit(this);
@@ -1508,7 +1388,7 @@ QWidget* MainWindow::buildCenterPanel() {
     optsRow->addWidget(m_chkSplit);
     optsRow->addStretch();
 
-    // 入盘单独一行：带目录输入框，和开关挤在一排放不下
+    // 入盘单独一行
     auto* vaultRow=new QHBoxLayout();
     vaultRow->addWidget(m_chkIntoVault);
     vaultRow->addWidget(m_vaultDirEdit,1);
@@ -1520,7 +1400,7 @@ QWidget* MainWindow::buildCenterPanel() {
     lay->addLayout(optsRow,row,1);
     row++;
 
-    // 分卷大小：勾选「分卷输出」后才显示，默认 100MB
+    // 分卷大小
     m_splitRow=new QWidget;
     {
         auto* sr=new QHBoxLayout(m_splitRow);
@@ -1531,8 +1411,8 @@ QWidget* MainWindow::buildCenterPanel() {
         m_splitSize->setValue(100.0);
         m_splitSize->setDecimals(2);
         m_splitSize->setSingleStep(10.0);
-        // 单位由右侧下拉决定，数字框不要再挂固定后缀（否则选 GB 时仍显示 MB）；
-        // 宽度留足，避免右侧微调按钮挤占输入区、打字时看不见字符
+        // 单位
+        // 宽度留足
         m_splitSize->setMinimumWidth(150);
         m_splitUnit=new QComboBox;
         m_splitUnit->addItem(tr("MB"));
@@ -1547,7 +1427,7 @@ QWidget* MainWindow::buildCenterPanel() {
     lay->addWidget(m_splitRow,row,1);
     row++;
 
-    // 勾选签名水印后显示，不明文回显
+    // 勾选签名水印
     m_wmKeyRow=new QWidget;
     m_wmKeyRow->setVisible(false);
     {
@@ -1581,8 +1461,8 @@ QWidget* MainWindow::buildCenterPanel() {
 
     lay->setRowStretch(row,1);
 
-    // 国庆祝福：贴在功能区最下方，跟 WinUI 同位置。
-    // 非国庆窗口隐藏，不占布局空间。
+    // 国庆祝福
+    // 非国庆窗口隐藏
     m_birthdayLabel=new QLabel(ThemeManager::birthdayMessage());
     m_birthdayLabel->setAlignment(Qt::AlignCenter);
     m_birthdayLabel->setWordWrap(true);
@@ -1600,10 +1480,12 @@ QWidget* MainWindow::buildBottomPanel() {
     auto* w=new QWidget;
     m_bottomPanel=w;
     auto* lay=new QVBoxLayout(w);
-    lay->setContentsMargins(0,0,0,0);
+    lay->setContentsMargins(8,6,8,8);
+    lay->setSpacing(6);
 
     auto* headerRow=new QHBoxLayout;
     headerRow->setContentsMargins(0,0,0,0);
+    headerRow->setSpacing(6);
     headerRow->addWidget(new QLabel(tr("<b>命令浏览与执行输出</b>")));
     headerRow->addStretch();
     m_btnTaskHistory=new QPushButton(tr("任务历史..."));
@@ -1645,7 +1527,7 @@ void MainWindow::connectSignals() {
     if(m_wrapOutEdit) connect(m_wrapOutEdit,&QLineEdit::textChanged,this,refresh);
     if(m_wrapAlgCombo) {
         connect(m_wrapAlgCombo,QOverload<int>::of(&QComboBox::currentIndexChanged),this,refresh);
-        // 算法决定「密码还是私钥」，切换后区块显隐要重算
+        // 算法决定「密码
         connect(m_wrapAlgCombo,QOverload<int>::of(&QComboBox::currentIndexChanged),
             this,[this](int){ updateAsymVisibility(); });
     }
@@ -1657,7 +1539,7 @@ void MainWindow::connectSignals() {
     connect(m_chkSha256,&QCheckBox::stateChanged,this,refresh);
     connect(m_chkCompress,&QCheckBox::stateChanged,this,refresh);
     connect(m_chkCompress,&QCheckBox::stateChanged,this,[this](int){ updateAsymVisibility(); });
-    // 勾选分卷时露出大小行；单位下拉改动也要刷新命令预览
+    // 勾选分卷时露出
     connect(m_chkSplit,&QCheckBox::stateChanged,this,refresh);
     connect(m_chkSplit,&QCheckBox::stateChanged,this,[this](int){ updateAsymVisibility(); });
     connect(m_splitSize,QOverload<double>::of(&QDoubleSpinBox::valueChanged),this,refresh);
@@ -1671,7 +1553,7 @@ void MainWindow::connectSignals() {
         const QString f=QFileDialog::getOpenFileName(this,tr("选择水印签名私钥"),
             QDir::homePath(),tr("私钥 PEM (*.pem *.key);;所有文件 (*)"));
         if(f.isEmpty()) return;
-        // 密钥内容直接进密码框，界面不回显明文
+        // 密钥内容直接进
         QFile in(f);
         if(!in.open(QIODevice::ReadOnly|QIODevice::Text)) {
             setStatus(tr("[水印私钥] 读取失败：%1").arg(in.errorString()));
@@ -1735,17 +1617,17 @@ void MainWindow::connectSignals() {
     }
 }
 
-// 打包开关依赖 CLI 的 --pack（2.8.0+）：不支持时整个勾选框隐藏并清掉勾选，
-// 否则下发的 -p 会被旧 CLI 当未知参数直接拒绝。
-// 不与分卷互斥：归档在明文域打成字节流，分卷再作用于容器，两者叠加语义明确。
+// 打包开关依赖 CLI
+// 下发
+// 不与分卷互斥
 void MainWindow::updatePackVisibility() {
     if(!m_chkPack) return;
     if(!m_packAvailable && m_chkPack->isChecked()) m_chkPack->setChecked(false);
 }
 
-// 密钥包装动作（--wrap-key / --unwrap-key）同样是 2.9.0 才有：
-// CLI 没编 OpenSSL 时报 keywrap=0，此时禁用两个单选并把停用原因写进提示。
-// 勾选中的那个要主动切走，否则界面停用却仍能点运行。
+// 密钥包装动作
+// CLI 没编 OpenSSL 时报
+// 勾选
 void MainWindow::updateWrapKeyVisibility() {
     if(!m_rbWrapKey || !m_rbUnwrapKey) return;
     const QString tip=m_keywrapAvailable ? QString()
@@ -1757,7 +1639,7 @@ void MainWindow::updateWrapKeyVisibility() {
     if(!m_keywrapAvailable && m_rbWrapKey->isChecked()) m_rbEncrypt->setChecked(true);
 }
 
-// 某些模式依赖硬件或编译选项：--features 报不可用时禁用对应项，避免选中后 CLI 直接报错
+// 某些模式依赖硬
 void MainWindow::updateSm4Visibility() {
     struct Item{ CryptoMode mode; bool avail; };
     const QList<Item> items{
@@ -1769,7 +1651,7 @@ void MainWindow::updateSm4Visibility() {
         for(const Item& it : items) {
             for(int i=0;i<cb->count();++i) {
                 if(cb->itemData(i).toInt()!=static_cast<int>(it.mode)) continue;
-                // Qt 约定：UserRole-1 置 false 即禁用该项
+                // Qt 约定
                 cb->setItemData(i, !it.avail ? QVariant(false) : QVariant(),
                                 Qt::UserRole-1);
                 if(!it.avail && cb->currentIndex()==i) cb->setCurrentIndex(0);
@@ -1796,7 +1678,7 @@ void MainWindow::updateAsymVisibility() {
     const bool asym=(!isKeyAction)&&(!isWrapAction)&&
         (m_modeCombo->currentData().toInt()==static_cast<int>(CryptoMode::Asymmetric));
 
-    // 解密不看模式：模式下拉若停在非对称，下一次对称解密会被判成非对称而不弹密码框
+    // 解密不看模式
     if(asymDecrypt&&asym) {
         for(int i=0;i<m_modeCombo->count();++i) {
             if(m_modeCombo->itemData(i).toInt()==static_cast<int>(CryptoMode::XChaCha20)) {
@@ -1806,37 +1688,37 @@ void MainWindow::updateAsymVisibility() {
         }
     }
 
-    // 公钥行只服务加密；解密靠下面密钥管理组里的「私钥文件」行。
-    // 包装动作的公钥收件人也复用这一行：--wrap-to 与 -r 同为收件人输入。
+    // 公钥行只服务加
+    // 包装动作
     const bool wrapPubkey=isWrapAction && currentWrapAlg()==WrapAlg::Pubkey;
     m_asymWidget->setVisible((asym&&isEnc)||(wrap&&wrapPubkey));
     m_recipientRow->setVisible((asym&&isEnc)||(wrap&&wrapPubkey));
-    // 同一个组在包装动作下装的是收件人公钥，标题得跟着改，否则写着「非对称加密」误导
+    // 同一个组
     if(m_asymTitle.isEmpty()) m_asymTitle=m_asymWidget->title();
     m_asymWidget->setTitle(wrap ? tr("收件人公钥") : m_asymTitle);
-    // 「私钥文件」行与说明同时服务密钥管理三项、解密动作与公钥解包
+    // 「私钥文件」行
     const bool identityShown=isKeyAction||asymDecrypt||(unwrap&&wrapPubkey);
     m_identityRow->setVisible(identityShown);
     m_keygenWidget->setVisible(identityShown);
-    // 曲线开关：非对称模式下控制封装曲线，生成密钥对时控制 -x448（CLI 只认这条）；
-    // 派生(-G)/导出公钥(-Y)固定走 X25519，对称加密也无需曲线，故一律隐藏。
+    // 曲线开关
+    // 派生
     if(m_chkX448) m_chkX448->setVisible((asym&&isEnc)||keygen);
-    // 模式整行：只有加密动作才用得上（解密不带 -m，非对称解密走「私钥文件」入口）
+    // 模式整行
     m_modeRow->setVisible(isEnc&&!isKeyAction&&!isWrapAction);
-    // 加密专属字段：解密与密钥管理动作下一律不出现（这些参数 CLI 只对加密动作生效，
-    // 留在界面上只是点不动的死控件）
+    // 加密专属字段
+    // 留在界面上只
     const bool encFields=isEnc&&!isKeyAction;
-    // 文件算法仍在容器里，单独按非对称模式控制显隐
+    // 文件算法仍
     if(m_fileCipherLabel) m_fileCipherLabel->setVisible(asym&&isEnc);
     if(m_fileCipherCombo) {
         m_fileCipherCombo->setVisible(asym&&isEnc);
-        // 非对称模式禁用 SM4 之外的选择在界面上无意义，降级为非对称时自动回到默认项
+        // 非对称模式禁用 SM4
         if(asym && m_fileCipherCombo->currentIndex()<0) m_fileCipherCombo->setCurrentIndex(0);
     }
     if(m_sourceCombo) m_sourceCombo->setVisible(encFields);
     if(m_chkPack) m_chkPack->setVisible(encFields && m_packAvailable);
     if(m_chkSplit) m_chkSplit->setVisible(encFields);
-    // 入盘：仅加密动作 + CLI 支持时显示；不支持则顺手清掉勾选，避免带着无效参数下发
+    // 入盘
     const bool vaultShown = encFields && m_vaultAvailable;
     if(m_chkIntoVault) {
         m_chkIntoVault->setVisible(vaultShown);
@@ -1845,19 +1727,19 @@ void MainWindow::updateAsymVisibility() {
     if(m_vaultDirEdit) m_vaultDirEdit->setVisible(vaultShown);
     if(m_btnVaultBrowse) m_btnVaultBrowse->setVisible(vaultShown);
     if(!encFields) {
-        // 藏起来的开关清掉勾选，CLI 不会收到对当前动作无意义的开关
+        // 藏起来
         if(m_chkSha256&&m_chkSha256->isChecked()) m_chkSha256->setChecked(false);
         if(m_chkWatermark&&m_chkWatermark->isChecked()) m_chkWatermark->setChecked(false);
         if(m_chkPack&&m_chkPack->isChecked()) m_chkPack->setChecked(false);
         if(m_chkSplit&&m_chkSplit->isChecked()) m_chkSplit->setChecked(false);
         if(m_chkPqc&&m_chkPqc->isChecked()) m_chkPqc->setChecked(false);
     }
-    // 分卷大小行：仅「加密动作 + 勾选分卷」时露出
+    // 分卷大小行
     if(m_splitRow)
         m_splitRow->setVisible(encFields && m_chkSplit && m_chkSplit->isChecked());
     if(m_chkSha256) m_chkSha256->setVisible(encFields);
     if(m_chkWatermark) m_chkWatermark->setVisible(encFields);
-    // PQC 只影响载荷封装与水印签名，包装路线不经过这两步，同样收起
+    // PQC 只影响载荷封装
     if(m_chkPqc) m_chkPqc->setVisible(encFields);
 
     if(keygen) {
@@ -1880,7 +1762,7 @@ void MainWindow::updateAsymVisibility() {
         m_keygenIntro->setText(tr("该 .fekw 由收件人公钥封装，填写对应身份私钥文件即可取回数据密钥，无需密码。"));
     }
 
-    // 包装区块：文件清单不参与，输出目录也不参与（产物路径由包装/解包输出行决定）
+    // 包装区块
     m_wrapWidget->setVisible(isWrapAction);
     if(m_outDirLabel) m_outDirLabel->setVisible(!isWrapAction);
     if(m_outDirEdit) m_outDirEdit->setVisible(!isWrapAction);
@@ -1896,7 +1778,7 @@ void MainWindow::updateAsymVisibility() {
         m_wrapOutEdit->setPlaceholderText(wrap
             ? tr("留空则用 <密钥文件>.fekw")
             : tr("留空则用 <包装文件>.dek"));
-        // 解包时算法写在 blob 头里，下拉只决定「密码还是私钥」，标题随之改口
+        // 解包时算法写
         m_wrapAlgTitle->setText(wrap ? tr("包装算法：") : tr("解密方式："));
         m_wrapAlgCombo->setToolTip(wrap
             ? tr("包装密钥的算法")
@@ -1913,7 +1795,7 @@ void MainWindow::updateAsymVisibility() {
     }
 
     if(isKeyAction) {
-        // 密钥管理动作固定落在非对称项，切回加密动作时参数才是预期的 -m
+        // 密钥管理动作固
         for(int i=0;i<m_modeCombo->count();++i) {
             if(m_modeCombo->itemData(i).toInt()==static_cast<int>(CryptoMode::Asymmetric)) {
                 m_modeCombo->setCurrentIndex(i);
@@ -1922,11 +1804,11 @@ void MainWindow::updateAsymVisibility() {
         }
     }
 
-    // 压缩对非对称同样可用
+    // 压缩对非对称同
     const bool compAllowed=isEnc;
     m_compressTitle->setVisible(compAllowed);
     m_compressRow->setVisible(compAllowed);
-    // 禁用以免 CliArgBuilder 仍下发 -zstd
+    // 禁用
     const bool compressUsable=compAllowed && m_zstdAvailable;
     m_chkCompress->setEnabled(compressUsable);
     m_compressLabel->setEnabled(compressUsable);
@@ -1938,7 +1820,7 @@ void MainWindow::updateAsymVisibility() {
         m_chkCompress->setToolTip(m_compressTipTemplate);
     }
 
-    // 能力开关常驻，仅由勾选状态决定是否下发
+    // 能力开关常驻
     const bool wmOn=m_chkWatermark && m_chkWatermark->isChecked();
     const QString pqcTip=tr("非对称收件人用 X25519（或 X448）+ ML-KEM-768 混合密钥，水印签名用 ML-DSA-65");
     m_chkPqc->setEnabled(m_pqcAvailable && encFields);
@@ -1980,6 +1862,17 @@ void MainWindow::addInputPaths(const QStringList& paths) {
     }
     resetPendingCache();
     recomputePending();
+}
+
+// 文件关联
+void MainWindow::addFilesFromArgs(const QStringList& paths) {
+    QStringList files;
+    for(const QString& p:paths) {
+        if(!p.endsWith(QStringLiteral(".ptd"),Qt::CaseInsensitive)) continue;
+        if(!QFileInfo::exists(p)) continue;
+        files<<QDir::toNativeSeparators(p);
+    }
+    if(!files.isEmpty()) addInputPaths(files);
 }
 
 void MainWindow::onAddFiles() {
@@ -2042,7 +1935,7 @@ ShellOptions MainWindow::collectOptions() const {
     o.sourceDisposition=m_sourceCombo ? m_sourceCombo->currentData().toInt() : 0;
     o.forceOverwrite=m_chkForce->isChecked();
     o.pack=(m_chkPack && m_chkPack->isChecked());
-    // 入盘：勾了才把库目录传下去；目录留空由校验拦（空串 = 普通加密）
+    // 入盘
     if(m_chkIntoVault && m_chkIntoVault->isChecked()) {
         o.intoVault=m_vaultDirEdit ? m_vaultDirEdit->text().trimmed() : QString();
     }
@@ -2051,11 +1944,11 @@ ShellOptions MainWindow::collectOptions() const {
     if(m_splitUnit) o.splitUnit=m_splitUnit->currentIndex();
     o.writeSha256=m_chkSha256->isChecked();
     o.keyfilePath=m_keyfileEdit->text().trimmed();
-    // CLI 无 zstd 时禁用勾选框，这里再兜一层，避免任务记录/预览里出现别人无法执行的指令
+    // CLI 无 zstd 时禁用勾选框
     o.compress=m_chkCompress->isChecked() && m_zstdAvailable;
     o.compressionLevel=o.compress ? m_compressLevel->value() : 0;
     o.useX448=(m_chkX448 && m_chkX448->isChecked());
-    // CLI 不支持 PQC 时恒为 false：既不请求 PQC，也不下发旧 CLI 不认的 --no-pqc
+    // CLI 不支持 PQC 时恒
     o.pqc=(m_chkPqc && m_chkPqc->isChecked() && m_pqcAvailable);
     o.watermark=m_chkWatermark->isChecked();
     o.watermarkKeyPath=m_wmKeyEdit->text().trimmed();
@@ -2076,7 +1969,7 @@ ShellOptions MainWindow::collectOptions() const {
         if(asymDecrypt) o.keyfilePath=o.identityPath;
         else if(o.action==CryptoAction::PubKey) o.keyfilePath=o.identityPath;
         else if(o.action==CryptoAction::WrapKey) {
-            // 公钥路线没有 KEK，密钥文件行对它无意义，留着会被误当成密码来源下发
+            // 公钥路线没有 KEK
             o.keyfilePath=(o.wrapAlg==WrapAlg::Pubkey) ? QString() : o.keyfilePath;
         }
         else if(o.mode==CryptoMode::Asymmetric) o.keyfilePath.clear();
@@ -2102,9 +1995,9 @@ QString MainWindow::resolveRecipients(const QString& raw) const {
     if(!m_recipientTempFile.isEmpty()) { QFile::remove(m_recipientTempFile); m_recipientTempFile.clear(); }
     QTemporaryFile recTmp(QDir::tempPath()+QStringLiteral("/fe_recipients_XXXXXX"));
     recTmp.setAutoRemove(false);
-    // 0600：多用户 POSIX 下默认 0644 会让同机其他用户读到收件人公钥列表
+    // 0600
     recTmp.setPermissions(QFileDevice::ReadOwner|QFileDevice::WriteOwner);
-    // 无参 open() 是 public；带参重载在 QTemporaryFile 里是 protected
+    // 无参 open
     if(!recTmp.open()) return QString();
     QByteArray blob;
     for(const QString& k:parts) blob+=(k+QLatin1Char('\n')).toUtf8();
@@ -2115,7 +2008,7 @@ QString MainWindow::resolveRecipients(const QString& raw) const {
     }
     recTmp.close();
     m_recipientTempFile=recTmp.fileName();
-    // H6b：创建后立即收紧 DACL（Windows 上 0600 权限位是 no-op）
+    // H6b
     CliArgBuilder::setTempFileAcl(m_recipientTempFile);
     return m_recipientTempFile;
 }
@@ -2137,8 +2030,8 @@ void MainWindow::onRunClicked() {
 
     ShellOptions o=collectOptions();
 
-    // 批量模式参数总长上限：Windows CreateProcess 命令行约 32767 字符，
-    // 超大批量启动必失败，提前给出可读提示（fail-fast，别让启动错误难以定位）
+    // 批量模式参数总
+    // 超大批量启动必
     if(o.action==CryptoAction::BatchEncrypt||o.action==CryptoAction::BatchDecrypt) {
         int total=0;
         for(const QString& p:o.inputPaths) total+=p.size()+8;
@@ -2148,10 +2041,10 @@ void MainWindow::onRunClicked() {
         }
     }
 
-    // 任务历史要原始收件人列表：resolveRecipients 生成的临时文件任务结束即删，
-    // 把临时路径写进历史，回放时必然指向已失效的文件
+    // 任务历史要原始
+    // 把临时路径写进
     const QString originalRecipient=o.recipientPath;
-    // 多收件人写成临时文件失败时不能把含逗号的原文当 -r 值下发
+    // 多收件人写成临
     if(!o.recipientPath.trimmed().isEmpty()) {
         const QString recipFile=resolveRecipients(o.recipientPath);
         if(recipFile.isEmpty()) {
@@ -2162,7 +2055,7 @@ void MainWindow::onRunClicked() {
         o.recipientPath=recipFile;
     }
 
-    // 包装动作与 -m 正交：模式下拉此时是隐藏的残留值，不能拿它做可用性判断
+    // 包装动作
     const bool isWrapAct=(o.action==CryptoAction::WrapKey||o.action==CryptoAction::UnwrapKey);
     if(!isWrapAct && o.mode==CryptoMode::Aegis256 && !m_aegisAvailable) {
         MsgBox::error(this, tr("AEGIS-256 不可用"),
@@ -2198,7 +2091,7 @@ void MainWindow::onRunClicked() {
     const bool isWrap=(o.action==CryptoAction::WrapKey);
     const bool isUnwrap=(o.action==CryptoAction::UnwrapKey);
     const bool noInputNeeded=(isKeyGen||isDerive||isPubKey);
-    // 包装动作的输入走「包装文件」行，文件清单不参与
+    // 包装动作
     if(!noInputNeeded && !isWrap && !isUnwrap && o.inputPaths.isEmpty()) {
         MsgBox::warn(this,tr("缺少输入"),tr("请先添加文件或目录。"));
         return;
@@ -2206,11 +2099,11 @@ void MainWindow::onRunClicked() {
     bool isBatch=(o.action==CryptoAction::BatchEncrypt||
         o.action==CryptoAction::BatchDecrypt);
     bool isEnc=(o.action==CryptoAction::Encrypt||o.action==CryptoAction::BatchEncrypt);
-    // 入盘：目录必须已初始化，否则 CLI 会先报库不存在，产物落不进索引
+    // 入盘
     if(isEnc && m_chkIntoVault && m_chkIntoVault->isChecked()) {
         QString vd=o.intoVault.trimmed();
-        // 盘符根（Z / Z: / Z:\）已移除支持：CLI 会拒盘符根，这里提前拦并说清要填什么。
-        // 仅「去掉尾部斜杠后长度为 1 或 2 的 X / X:」算盘符根；D:\Vault 这类真实目录不能误判。
+        // 盘符根
+        // 仅「去掉尾部斜杠
         {
             QString n=vd;
             while(n.endsWith(QLatin1Char('\\'))||n.endsWith(QLatin1Char('/'))) n.chop(1);
@@ -2231,8 +2124,8 @@ void MainWindow::onRunClicked() {
             if(m_vaultDirEdit) m_vaultDirEdit->setFocus();
             return;
         }
-        // 支持直接指定：① 已有加密盘（含 vault.meta）直接追加；
-        // ② 空目录 / 尚无 vault.meta 的目录由 CLI 自动初始化为新盘，不再强制先手工建盘。
+        // 支持直接指定
+        // ② 空目录 / 尚无 vault.meta
         QFileInfo vi(vd);
         if(!vi.exists()||!vi.isDir()) {
             MsgBox::warn(this,tr("加密盘目录无效"),tr("找不到该目录：%1\n请重新选择，或到「工具 → 加密盘 → 初始化新盘」建一个。").arg(vd));
@@ -2241,7 +2134,7 @@ void MainWindow::onRunClicked() {
         }
         if(vi.isDir()&&!QDir(vd).isEmpty()
            &&!QFileInfo::exists(vd+QStringLiteral("/vault.meta"))) {
-            // 非空且不是盘：大概率选错了目录，问一句再自动初始化，避免误把普通文件夹变成盘
+            // 非空且不是盘
             if(!MsgBox::confirm(this,tr("初始化为新加密盘"),
                 tr("该目录不是已初始化的加密盘：%1\n请确认是否把它初始化为新的加密盘并写入文件。").arg(vd))) {
                 if(m_vaultDirEdit) m_vaultDirEdit->setFocus();
@@ -2250,7 +2143,7 @@ void MainWindow::onRunClicked() {
         }
     }
     if(isWrapAct) {
-        // 包装输入是单个文件，不走文件清单；缺路径或路径不存在都在这里拦下
+        // 包装输入是单
         if(o.wrapInput.isEmpty()) {
             MsgBox::warn(this, tr("缺少密钥文件"),
                 isWrap ? tr("请先选择要包装的 32 字节数据密钥文件。")
@@ -2269,8 +2162,8 @@ void MainWindow::onRunClicked() {
             tr("单文件模式只接受一个输入路径，请清空后只选一个，勾选「打包为单个容器」，或改用批量模式。"));
         return;
     }
-    // 目录 + 删除类源处置：整棵树都会被清掉，动手前必须确认一次。
-    // 确认通过后下发 --source-delete-ok，免得 CLI 再问一遍（问第二遍用户会懵）。
+    // 目录 + 删除类源处
+    // 确认通过后下发 --source
     if(isEnc && !o.pack && o.sourceDisposition!=0) {
         QStringList dirs;
         for(const QString& p : o.inputPaths) {
@@ -2282,7 +2175,7 @@ void MainWindow::onRunClicked() {
                              : disp==3 ? tr("移入回收站")
                              : tr("删除");
             QStringList show=dirs.mid(0,5);
-            // 与 CLI 行为对齐：-de 只逐个删除目录树里的文件，空目录壳保留
+            // 与 CLI 行
             QString msg=tr("加密完成后，以下源目录中的文件将被%1（目录本身保留），此操作不可撤销：\n\n%2")
                              .arg(how)
                              .arg(show.join('\n'));
@@ -2296,10 +2189,10 @@ void MainWindow::onRunClicked() {
             o.sourceDeleteOk=true;
         }
     }
-    // 非对称判定对解密同样成立：解密不看模式，只认「私钥文件」入口
+    // 非对称判定对解
     const bool asymDecrypt=(!isEnc)&&!noInputNeeded&&!isWrapAct&&
         (o.action==CryptoAction::Decrypt||o.action==CryptoAction::BatchDecrypt);
-    // 包装动作不参与非对称判定：模式下拉此时隐藏，残留值不代表用户的加密意图
+    // 包装动作不参
     const bool isAsym=(!isWrapAct)&&(((o.mode==CryptoMode::Asymmetric)&&!noInputNeeded)||asymDecrypt);
     if(isKeyGen) {
     } else if(isDerive) {
@@ -2356,10 +2249,17 @@ void MainWindow::onRunClicked() {
             : isWrap ? tr("包装密码")
             : isUnwrap ? tr("解包密码")
             : (isEnc ? tr("加密密码") : tr("解密密码")));
-        // 解密与解包都只输一次：原文只有确认，无法确认它与本次输入一致
-        dlg.setRequireConfirm(o.action==CryptoAction::Encrypt
-            || o.action==CryptoAction::BatchEncrypt || o.action==CryptoAction::Derive
-            || o.action==CryptoAction::WrapKey);
+        // 与 WinUI 对齐
+        // vault.meta 不存
+        // 解密/解包维持只
+        const QString intoVaultDir = o.intoVault.trimmed();
+        const bool intoNewVault =
+            (o.action == CryptoAction::Encrypt || o.action == CryptoAction::BatchEncrypt)
+            && !intoVaultDir.isEmpty()
+            && !QFileInfo::exists(intoVaultDir + QStringLiteral("/vault.meta"));
+        dlg.setRequireConfirm(intoNewVault
+            || o.action == CryptoAction::Derive
+            || o.action == CryptoAction::WrapKey);
         if(dlg.exec()!=QDialog::Accepted) return;
         pw = dlg.takePassword();
         if(pw.empty()) return;
@@ -2369,8 +2269,8 @@ void MainWindow::onRunClicked() {
     req.programPath=m_fileEncryptorPath;
     req.arguments=CliArgBuilder::buildArguments(o);
     req.extraEnv=CliArgBuilder::buildEnvironment(o);
-    // 签名私钥临时文件落盘失败时 buildArguments 返回空：中止并说明原因，
-    // 不要拿空参数去启动 CLI（那只会弹用法，用户看不出真实原因）
+    // 签名私钥临时文
+    // 不要拿空参数去
     if(req.arguments.isEmpty()) {
         MsgBox::warn(this, tr("水印签名失败"),
             tr("无法创建水印签名私钥的临时文件（权限不足或临时目录不可写）。\n任务已取消，私钥不会被传给命令行。"));
@@ -2383,13 +2283,13 @@ void MainWindow::onRunClicked() {
         if(statsTmp.open()) {
             m_statsFile=statsTmp.fileName();
             statsTmp.close();
-            // H6b：创建后立即收紧 DACL（Windows 上 0600 权限位是 no-op）
+            // H6b
             CliArgBuilder::setTempFileAcl(m_statsFile);
         }
     }
     req.extraEnv.insert(QStringLiteral("FILEENCRYPTOR_STATS_FILE"),m_statsFile);
-    // 确认握手：CLI 把 y/n 询问写进这个文件，界面读到后弹窗，再把答案写回去。
-    // 走文件是因为 stdin 已被 --key-stdin 读到 EOF，CLI 那边没法再从 stdin 收答案。
+    // 确认握手
+    // 走文件是因
     {
         QTemporaryFile confirmTmp(QDir::tempPath()+QStringLiteral("/fe_confirm_XXXXXX"));
         confirmTmp.setAutoRemove(false);
@@ -2397,8 +2297,8 @@ void MainWindow::onRunClicked() {
         if(confirmTmp.open()) {
             m_confirmFile=confirmTmp.fileName();
             confirmTmp.close();
-            // H6b：握手文件同样收紧 DACL。不再创建后立即 remove——
-            // 空文件常驻供 CLI 原地覆写，删掉会丢 DACL 并让轮询看到文件缺失
+            // H6b
+            // 空文件常驻供 CLI 原
             CliArgBuilder::setTempFileAcl(m_confirmFile);
         }
     }
@@ -2415,7 +2315,7 @@ void MainWindow::onRunClicked() {
         req.extraEnv.insert(QStringLiteral("COLUMNS"),QString::number(cols));
     }
 
-    // 公钥路线没有密码可注入；包装动作的密码同样走 --key-stdin
+    // 公钥路线没有密
     if(!(isKeyGen||isPubKey) && !isAsym && o.keyfilePath.isEmpty() && !pw.empty()) {
         req.stdinData=QByteArray(reinterpret_cast<const char*>(pw.data()),(int)pw.size());
     }
@@ -2449,7 +2349,7 @@ void MainWindow::onRunClicked() {
     }
 }
 
-// CLI 请求确认：同步弹窗，答完立刻写回握手文件让 CLI 继续
+// CLI 请求确认
 void MainWindow::onConfirmPrompt(const QString& text) {
     if(!m_executor) return;
     const bool yes=MsgBox::confirm(this,tr("需要确认"),text);
@@ -2512,7 +2412,7 @@ void MainWindow::onRewrapClicked() {
     const bool rewOk=(rewTmp.error()==QFile::NoError);
     const QString tmp=rewTmp.fileName();
     rewTmp.close();
-    // H6b：明文新密码文件收紧 DACL（Windows 0600 权限位是 no-op）
+    // H6b
     CliArgBuilder::setTempFileAcl(tmp);
     if(!rewOk) {
         QFile::remove(tmp);
@@ -2548,9 +2448,9 @@ void MainWindow::onRewrapClicked() {
     }
 }
 
-// 加密盘库管理：选目录 → 拼参数 → 交给 m_executor，输出进回显区。
-// head/tail 分开是因为 --vault-recovery 的值必须紧跟自己，中间不能被 --recovery-arg 抢走。
-// requireVault=false 用于「新建加密盘」：那时目录里还没有 vault.meta，不能按已初始化盘校验。
+// 加密盘库管理
+// head/tail 分开是因
+// requireVault=false 用于「新建
 void MainWindow::runVaultAction(const QString& title,const QStringList& head,
                                 const QStringList& tail,bool needPw,bool requireVault) {
     if(!checkCliExists(true)) return;
@@ -2619,9 +2519,9 @@ void MainWindow::onVaultRecoveryOpen() {
                    {QStringLiteral("--recovery-arg"),QStringLiteral("open ")+code},false);
 }
 
-// 目录/盘符记忆：下次挂载、锁定、解锁默认就是上次选的那个盘
-// 上次用的盘符/目录（QSettings 记忆）。盘符空时：Windows 回落 Z:，
-// Linux 回落 ~/fe_vault（FUSE 只能挂目录，不能用盘符）
+// 目录/盘符记忆
+// 上次用
+// Linux 回落 ~/fe_vault
 QString MainWindow::lastMountPoint() const {
     QSettings s(QStringLiteral("FileEncryptor"),QStringLiteral("FileEncryptorGUI"));
     const QString v=s.value(QStringLiteral("vault/lastMountPoint")).toString().trimmed();
@@ -2642,7 +2542,7 @@ void MainWindow::rememberVault(const QString& dir,const QString& point) {
     if(!point.isEmpty()) s.setValue(QStringLiteral("vault/lastMountPoint"),point);
 }
 
-// 选目录：默认落在上次用的那块盘；requireVault 时不是已初始化的盘就拒掉
+// 选目录
 QString MainWindow::pickVaultDir(const QString& title,bool requireVault) {
     const QString start=lastVaultDir();
     const QString dir=QFileDialog::getExistingDirectory(this,title,
@@ -2656,7 +2556,7 @@ QString MainWindow::pickVaultDir(const QString& title,bool requireVault) {
     return dir;
 }
 
-// 改盘密码要新旧两个密码：stdin 已被 --new-key-stdin 占用，旧密码只能走临时密钥文件
+// 改盘密码要新旧
 void MainWindow::onVaultRekey() {
     if(!checkCliExists(true)) return;
     if(m_fileEncryptorPath.isEmpty()) {
@@ -2705,7 +2605,7 @@ void MainWindow::onVaultRekey() {
     const bool wrote=(keyTmp.error()==QFile::NoError);
     const QString tmp=keyTmp.fileName();
     keyTmp.close();
-    // H6b：明文盘密码文件收紧 DACL（Windows 0600 权限位是 no-op）
+    // H6b
     CliArgBuilder::setTempFileAcl(tmp);
     if(!wrote) {
         QFile::remove(tmp);
@@ -2740,8 +2640,8 @@ void MainWindow::onVaultRekey() {
     }
 }
 
-// ===== 加密盘控制端（挂载/锁定/解锁）=====
-// M3/M4 未完项：挂载由 FE-Mounter 常驻持有，锁定/解锁经受限 IPC（CLI 不持有挂载）
+// 加密盘控制端
+// M3/M4 未完项
 
 bool MainWindow::locateMounter() {
     if(m_mounterPath.isEmpty()||!QFileInfo(m_mounterPath).isExecutable())
@@ -2749,7 +2649,7 @@ bool MainWindow::locateMounter() {
     return !m_mounterPath.isEmpty();
 }
 
-// detached 启动 FE-Mounter：pass 非空时落临时密码文件走 --pass-file，启动后延时删除
+// detached 启动 FE-Mounter：pass 非空时落临
 void MainWindow::launchMounterDetached(const QStringList& args,const QByteArray& pass) {
     QString tmpPath;
     QStringList a=args;
@@ -2762,7 +2662,7 @@ void MainWindow::launchMounterDetached(const QStringList& args,const QByteArray&
             f.flush();
             f.close();
             tmpPath=f.fileName();
-            // H6b：明文挂载密码文件收紧 DACL（Windows 0600 权限位是 no-op）
+            // H6b
             CliArgBuilder::setTempFileAcl(tmpPath);
             a<<QStringLiteral("--pass-file")<<tmpPath;
         }
@@ -2770,17 +2670,17 @@ void MainWindow::launchMounterDetached(const QStringList& args,const QByteArray&
     const QString wd=QFileInfo(m_mounterPath).absolutePath();
     const bool ok=QProcess::startDetached(m_mounterPath,a,wd);
     if(!tmpPath.isEmpty()) {
-        // M46：父对象改 qApp——定时器挂在窗口上时，窗口在延时内关闭即被销毁、
-        // 明文密码文件永不删除。延时放大到 10s：FE-Mounter 启动即读取并关闭
-        // 密码文件，但杀软扫描可能拖慢首次打开，留足余量；删前先零填充。
+        // M46
+        // 明文密码文件永
+        // 密码文件
         QTimer::singleShot(10000,qApp,[tmpPath] { shredFile(tmpPath); });
     }
     if(!ok)
         MsgBox::error(this,tr("挂载为磁盘"),tr("没法启动挂载组件，请确认 FE-Mounter.exe 还在、并且没被杀毒软件拦住。"));
 }
 
-// 挂载点对话框：Windows 填盘符（Z:，默认上次用的）/ Linux 填目录（~/fe_vault），
-// 外加可写勾选（仅 vault_rw 时）
+// 挂载点对话框
+// 外加可写勾选
 bool MainWindow::promptMountPoint(QString& point,bool& rw) {
     QDialog dlg(this);
     dlg.setWindowTitle(tr("挂载为磁盘"));
@@ -2793,7 +2693,7 @@ bool MainWindow::promptMountPoint(QString& point,bool& rw) {
     mpEdit->setPlaceholderText(tr("挂载目录，如 ~/fe_vault"));
     lay->addRow(tr("挂载目录"),mpEdit);
 #endif
-    // 固定 1 分钟空闲自动锁（M5 --idle-timeout），这里只告知、不给开关
+    // 固定 1 分钟空闲自
     lay->addRow(QString(),new QLabel(tr("挂载后 1 分钟无操作将自动锁定。")));
     QCheckBox* rwChk=nullptr;
     if(m_vaultRwAvailable) {
@@ -2818,9 +2718,9 @@ void MainWindow::onVaultMount() {
         return;
     }
 #ifdef Q_OS_WIN
-    // WinFSP 用户态 DLL 必须与 FE-Mounter 同目录（静态导入，缺了进程都起不来）。
-    // 但 WinFSP 也可由安装包装到系统目录（C:\Program Files (x86)\WinFsp\bin），
-    // 此处两者任一存在即放行，避免「已装系统 WinFSP 却误报缺运行时」。
+    // WinFSP 用户态 DLL 必须
+    // 但 WinFSP
+    // 此处两者任一存
     const QString localWfsp = QFileInfo(m_mounterPath).absolutePath()+QStringLiteral("/winfsp-x64.dll");
     const QString sysWfsp = QStringLiteral("C:/Program Files (x86)/WinFsp/bin/winfsp-x64.dll");
     if(!QFile::exists(localWfsp) && !QFile::exists(sysWfsp)) {
@@ -2838,7 +2738,7 @@ void MainWindow::onVaultMount() {
     QString point; bool rw=false;
     if(!promptMountPoint(point,rw)) return;
 #ifndef Q_OS_WIN
-    // FUSE 只能挂目录：默认目录（~/fe_vault）可能还不存在，现场建出来
+    // FUSE 只能挂目录
     if(!QFileInfo::exists(point)&&!QDir().mkpath(point)) {
         MsgBox::error(this,tr("挂载为磁盘"),
             tr("建不出挂载目录：%1\n请换一个已有目录，或手动创建它。").arg(point));
@@ -2853,10 +2753,10 @@ void MainWindow::onVaultMount() {
     auto pw=pd.takePassword();
     if(pw.empty()) return;
 
-    // 记住这次的盘：下次挂载/锁定/解锁默认就是它
+    // 记住这次
     rememberVault(dir,point);
 
-    // 记录挂载点进 vault.meta（下次可直接复用），失败不阻断挂载；fire-and-forget
+    // 记录挂载点进 vault.meta，失
     if(!m_fileEncryptorPath.isEmpty())
         QProcess::startDetached(m_fileEncryptorPath,
             QStringList{QStringLiteral("--vault-mount"),dir,
@@ -2870,7 +2770,7 @@ void MainWindow::onVaultMount() {
 #endif
     args<<QStringLiteral("--vault")<<dir;
     if(rw) args<<QStringLiteral("--rw");
-    // M5 空闲自动锁：GUI 挂载固定 60 秒
+    // M5 空闲自动锁
     args<<QStringLiteral("--idle-timeout")<<QStringLiteral("60");
 
     QByteArray passBytes(reinterpret_cast<const char*>(pw.data()),(int)pw.size());
@@ -2880,7 +2780,7 @@ void MainWindow::onVaultMount() {
         tr("正在挂载，盘符由后台进程持有。稍等片刻，在「此电脑」里就能看到：%1\n1 分钟不操作会自动锁定。").arg(point));
 }
 
-// 卸载：FE-Mounter 的 ipc-call eject —— 持有进程停服务退出，盘符随之释放
+// 卸载
 void MainWindow::onVaultUnmount() {
     if(!m_vaultAvailable) return;
     if(!locateMounter()) {
@@ -2911,7 +2811,7 @@ void MainWindow::onVaultUnmount() {
     m_executor->execute(req);
 }
 
-// 格式化：CLI --vault-format 清空盘内全部内容（删除所有 .ptd + 索引置空），保留盘身份与密码
+// 格式化
 void MainWindow::onVaultFormat() {
     if(!m_vaultAvailable) return;
     if(!MsgBox::confirm(this,tr("格式化加密盘"),
@@ -2921,7 +2821,7 @@ void MainWindow::onVaultFormat() {
     runVaultAction(tr("格式化加密盘"),{QStringLiteral("--vault-format")},{},true,true);
 }
 
-// 锁定/解锁走 FE-Mounter 的 ipc-call（短命令，经 m_executor 回显输出）
+// 锁定/解锁走 FE-Mounter
 void MainWindow::onVaultLock() {
     if(!m_vaultAvailable) return;
     if(!locateMounter()) {
@@ -2967,7 +2867,7 @@ void MainWindow::onVaultUnlock() {
     auto pw=pd.takePassword();
     if(pw.empty()) return;
 
-    // 临时密码文件：ipc-call unlock 启动时读取后即删除
+    // 临时密码文件
     QString tmpPath;
     {
         QTemporaryFile f(QDir::tempPath()+QStringLiteral("/fe_mountpw_XXXXXX"));
@@ -2977,7 +2877,7 @@ void MainWindow::onVaultUnlock() {
             f.write(reinterpret_cast<const char*>(pw.data()),(qint64)pw.size());
             f.flush(); f.close();
             tmpPath=f.fileName();
-            // H6b：明文盘密码文件收紧 DACL（Windows 0600 权限位是 no-op）
+            // H6b
             CliArgBuilder::setTempFileAcl(tmpPath);
         }
     }
@@ -2999,8 +2899,8 @@ void MainWindow::onVaultUnlock() {
     m_btnCancel->setEnabled(true);
     setStatus(tr("运行中..."));
     m_executor->execute(req);
-    // M46：父对象改 qApp（窗口在延时内关闭时 this 上的定时器会被销毁、文件永不删除）；
-    // 延时放大到 10s 兜底（ipc-call 启动即读取密码文件，杀软扫描可能拖慢打开）；
+    // M46
+    // 延时放大到 10s 兜底
     // 删前先零填充
     QTimer::singleShot(10000,qApp,[tmpPath] { shredFile(tmpPath); });
 }
@@ -3157,16 +3057,16 @@ void MainWindow::onCommandFinished(const CommandResult& r) {
     if(m_btnRewrap) m_btnRewrap->setEnabled(true);
     m_btnCancel->setEnabled(false);
     if(!m_rewrapTempKey.isEmpty()) {
-        shredFile(m_rewrapTempKey);   // P2-3：重包装后的钥匙是明文，先清零再删
+        shredFile(m_rewrapTempKey);   // P2-3
         m_rewrapTempKey.clear();
     }
-    // 任务结束即清理，避免公钥临时文件与统计 JSON 滞留到关窗口
+    // 任务结束即清理
     if(!m_recipientTempFile.isEmpty()) {
         QFile::remove(m_recipientTempFile);
         m_recipientTempFile.clear();
     }
     if(m_framePending) flushPendingFrame();
-    finishTaskRecord(r);   // 内部要读 m_statsFile，故统计文件在其后清理
+    finishTaskRecord(r);   // 内部要读 m_statsFile
     if(!m_statsFile.isEmpty()) {
         QFile::remove(m_statsFile);
         m_statsFile.clear();
@@ -3226,10 +3126,10 @@ void MainWindow::onCommandFinished(const CommandResult& r) {
         TaskSummaryDialog dlg(tr("操作完成"),durStr,speedStr,encStr,
                               m_doneFiles,m_skipFiles,m_failFiles,this);
         dlg.exec();
-        showedSummary=true;   // 已弹汇总框，不再重复弹消息框/托盘通知
+        showedSummary=true;   // 已弹汇总框
     }
 
-    // 已弹汇总框时不再重复通知
+    // 已弹汇总框
     if(!showedSummary) {
         const QString notifyTitle = tr("操作完成");
         const QString notifyBody = summary.remove(QStringLiteral("---")).trimmed();
@@ -3241,7 +3141,7 @@ void MainWindow::onCommandFinished(const CommandResult& r) {
     }
 }
 
-// 任务历史与进度
+// 任务历史
 QString MainWindow::actionKey(CryptoAction a) {
     switch(a) {
         case CryptoAction::Encrypt:       return QStringLiteral("encrypt");
@@ -3268,7 +3168,7 @@ QString MainWindow::modeKey(CryptoMode m) {
     return QStringLiteral("xchacha20");
 }
 
-// 包装算法存的是 CLI 的 --wrap-alg 取值，回放时按同名还原下拉
+// 包装算法存
 static QString wrapAlgKey(WrapAlg a) {
     switch(a) {
         case WrapAlg::AesKw:  return QStringLiteral("aes-kw");
@@ -3378,12 +3278,12 @@ void MainWindow::beginTaskRecord(const ShellOptions& o,const QString& rawRecipie
     m_currentTask.compressionLevel=o.compressionLevel;
     m_currentTask.pqc=o.pqc;
     m_currentTask.watermark=o.watermark;
-    // 明文私钥不写进任务记录，恢复任务时由用户重新输入
+    // 明文私钥不写进
     m_currentTask.watermarkKey=CliArgBuilder::isPrivateKeyMaterial(o.watermarkKeyPath)
         ? QStringLiteral("<protected>") : o.watermarkKeyPath;
     m_currentTask.keyfile=o.keyfilePath;
-    // 记录原始收件人列表：resolveRecipients 生成的临时文件任务结束即删，
-    // 把临时路径写进历史，回放时必然指向已失效的文件
+    // 记录原始收件人
+    // 把临时路径写进
     m_currentTask.recipient=rawRecipient.isEmpty()?o.recipientPath:rawRecipient;
     m_currentTask.identity=o.identityPath;
     m_currentTask.wrapInput=o.wrapInput;
@@ -3470,7 +3370,7 @@ void MainWindow::applyTaskRecord(const TaskRecord& rec) {
         const int idx=m_modeCombo->findData(mode);
         if(idx>=0) m_modeCombo->setCurrentIndex(idx);
     }
-    // 非对称模式的文件算法一并回填，否则下拉停在默认项却回放出另一套 -m
+    // 非对称模式
     if(m_fileCipherCombo && mode==static_cast<int>(CryptoMode::Asymmetric)) {
         int fc=-1;
         if(rec.fileCipher==QStringLiteral("aegis256"))      fc=static_cast<int>(CryptoMode::Aegis256);
@@ -3483,7 +3383,7 @@ void MainWindow::applyTaskRecord(const TaskRecord& rec) {
     if(m_chkX448) m_chkX448->setChecked(rec.mode==QStringLiteral("x448"));
     if(!rec.outputDir.isEmpty()) m_outDirEdit->setText(rec.outputDir);
 
-    // 打包为一个文件 / 入加密盘：控件可用时才回填，否则下一次可见性刷新会把它清掉
+    // 打包
     if(m_chkPack && m_packAvailable) m_chkPack->setChecked(rec.pack);
     if(m_chkIntoVault && !rec.intoVault.isEmpty()) {
         m_chkIntoVault->setChecked(true);
@@ -3502,7 +3402,7 @@ void MainWindow::applyTaskRecord(const TaskRecord& rec) {
     if(m_compressLevel) m_compressLevel->setValue(rec.compressionLevel);
     if(m_chkPqc) m_chkPqc->setChecked(rec.pqc);
     if(m_chkWatermark) m_chkWatermark->setChecked(rec.watermark);
-    // 历史里只有占位符，私钥需重新输入
+    // 历史里只有占位
     if(m_wmKeyEdit) {
         const QString wmKey=rec.watermarkKey.startsWith(QLatin1Char('<'))
             ? QString() : rec.watermarkKey;

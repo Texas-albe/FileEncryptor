@@ -13,8 +13,8 @@
 #include <QScrollBar>
 
 namespace {
-// 二进制内容不适合直接进 QPlainTextEdit（会按 \0 截断且无法显示不可打印字节），
-// 这里统一转成「·」占位 + 转义可打印字符，保证行不乱、长度可见
+// 二进制内容不适
+// 统一转成「·」占位 + 转
 QString toDisplayText(const QByteArray& raw)
 {
     QString out;
@@ -38,6 +38,8 @@ PreviewDialog::PreviewDialog(QWidget* parent)
     resize(760, 520);
 
     auto* root = new QVBoxLayout(this);
+    root->setContentsMargins(14, 12, 14, 12);
+    root->setSpacing(8);
 
     auto* topRow = new QHBoxLayout;
     m_fileLabel = new QLabel(this);
@@ -66,16 +68,18 @@ PreviewDialog::PreviewDialog(QWidget* parent)
     auto* btnRow = new QHBoxLayout;
     btnRow->addStretch(1);
     m_nextBtn = new QPushButton(tr("下一个文件(&N)"), this);
+    m_nextBtn->setProperty("uiRole", "primary");
     m_nextBtn->setVisible(false);
     btnRow->addWidget(m_nextBtn);
     m_closeBtn = new QPushButton(tr("关闭(&C)"), this);
+    m_closeBtn->setProperty("uiRole", "secondary");
     btnRow->addWidget(m_closeBtn);
     root->addLayout(btnRow);
 
     connect(m_closeBtn, &QPushButton::clicked, this, &PreviewDialog::onCloseClicked);
     connect(m_nextBtn, &QPushButton::clicked, this, &PreviewDialog::onNextClicked);
     connect(m_bytes, &QSpinBox::valueChanged, this, [this](int) {
-        if (m_done) emit nextRequested();   // 改字节数即按新长度重跑当前文件
+        if (m_done) emit nextRequested();   // 改字节数即
     });
 }
 
@@ -109,7 +113,7 @@ void PreviewDialog::start(const PreviewRequest& req)
 
     CommandRequest cr;
     cr.programPath = req.programPath;
-    // --preview 只落 stdout 明文前缀；密码走 stdin，不进 argv
+    // -preview 只落 stdout 明文前缀
     cr.arguments << QStringLiteral("-d")
                  << QStringLiteral("--preview")
                  << QStringLiteral("--max-bytes") << QString::number(req.maxBytes)
@@ -119,7 +123,7 @@ void PreviewDialog::start(const PreviewRequest& req)
 
     if (!m_exec) {
         m_exec = new ProcessCommandExecutor(this);
-        m_exec->setRawMode(true);   // 明文前缀按原始字节收
+        m_exec->setRawMode(true);   // 明文前缀
         connect(m_exec, &ICommandExecutor::rawStdout,
                 this, [this](const QByteArray& c) { m_pending.append(c); });
         connect(m_exec, &ICommandExecutor::outputLine,
@@ -141,7 +145,7 @@ void PreviewDialog::flushPending()
 
 void PreviewDialog::onOutput(const OutputLine& line)
 {
-    // raw 模式下 CLI 的 stderr 仍走行解析，用来抓错误信息
+    // raw 模式下 CLI
     if (!line.isError) return;
     const QString t = line.text.trimmed();
     if (t.isEmpty()) return;
@@ -162,7 +166,7 @@ void PreviewDialog::onFinished(const CommandResult& r)
     } else if (r.wasCancelled) {
         m_status->setText(tr("已取消。"));
     } else {
-        // 密码错 / 文件损坏 / 非对称缺私钥，CLI 的原因都在 stderr 里
+        // 密码错 / 文件损坏 /
         m_status->setText(tr("预览失败：%1").arg(m_errText.isEmpty()
             ? tr("CLI 返回码 %1").arg(r.exitCode) : m_errText.trimmed()));
     }

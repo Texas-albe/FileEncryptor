@@ -1,125 +1,153 @@
-// 加密盘索引模块（M1）：库元数据 + 加密索引 .feindex + 增量入盘。
-// 全局命名空间（core/ 下约定不加 namespace，避免 main.cpp/FileEncryptor.cpp 编译失败）。
+// 加密盘索引模块
+// 全局命名空间
 #pragma once
 #include <string>
 #include <vector>
+#include "vdisk.h"             // VDiskProgressFn / VDiskCancelFn 回调类型
 #include "secure_buffer.hpp"
 #include "FileEncryptor.hpp"   // CryptoMode
 
 
-// 库元数据（存于 <vault>/vault.meta）。
-// 明文前导（任何时刻可读，无需密码）：format / salt / opslimit / memlimit_kb / mount_point。
-// 私钥派生（Argon2id）只依赖 salt+ops+mem，故这三者必明文；mount_point 是用户自选盘符，
-// 挂载命令需在无密码时改写，故也留明文。
-// 隐私字段 root/created 在 format==2 时移入 meta_enc（secretbox(索引密钥) 密文），
-// 解密需密码——满足「vault.meta 加密存储」诉求，同时不破坏「open 先于 unlock、无密码可读盐」的既有流程。
+// 库元数据
+// 明文前导
+// 私钥派生
+// 挂载命令需
+// 隐私字段 root/created
+// 解密需密码满足「vault.meta
 struct VaultMeta {
     uint32_t format = 1;
-    std::vector<unsigned char> salt;   // 16 字节（crypto_pwhash_SALTBYTES）
-    std::string root;                  // 库根绝对路径（format==2 时仅解密后存在）
-    uint64_t created = 0;              // 创建时间（unix 秒，format==2 时仅解密后存在）
-    unsigned int opslimit = 4;         // Argon2id 参数（与索引密钥派生一致）
+    std::vector<unsigned char> salt;   // 16 字节
+    std::string root;                  // 库根绝对路径
+    uint64_t created = 0;              // 创建时间
+    unsigned int opslimit = 4;         // Argon2id 参数
     uint32_t memlimit_kb = 65536;      // 64 MB
-    std::string mount_point;           // 期望挂载点（盘符 "V:" 或 Linux 挂载目录）；空=未记录
-    // format==2 字段：root/created 的密文封装（解密需密码）
-    bool encrypted = false;                                  // 是否 format==2（加密元数据）
+    std::string mount_point;           // 期望挂载点
+    bool encrypted = false;                                  
     std::vector<unsigned char> meta_nonce;                   // crypto_secretbox_NONCEBYTES
-    std::vector<unsigned char> meta_enc;                     // secretbox 密文（含 MAC）
+    std::vector<unsigned char> meta_enc;                     // secretbox 密文
+    // 新写入默认算法/
+    int default_mode = 1;        // FE_M_MODE_*（1=XChaCha20）
+    int compress_policy = 100;   
 };
 
-// 索引条目：设计文档 §5 的 rel_path/orig_abs/size/mtime/enc_ts/算法参数。
+// 索引条目
 struct VaultEntry {
-    std::string rel_path;   // 相对库根（如 gts/Alpha/photos/2025/a.jpg），逻辑名
-    std::string store;      // 实际 .ptd 文件名（不含目录与 .ptd 后缀）；空=沿用 rel_path 基名（旧盘兼容）
-    std::string orig_abs;   // 挂载时由库根拼接的绝对原路径
+    std::string rel_path;   // 相对库根
+    std::string store;      // 实际 .ptd 文件名
+    std::string orig_abs;   // 挂载
     uint64_t size = 0;      // 明文原始大小
     int64_t mtime = 0;      // 明文修改时间
-    uint64_t enc_ts = 0;    // 加密时间戳（预热排序用）
-    std::string algo;       // 算法（XChaCha20 / AEGIS-256 / SM4-GCM ...）
-    std::string kdf;        // 密钥派生（argon2id）
-    bool is_dir = false;    // 显式目录条目（挂载盘 mkdir/拷贝文件夹用）；false=文件。旧盘无此字段→默认文件
+    uint64_t enc_ts = 0;    // 加密时间戳
+    std::string algo;       // 算法
+    std::string kdf;        // 密钥派生
+    bool is_dir = false;    // 显式目录条目
     VaultEntry() = default;
 };
 
-// 实际 .ptd 路径：目录结构沿用 rel_path，基名优先用 store（随机 16hex 命名）；
-// store 为空（旧盘）则取 rel_path 基名。CLI 入盘/recrypt 与 vdisk 挂载共用此规则。
+// 实际 .ptd 路径
+// store 为空
 std::string vault_ptd_path(const std::string& dir, const std::string& rel, const std::string& store);
 
-// 生成随机 16 位 hex 存储名（8 字节 → 16 hex）。
+// 生成随机 16 位 hex 存储
 std::string vault_random_store_name();
 
-// 初始化库：vault.meta 不存在则创建（随机盐），存在则载入校验。
-// 清空进程内缓存的索引密钥（Argon2id 派生结果）——锁定/休眠时调用，
-// 否则索引密钥会在内存中长期驻留，与 §4.1 密钥生命周期冲突。
-// 注册索引密钥缓存实现（批量写优化，H5）。holder 在 open 时注册、lock 时调 drop。
+// 保留路径判定
+bool rel_first_reserved(const std::string& rel);
+
+// 初始化库
+// 清空进程内缓存
+// 索引密钥
+// 注册索引密钥缓
 void set_index_key_cache_hook(
     bool (*fn)(const SecureBuffer&, const VaultMeta&, std::vector<unsigned char>&, std::string&),
     void (*drop)());
 void forget_cached_index_keys();
-// 从密码+库盐派生索引密钥（Argon2id）。holder 的缓存 hook 需调用它做未命中路径。
+// 从密码+库盐派生
 bool derive_index_key(const SecureBuffer& password, const VaultMeta& meta,
                       std::vector<unsigned char>& key, std::string& err);
-// 索引内存镜像（批量写优化）：把待落盘改动立即写入 .feindex。
-// 进程退出/锁定/卸载前应调用，否则最后一批改动会丢。
+// 索引内存镜像
+// 进程退出/锁定/卸
 bool vault_flush_index(const std::string& dir, const VaultMeta& meta,
                        const SecureBuffer& password, std::string& err);
-// 丢弃内存镜像（换库/锁定），下次写重新从盘面读。
+// 丢弃内存镜像
 void vault_drop_index_mirror();
+// 索引盘面版本戳
+// 未变
+uint64_t vault_index_stamp(const std::string& dir);
 bool vault_meta_init(const std::string& dir, const std::string& root,
                      VaultMeta& out, std::string& err);
 
-// 仅载入已有 vault.meta（不存在返回 false）。format==2 时 root/created 留空，
-// 需 vault_meta_decrypt 用密码补全；salt/ops/mem/mount_point 始终明文可读。
+// 仅载入已有 vault.meta
+// 需 vault_meta_decrypt 用密码
 bool vault_meta_load(const std::string& dir, VaultMeta& out, std::string& err);
 
-// 回写 vault.meta（保留原有盐与 KDF 参数，仅更新挂载点等可变字段）。
-// 若 meta.encrypted 为 true（format==2），则原样保留 meta_nonce/meta_enc 段，
-// 仅更新明文可写字段（mount_point）——无需密码即可改写挂载点，不破坏已加密载荷。
+// 回写 vault.meta
+// 若 meta.encrypted
+// 仅更新明文可写
 bool vault_meta_save(const std::string& dir, const VaultMeta& m, std::string& err);
 
-// 用索引密钥（KEK，由密码+盐派生，32 字节）将 root/created 加密后回写（升到 format==2）。
-// 仅在已持有密码的解锁/重加密路径调用；旧 format==1 盘首次解锁即透明升级。
+// 用索引密钥
+// 仅在已持有密码
 bool vault_meta_save_encrypted(const std::string& dir, const VaultMeta& m,
                                const std::vector<unsigned char>& kek, std::string& err);
 
-// 用密码解密 format==2 的 root/created 回填到 meta（open 之后、有密码时调用）。
 bool vault_meta_decrypt(VaultMeta& m, const SecureBuffer& password, std::string& err);
 
-// 由密码 + 库盐派生 32 字节索引密钥（Argon2id）。
+// 由密码 + 库盐派生
 bool vault_derive_key(const SecureBuffer& password, const VaultMeta& meta,
                       std::vector<unsigned char>& key32, std::string& err);
 
-// 解密读取全部索引条目；.feindex 缺失视为空索引（ok=true）。密码错误返回 false。
+// 解密读取全部索
 bool vault_read_index(const std::string& dir, const VaultMeta& meta,
                       const SecureBuffer& password, std::vector<VaultEntry>& out,
                       std::string& err);
 
-// 增量追加一条索引条目（载入现有、压入、重加密、原子写回）。
-// flush=false 时只更新内存镜像、不整体重加密（批量入盘热循环用，末尾 vault_flush_index 一次性落盘）。
+// 增量追加一条索
+// flush=false 时只
 bool vault_append_entry(const std::string& dir, const VaultMeta& meta,
                         const SecureBuffer& password, const VaultEntry& e,
                         std::string& err, bool flush = true);
 
-// 重扫库目录：按 .ptd 头部重抽元数据重建索引（best-effort，覆盖式写入）。
+// 重扫库目录
+// old_hint
+// 故盘面旧索引
+// progress 收
 bool vault_reindex(const std::string& dir, const VaultMeta& meta,
-                   const SecureBuffer& password, std::string& err);
+                   const SecureBuffer& password, std::string& err,
+                   const std::vector<VaultEntry>* old_hint = nullptr,
+                   VDiskProgressFn progress = nullptr, void* user = nullptr,
+                   VDiskCancelFn cancel = nullptr, void* cancel_user = nullptr,
+                   bool* cancelled = nullptr);
 
-// 整体覆写索引（改密换盐重封 / recrypt 后重建用）。
+// 覆写索引
 bool vault_write_index(const std::string& dir, const VaultMeta& meta,
                       const SecureBuffer& password, const std::string& json,
                       std::string& err);
 
-// 索引原子 upsert/remove（M6 写支持）：读全量 → 改 → 整体写回；内部走 write_file_atomic。
+// 只写受影响分片
+bool vault_write_index_folders(const std::string& dir, const VaultMeta& meta,
+                               const SecureBuffer& password,
+                               const std::vector<std::string>& folders,
+                               const std::vector<VaultEntry>& entries,
+                               std::string& err);
+
+// 索引原子 upsert/remove：读全量 →
 bool vault_upsert_entry(const std::string& dir, const VaultMeta& meta,
                         const SecureBuffer& password, const VaultEntry& e, std::string& err);
 bool vault_remove_entry(const std::string& dir, const VaultMeta& meta,
                        const SecureBuffer& password, const std::string& rel_path, std::string& err);
 
-// 条目序列化（紧凑 JSON，供 vault-list 输出与调试）。
-// ---- §4.4 恢复密钥（BitLocker 语义，可轮换）----
-// 保险文件 <vault>/.fevault：库盐 + Argon2id(恢复密钥) 加密的**主密码副本**。
-// 恢复密钥 = 48 位十进制（≈159 bit）。泄露恢复密钥即泄露盘访问权。
-std::string vault_recovery_gen_code();                       // 生成 48 位十进制恢复密钥
+// 批量删除
+// 逐个调 vault_remove_entry 删
+bool vault_remove_entries(const std::string& dir, const VaultMeta& meta,
+                          const SecureBuffer& password,
+                          const std::vector<std::string>& rel_paths, std::string& err);
+
+// 条目序列化
+// §4.4 恢复密钥
+// 保险文件 <vault>/.fevault：库盐
+// 恢复密钥 = 48 位十进
+std::string vault_recovery_gen_code();                       // 生成 48 位十进制恢
 bool vault_recovery_exists(const std::string& dir);
 bool vault_recovery_create(const std::string& dir, const SecureBuffer& passphrase,
                            const std::string& code, std::string& err);
@@ -129,5 +157,5 @@ bool vault_recovery_remove(const std::string& dir, std::string& err);
 
 std::string vault_entries_to_json(const std::vector<VaultEntry>& entries);
 
-// 算法枚举 → 人类可读串（与 CLI 主程序口径一致）。
+// 算法枚举 → 人类
 std::string vault_mode_str(CryptoMode m);

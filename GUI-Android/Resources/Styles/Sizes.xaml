@@ -1,0 +1,44 @@
+﻿<?xml version="1.0" encoding="UTF-8" ?>
+<ResourceDictionary
+    xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+    xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml">
+
+    <!-- 全局尺寸令牌 -->
+    <x:Double x:Key="SpaceXs">2</x:Double>
+    <x:Double x:Key="SpaceSm">4</x:Double>
+    <x:Double x:Key="SpaceMd">8</x:Double>
+    <x:Double x:Key="SpaceLg">10</x:Double>
+    <x:Double x:Key="SpaceXl">12</x:Double>
+    <x:Double x:Key="SpaceXxl">14</x:Double>
+    <x:Double x:Key="SpacePage">16</x:Double>
+
+    <x:Double x:Key="FontSizeXs">9</x:Double>
+    <x:Double x:Key="FontSizeSm">11</x:Double>
+    <x:Double x:Key="FontSizeCaption">12</x:Double>
+    <x:Double x:Key="FontSizeSub">13</x:Double>
+    <x:Double x:Key="FontSizeBody">14</x:Double>
+    <x:Double x:Key="FontSizeField">15</x:Double>
+    <x:Double x:Key="FontSizeTitle">22</x:Double>
+
+    <Thickness x:Key="PagePadding">18,16,18,24</Thickness>
+    <Thickness x:Key="ViewPadding">18</Thickness>
+    <Thickness x:Key="CardPadding">14</Thickness>
+    <Thickness x:Key="DialogPadding">20</Thickness>
+    <Thickness x:Key="DialogMargin">24</Thickness>
+    <Thickness x:Key="DialogMarginH">24,0</Thickness>
+    <Thickness x:Key="ButtonPadding">16,10</Thickness>
+    <Thickness x:Key="SmallButtonPadding">12,6</Thickness>
+    <Thickness x:Key="FieldPadding">12,0</Thickness>
+    <Thickness x:Key="QuietPadding">4,0</Thickness>
+    <Thickness x:Key="ChoicePadding">14,10</Thickness>
+
+    <x:Double x:Key="RadiusChip">8</x:Double>
+    <x:Double x:Key="RadiusField">10</x:Double>
+    <x:Double x:Key="ControlMin">44</x:Double>
+    <x:Double x:Key="ControlMinSmall">36</x:Double>
+
+    <x:Double x:Key="PageSpacing">14</x:Double>
+    <x:Double x:Key="CardSpacing">10</x:Double>
+    <x:Double x:Key="GridGap">12</x:Double>
+    <x:Double x:Key="GridGapSm">8</x:Double>
+</ResourceDictionary>

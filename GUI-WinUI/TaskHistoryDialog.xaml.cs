@@ -19,7 +19,7 @@ public sealed partial class TaskHistoryDialog : ContentDialog
 
     public TaskHistoryDialog(List<TaskRecord> records)
     {
-        // 跟随用户在「视图」菜单里的选择，不再写死深色
+        // 跟随用户
         RequestedTheme = App.Settings.Current.Theme switch
         {
             Services.AppTheme.Light => ElementTheme.Light,
@@ -34,8 +34,8 @@ public sealed partial class TaskHistoryDialog : ContentDialog
 
         // 顶部操作栏
         var topBar = new Grid { ColumnDefinitions = { new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) }, new ColumnDefinition { Width = GridLength.Auto } } };
-        var countText = new TextBlock { Text = L10n.F("共 {0} 条记录", records.Count), VerticalAlignment = VerticalAlignment.Center, Opacity = 0.6 };
-        var clearBtn = new Button { Content = L10n.T("清空全部"), Padding = new Thickness(12, 4, 12, 4), HorizontalAlignment = HorizontalAlignment.Right };
+        var countText = new TextBlock { Text = L10n.F("共 {0} 条记录", records.Count), VerticalAlignment = VerticalAlignment.Center, Foreground = ThemeService.BrushFor("AppTextSecondaryBrush", RequestedTheme) };
+        var clearBtn = new Button { Content = L10n.T("清空全部"), Padding = new Thickness(12, 4, 12, 4), HorizontalAlignment = HorizontalAlignment.Right, Style = ThemeService.StyleFor("AppDangerButtonStyle") };
         clearBtn.Click += (_, _) =>
         {
             _records.Clear();
@@ -52,7 +52,7 @@ public sealed partial class TaskHistoryDialog : ContentDialog
 
         if (records.Count == 0)
         {
-            panel.Children.Add(new TextBlock { Text = L10n.T("暂无历史记录"), Opacity = 0.6 });
+            panel.Children.Add(new TextBlock { Text = L10n.T("暂无历史记录"), Foreground = ThemeService.BrushFor("AppTextSecondaryBrush", RequestedTheme) });
         }
         else
         {
@@ -88,8 +88,8 @@ public sealed partial class TaskHistoryDialog : ContentDialog
             _list.DoubleTapped += OnDoubleTapped;
             panel.Children.Add(_list);
         }
-        // M18：路径隐私开关（默认关闭）。放在历史窗口内，用户看到历史时就能就地决定，
-        // 不必另找设置入口。改动立即落 settings.json，此后新记录按新策略写盘。
+        // M18
+        // 不必另找设置入
         var pathChk = new CheckBox
         {
             Content = L10n.T("任务历史保存完整路径"),
@@ -111,7 +111,7 @@ public sealed partial class TaskHistoryDialog : ContentDialog
         {
             Text = L10n.T("开启后任务历史会记录完整文件路径（便于双击回放）；关闭则只记录文件名，不把「保护了哪些文件」明文留在磁盘上。"),
             FontSize = 12,
-            Opacity = 0.6,
+            Foreground = ThemeService.BrushFor("AppTextSecondaryBrush", RequestedTheme),
             TextWrapping = TextWrapping.Wrap,
             MaxWidth = 520
         });

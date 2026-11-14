@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 音乐播放器与通知栏使用的文案资源 -->
+<resources>
+    <string name="music_channel_name">音乐播放</string>
+</resources>

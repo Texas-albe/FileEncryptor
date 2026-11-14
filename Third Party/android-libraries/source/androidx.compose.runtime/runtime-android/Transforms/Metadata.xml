@@ -1,0 +1,113 @@
+<metadata>
+  <!--
+    These types use Kotlin idioms (inline classes, KMP collection-jvm interfaces,
+    typealias function types) that the JNI binding generator cannot project into
+    C# without per-error hand fix-ups. Strip them; the underlying .class files
+    remain in the AAR shipped by Xamarin.AndroidX.Compose.Runtime.Android, so
+    Kotlin code that references them transitively still works at runtime.
+
+    Mirrors:
+    https://github.com/jonathanpeppers/compose-net/blob/d1c6a5ecd3b02f624c2e5e4655a93b36126277b4/src/ComposeNet.Bindings.Runtime/Transforms/Metadata.xml
+  -->
+
+  <!-- SnapshotStateMap/List/Set: Kotlin MutableMap/List/Set + KMP collection-jvm
+       interface erasure -> Size()/Values()/EntrySet() signature mismatch with java.util.* -->
+  <remove-node path="/api/package[@name='androidx.compose.runtime.snapshots']/class[@name='SnapshotStateList']" />
+  <remove-node path="/api/package[@name='androidx.compose.runtime.snapshots']/class[@name='SnapshotStateMap']" />
+  <remove-node path="/api/package[@name='androidx.compose.runtime.snapshots']/class[@name='SnapshotStateSet']" />
+  <remove-node path="/api/package[@name='androidx.compose.runtime.snapshots']/class[@name='SnapshotStateListKt']" />
+  <remove-node path="/api/package[@name='androidx.compose.runtime.snapshots']/class[@name='SnapshotStateMapKt']" />
+  <remove-node path="/api/package[@name='androidx.compose.runtime.snapshots']/class[@name='SnapshotStateSetKt']" />
+
+  <!-- MutableSnapshot.ReadObserver: abstract Snapshot.readObserver uses a
+       Kotlin typealias (Any) -> Unit which projects oddly. -->
+  <remove-node path="/api/package[@name='androidx.compose.runtime.snapshots']/class[@name='MutableSnapshot']" />
+  <remove-node path="/api/package[@name='androidx.compose.runtime.snapshots']/class[@name='Snapshot']/method[@name='getReadObserver']" />
+
+  <!-- AbstractApplier<T>: abstract IApplier.insertBottomUp/TopDown(int, T) doesn't
+       satisfy IApplier<Object> after erasure. -->
+  <remove-node path="/api/package[@name='androidx.compose.runtime']/class[@name='AbstractApplier']" />
+
+  <!-- Coroutine context elements (FrameClocks): missing CoroutineContext.Element.key
+       override binding. -->
+  <remove-node path="/api/package[@name='androidx.compose.runtime']/class[@name='BroadcastFrameClock']" />
+  <remove-node path="/api/package[@name='androidx.compose.runtime']/class[@name='PausableMonotonicFrameClock']" />
+
+  <!-- IMutable{Double}State overrides `value` with the primitive form, hiding
+       MutableState<T>.value's setter. The auto-generated Invoker is then missing
+       IMutableState.Value.set. The Int/Long/Float variants are surfaced (see
+       below) so C# consumers can use primitive Compose state without boxing. -->
+  <remove-node path="/api/package[@name='androidx.compose.runtime']/interface[@name='MutableDoubleState']" />
+  <remove-node path="/api/package[@name='androidx.compose.runtime']/interface[@name='DoubleState']" />
+
+  <!-- Int/Long/Float {Mutable}State: drop the boxed `getValue()`/`setValue(primitive)`
+       overrides that hide the inherited (Mutable)State.value property. Without these the
+       generated Invoker keeps the un-boxed `IntValue`/`LongValue`/`FloatValue` accessors and
+       correctly implements IMutableState.Value (get/set). -->
+  <remove-node path="/api/package[@name='androidx.compose.runtime']/interface[@name='IntState']/method[@name='getValue' and count(parameter)=0]" />
+  <remove-node path="/api/package[@name='androidx.compose.runtime']/interface[@name='LongState']/method[@name='getValue' and count(parameter)=0]" />
+  <remove-node path="/api/package[@name='androidx.compose.runtime']/interface[@name='FloatState']/method[@name='getValue' and count(parameter)=0]" />
+  <remove-node path="/api/package[@name='androidx.compose.runtime']/interface[@name='MutableIntState']/method[@name='getValue' and count(parameter)=0]" />
+  <remove-node path="/api/package[@name='androidx.compose.runtime']/interface[@name='MutableLongState']/method[@name='getValue' and count(parameter)=0]" />
+  <remove-node path="/api/package[@name='androidx.compose.runtime']/interface[@name='MutableFloatState']/method[@name='getValue' and count(parameter)=0]" />
+  <remove-node path="/api/package[@name='androidx.compose.runtime']/interface[@name='MutableIntState']/method[@name='setValue' and count(parameter)=1 and parameter[1][@type='int']]" />
+  <remove-node path="/api/package[@name='androidx.compose.runtime']/interface[@name='MutableLongState']/method[@name='setValue' and count(parameter)=1 and parameter[1][@type='long']]" />
+  <remove-node path="/api/package[@name='androidx.compose.runtime']/interface[@name='MutableFloatState']/method[@name='setValue' and count(parameter)=1 and parameter[1][@type='float']]" />
+
+  <!-- Re-introduce the inherited `getValue()/setValue(Object)` directly on Mutable{Int,Long,Float}State
+       so the binding generator pairs them into the IMutableState.Value get/set property on the
+       Invoker. Without this, the Invoker only implements the read-only IntState/LongState/FloatState
+       getter (inherited Value.get) and CS0535 fires for the missing Value.set. The underlying JNI
+       methods exist on the interface via MutableState inheritance. -->
+  <add-node path="/api/package[@name='androidx.compose.runtime']/interface[@name='MutableIntState']">
+    <method visibility="public" abstract="true" static="false" return="java.lang.Object" name="getValue"
+            deprecated="not deprecated" final="false" bridge="false" native="false"
+            synchronized="false" synthetic="false" />
+    <method visibility="public" abstract="true" static="false" return="void" name="setValue"
+            deprecated="not deprecated" final="false" bridge="false" native="false"
+            synchronized="false" synthetic="false">
+      <parameter name="value" type="java.lang.Object" />
+    </method>
+  </add-node>
+  <add-node path="/api/package[@name='androidx.compose.runtime']/interface[@name='MutableLongState']">
+    <method visibility="public" abstract="true" static="false" return="java.lang.Object" name="getValue"
+            deprecated="not deprecated" final="false" bridge="false" native="false"
+            synchronized="false" synthetic="false" />
+    <method visibility="public" abstract="true" static="false" return="void" name="setValue"
+            deprecated="not deprecated" final="false" bridge="false" native="false"
+            synchronized="false" synthetic="false">
+      <parameter name="value" type="java.lang.Object" />
+    </method>
+  </add-node>
+  <add-node path="/api/package[@name='androidx.compose.runtime']/interface[@name='MutableFloatState']">
+    <method visibility="public" abstract="true" static="false" return="java.lang.Object" name="getValue"
+            deprecated="not deprecated" final="false" bridge="false" native="false"
+            synchronized="false" synthetic="false" />
+    <method visibility="public" abstract="true" static="false" return="void" name="setValue"
+            deprecated="not deprecated" final="false" bridge="false" native="false"
+            synchronized="false" synthetic="false">
+      <parameter name="value" type="java.lang.Object" />
+    </method>
+  </add-node>
+
+  <!-- Nested `Key` companion object on these interfaces collides with the inherited
+       CoroutineContext.Element.key property in generated code (CS0119/CS0572). -->
+  <remove-node path="/api/package[@name='androidx.compose.runtime']/class[@name='MonotonicFrameClock.Key']" />
+  <remove-node path="/api/package[@name='androidx.compose.runtime']/interface[@name='MonotonicFrameClock']/field[@name='Key']" />
+  <remove-node path="/api/package[@name='androidx.compose.runtime.snapshots']/class[@name='SnapshotContextElement.Key']" />
+  <remove-node path="/api/package[@name='androidx.compose.runtime.snapshots']/interface[@name='SnapshotContextElement']/field[@name='Key']" />
+
+  <!-- Duplicate `isAfterFirstChild(Object)` on ComposerKt: two Kotlin overloads
+       with inline-class parameters collapse to identical JVM signatures. -->
+  <remove-node path="/api/package[@name='androidx.compose.runtime']/class[@name='ComposerKt']/method[@name='isAfterFirstChild']" />
+
+  <!-- Internal `androidx.compose.runtime.composer.*` Kotlin packages collide
+       with the `Composer` class in `androidx.compose.runtime` (C# can't have a
+       namespace and a type with the same fully-qualified name). These are all
+       internal Kotlin implementation details (gapbuffer / linkbuffer slot
+       table internals); drop them. -->
+  <remove-node path="/api/package[@name='androidx.compose.runtime.composer.gapbuffer']" />
+  <remove-node path="/api/package[@name='androidx.compose.runtime.composer.gapbuffer.changelist']" />
+  <remove-node path="/api/package[@name='androidx.compose.runtime.composer.linkbuffer']" />
+  <remove-node path="/api/package[@name='androidx.compose.runtime.composer.linkbuffer.changelist']" />
+</metadata>

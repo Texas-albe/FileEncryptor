@@ -1,4 +1,4 @@
-// 对象存储后端：key 前缀模拟目录，写流缓冲后整对象 put
+// 对象存储后端
 #include "saf_cloud.hpp"
 
 #include <algorithm>
@@ -99,13 +99,13 @@ public:
         if (out_size) *out_size = 0;
         if (out_mtime) *out_mtime = 0;
         if (out_is_dir) *out_is_dir = false;
-        if (out_is_symlink) *out_is_symlink = false;   // 对象存储无符号链接
+        if (out_is_symlink) *out_is_symlink = false;   // 对象存储无符号
         if (out_mode) *out_mode = 0;
 
         if (k.empty()) { if (out_is_dir) *out_is_dir = true; return SAF_OK; }
 
         std::vector<std::pair<std::string, uint64_t>> all;
-        SafStatus st = store_->list(k, all);          // 只列该前缀，不拉全桶
+        SafStatus st = store_->list(k, all);          // 只列该前缀
         if (st != SAF_OK) return st;
         bool exact = false, dir = false;
         uint64_t sz = 0;

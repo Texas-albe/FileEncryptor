@@ -1,0 +1,74 @@
+﻿<metadata>
+    <attr
+        path="/api/package[@name='androidx.appcompat.graphics.drawable']/class[@name='AnimatedStateListDrawableCompat']/method[@name='getChangingConfigurations' and count(parameter)=0]"
+        name="managedReturn"
+        >
+        Android.Content.PM.ConfigChanges
+    </attr>
+    <attr
+        path="/api/package[@name='androidx.appcompat.graphics.drawable']/class[@name='DrawableContainer']/method[@name='getConstantState' and count(parameter)=0]"
+        name="propertyName"></attr>
+    <attr
+        path="/api/package[@name='androidx.appcompat.graphics.drawable']/class[@name='DrawableContainer']/method[@name='getConstantState' and count(parameter)=0]"
+        name="managedName"
+        >
+        GetConstantState
+    </attr>
+    <!--
+    -->
+    <attr
+        path="/api/package[@name='androidx.appcompat.graphics.drawable']/class[@name='DrawableContainer']"
+        name="visibility"
+        >
+        public
+    </attr>
+    
+    <attr
+        path="/api/package[@name='androidx.appcompat.widget']/class[@name='ResourceManagerInternal.AsldcInflateDelegate']"
+        name="visibility"
+        >
+        public
+    </attr>
+    <attr
+        path="/api/package[@name='androidx.appcompat.widget']/class[@name='ResourceManagerInternal.InflateDelegate']"
+        name="visibility"
+        >
+        public
+    </attr>
+    <attr
+        path="/api/package[@name='androidx.appcompat.widget']/class[@name='ResourceManagerInternal.InflateDelegate']"
+        name="visibility"
+        >
+        public
+    </attr>
+    
+    <!--
+        name="managedReturn"
+        and
+        Android.Graphics.Color
+
+        generated/androidx.appcompat.appcompat-resources/obj/Debug/monoandroid9.0/generated/src/AndroidX.AppCompat.Widget.VectorEnabledTintResources.cs(232,12): 
+        error CS0029: 
+        Cannot implicitly convert type 
+            'int' 
+        to 
+            'Android.Graphics.Color' 
+    -->
+    <attr
+        path="/api/package[@name='androidx.appcompat.widget']/class[@name='VectorEnabledTintResources']/method[@name='getColor' and count(parameter)=1 and parameter[1][@type='int']]"
+        name="return"
+        >
+        android.graphics.Color
+    </attr>
+
+    <attr
+        path="/api/package[@name='androidx.appcompat.graphics.drawable']/class[@name='DrawableContainerCompat']/method[@name='getConstantState' and count(parameter)=0]"
+        name="propertyName"></attr>
+    <attr
+        path="/api/package[@name='androidx.appcompat.graphics.drawable']/class[@name='DrawableContainerCompat']/method[@name='getConstantState' and count(parameter)=0]"
+        name="managedName"
+        >
+        GetConstantState
+    </attr>
+
+</metadata>

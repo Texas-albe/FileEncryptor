@@ -30,7 +30,7 @@ public sealed partial class TaskNotificationWindow : Window
             presenter.IsResizable = false;
         }
 
-        // 定位到屏幕右下角
+        // 定位到屏幕右
         var displayArea = DisplayArea.GetFromWindowId(AppWindow.Id, DisplayAreaFallback.Nearest);
         var work = displayArea?.WorkArea ?? new Windows.Graphics.RectInt32(0, 0, 1920, 1080);
         int x = work.X + work.Width - 300 - Margin;

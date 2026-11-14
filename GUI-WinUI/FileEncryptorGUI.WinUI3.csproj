@@ -14,12 +14,11 @@
     <WindowsPackageType>None</WindowsPackageType>
     <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
     <EnableMsixTooling>true</EnableMsixTooling>
-    <!-- AssemblyVersion 固定以保持内部 XAML/类型引用稳定；FileVersion/Version 固定 3.1.0.0/3.1.0。
-         覆盖安装的文件替换由 installer 的 MajorUpgrade AllowSameVersionUpgrades="yes" 解决（相同
-         版本也先卸后装），不依赖版本号递增。 -->
-    <AssemblyVersion>3.1.0.0</AssemblyVersion>
-    <FileVersion>3.1.0.0</FileVersion>
-    <Version>3.1.0</Version>
+    <!-- 程序集版本与对外版本一致；同版本覆盖安装由 installer 的
+         AllowSameVersionUpgrades="yes" 保证先卸后装。 -->
+    <AssemblyVersion>3.1.1.0</AssemblyVersion>
+    <FileVersion>3.1.1.0</FileVersion>
+    <Version>3.1.1</Version>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <LangVersion>latest</LangVersion>

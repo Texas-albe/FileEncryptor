@@ -1,6 +1,8 @@
 #include "OsHarden.h"
 
-#ifdef Q_OS_WIN
+// Q_OS_WIN 需 Qt 头才定义，本 TU
+// 非 Qt 上下文
+#if defined(_WIN32) || defined(Q_OS_WIN)
 
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -14,7 +16,7 @@ namespace OsHarden {
 
 void hardenImageLoadPolicy()
 {
-    // 三条一起开，堵住「从不可信位置加载可执行镜像」这条注入主路
+    // 三条一起开
     PROCESS_MITIGATION_IMAGE_LOAD_POLICY pol;
     memset(&pol, 0, sizeof pol);
     pol.NoRemoteImages = 1;
@@ -25,11 +27,11 @@ void hardenImageLoadPolicy()
 
 void disableCrashDump()
 {
-    // 崩溃 dump 会把进程内存（口令/KEK/明文）整体写盘，故把自身排除出 WER。
-    // M44：真正在内存持有口令/KEK/明文的是子进程 FileEncryptorCLI，一并排除。
-    // WerAddExcludedApplication 只收文件名（不含路径），与 GUI 同安装目录部署的约定
-    // 由文件名本身命中；拿不到自身路径时同样用文件名兜底。
-    // wer.dll 动态加载：老系统无此 API 时静默降级。
+    // 崩溃 dump
+    // M44
+    // WerAddExcludedApplication 只收文件名
+    // 由文件名本身命
+    // wer.dll 动态加载
     HMODULE wer = LoadLibraryW(L"wer.dll");
     if (!wer) return;
     typedef HRESULT (WINAPI *WerAddFn)(PCWSTR, BOOL);
@@ -37,8 +39,8 @@ void disableCrashDump()
     if (!add) { FreeLibrary(wer); return; }
     auto exclude=[&add](const wchar_t* name) {
         if (!name || !*name) return;
-        // 文档要求：只传文件名（含扩展名），不含路径
-        if (FAILED(add(name, TRUE))) add(name, FALSE);   // 全部用户失败则退化为当前用户
+        // 文档要求
+        if (FAILED(add(name, TRUE))) add(name, FALSE);   // 全部用户失败
     };
     wchar_t path[MAX_PATH];
     if (GetModuleFileNameW(NULL, path, MAX_PATH)) {
@@ -61,7 +63,7 @@ bool isDebuggerAttached()
 
 void hardenProcessDacl()
 {
-    // 当前进程的令牌用户 SID
+    // 当前进程
     HANDLE tok = NULL;
     if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &tok)) return;
     DWORD need = 0;
@@ -96,7 +98,7 @@ void hardenProcessDacl()
 
     PACL dacl = NULL;
     if (SetEntriesInAclW(n, ea, NULL, &dacl) == ERROR_SUCCESS && dacl) {
-        // SE_KERNEL_OBJECT：对进程句柄改 DACL；PROTECTED 阻断继承来的宽松 ACE
+        // SE_KERNEL_OBJECT
         SetSecurityInfo(GetCurrentProcess(), SE_KERNEL_OBJECT,
                         DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
                         NULL, NULL, dacl, NULL);
@@ -109,7 +111,7 @@ void hardenProcessDacl()
 
 } // namespace OsHarden
 
-#else // 非 Windows：无对应机制
+#else // 非 Windows
 
 #include <sys/resource.h>
 
@@ -117,10 +119,10 @@ namespace OsHarden {
 void hardenProcessDacl() {}
 void hardenImageLoadPolicy() {}
 void disableCrashDump() {
-    // M44：Linux 无 WER，但 core dump 同样会倒出内存（口令/KEK/明文），
-    // 对本进程直接禁核。资源限制经 fork/exec 继承，QProcess 启动的
-    // FileEncryptorCLI 子进程同样生效；detached 启动的其他进程如需保证，
-    // 应在其启动环境里另行设置。
+    // M44
+    // 对本进程直接禁
+    // FileEncryptorCLI 子进程同样生效；detached
+    // 应在其启动环境
     struct rlimit rl;
     if (getrlimit(RLIMIT_CORE, &rl) == 0) {
         rl.rlim_cur = 0;
