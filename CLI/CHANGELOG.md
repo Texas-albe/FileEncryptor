@@ -12,25 +12,9 @@
 > 2.4.0 可读取并解密 v1 ~ v6 全部格式，旧产物无需重加密即可解密。
 > CLI 主版本号历史上与合并项目同步；自 2.1.0 起 CLI/GUI 拆分独立发版。
 
-## [Unreleased]
-
-### 新增
-- **加密库多算法 + zstd 试压自适应**：`vault.meta` 新增可缺省字段 `default_mode` / `compress_policy`，旧库读取时回落到 XChaCha20 + 自动试压，旧程序忽略未知键。新增 C ABI `vdisk_init_ex` / `vdisk_set_default_mode` / `vdisk_import_fd_ex` / `vdisk_get_file_info`；仅新增符号与可缺省字段，`VDISK_ABI_VERSION` 不变，加载方无需同步。单文件加密支持 `FE_M_COMPRESS_AUTO`。
-- 试压取输入前 64KiB 估算收益，低于 5% 不压，否则 zstd level 3；存量文件不做批量重压缩。压缩策略同时覆盖单文件 `.ptd` 与加密库：桌面 CLI `--into-vault` 未指定压缩选项时默认试压自适应，可用 `-z` / `--compression-level N` 覆盖；库层批量导入读 `vault.meta` 的 `compress_policy`。
-
-### 修复
-- **CLI `--random-read` 对压缩容器误报不支持**：`main.cpp` 仍拿 `out_compressed` 当错误码直接拒绝（历史遗留守卫），即使 `random_read_ptd` 已能返回窗口明文。现改为正常输出片段，仅在 stderr 标注走整文件解密窗口；`--rr` 帮助文本同步更新。压缩容器随机读的开销从 O(1) 变为 O(文件大小)，属预期。
-- **压缩 .ptd 挂载读取损坏（历史事故）**：`random_read_ptd` 此前遇到压缩文件直接返回 `NOTIMPL`，故历史上入盘压缩被全面关闭。现改为整文件解密到窗口流（内存 O(请求长度)，不落明文临时文件），并可向挂载层回填一次全量明文以填满 64KiB 段缓存，避免逐段重复解密；压缩文件的覆盖写 / 截断亦随之可用。此前「入加密盘一律禁用压缩」的限制解除；`--vault-recrypt` 仍保持非压缩输出（其目标是重分块，不改变容器压缩形态）。
-
-### 改进
-- **依赖目录改名 `third_party` → `Third Party`**：随仓库分发的依赖源码树整体换了目录名，CMake preset、依赖查找、安装包路径、Linux 构建脚本和文档里的引用一并改过。新目录名带空格，CMake 的 `add_subdirectory` 与头文件路径、README 里的命令行示例都补了引号；上游源码与历史变更记录里的旧路径按原样保留。
-- **一键构建补齐并实跑**：Windows 侧从 CLI、FE-Mounter 到两套 MSI 的六步矩阵，现在可由 `scripts/build_all.py --win` 一次跑完并把产物收进发布目录。构建用的辅助脚本放在 `scripts/` 下，按仓库约定不入库，换机需自备。CMake 参数改走初始缓存文件，避免批处理把 `-DKEY=VAL` 的等号拆开；工具链自行补 Windows SDK 路径、规范化代理环境变量，不再依赖注册表查询。
-- **实时速率改为窗口式**：批量任务的进度帧按最近三秒的增量字节除以窗口时长算速度，不再用累计量除以总耗时；Qt 与 WinUI 面板显示的是同一份进度帧，任务结束后的平均速度仍是事后统计，口径不变。
-
-- **Android 交叉编译提速**：Release 不再生成调试信息（strip 后本来也用不上），ThinLTO 链接按核数并行；一次全量重编从约 24 秒降到约 14 秒，中间对象文件从 19 MiB 降到 2.4 MiB。编译缓存改成按需开启：vdisk 只有 27 个编译单元，实测首次挂缓存反而更慢、命中后也与直接编持平，所以默认不开；OpenSSL 上百个编译单元则默认走缓存，并跳过 apps 只编库。产物前缀可以放到共享目录，出包侧用 `FE_OPENSSL_ROOT` 指过去。
 ## [CLI 3.1.1] - 2026-10-22
 
-### 修复
+### Fixed
 - **`-e <文件> --stdout` 产出空密文（2026-10-24）**：流输出（`--stdout`）+ 文件输入组合下，输入流 `fin` 尚未打开就去读 `rdbuf()`，密文块数为 0、产物只有文件头——解密得到空文件。现该分支显式打开输入文件再整读（可 seek 的流输出本就不需要全量缓冲，此路径仅历史遗留）。同时修复可 seek 的外部输入流（fd 版 C ABI）在非缓冲分支被忽略、误开空路径必失败的问题。
 - **`--vault-format` 删不掉文件却清空索引，盘内文件「全丢」（2026-10-23）**：格式化逐个 `_wremove` 盘内 `.ptd`，盘正被挂载 / 文件被占用时全部失败，旧逻辑仅打 `Warning: cannot remove …` 就继续把索引写成 `[]` 并返回 1——索引空、`.ptd` 还在，用户看到的就是「格式化失败后文件全没了」。现改为：删前先清只读属性；只要有一个 `.ptd` 没删掉就立即返回非零且**索引一字不改**，并输出可执行指引（先卸载该盘；若索引已与盘面不一致，用 `--vault-reindex` 从 `.ptd` 头重建）。
 - **`--into-vault` 收尾索引落盘失败仍报成功（2026-10-23）**：末尾 flush 失败旧逻辑只打 Warning 并退出 0，而此时源文件已按处置策略删除、条目却没落盘＝静默丢数据。现改为返回非零，并提示立即对目标盘执行 `--vault-reindex` 找回。
@@ -42,22 +26,30 @@
 - **「暂时不锁定」后秒级误判已锁（锁态判定混淆）**：挂载层 watchdog 纠察块原用 `idle_remaining()==UINT32_MAX` 判「库自行锁定」，但「空闲超时被关成 0」（正是 suspend 的语义）同样返回 `UINT32_MAX`，导致暂停期间每秒被误判成已锁、暂停形同虚设。现新增 `vdisk_is_unlocked` ABI 直查真实锁态，纠察改用它，暂停语义恢复。
 - **播放/阅读中被自动锁（前台续期口径补强，2026-10-22）**：文件读一次即进系统缓存，之后读取不再产生磁盘 I/O，两个自动锁计时器都无从续期——电影和电视看一半被锁、暂停也压不住即是此机理。现挂载层在「前台进程仍持开文件句柄」时（`g_open_files` 登记 + 前台窗口判定，播放器类程序读缓存命中后不发 I/O 但人还在看）持续续期两层计时；同时前台窗口判定对控制台程序自己的窗口（`PseudoConsoleWindow`，带 `WS_EX_TOOLWINDOW` 但任务栏不可见的形态）网开一面，`ConsoleWindowClass` 额外登记 conhost 父进程，控制台里的读程序不再被误判为后台。**关键坑**：本组新增的三个 ABI（`vdisk_note_activity` / `vdisk_index_stamp` / `vdisk_is_unlocked`）定义一度误落在 `vdisk_abi.cpp` 的匿名 namespace 内，导出为 C++ 修饰名（`?vdisk_note_activity@?A0x…`），挂载层按 C 名 `GetProcAddress` 全部加载失败，「持开文件续期」静默失效——现定义移至全局作用域、导出纯 C 名，并在挂载层加载缺失时打告警；e2e 另修复「根下第一个条目是盘符目录而非文件」导致的测试空转。
 
-### 新增
+- **CLI `--random-read` 对压缩容器误报不支持**：`main.cpp` 仍拿 `out_compressed` 当错误码直接拒绝（历史遗留守卫），即使 `random_read_ptd` 已能返回窗口明文。现改为正常输出片段，仅在 stderr 标注走整文件解密窗口；`--rr` 帮助文本同步更新。压缩容器随机读的开销从 O(1) 变为 O(文件大小)，属预期。
+- **压缩 .ptd 挂载读取损坏（历史事故）**：`random_read_ptd` 此前遇到压缩文件直接返回 `NOTIMPL`，故历史上入盘压缩被全面关闭。现改为整文件解密到窗口流（内存 O(请求长度)，不落明文临时文件），并可向挂载层回填一次全量明文以填满 64KiB 段缓存，避免逐段重复解密；压缩文件的覆盖写 / 截断亦随之可用。此前「入加密盘一律禁用压缩」的限制解除；`--vault-recrypt` 仍保持非压缩输出（其目标是重分块，不改变容器压缩形态）。
+### Added
 - **单文件加解密 C ABI（`fe_mobile.h`，2026-10-24）**：面向移动端（Android MAUI P/Invoke）的 7 个纯 C 导出——`fe_m_abi_version` / `fe_m_strerror` / `fe_m_mode_supported` / `fe_m_encrypt_fd` / `fe_m_decrypt_fd` / `fe_m_verify_fd` / `fe_m_hash_fd`。输入输出均走 fd（对接 SAF `ContentResolver`），可 seek 时流式零拷贝（明文哈希尾部回填），不可 seek 自动回退全量缓冲；错误码细化（错密码/认证失败返回 -3，由 `fe_last_fail_auth()` 分类）。随 `vdisk` 共享库一同构建，Windows / Android / Linux 三平台导出。底层 `encrypt_file` / `decrypt_file` 同步增加 `in_stream` / `out_stream` 形参。
 - **IPC `suspend <minutes>`（FE-Mounter）**：暂停空闲自动锁，详见 GUI 侧「暂时不锁定」。suspend 同时关闭库侧空闲计时（`vdisk_set_idle_timeout(…, 0)`）——此前只挡挂载层 watchdog，库在 I/O 路径到点仍自行上锁，表现为「设了暂停还是被锁」；取消（`suspend 0`）/ 手动上锁 / 重新解锁时按当前窗口恢复库侧计时；暂停到期由 watchdog 恢复并给一个完整过渡窗口，避免到期瞬间当场上锁。
 - **忙闲续期 ABI（`vdisk_note_activity` / `vdisk_index_stamp`）**：供挂载层防误锁——前台程序持着打开的文件句柄时（播放器读缓存命中后不再发读 I/O，自动锁计时无从续期，电影看一半被锁）调 `note_activity` 续期库层计时；外部进程写库时索引版本戳（`.feindex.d/.stamp`）会变，挂载层 watchdog 每秒轮询 `index_stamp`，戳在变即判「库正被使用」，入盘入到一半不再被自动锁打断。详见 FE-Mounter 侧「自动锁加固」。
 - **命令行参数全面补齐「短 / 长」两版（2026-10-23）**：此前多数参数只有单一形态——动作类只有短形态（`-e` / `-d` / `-g` / `-G` / `-Y`），维护类只有长形态（`--rewrap` / `--wipe-source` / `--new-key-file` / `--vault-reindex` 等），脚本里想写可读性好的长名、交互时想敲短名都对不上，只能靠 `print_usage()` 逐个查。现每个参数一律同时登记短版与长版：动作补长名（`-e,--encrypt`、`-d,--decrypt`、`--be,--batch-encrypt`、`--bd,--batch-decrypt`、`-g,--keygen`、`-G,--derive`、`-Y,--pubkey`），长名参数补短版——能占用无冲突单字母的用单字母（`-X,--x448`、`-f,--features`、`-q,--sha256`、`-A,--as`），其余用双横线缩写（`--rw,--rewrap`、`--ws,--wipe-source`、`--rs,--recycle-source`、`--nk,--new-key-file`、`--sd,--source-delete-ok`、`--vi,--vault-init`、`--vl,--vault-list`、`--vri,--vault-reindex`、`--iv,--into-vault`、`--vrk,--vault-rekey`、`--vrc,--vault-recrypt`、`--vf,--vault-format` 等）。**所有旧参数名原样保留**，GUI 与既有脚本、批处理均不受影响。短版一律避开「单横线 + 多字符」写法（CLI11 2.7.2 会直接拒绝），此类历史写法（`-be` / `-bd` / `-de` / `-rn` / `-on` / `-cl` / `-zstd` / `-x448`）继续走既有的预处理改写表。参数注释同步精简为 7 字以内（只说该参数干什么）。
 
-### 改进
+- **加密库多算法 + zstd 试压自适应**：`vault.meta` 新增可缺省字段 `default_mode` / `compress_policy`，旧库读取时回落到 XChaCha20 + 自动试压，旧程序忽略未知键。新增 C ABI `vdisk_init_ex` / `vdisk_set_default_mode` / `vdisk_import_fd_ex` / `vdisk_get_file_info`；仅新增符号与可缺省字段，`VDISK_ABI_VERSION` 不变，加载方无需同步。单文件加密支持 `FE_M_COMPRESS_AUTO`。
+- 试压取输入前 64KiB 估算收益，低于 5% 不压，否则 zstd level 3；存量文件不做批量重压缩。压缩策略同时覆盖单文件 `.ptd` 与加密库：桌面 CLI `--into-vault` 未指定压缩选项时默认试压自适应，可用 `-z` / `--compression-level N` 覆盖；库层批量导入读 `vault.meta` 的 `compress_policy`。
+### Changed
 - 版本号升至 3.1.1（与 GUI-WinUI / FE-Mounter 协同）。
 
+- **依赖目录改名 `third_party` → `Third Party`**：随仓库分发的依赖源码树整体换了目录名，CMake preset、依赖查找、安装包路径、Linux 构建脚本和文档里的引用一并改过。新目录名带空格，CMake 的 `add_subdirectory` 与头文件路径、README 里的命令行示例都补了引号；上游源码与历史变更记录里的旧路径按原样保留。
+- **一键构建补齐并实跑**：Windows 侧从 CLI、FE-Mounter 到两套 MSI 的六步矩阵，现在可由 `scripts/build_all.py --win` 一次跑完并把产物收进发布目录。构建用的辅助脚本放在 `scripts/` 下，按仓库约定不入库，换机需自备。CMake 参数改走初始缓存文件，避免批处理把 `-DKEY=VAL` 的等号拆开；工具链自行补 Windows SDK 路径、规范化代理环境变量，不再依赖注册表查询。
+- **实时速率改为窗口式**：批量任务的进度帧按最近三秒的增量字节除以窗口时长算速度，不再用累计量除以总耗时；Qt 与 WinUI 面板显示的是同一份进度帧，任务结束后的平均速度仍是事后统计，口径不变。
+- **Android 交叉编译提速**：Release 不再生成调试信息（strip 后本来也用不上），ThinLTO 链接按核数并行；一次全量重编从约 24 秒降到约 14 秒，中间对象文件从 19 MiB 降到 2.4 MiB。编译缓存改成按需开启：vdisk 只有 27 个编译单元，实测首次挂缓存反而更慢、命中后也与直接编持平，所以默认不开；OpenSSL 上百个编译单元则默认走缓存，并跳过 apps 只编库。产物前缀可以放到共享目录，出包侧用 `FE_OPENSSL_ROOT` 指过去。
 ## [CLI 3.0.1] - 2026-10-06
 
-### 新增
+### Added
 - **`--vault-format`（格式化加密盘）**：清空盘内全部内容——按索引删除每个 `.ptd` 并把索引重置为空，保留 `vault.meta`、盘身份与密码。格式化后仍可用原密码继续入盘，适合「整盘重置」而非删除目录。
 - **挂载盘重命名 / 移动**：此前挂载的加密盘不支持重命名，Explorer 报「MSDOS 功能无效」（挂载层根本没有 Rename 回调）。现在库层新增 `vdisk_rename`、挂载层新增 `wf_Rename` 并注册到 WinFsp 接口——文件改名、目录改名（含递归子项批量改索引路径并搬运各自的 `.ptd` 容器）均可用；受影响条目一次性重写索引，避免 N 次 upsert 的 O(N²) 重加密；目标已存在返回冲突而非覆盖。
 
-### 修复 / 改进
+### Fixed / Changed
 - **WinUI 密码弹窗的「确认密码」无条件出现（2026-10-16）**：`PasswordDialog` 的 `NeedConfirm` 原本是可 `init` 的属性，而控件面板是在构造函数里按 `NeedConfirm` 判断着建的——C# 对象初始化器在构造**之后**才赋值，构造里读到的永远是属性默认值 `true`，导致**所有**调用点即使写了 `NeedConfirm = false`（解锁 / 重新解锁 / 已挂载列表双击解锁 / 锁定访问自动弹框 / 预览解密 / 解密 / 解包），弹出来仍是「密码 + 确认密码」两框，用户仍被迫输两次——这正是此前多次排查「源码明明单次、实测仍两次」的真正原因。现 `NeedConfirm` 改为构造函数参数（`new PasswordDialog(needConfirm)`，默认 `true`，新建密码场景的二次确认保持不变），4 处调用点同步改造；解锁弹窗同时补上标题「解锁加密盘」（中/英/俄），与「设置新密码」类弹窗一眼可分。
 - **挂载盘（Windows）的属性页显示**：卷标改为「加密磁盘」，此前 `VolumeLabelLength` 误按字符数填写（该字段单位是字节），中文卷标被截成半个字；属性页「文件系统」一行恢复为产品标识 `FE-Vault`（曾被误改为卷标文案）；「容量」改为盘内实际内容大小（含 `.feindex` 与 `vault.meta` 占用），「可用空间」改为真实剩余空间（总量按已用 2 倍留增长余量、下限 64MiB，再减去已用）。此前误报 0 会让资源管理器把卷当成「盘已满」，挂载盘枚举/访问异常、可写挂载（M6）直接损坏；现已修正。
 - **挂载进程新增 `ipc-call eject`（卸载磁盘）**：由持有盘符的进程停服务并退出后释放盘符，先回 `OK` 再收尾，避免客户端读到断管；强杀进程会跳过索引落盘等收尾，故一律走 IPC。
@@ -77,11 +69,11 @@
 - **入盘提示文案改为专业但易懂的中文，并清理冗余注释**（含 `CMakeLists.txt`）。
 - **挂载盘重命名 / 移动 / 访问的大小写失配修复（2026-10-21）**：WinFSP 驱动会把 Rename 回调的 `FileName` 与移动目标路径的父目录段做大写归一化后传入，而库索引存的是用户原始大小写，造成三重故障：①任何改名 / 移动都报「找不到项目」（`VDISK_E_NOTFOUND` → `STATUS_OBJECT_NAME_NOT_FOUND`）；②移入子目录时目标父目录被大写化，与既有小写目录条目分裂成两个「目录」，后续访问全部错位；③以不同大小写路径打开 / 枚举盘内文件直接失败（违反 Windows 大小写不敏感语义）。现 `vdisk_rename` 对源路径与目标父目录段均做大小写不敏感还原（末段新名保留用户输入），`find_entry` / `find_mut` 与索引派生缓存（`index_map` / `dir_children` / `dir_set`，键统一小写、显示仍用原始大小写）全部 ci 化，`read` / `write` / `truncate` / `delete` / `create` 的 `.ptd` 路径一律按索引存储的原始大小写拼接；连带修复目录条目在 `readdir` 里的幽灵自嵌套（`dir\dir`——`rebuild_index_caches` 曾把目录末层重复注册为自身子项）。回归覆盖小写 / 大写 / 混合大小写的改名、移动、目录改名、目标冲突拒绝、大写路径访问共 13 个场景全部通过。
 
-### 性能
+### Performance
 - **挂载盘枚举大幅提速（大文件量不再卡成 PPT）**：挂载进程的列目录 / 查属性此前对每条都线性扫描整个索引（`find_entry` O(N)、`is_dir` 嵌套扫描 O(N²)、`readdir` 扫全量并去重 O(N²)），且每次都先 `stat` `.feindex` 再整体解密解析。文件一多（数千条），资源管理器一滑动就连续触发这些 O(N²) 调用，表现为逐帧卡顿。现在解锁时一次性建好**派生索引缓存**：`index_map`（路径 → 下标，查文件 O(1)）、`dir_children`（父目录 → 子项列表，列目录 O(子项数)）、`dir_set`（全部目录路径，判目录 O(1)）、`index_used_bytes`（容量统计 O(1)）；`.feindex` 变更检测加 **200ms 轮询节流**（变了才重建缓存，索引密钥有进程内缓存、不重跑 Argon2id）。实测 820 条目库下，`readdir(根)+逐子项 getattr` 的热点从旧的 O(N²) 0.086ms/次降到新逻辑根视图 0.004ms/次、子目录 0.012ms/次，**枚举部分约 23× 提速**，递归走库正确性经基准脚本校验（820 文件、树可导航）。
 - **「入加密盘」索引写入去掉 O(N²) 重加密**：此前每追加一条索引就整体重加密整份索引并整串拷贝（N 个文件 → O(N²) 次 Argon2id 级重加密），2100 个文件入盘约需 5+ 分钟。现在 `vault_append_entry` 改为 O(1) 摊销的字符串追加（截断收尾 `]` 再拼接），并新增 `flush` 参数——批量入盘热循环传 `flush=false` 只更新内存镜像、不落盘，所有 worker 完成后由末尾 `vault_flush_index` **一次性整体落盘**（内存镜像受互斥锁串行化，多 worker 并发安全）。入盘总时长由「随文件数平方增长」降为「随文件数线性增长」。
 
-### 安全
+### Security
 - **修复 WinFsp 目录缓冲区栈溢出（高危）**：`FE-Mounter/fe_winfsp.cpp` 的 `wf_ReadDirectory` 用固定 512-WCHAR 的栈缓冲装 `FSP_FSCTL_DIR_INFO.FileNameBuf`，但 `di->Size` 按实际文件名字节数填写；文件名超过 511 个 WCHAR 时越界写穿栈帧（未定义行为 / 潜在 RCE 面）。已加 `if (wb.size() > 512) continue;` 守卫，超长文件名跳过该条目而非溢出。
 - **加固索引路径穿越（中危）**：`core/vault_index.cpp` 新增 `rel_path_safe()`，拒绝绝对路径、Windows 盘符路径、空名及 `.` / `..` 组件，应用于 `parse_index_text` 与重建索引两处；`vault_ptd_path` 对含 `..` 的 rel 直接返回空路径（拒绝越界落盘）。此前一条被篡改 / 伪造的索引条目可用 `..\` 把 `.ptd` 写到库目录之外。
 - **复核明文临时件安全擦除（无变更，确认合规）**：`rewrite_ptd` / `cleanup_vault_temp_files` 对 `.plain.tmp` 走 `secure_wipe_remove`（先覆写零再 `DeleteFileW`），无明文残片落盘；该路径此前已正确，本次安全审计仅复核确认。
@@ -392,7 +384,7 @@ er==5。批量加密重复运行时已存在的完整 v6 输出现在正确跳�
   不再对其白跑一次 128 MB Argon2id 后报 Failed。混合「已加密 + 未加密」目录
   既不中断任务也不再误标失败。
 
-### 验证
+### Validation
 - Windows x64（MSVC 2026 / Ninja / Release）普通构建与 PGO 两阶段构建均通过；
   往返（加密→解密）逐字节一致，批量 / 续传 / rewrap / 压缩（zstd）回归通过。
 - 603 文件（600 散文件 + 3×30 MB，11 层嵌套目录）批量加密 → 批量解密（含 `-rn`）：
@@ -444,7 +436,9 @@ er==5。批量加密重复运行时已存在的完整 v6 输出现在正确跳�
   16 字节块元数据（`chunk_size` / `total_chunks` / `orig_size`）中，此前未读取。现已正确解析，
   并为 v6 容器新增 `key version` 行（便于确认密钥轮换是否生效）。
 
-### 解密流程修复与进度帧增强（配套 GUI 1.4.0）
+### Fixed
+
+解密流程修复与进度帧增强（配套 GUI 1.4.0）
 
 ### Added
 - **进度帧末行 `FILES done/total SKIP n FAIL n`**：批量模式（`-be` / `-bd`）每个渲染帧新增一行
@@ -462,7 +456,9 @@ er==5。批量加密重复运行时已存在的完整 v6 输出现在正确跳�
   （删除 `.ptd` / 安全擦除 / 移回收站），修复此前仅加密侧执行、解密侧遗漏的问题；
   「已存在且有效」的跳过条目也按 `-de` 等处置，避免重跑永远清不掉 `.ptd`。
 
-### 性能优化（解密正确性已逐字节验证）
+### Performance
+
+性能优化（解密正确性已逐字节验证）
 
 - **批量解密 `-rn` 的 Argon2id KDF 冗余消除**：`restore_name` 批量解密此前每文件派生 KEK 3 次
   （预扫描 `read_original_name` + worker `read_original_name` + `decrypt_file` 内部）。现 `process_files`
@@ -473,7 +469,7 @@ er==5。批量加密重复运行时已存在的完整 v6 输出现在正确跳�
   （Release 配置 `/GL` + `/LTCG`），对跨 TU 热点（KDF 调用、AEAD 循环）生效。
 - 安全：进程退出前对缓存的派生密钥 `sodium_memzero` 清零，避免明文残留。
 
-### 安全审计与缺陷修复（CLI `FileEncryptor.cpp` / `config.cpp` 相关）
+### Fixed
 
 - **修复 `compute_progress_binding` 栈缓冲区越界读（高危，#F1）**：原实现用固定 256 字节栈缓冲 +
   `snprintf` 后再 `std::string(buf, n)` 构造字符串；`snprintf` 返回的是“本应写入的长度”，

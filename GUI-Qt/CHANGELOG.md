@@ -13,35 +13,31 @@
 > - GUI 仅描述本项目自身的实现变更（界面、主题、图标、构建、依赖查找等）。
 > - 加密核心 / 算法 / 磁盘格式 v4 / 续传 / YAML 配置 等行为变更请见 `../CLI/CHANGELOG.md`（CLI 是行为实现的承担者）。
 
-## [Unreleased]
-
-### 改进
-- **开始菜单卸载改走 Windows Installer**：Qt 安装包原先指向随包分发的独立 WPF 卸载器，工程删除后改为直接调 `msiexec /x [ProductCode]`。用户看到的仍是熟悉的维护与卸载界面，包里不再附带卸载器。
-- **依赖目录改名 `third_party` → `Third Party`**：随仓库分发的依赖源码树整体换了目录名，CMake preset、依赖查找、安装包路径、Linux 构建脚本和文档里的引用一并改过。新目录名带空格，CMake 的 `add_subdirectory` 与头文件路径、README 里的命令行示例都补了引号；上游源码与历史变更记录里的旧路径按原样保留。
-- **一键构建补齐并实跑**：Windows 侧从 CLI、FE-Mounter 到两套 MSI 的六步矩阵，现在可由 `scripts/build_all.py --win` 一次跑完并把产物收进发布目录。构建用的辅助脚本放在 `scripts/` 下，按仓库约定不入库，换机需自备。CMake 参数改走初始缓存文件，避免批处理把 `-DKEY=VAL` 的等号拆开；工具链自行补 Windows SDK 路径、规范化代理环境变量，不再依赖注册表查询。
-- 静态 Qt 的 `CMAKE_PREFIX_PATH` 示例、WinFSP 驱动与 MSI 路径都跟着新目录名走。
-
 ## [GUI-Qt 3.1.1] - 2026-10-23
 
 配套 CLI / FE-Mounter 3.1.1。
 
-### 修复
+### Fixed
 - **普通加密只输一次密码**：此前 Qt 端加密 / 批加密一律弹出「密码 + 确认密码」两框。现与 WinUI 前端对齐：仅「入新加密盘」（勾选入盘且该盘尚未初始化、`vault.meta` 不存在）才要求二次确认——那是给新盘设密码，敲错不可挽回；普通加密 / 解密 / 解包均只输一次。
 - **Windows 静态 Qt（smelibs 6.10）下无法编译**：3.1.0 引入的三处代码从未对静态 Qt 编过（此前只编过动态 Qt 6.11 树），导致 Qt MSI 卡在「GUI 产物不存在」。① `OsHarden.cpp` 用 `#ifdef Q_OS_WIN` 判断平台，但本编译单元不包含 Qt 头、宏未定义，Windows 上误编 Linux 分支（`sys/resource.h` 不存在）；改为 `#if defined(_WIN32) || defined(Q_OS_WIN)`。② `CliNotFoundDialog.cpp` 调用并不存在的 `QNetworkRequest::setRedirectPolicy()` / `NoRedirectPolicy`（Qt 6.10/6.11 均无此 API），改设 `RedirectPolicyAttribute` 属性 + `ManualRedirectPolicy`——与既有的 `followRedirect` 逐跳白名单校验语义一致。③ `CliArgBuilder.cpp` 文件级静态函数内未限定调用静态成员 `isPrivateKeyMaterial`，补 `CliArgBuilder::` 限定。
 
-### 改进
+### Changed
 - 版本号随 CLI 同步升至 3.1.1。
 
+- **开始菜单卸载改走 Windows Installer**：Qt 安装包原先指向随包分发的独立 WPF 卸载器，工程删除后改为直接调 `msiexec /x [ProductCode]`。用户看到的仍是熟悉的维护与卸载界面，包里不再附带卸载器。
+- **依赖目录改名 `third_party` → `Third Party`**：随仓库分发的依赖源码树整体换了目录名，CMake preset、依赖查找、安装包路径、Linux 构建脚本和文档里的引用一并改过。新目录名带空格，CMake 的 `add_subdirectory` 与头文件路径、README 里的命令行示例都补了引号；上游源码与历史变更记录里的旧路径按原样保留。
+- **一键构建补齐并实跑**：Windows 侧从 CLI、FE-Mounter 到两套 MSI 的六步矩阵，现在可由 `scripts/build_all.py --win` 一次跑完并把产物收进发布目录。构建用的辅助脚本放在 `scripts/` 下，按仓库约定不入库，换机需自备。CMake 参数改走初始缓存文件，避免批处理把 `-DKEY=VAL` 的等号拆开；工具链自行补 Windows SDK 路径、规范化代理环境变量，不再依赖注册表查询。
+- 静态 Qt 的 `CMAKE_PREFIX_PATH` 示例、WinFSP 驱动与 MSI 路径都跟着新目录名走。
 ## [GUI-Qt 3.0.1] - 2026-10-06
 
-### 新增
+### Added
 - **「工具 → 加密盘」新增「卸载磁盘」与「格式化加密盘」**（与 WinUI 前端同源，现共十项入口）：卸载走挂载组件的 `ipc-call eject`，由持有挂载点的后台进程退出后释放挂载点；格式化调用 CLI `--vault-format` 清空盘内全部文件，执行前有不可撤销确认并要求输入盘密码，盘身份与密码保留。
 
-### 修复
+### Fixed
 - **挂载后看不到新入盘的文件**：挂载进程持有的索引不再与磁盘同步，现在会随 `.feindex` 变化自动重载，往盘里加密文件后无需重新挂载即可看到。
 - **进度面板刷出多余新行**：帧渲染留出 1 列余量避免终端自动换行导致光标错位，入盘过程中的告警改为帧结束后统一输出。
 
-### 改进
+### Changed
 - 配合 CLI 3.0.1：勾选「入加密盘」加密时，进度面板按并行核心数显示多条进度（帧式输出每线程一行）。
 - 版本号随 CLI 同步升至 3.0.1。
 
@@ -426,11 +422,11 @@ GUI 本体性能与代码质量优化（配套 CLI 期望版本仍为 2.4.1）�
 ### Added
 - **CPack 打包 DEB / RPM**：`CMakeLists.txt` 在 `if(UNIX)` 下加入 CPack 配置（与 CLI 对齐）：包名 `file-encryptor-gui`、安装前缀 `/usr`、生成器 `DEB;RPM`；DEB 关闭 `CPACK_DEBIAN_PACKAGE_SHLIBDEPS` 且 `Depends` 清空，RPM 关闭 `AUTOREQ`/`AUTOREQPROV`，确保静态 Qt6 + 嵌入字体下包零运行时依赖声明（自包含）。DEB/RPM 为 Unix 专属，配置用 `if(UNIX)` 守护，Windows 构建不受影响。生成命令：`cmake --build --preset linux-release` 后于构建目录 `cpack`。
 
-### Changed（拆分前收尾的两项界面改进，一并归档于本版本节点）
+### Changed
 - **导航栏主题切换（原"视图"菜单移除）**：顶部新增导航栏（QToolBar），以 `QComboBox` 提供「跟随系统 / 浅色 / 深色」三模式切换，替代原"视图(&V)"菜单中的主题选项（已删除）。`ThemeManager` 改为单例（`instance()`），`setTheme` 时发射 `themeChanged(bool)` 信号，导航栏下拉框与面板半透明底色随之同步。
 - **自定义背景图（视图设置）**：新增 `ViewSettingsDialog`，用户可选图片作主窗口背景（预览 + 清除）。主窗口以铺满底图（QLabel，`KeepAspectRatioByExpanding`）+ 面板半透明（`rgba` 约 0.82，随主题变底色）呈现；选定图片后窗口按图片比例拉伸/缩小（约束在屏幕 90% 内、高 480–900）。背景图路径（键 `backgroundImage`）与窗口几何（`saveGeometry`/`restoreGeometry`，键 `geometry`）经 QSettings 持久化，重启后保持生效。
 
-### Fixed（拆分前遗留）
+### Fixed
 - **CLI 重命名后 GUI 识别不到**：`FileEncryptorLocator::locate()` 原仅按固定名 `FileEncryptorCLI(.exe)` 查找，重命名 CLI（如改为 `FileEncryptor.exe`/`fe.exe`）即失效。现按候选名列表 `FileEncryptorCLI` / `FileEncryptor` / `file-encryptor-cli` / `fe`（Windows 加 `.exe`）在"同目录 + PATH"两段依次探测，任一命中即返回。
 
 ## [GUI-Qt 2.0.0] - 2026-09-05（统一项目时代，随 CLI 2.0.0 同步）

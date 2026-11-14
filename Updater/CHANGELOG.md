@@ -86,6 +86,6 @@
 - **动态链接残留**：修正 CMake 配置后经 `dumpbin /dependents` 确认产物为纯静态单文件，无 `libcurl.dll` 依赖。
 - **路径格式**：README 补充说明 `--install-dir` 须传原生 Windows / Linux 路径。
 
-### 验证记录（真机）
+### Validation
 - `--check` 三场景：qt/windows（无更新/有更新）、winui/windows（命中 .msi）全部正确，SHA256 与 size/ETag 提取无误。
 - `--update` 真实下载 CLI 资产（约 2.7 MB）与 GUI 资产（约 24 MB）落盘，独立复算 SHA256 与 `--sha256` 校验通过；喂入错误哈希时正确报 `sha256_mismatch`。
