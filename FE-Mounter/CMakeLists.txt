@@ -13,7 +13,7 @@
 #   cmake -S FE-Mounter -B out -DFE_MOUNT_CLI_DIR=/path/to/FileEncryptor/CLI
 #   cmake -S FE-Mounter -B out -DFE_MOUNT_CLI_INCLUDE=/path/to/vdisk.h
 cmake_minimum_required(VERSION 3.15)
-project(FileEncryptorMounter VERSION 3.1.1 LANGUAGES CXX)
+project(FileEncryptorMounter VERSION 3.2.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -147,6 +147,7 @@ if(MSVC)
 endif()
 if(UNIX)
   target_link_libraries(FE-Mounter PRIVATE ${CMAKE_DL_LIBS})   # dlopen
+  target_link_options(FE-Mounter PRIVATE $<$<CONFIG:Release>:-s>)   # 发布件 strip
 endif()
 
 # ---- fuse3（Linux 挂载）----

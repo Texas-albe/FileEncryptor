@@ -81,9 +81,16 @@ bool derive_key(const unsigned char* password, size_t pwd_len,
             (unsigned long long)memlimit,(unsigned long long)KDF_MEM_LIMIT_MAX_BYTES);
         return false;
     }
-    // 头里可能填 0
-    if(memlimit<crypto_pwhash_MEMLIMIT_MIN) memlimit=crypto_pwhash_MEMLIMIT_MIN;
-    if(opslimit<1) opslimit=1;
+    // 业务下限：拒绝弱保护参数（存量合法文件均高于此）
+    if(opslimit<KDF_OPS_LIMIT_MIN||memlimit<KDF_MEM_LIMIT_MIN_BYTES) {
+        fprintf(stderr,
+            "Refusing to process file: KDF parameters below the security minimum "
+            "(opslimit=%u < %u or memlimit=%llu < %llu bytes). "
+            "The file uses dangerously weak key protection.\n",
+            opslimit,KDF_OPS_LIMIT_MIN,
+            (unsigned long long)memlimit,(unsigned long long)KDF_MEM_LIMIT_MIN_BYTES);
+        return false;
+    }
     g_kdf_sem.ensure();
     g_kdf_sem.acquire();
     int rc=crypto_pwhash(key,key_len,
@@ -123,5 +130,14 @@ void derive_header_auth_key(const unsigned char* master_key,
     std::vector<unsigned char> in(tag, tag+sizeof(tag)-1);
     in.insert(in.end(), master_key, master_key+ARGON2_OUTPUT_LEN);
     crypto_generichash(auth_key, HEADER_HMAC_SIZE, in.data(), in.size(), nullptr, 0);
+    sodium_memzero(in.data(), in.size());
+}
+
+void derive_plain_hash_key(const unsigned char* master_key,
+    unsigned char hash_key[HASH_SIZE]) {
+    const char tag[]="FE_plaintext_hash_v1";
+    std::vector<unsigned char> in(tag, tag+sizeof(tag)-1);
+    in.insert(in.end(), master_key, master_key+ARGON2_OUTPUT_LEN);
+    crypto_generichash(hash_key, HASH_SIZE, in.data(), in.size(), nullptr, 0);
     sodium_memzero(in.data(), in.size());
 }

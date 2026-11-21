@@ -91,6 +91,7 @@ private slots:
     void showEvent(QShowEvent* e) override;
     void onRetryCliDetection();
     void onOpenTaskHistory();
+    void onAuditVerify();
     void onCheckForUpdate();
     // 加密盘库管理
     void onVaultInit();
@@ -98,6 +99,15 @@ private slots:
     void onVaultRecoveryCreate();
     void onVaultRecoveryOpen();
     void onVaultRekey();
+    // 快照备份 / 校验 / 恢复
+    void onVaultSnapshot();
+    void onVaultCheckSnapshot();
+    void onVaultRestoreSnapshot();
+    // 分享库内文件
+    void onVaultShare();
+    // 云端 WebDAV 只读浏览 / 拉取
+    void onCloudBrowse();
+    void onCloudPull();
     // 加密盘控制端
     void onVaultMount();
     void onVaultUnmount();
@@ -138,13 +148,20 @@ private:
     // 加密盘
     // needPw 时弹密码框走 --key-stdin
     void runVaultAction(const QString& title,const QStringList& head,
-                        const QStringList& tail,bool needPw,bool requireVault=true);
+                        const QStringList& tail,bool needPw,bool requireVault=true,
+                        const QString& presetDir=QString());
+    // 通用 CLI 子进程执行（vault/云等免选目录动作共用）
+    void launchCli(const QString& title,const QStringList& args,
+                   const QByteArray& stdinData=QByteArray());
     // 选加密盘目录
     QString pickVaultDir(const QString& title,bool requireVault);
     // 上次用
     QString lastMountPoint() const;
     QString lastVaultDir() const;
     void rememberVault(const QString& dir,const QString& point);
+    // 上次云端地址
+    QString lastCloudUri() const;
+    void rememberCloudUri(const QString& uri);
     // 定位 FE-Mounter
     bool locateMounter();
     // detached 启动 FE-Mounter：pass 非空时落临
@@ -235,6 +252,10 @@ private:
     // 加密盘
     QCheckBox* m_chkIntoVault=nullptr;
     QLineEdit* m_vaultDirEdit=nullptr;
+    // 批量过滤
+    QCheckBox* m_chkSkipHidden=nullptr;
+    QLineEdit* m_excludeEdit=nullptr;
+    QWidget* m_excludeRow=nullptr;
     QPushButton* m_btnVaultBrowse=nullptr;
     QWidget*   m_wmKeyRow=nullptr;
     QLineEdit* m_wmKeyEdit=nullptr;

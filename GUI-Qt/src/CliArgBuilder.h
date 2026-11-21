@@ -86,6 +86,10 @@ struct ShellOptions {
     // 加密盘
     QString intoVault;
 
+    // 批量过滤
+    QStringList excludePatterns;
+    bool skipHidden = false;
+
     // 密钥包装
     // 待包装
     QString wrapInput;

@@ -16,6 +16,8 @@ public class TaskSummaryInfo
     public string AvgSpeed = "";
     public string EncryptedSize = "";
     public int Done, Skip, Fail;
+    public int ActionIndex = -1;
+    public bool Success;
     public string Title = "";
 }
 
@@ -204,6 +206,12 @@ public class MainViewModel : ObservableObject
     private bool _sha256;
     public bool Sha256 { get => _sha256; set { SetProperty(ref _sha256, value); RefreshCommandPreview(); } }
 
+    // 批量过滤
+    private string _excludeText = "";
+    public string ExcludeText { get => _excludeText; set { SetProperty(ref _excludeText, value); RefreshCommandPreview(); } }
+    private bool _skipHidden;
+    public bool SkipHidden { get => _skipHidden; set { SetProperty(ref _skipHidden, value); RefreshCommandPreview(); } }
+
     private bool _compress;
     public bool Compress { get => _compress; set { SetProperty(ref _compress, value); RefreshCommandPreview(); } }
 
@@ -343,8 +351,8 @@ public class MainViewModel : ObservableObject
     }
 
     // 运行
-    // 默认走系统控制
-    public bool UseSystemConsole { get; set; } = true;
+    // 默认走 in-app 终端（重定向捕获），不弹独立控制台窗
+    public bool UseSystemConsole { get; set; } = false;
 
     public void RunWithPassword(string password)
     {
@@ -396,6 +404,9 @@ public class MainViewModel : ObservableObject
         // 批量开帧式进度
         if (opts.Action is CryptoAction.BatchEncrypt or CryptoAction.BatchDecrypt)
         {
+            // 结构化 JSON 帧走 stderr
+            // stdout 旧块不输出
+            req.ExtraEnv["FILEENCRYPTOR_PROGRESS_EVENTS"] = "1";
             req.ExtraEnv["FILEENCRYPTOR_PROGRESS_FRAME"] = "1";
             req.ExtraEnv["COLUMNS"] = "100";
         }
@@ -532,6 +543,8 @@ public class MainViewModel : ObservableObject
                 Done = _cli.FilesDone,
                 Skip = _cli.FilesSkip,
                 Fail = _cli.FilesFail,
+                ActionIndex = ActionIndex,
+                Success = !result.WasCancelled && result.ExitCode == 0,
             };
             long totalBytes = _cli.TotalBytes > 0 ? _cli.TotalBytes : (_currentTask?.TotalBytes ?? 0);
             if (totalBytes > 0 && _runTimer.ElapsedMilliseconds > 0)
@@ -581,6 +594,20 @@ public class MainViewModel : ObservableObject
             var m = System.Text.RegularExpressions.Regex.Match(line, @"skipped\s+(\d+)");
             if (m.Success && int.TryParse(m.Groups[1].Value, out var n)) _skipFiles = n;
         }
+        UpdateProgressLabel();
+    }
+
+    // 批量帧尾 FILES 行
+    // UI 线程内直接调
+    public void ApplyFrameStatus(string line)
+    {
+        var m = System.Text.RegularExpressions.Regex.Match(line,
+            @"FILES (\d+)/(\d+)\s+SKIP (\d+)\s+FAIL (\d+)");
+        if (!m.Success) return;
+        _doneFiles = int.Parse(m.Groups[1].Value);
+        _totalFiles = int.Parse(m.Groups[2].Value);
+        _skipFiles = int.Parse(m.Groups[3].Value);
+        _failFiles = int.Parse(m.Groups[4].Value);
         UpdateProgressLabel();
     }
 
@@ -650,6 +677,9 @@ public class MainViewModel : ObservableObject
             IdentityPath = Identity,
             RestoreName = RestoreName,
             WriteSha256 = Sha256,
+            ExcludePatterns = ExcludeText.Split(',',
+                StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList(),
+            SkipHidden = SkipHidden,
             Compress = Compress,
             CompressionLevel = Compress ? CompressLevel : 0,
             UseX448 = UseX448,

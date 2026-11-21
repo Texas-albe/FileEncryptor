@@ -94,6 +94,79 @@ namespace fs = std::filesystem;
 #include <dirent.h>
 #endif
 
+// Batch filter state, set from CLI options
+static std::vector<std::string> g_exclude_patterns;
+static bool g_skip_hidden = false;
+static bool g_preserve_times = true;
+
+void batch_set_exclude_patterns(const std::vector<std::string>& patterns) {
+    g_exclude_patterns = patterns;
+}
+void batch_set_skip_hidden(bool b) { g_skip_hidden = b; }
+void batch_set_preserve_times(bool b) { g_preserve_times = b; }
+
+// Wildcard match: '*' and '?', case-insensitive
+static bool fe_wild_match_ci(const std::string& text, const std::string& pat) {
+    size_t t = 0, p = 0, star = std::string::npos, mark = 0;
+    auto eq = [](unsigned char a, unsigned char b) {
+        return std::tolower(a) == std::tolower(b);
+    };
+    while (t < text.size()) {
+        if (p < pat.size() && (pat[p] == '?' || eq((unsigned char)pat[p], (unsigned char)text[t]))) {
+            ++t; ++p;
+        } else if (p < pat.size() && pat[p] == '*') {
+            star = p++; mark = t;
+        } else if (star != std::string::npos) {
+            p = star + 1; t = ++mark;
+        } else {
+            return false;
+        }
+    }
+    while (p < pat.size() && pat[p] == '*') ++p;
+    return p == pat.size();
+}
+
+static bool fe_name_excluded(const std::string& name) {
+    for (const auto& p : g_exclude_patterns)
+        if (fe_wild_match_ci(name, p)) return true;
+    return false;
+}
+
+static bool fe_name_hidden(const std::string& name) {
+    return !name.empty() && name[0] == '.';
+}
+
+// Full-path filter for dry-run enumeration and callers without dir recursion
+bool fe_batch_filter_path(const std::string& full_path) {
+    if (full_path.empty()) return true;
+    size_t pos = full_path.find_last_of("/\\");
+    std::string name = (pos != std::string::npos) ? full_path.substr(pos + 1) : full_path;
+    if (g_skip_hidden && fe_name_hidden(name)) return false;
+    if (fe_name_excluded(name)) return false;
+    // Any excluded parent dir name prunes the whole subtree
+    size_t start = 0;
+    while (pos != std::string::npos) {
+        size_t sep = full_path.find_first_of("/\\", start);
+        if (sep == std::string::npos || sep >= pos) break;
+        std::string seg = full_path.substr(start, sep - start);
+        if (!seg.empty() && seg != "." && seg != ".." && seg.find(':') == std::string::npos &&
+            fe_name_excluded(seg)) {
+            return false;
+        }
+        start = sep + 1;
+    }
+    return true;
+}
+
+// Copy source mtime to output file (filesystem level, no format change)
+static void fe_preserve_mtime(const std::string& src, const std::string& dst) {
+    if (!g_preserve_times) return;
+    std::error_code ec;
+    auto t = fs::last_write_time(src, ec);
+    if (ec) return;
+    fs::last_write_time(dst, t, ec);
+}
+
 static bool is_directory(const std::string& path) {
 #ifdef _WIN32
     struct _stat64 st;
@@ -123,6 +196,9 @@ static void collect_files_from_dir(const std::string& dir,std::vector<std::strin
     do {
         if(wcscmp(fd.name,L".")==0||wcscmp(fd.name,L"..")==0) continue;
         std::string name=wstring_to_utf8(fd.name);
+        // filter: hidden and excluded names prune dirs too
+        if(g_skip_hidden&&((fd.attrib&_A_HIDDEN)||fe_name_hidden(name))) continue;
+        if(fe_name_excluded(name)) continue;
         std::string full=dir+"\\"+name;
         // 跳过重解析点
         if((fd.attrib&_A_SUBDIR)&&!(fd.attrib&0x0400)) {
@@ -139,7 +215,11 @@ static void collect_files_from_dir(const std::string& dir,std::vector<std::strin
     struct dirent* entry;
     while((entry=readdir(dp))!=nullptr) {
         if(strcmp(entry->d_name,".")==0||strcmp(entry->d_name,"..")==0) continue;
-        std::string full=dir+"/"+entry->d_name;
+        // filter: hidden and excluded names prune dirs too
+        std::string ename=entry->d_name;
+        if(g_skip_hidden&&fe_name_hidden(ename)) continue;
+        if(fe_name_excluded(ename)) continue;
+        std::string full=dir+"/"+ename;
         struct stat st;
         if(lstat(full.c_str(),&st)==0) {
             if(S_ISLNK(st.st_mode)) {
@@ -714,6 +794,7 @@ bool process_files(const std::vector<std::string>& input_paths,
                             print_progress(global_processed.load(),total_bytes,start_time,false);
                         }
                     },true,true,nullptr,dec_kek);
+                if(ok) fe_preserve_mtime(src_path, out_path);   // ptd mtime to plain
                 // 解密成功后处理
                 // 输入来自分卷
                 if(ok && source_action!=0) {
@@ -750,6 +831,7 @@ bool process_files(const std::vector<std::string>& input_paths,
                     }
                 }
                 if(encrypt) {
+                    fe_preserve_mtime(in_path, out_path);   // src mtime to cipher
                     if(write_sha256_enabled()) write_sha256_sidecar(out_path); // 功能10
                     if(split_bytes>0) {
                         std::string serr;

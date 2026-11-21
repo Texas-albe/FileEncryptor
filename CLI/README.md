@@ -3,7 +3,7 @@
 跨平台（Windows / Linux / macOS）文件加密命令行工具，基于 [libsodium](https://doc.libsodium.org/) 实现高强度、抗篡改、可续传的分块加密。
 
 - 磁盘文件格式默认版本 **v6**（可扩展加密容器；v4/v5 按需写出，v1~v6 全部可直接解密，旧文件无需重加密）。
-- 程序版本 **3.0.1**。
+- 程序版本 **3.2.0**。
 
 ---
 
@@ -35,6 +35,7 @@
   - 每文件 `salt` + `iv` 随机生成；每块 `nonce = sodium_increment(iv)` 逐块自增，杜绝 nonce 复用。
   - 明文 **Blake2b** 哈希写入文件头，解密后重新计算并比对，端到端验证完整性。
   - 进度文件 `.progress` 带 **HMAC-SHA512/256** 认证，防止续传劫持。
+  - 审计 JSONL（可选，`FE_AUDIT_LOG`）：受保护模式用 HMAC-SHA256 哈希链 + 单调序号 + 外部锚点；`--audit-keygen` 生成密钥，`--audit-verify` 校验首个断点，`--audit-anchor` 写锚点（可配 WebDAV）。内容仍为明文，只保证篡改可发现，不保证机密性。strict 模式（`--audit-strict` 或 `FE_AUDIT_STRICT=1`）在无审计密钥时拒绝降级为明文日志（init 失败退出码 4）；密钥文件也可经 `FE_AUDIT_KEY` 环境变量传入路径。
 - **可续传加密 / 解密**：中断后重跑可从中断点继续（含算法模式一致性校验，断点损坏或模式不匹配则安全从头重写）。
 - **批量处理**：支持目录递归、多线程并行（并发数由 YAML `worker_threads` 配置）、源文件删除（`-de`）、强制覆盖（`-y`）、断点续传（重跑自动从 `.progress` 继续）。
 - **防御文件头篡改（v4 头 HMAC 安全信封）**：v4 在 v3 头部基础上追加 32 字节 `header_hmac`，由"元数据认证密钥"（与主密钥域分离派生，标签 `FE_header_auth_v4`）对文件头前 77 字节（magic / version / mode / Argon2 参数 / salt / iv）做独立 HMAC-SHA512/256 认证；替换 salt / iv / mode 等头字段的篡改会在解密端被拒绝（仅通用错误，不泄露细节），文件头成为"安全信封"。
@@ -77,8 +78,8 @@ rm -rf out/build/linux-release
 cmake --preset linux-release
 cmake --build --preset linux-release
 # 构建完成后自动：
-#   - 拷到 out/Ubuntu-26.04/build/linux-release/bin/FileEncryptorCLI-3.0.1-cmd-Linux
-#   - cpack 生成 out/packages/file-encryptor-cli-3.0.1-Linux.deb 和 .rpm
+#   - 拷到 out/Ubuntu-26.04/build/linux-release/bin/FileEncryptorCLI-3.2.0-cmd-Linux
+#   - cpack 生成 out/packages/file-encryptor-cli-3.2.0-Linux.deb 和 .rpm
 ```
 
 > 若系统中同时存在多个 libsodium（如 apt 旧版 + `/usr/local` 新版），可显式指定：
@@ -87,9 +88,9 @@ cmake --build --preset linux-release
 最终用户安装：
 
 ```bash
-sudo dpkg -i file-encryptor-cli-3.0.1-Linux.deb
+sudo dpkg -i file-encryptor-cli-3.2.0-Linux.deb
 # 或
-sudo rpm -ivh file-encryptor-cli-3.0.1-Linux.rpm
+sudo rpm -ivh file-encryptor-cli-3.2.0-Linux.rpm
 ```
 
 ### Windows（预编译 libsodium + MSVC）
@@ -226,15 +227,15 @@ FileEncryptorCLI -G -o ./keys --key-stdin > pubkey.txt
 # 用已有的盐 + 同一个密码重新派生出同一对密钥（私钥文件丢了也能找回）
 FileEncryptorCLI -G -o ./keys --key-stdin --salt ./keys/rage_derive_salt.txt
 
-# 由私钥反推公钥
-FileEncryptorCLI -Y -k ./keys/rage_private.txt
+# 由私钥反推公钥（私钥文件为 FEPK1 加密容器，需 FE_KEY_PASS / FE_KEY_FILE 或交互输入口令）
+FE_KEY_PASS=... FileEncryptorCLI -Y -k ./keys/rage_private.txt
 
 # 非对称加密：直接用公钥字符串，或给公钥文件
 FileEncryptorCLI -e secret.docx -m x25519 -r age1... -o ./out
 FileEncryptorCLI -e secret.docx -m x25519 -r ./recipients.txt -o ./out
 
-# 解密：私钥以文件形式经 -k 传入（不走 stdin / 环境变量）
-FileEncryptorCLI -d secret.docx.ptd -m x25519 -k ./keys/rage_private.txt -o ./out
+# 解密：私钥以文件形式经 -k 传入（FEPK1 加密容器同样支持，口令来源见 -g 说明）
+FE_KEY_PASS=... FileEncryptorCLI -d secret.docx.ptd -m x25519 -k ./keys/rage_private.txt -o ./out
 
 # 密钥库：导入 / 查看 / 派生缓存公钥 / 按名称使用
 FileEncryptorCLI -L add ./keys/rage_private.txt --as backup --alias "异地备份" --notes "offsite"
@@ -242,7 +243,8 @@ FileEncryptorCLI -L list
 FileEncryptorCLI -L pub backup                 # 派生并缓存公钥（索引可见）
 FileEncryptorCLI -e secret.docx -m x25519 -K backup -o ./out
 FileEncryptorCLI -d secret.docx.ptd -m x25519 -K backup -o ./out
-FileEncryptorCLI -L export backup ./out        # 导出材料文件（仅拥有者可读）
+FileEncryptorCLI -L export backup ./out        # 导出 FEPK1 加密材料（强制 Argon2id，跨机器可解）
+FileEncryptorCLI -L export backup ./out --key-export-plain   # 显式导出明文（给 age/rage 等第三方工具）
 FileEncryptorCLI -L remove backup
 
 续传：单文件（`-e`/`-d`）与批量（`-be`/`-bd`）模式均默认自动；中断后重跑同一命令，若存在同名 `.progress` 即从中断点继续，无需额外开关。
@@ -311,7 +313,8 @@ FileEncryptorCLI -bd ./encrypted_dir -o ./decrypted
 
 非对称模式（`-m x25519` / `-m x448`）采用**混合加密**：每个文件用随机 DEK 加密，再用收件人公钥（X25519 或 X448）把 DEK 封装进 `.ptd` v6 容器的收件人条目区。无需与对方共享密码，只需交换公钥；可指定多个收件人（每人都能独立解密），同一容器可混合两种曲线。底层由 OpenSSL `EVP_PKEY` 完成 ECDH。
 
-- **密钥对生成**：`-g`（`-x448` 切到 X448）——**公钥打印到 stdout**（便于重定向 / 管道给 `-r`），**公钥同时写入 `-o <dir>/rage_public.txt`**、**私钥写入 `-o <dir>/rage_private.txt`**（同名覆盖保护同私钥）；提示信息一律走 stderr，保证 stdout 是干净的一行公钥。
+- **私钥全文加密（FEPK1）**：`-g` / `-G` / `--wm-keygen` / `-L add` 写出的私钥文件一律为 `FEPK1` 加密容器（magic `FEPK1` + XChaCha20-Poly1305）。Windows 默认 DPAPI CurrentUser（无口令、绑定本机本用户）；设置 `FE_KEY_PASS`（口令）或 `FE_KEY_FILE`（口令文件，适合 CI 无人值守）时走 Argon2id（3 ops / 64 MiB）；两个环境变量在进程内首次读取后立即从进程环境抹除（与 `ENCRYPTOR_KEY` 同款），值仅保留于进程内存缓存；Linux 无环境变量时交互输入两次。读取端（`-k`、`--identity`、`-L add/pub/export`、`--wm` 签名）按文件头自动识别并解密，旧明文私钥仍可读取但会告警建议重新加密保存。口令错误或文件被篡改会明确报错（AEAD 认证失败）。
+- **密钥对生成**：`-g`（`-x448` 切到 X448）——**公钥打印到 stdout**（便于重定向 / 管道给 `-r`），**公钥同时写入 `-o <dir>/rage_public.txt`**、**私钥写入 `-o <dir>/rage_private.txt`**（FEPK1 加密，同名覆盖保护同私钥）；提示信息一律走 stderr，保证 stdout 是干净的一行公钥。
 - **加密**：`-r <pub|file>` 给收件人公钥——可直接是 `age1...` / `X448-...` 字符串，也可以是公钥文件（每行一个，可空行 / `#` 注释 / `publickey:` 前缀），输出 `<名>.ptd`。
 - **解密**：**必须**用私钥文件：`-k <私钥文件>`（内容为 `AGE-SECRET-KEY-...` / `X448SEC-...`，自动去除首尾空白 / 换行）。身份私钥不再经 stdin 传入，**绝不走环境变量**。
 

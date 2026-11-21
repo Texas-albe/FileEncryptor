@@ -13,7 +13,7 @@ public class StrengthResult
 
 public static class PasswordStrengthService
 {
-    public const int MinPasswordLength = 8;
+    public const int MinPasswordLength = 12;
 
     private static int CharsetSize(string pw, out bool lower, out bool upper, out bool digit, out bool symbol)
     {
@@ -103,7 +103,7 @@ public static class PasswordStrengthService
         // 非 ASCII
         int kinds = (lower ? 1 : 0) + (upper ? 1 : 0) + (digit ? 1 : 0) +
                     (symbol ? 1 : 0) + (nonAscii ? 1 : 0);
-        if (kinds >= 2 || len >= 16)
+        if (kinds >= 3 || len >= 16)
         {
             bool allSame = true;
             for (int i = 1; i < password.Length; i++)

@@ -179,6 +179,8 @@ bool uninstall_service(const std::string& vault, std::string& err);
 #if FE_HAVE_WINFSP
 extern std::string g_svc_vault, g_svc_pass, g_svc_mp, g_svc_lib;  // 服务命令行参数
 extern bool        g_svc_rw;                     // M6 可写挂载开关
-extern uint32_t    g_svc_idle;                   // M5 空闲超时自动锁
 int  fe_winmount_service();                      // FspLoad + FspServiceRun
 #endif
+// M5 空闲超时自动锁（跨平台：ipc / main / watchdog 共用）。C++17 inline 变量，跨 TU 唯一定义，
+// 避免 Linux 下 g_svc_idle 定义被 fe_winfsp.cpp 的 #if FE_HAVE_WINFSP 块吞掉导致链接失败。
+inline uint32_t    g_svc_idle = 0;

@@ -154,12 +154,47 @@
                             <Picker x:Name="PkSplit" Grid.Column="1" Title="{local:Zh 不分卷}"
                                     VerticalOptions="Center" FontSize="{StaticResource FontSizeSub}" />
                         </Grid>
+                </VerticalStackLayout>
+            </Border>
+
+                <Border x:Name="GroupWm" Style="{StaticResource Card}" IsVisible="False">
+                    <VerticalStackLayout Spacing="{StaticResource SpaceLg}">
+                        <Label Text="{local:Zh 水印签名}" Style="{StaticResource SectionTitle}" />
+                        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="{StaticResource GridGap}">
+                            <VerticalStackLayout Spacing="{StaticResource SpaceXs}">
+                                <Label Text="{local:Zh 加密时附带签名水印}" FontSize="{StaticResource FontSizeBody}" />
+                                <Label Text="{local:Zh 用你的私钥给密文签名，事后可校验来源与完整性。}" Style="{StaticResource Caption}" />
+                            </VerticalStackLayout>
+                            <Switch x:Name="SwWm" Grid.Column="1" VerticalOptions="Center" Toggled="OnWmToggled" />
+                        </Grid>
+                        <BoxView Style="{StaticResource Divider}" />
+                        <VerticalStackLayout x:Name="WmBody" Spacing="{StaticResource SpaceMd}">
+                            <Label Text="{local:Zh 签名私钥（PEM）}" Style="{StaticResource Caption}" />
+                            <Border Style="{StaticResource FieldBorder}">
+                                <Editor x:Name="EdtWmPriv" Placeholder="{local:Zh 粘贴或生成签名私钥}"
+                                        HeightRequest="90" AutoSize="Disabled"
+                                        FontSize="{StaticResource FontSizeCaption}" />
+                            </Border>
+                            <Grid ColumnDefinitions="*,*" ColumnSpacing="{StaticResource SpaceLg}">
+                                <Button Grid.Column="0" Text="{local:Zh 生成密钥对…}"
+                                        Style="{StaticResource QuietButton}" FontSize="{StaticResource FontSizeCaption}"
+                                        Clicked="OnWmGen" />
+                                <Button Grid.Column="1" Text="{local:Zh 从文件载入…}"
+                                        Style="{StaticResource QuietButton}" FontSize="{StaticResource FontSizeCaption}"
+                                        Clicked="OnWmLoad" />
+                            </Grid>
+                            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="{StaticResource GridGap}">
+                                <Label Text="{local:Zh 签名算法}" FontSize="{StaticResource FontSizeBody}" VerticalOptions="Center" />
+                                <Picker x:Name="PkWmAlg" Grid.Column="1" Title="{local:Zh 签名算法}"
+                                        VerticalOptions="Center" FontSize="{StaticResource FontSizeSub}" />
+                            </Grid>
+                        </VerticalStackLayout>
                     </VerticalStackLayout>
                 </Border>
 
-                <Border Style="{StaticResource Card}">
-                    <VerticalStackLayout Spacing="{StaticResource SpaceLg}">
-                        <Label Text="{local:Zh 要处理的文件}" Style="{StaticResource SectionTitle}" />
+            <Border Style="{StaticResource Card}">
+                <VerticalStackLayout Spacing="{StaticResource SpaceLg}">
+                    <Label Text="{local:Zh 要处理的文件}" Style="{StaticResource SectionTitle}" />
                         <Grid ColumnDefinitions="*,*" ColumnSpacing="{StaticResource SpaceLg}">
                             <Button Grid.Column="0" Text="{local:Zh 选择文件…}"
                                     Style="{StaticResource SecondaryButton}"
@@ -217,6 +252,11 @@
                             <Button Grid.Column="0" Text="{local:Zh 钥匙保管…}"
                                     Style="{StaticResource SecondaryButton}" FontSize="{StaticResource FontSizeSub}"
                                     Clicked="OnFekw" />
+                        </Grid>
+                        <Grid ColumnDefinitions="*,*" ColumnSpacing="{StaticResource SpaceLg}">
+                            <Button Grid.Column="0" Text="{local:Zh 校验水印…}"
+                                    Style="{StaticResource SecondaryButton}" FontSize="{StaticResource FontSizeSub}"
+                                    Clicked="OnWmVerify" />
                         </Grid>
                     </VerticalStackLayout>
                 </Border>

@@ -30,6 +30,9 @@ FileEncryptor/
 │   ├── ViewModels/
 │   ├── installer/      # WiX v4 MSI 安装包
 │   └── build.cmd
+├── GUI-Android/        # Android 图形界面（.NET MAUI，C#）
+│   └── Services/       # 库服务、音乐播放器等
+├── shared/             # 三端共享数据文件（成就定义 achievements.json）
 ├── CERT/               # 自签名代码签名证书（root.cer/.pvk/.spc，本机私有，不入库）
 ├── FileEncryptor.slnx  # VS 解决方案（GUI-WinUI + installer）
 └── README.md

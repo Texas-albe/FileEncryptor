@@ -135,6 +135,11 @@ inline constexpr size_t HEADER_HMAC_COVER_V5 = HEADER_SIZE_V5 - HASH_SIZE - HEAD
 inline constexpr size_t HEADER_HMAC_COVER_V6 = HEADER_SIZE_V6 - HASH_SIZE - HEADER_HMAC_SIZE; 
 inline constexpr size_t V6_CONTAINER_LEN = 24 + 64 + 4 + 33; // dek_nonce+dek_box+key_version+reserved
 
+// v6 reserved[4] 明文哈希标志：0=裸 BLAKE2b（存量），1=keyed（防探测）
+// reserved[4] 位于 header_hmac 覆盖区（前 192B），篡改会被校验拦下
+inline constexpr size_t V6_HASH_FLAG_OFF = 4;
+inline constexpr unsigned char V6_HASH_FLAG_KEYED = 1;
+
 // 载荷 AAD 只覆盖稳定
 // 即使 DEK 不变
 inline constexpr size_t HEADER_AAD_COVER_V6 = HEADER_HMAC_COVER_V5; 

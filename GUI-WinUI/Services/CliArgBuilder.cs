@@ -195,6 +195,20 @@ public static class CliArgBuilder
             args.Add("--restore-name");
         }
 
+        // 批量过滤
+        bool isBatch = options.Action is CryptoAction.BatchEncrypt or CryptoAction.BatchDecrypt;
+        if (isBatch)
+        {
+            foreach (var pat in options.ExcludePatterns)
+            {
+                if (!string.IsNullOrWhiteSpace(pat))
+                {
+                    args.Add("--exclude"); args.Add(pat.Trim());
+                }
+            }
+            if (options.SkipHidden) args.Add("--skip-hidden");
+        }
+
         // SHA256 校验单
         if (options.WriteSha256 && options.Action is CryptoAction.Encrypt or CryptoAction.BatchEncrypt)
         {

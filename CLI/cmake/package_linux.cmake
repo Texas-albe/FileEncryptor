@@ -85,3 +85,17 @@ if(_pkgs)
 else()
   message(WARNING "[package] 未生成任何安装包，请检查上方 cpack 输出")
 endif()
+
+# 清理旧版残留：cpack 失败时不会产出新版、历史包会一直留在 out/packages，
+# 与 Release 目录的 _clean_old_linux_pkgs 对称，保证此处也只留当前版本。
+file(STRINGS "${FE_PKG_BUILD_DIR}/CPackConfig.cmake" _cpv REGEX "CPACK_PACKAGE_VERSION ")
+string(REGEX REPLACE ".*\"([0-9]+\\.[0-9]+\\.[0-9]+)\".*" "\\1" _cur_ver "${_cpv}")
+if(_cur_ver)
+  file(GLOB _all_pkgs "${FE_PKG_OUT_DIR}/*.deb" "${FE_PKG_OUT_DIR}/*.rpm")
+  foreach(_p IN LISTS _all_pkgs)
+    if(NOT _p MATCHES "file-encryptor-cli-${_cur_ver}-Linux")
+      file(REMOVE "${_p}")
+      message(STATUS "[package] 清理旧版残留: ${_p}")
+    endif()
+  endforeach()
+endif()

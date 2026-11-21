@@ -45,4 +45,6 @@ public class TaskRecord
     // M18
     // 读取侧据此提示
     [JsonPropertyName("pathsStripped")] public bool PathsStripped { get; set; }
+    // path_ct: encrypted full-path payload (DPAPI on Windows)
+    [JsonPropertyName("pathCt")] public string PathCt { get; set; } = "";
 }

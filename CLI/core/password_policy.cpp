@@ -67,7 +67,7 @@ bool meets_policy(const std::string& pw, size_t min_len, int min_classes,
 }
 
 bool meets_policy(const std::string& pw, std::string& reason) {
-    return meets_policy(pw.data(), pw.size(), 8, 2, reason);
+    return meets_policy(pw.data(), pw.size(), 12, 3, reason);
 }
 
 int strength_score(const std::string& pw) {

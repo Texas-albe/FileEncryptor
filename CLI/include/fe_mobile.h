@@ -149,6 +149,27 @@ FE_M_API int fe_m_pqc_open(const unsigned char* blob, size_t blob_len,
                     const unsigned char* vault_salt, size_t salt_len,
                     unsigned char* out_pass, size_t cap, size_t* out_pass_len);
 
+// 水印签名（与桌面 --watermark / --wm-sign / --wm-verify 对齐）
+// 加密时附带水印；wm_priv_pem 为签名私钥 PEM 文本
+// wm_pqc=1 用 ML-DSA-65，=0 用 RSA-3072
+// 内部先落临时 fstream 再拷到 out_fd，保证「容器+水印+名尾」顺序
+FE_M_API int fe_m_encrypt_fd_wm(int in_fd, uint64_t in_size, int out_fd,
+                    const char* password, size_t pass_len,
+                    int mode, int compress_level,
+                    const char* wm_priv_pem, int wm_pqc,
+                    fe_m_progress_fn progress, void* user);
+
+// 校验水印。pub_pem 可空（只展示不验签）
+// 返回 JSON：timestamp/machine_id_hex/nonce_hex/has_signature/verify_ok 等
+FE_M_API int fe_m_wm_verify(const char* ptd_path, const char* pub_pem, int pqc,
+                    char* out_json, size_t cap);
+
+// 生成水印签名密钥
+// out_pub/out_priv 为 PEM 文本缓冲（建议各 16384 字）
+FE_M_API int fe_m_wm_generate_keypair(int pqc,
+                    char* out_pub, size_t cap_pub,
+                    char* out_priv, size_t cap_priv);
+
 #ifdef __cplusplus
 }
 #endif

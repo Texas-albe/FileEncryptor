@@ -4,7 +4,7 @@ Windows 平台的 FileEncryptor 图形界面，基于 **WinUI 3 (Windows App SDK
 
 Linux 平台的 Qt6 版本见 [`../GUI-Qt/`](../GUI-Qt/)。
 
-- 程序版本 **3.0.1**（配套 CLI 3.0.1）。
+- 程序版本 **3.2.0**（配套 CLI 3.2.0）。
 
 ## 项目定位
 
@@ -13,8 +13,8 @@ Linux 平台的 Qt6 版本见 [`../GUI-Qt/`](../GUI-Qt/)。
 | 项目 | 产物 | 技术栈 |
 |---|---|---|
 | `../CLI/` | `FileEncryptorCLI.exe` | C++17 / CMake / libsodium |
-| **本项目** | `FileEncryptorGUI-3.0.1-WinUI-Windows.msi` | C# / .NET 8 / WinUI 3 |
-| `../GUI-Qt/` | `FileEncryptorGUI-3.0.1-Qt-Linux` | C++ / Qt6 |
+| **本项目** | `FileEncryptorGUI-3.2.0-WinUI-Windows.msi` | C# / .NET 8 / WinUI 3 |
+| `../GUI-Qt/` | `FileEncryptorGUI-3.2.0-Qt-Linux` | C++ / Qt6 |
 
 ## 功能
 
@@ -27,8 +27,7 @@ Linux 平台的 Qt6 版本见 [`../GUI-Qt/`](../GUI-Qt/)。
 - 磨砂玻璃背景（Acrylic），支持自定义背景图
 - 主题切换：「视图」菜单里可选浅色 / 深色 / 跟随系统，选择即生效并记住
 - 文件列表勾选：仅勾选的条目参与执行
-- 命令预览实时显示当前参数
-- 在系统控制台窗口中运行 CLI：进度、结果与提示实时可见，任务结束后窗口保留 3 秒再关闭
+- 内置终端：任务开始时自动打开对应标签页，实时显示实际调用的 CLI 命令与运行输出（进度、结果、提示），不再弹出独立控制台窗口
 - 界面语言 简体中文 / English / Русский，切换即时生效，无需重启
 - 任务历史：清空全部、右键删除、双击回放全部参数
 - 任务完成汇总弹窗（用时、平均速度、加密后大小、完成/跳过/失败）

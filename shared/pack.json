@@ -1,0 +1,24 @@
+{
+  "pack_format": 1,
+  "description": "FileEncryptor 成就数据包（Minecraft 进度格式）",
+  "achievements": [
+    "fileencryptor:story/root",
+    "fileencryptor:story/first_encrypt",
+    "fileencryptor:story/first_decrypt",
+    "fileencryptor:story/first_mount"
+  ],
+  "triggers": {
+    "fileencryptor:tick": "应用启动后触发一次，无条件达成",
+    "fileencryptor:impossible": "永不达成，逻辑与隐藏成就占位用",
+    "fileencryptor:encrypt": "累计加密文件数，conditions.count 可设界限",
+    "fileencryptor:decrypt": "累计解密文件数",
+    "fileencryptor:decrypt_failed": "解密失败次数（口令错误等）",
+    "fileencryptor:mount": "累计挂载加密盘次数",
+    "fileencryptor:audit_enabled": "开启审计日志时触发",
+    "fileencryptor:pqc_enabled": "启用后量子加密时触发",
+    "fileencryptor:snapshot_created": "累计创建快照次数",
+    "fileencryptor:share_created": "累计创建分享密文次数",
+    "fileencryptor:music_play": "累计播放曲目次数",
+    "fileencryptor:music_complete": "累计听完全曲次数"
+  }
+}

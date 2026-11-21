@@ -6,6 +6,7 @@ using FileEncryptorMobile.Services;
 using Microsoft.Maui.ApplicationModel;
 using Microsoft.Maui.ApplicationModel.DataTransfer;
 using Microsoft.Maui.Storage;
+using System.Text;
 
 namespace FileEncryptorMobile;
 
@@ -70,6 +71,12 @@ public partial class CryptoPage : ContentPage
             L10n.T("密码（兼容旧版）"),
         };
         PkFekwAlg.SelectedIndex = 0;
+        PkWmAlg.ItemsSource = new[]
+        {
+            L10n.T("后量子签名（ML-DSA-65）"),
+            L10n.T("RSA-3072 签名"),
+        };
+        PkWmAlg.SelectedIndex = 0;
         RefreshMode();
         _outDir = LoadOutDir();
         LblOut.Text = _outDir;
@@ -213,6 +220,8 @@ public partial class CryptoPage : ContentPage
         EdtIdentity.IsVisible = _asymMode && !_encrypting;
         RowRestore.IsVisible = !_encrypting && !_asymMode;
         BtnVerify.IsVisible = !_asymMode;
+        GroupWm.IsVisible = _encrypting && !_asymMode;
+        WmBody.IsVisible = SwWm.IsToggled;
         LblKeyModeHint.Text = !_asymOk
             ? L10n.T("当前版本不支持钥匙加密。")
             : _encrypting
@@ -642,7 +651,8 @@ public partial class CryptoPage : ContentPage
         bool Enc, bool DelSrc, bool Force, bool Restore, bool Sha, bool Pack,
         ulong SplitBytes, string OutDir, bool DirMode, string Root,
         FeMMode Mode, int Compress, Dictionary<string, string> OutNames,
-        bool Asym, byte[] AsymData);
+        bool Asym, byte[] AsymData,
+        bool Wm, string WmPriv, bool WmPqc);
 
     private async void OnRun(object? sender, EventArgs e)
     {
@@ -686,6 +696,11 @@ public partial class CryptoPage : ContentPage
         if (restore && !await DisplayAlertAsync(L10n.T("恢复原始文件名"),
                 L10n.T("每个文件都要额外派生密钥，批量会明显变慢。继续？"), L10n.T("继续"), L10n.T("取消"))) return;
 
+        bool wm = enc && !_asymMode && SwWm.IsToggled;
+        string wmPriv = wm ? (EdtWmPriv.Text ?? "").Trim() : "";
+        bool wmPqc = wm && PkWmAlg.SelectedIndex == 0;
+        if (wm && wmPriv.Length == 0) { ShowMsg(L10n.T("粘贴或生成签名私钥")); return; }
+
         var inputs = _inputs.ToList();
         var outNames = new Dictionary<string, string>(_outNames);
         bool dirMode = _dirMode;
@@ -716,7 +731,8 @@ public partial class CryptoPage : ContentPage
             }
             var opt = new JobOptions(enc, delSrc, force, restore, sha, pack, splitBytes,
                 outDir, dirMode, root, mode.Mode, compressLevel, outNames,
-                _asymMode, pwBytes!);
+                _asymMode, pwBytes!,
+                wm, wmPriv, wmPqc);
             res = await ProgressPage.RunAsync(this, title, (tracker, ct) => Task.Run(
                 () => Process(tracker, ct, inputs, pwBytes!, opt)));
         }
@@ -729,6 +745,10 @@ public partial class CryptoPage : ContentPage
             EntryPwd2.Text = "";
         }
 
+        // 成就触发 仅成功任务
+        if (res.Ok > 0)
+            Services.AchievementService.Observe(
+                enc ? "fileencryptor:encrypt" : "fileencryptor:decrypt", res.Ok);
         string msg = L10n.F("成功 {0} 个", res.Ok) + (res.Failed > 0 ? L10n.F("，失败 {0} 个", res.Failed) : "")
             + (res.Remaining > 0 ? L10n.F("，剩余 {0} 个未处理", res.Remaining) : "");
         if (res.Errors.Count > 0) msg += "\n" + string.Join("\n", res.Errors);
@@ -831,6 +851,10 @@ public partial class CryptoPage : ContentPage
                                 (d, t) => tracker.ReportSlot(i, d, t));
                         else if (opt.Asym)
                             FileCryptoService.DecryptAsym(input, part, opt.AsymData, opt.Force,
+                                (d, t) => tracker.ReportSlot(i, d, t));
+                        else if (opt.Enc && opt.Wm)
+                            FileCryptoService.EncryptWm(input, part, password, opt.Mode, opt.Compress,
+                                opt.WmPriv, opt.WmPqc,
                                 (d, t) => tracker.ReportSlot(i, d, t));
                         else if (opt.Enc)
                             FileCryptoService.Encrypt(input, part, password, opt.Mode, opt.Compress,
@@ -1002,6 +1026,86 @@ public partial class CryptoPage : ContentPage
     {
         EdtRecips.Text = "";
         EdtIdentity.Text = "";
+    }
+
+    // 水印签名
+    private void OnWmToggled(object? sender, ToggledEventArgs e) => WmBody.IsVisible = e.Value;
+
+    private async void OnWmGen(object? sender, EventArgs e)
+    {
+        try
+        {
+            bool pqc = PkWmAlg.SelectedIndex != 1;
+            var pair = await Task.Run(() => FileCryptoService.WmGenerateKeypair(pqc));
+            EdtWmPriv.Text = pair.Priv;
+            ShowInfo(L10n.T("签名密钥对已生成"),
+                L10n.T("公钥（交给对方 / 用于校验）：") + "\n" + pair.Pub
+                + "\n\n" + L10n.T("私钥 PEM（自己离线保管）：") + "\n" + pair.Priv);
+        }
+        catch (Exception ex) { ShowMsg(L10n.T("钥匙生成失败：") + ex.Message); }
+    }
+
+    private async void OnWmLoad(object? sender, EventArgs e)
+    {
+        try
+        {
+            MainActivity.NoteExternalLaunch();
+            var f = await FilePicker.Default.PickAsync();
+            if (f is null) return;
+            string text = await File.ReadAllTextAsync(f.FullPath ?? "");
+            EdtWmPriv.Text = text.Trim();
+        }
+        catch (Exception ex) { ShowMsg(L10n.T("读取私钥失败：") + ex.Message); }
+    }
+
+    private async void OnWmVerify(object? sender, EventArgs e)
+    {
+        try
+        {
+            MainActivity.NoteExternalLaunch();
+            var f = await FilePicker.Default.PickAsync();
+            if (f is null) return;
+            string local = PtdToolkit.Materialize(f.FullPath ?? "");
+            try
+            {
+                string? pub = null;
+                if (await DisplayAlertAsync(L10n.T("校验水印"),
+                        L10n.T("是否同时提供签名者的公钥（PEM）以校验签名？"),
+                        L10n.T("提供公钥"), L10n.T("仅看元数据")))
+                {
+                    var pk = await FilePicker.Default.PickAsync();
+                    if (pk is not null) pub = (await File.ReadAllTextAsync(pk.FullPath ?? "")).Trim();
+                }
+                bool pqc = PkWmAlg.SelectedIndex != 1;
+                var info = await Task.Run(() => FileCryptoService.WmVerify(local, pub, pqc));
+                ShowInfo(L10n.T("水印信息"), FormatWm(info));
+            }
+            finally { PtdToolkit.Delete(local); }
+        }
+        catch (Exception ex) { ShowMsg(L10n.T("校验水印失败：") + ex.Message); }
+    }
+
+    private static string FormatWm(FileCryptoService.WatermarkInfo info)
+    {
+        if (!info.Found) return L10n.T("没有找到水印。");
+        var sb = new StringBuilder();
+        sb.AppendLine(L10n.T("已签名") + "：" + (info.HasSignature ? L10n.T("已签名") : L10n.T("未签名")));
+        if (info.HasSignature)
+        {
+            if (!info.VerifyAttempted)
+                sb.AppendLine(L10n.T("签名校验：") + L10n.T("未提供公钥，跳过"));
+            else
+                sb.AppendLine(L10n.T("签名校验：") + (info.VerifyOk ? L10n.T("校验通过") : L10n.T("校验未通过")));
+        }
+        if (info.Timestamp > 0)
+            sb.AppendLine(L10n.T("时间戳：") + DateTimeOffset.FromUnixTimeSeconds((long)info.Timestamp).ToString("yyyy-MM-dd HH:mm:ss") + " UTC");
+        if (info.MachineIdHex.Length > 0)
+            sb.AppendLine(L10n.T("机器 ID：") + info.MachineIdHex);
+        if (info.NonceHex.Length > 0)
+            sb.AppendLine(L10n.T("随机数：") + info.NonceHex);
+        if (info.Error.Length > 0)
+            sb.AppendLine(L10n.T("错误：") + info.Error);
+        return sb.ToString().TrimEnd();
     }
 
     // FEKW 工具

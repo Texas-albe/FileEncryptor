@@ -21,9 +21,9 @@
 #endif
 
 #define FE_VERSION_MAJOR 3
-#define FE_VERSION_MINOR 1
-#define FE_VERSION_PATCH 1
-#define FE_VERSION_STRING "3.1.1"
+#define FE_VERSION_MINOR 2
+#define FE_VERSION_PATCH 0
+#define FE_VERSION_STRING "3.2.0"
 
 // -force-decrypt
 extern bool g_force_decrypt;
@@ -231,6 +231,13 @@ bool fe_ptd_argon2_key(const std::string& ptd_path,
 void set_write_sha256(bool b);
 bool write_sha256_enabled();
 void write_sha256_sidecar(const std::string& file);
+
+// Batch filters and output mtime preservation
+void batch_set_exclude_patterns(const std::vector<std::string>& patterns);
+void batch_set_skip_hidden(bool b);
+void batch_set_preserve_times(bool b);
+// true = keep: wildcard match on basename and parent dir names, dot-hidden check
+bool fe_batch_filter_path(const std::string& full_path);
 
 // 批量处理
 // 为省去每文件昂

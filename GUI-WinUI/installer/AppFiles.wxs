@@ -444,9 +444,6 @@
       <Component Id="f116" Directory="INSTALLFOLDER">
         <File Source="$(var.PublishDir)\marshal.dll" />
       </Component>
-      <Component Id="f117" Directory="INSTALLFOLDER">
-        <File Source="$(var.PublishDir)\Microsoft.CSharp.dll" />
-      </Component>
       <Component Id="f118" Directory="INSTALLFOLDER">
         <File Source="$(var.PublishDir)\Microsoft.DiaSymReader.Native.amd64.dll" />
       </Component>
@@ -522,20 +519,11 @@
       <Component Id="f142" Directory="dir_Microsoft_UI_Xaml_Assets">
         <File Source="$(var.PublishDir)\Microsoft.UI.Xaml\Assets\NoiseAsset_256x256_PNG.png" />
       </Component>
-      <Component Id="f143" Directory="INSTALLFOLDER">
-        <File Source="$(var.PublishDir)\Microsoft.VisualBasic.Core.dll" />
-      </Component>
-      <Component Id="f144" Directory="INSTALLFOLDER">
-        <File Source="$(var.PublishDir)\Microsoft.VisualBasic.dll" />
-      </Component>
       <Component Id="f145" Directory="INSTALLFOLDER">
         <File Source="$(var.PublishDir)\Microsoft.Web.WebView2.Core.dll" />
       </Component>
       <Component Id="f146" Directory="INSTALLFOLDER">
         <File Source="$(var.PublishDir)\Microsoft.Web.WebView2.Core.winmd" />
-      </Component>
-      <Component Id="f147" Directory="INSTALLFOLDER">
-        <File Source="$(var.PublishDir)\Microsoft.Win32.Primitives.dll" />
       </Component>
       <Component Id="f148" Directory="INSTALLFOLDER">
         <File Source="$(var.PublishDir)\Microsoft.Win32.Registry.dll" />
@@ -672,9 +660,6 @@
       <Component Id="f192" Directory="INSTALLFOLDER">
         <File Source="$(var.PublishDir)\mscordbi.dll" />
       </Component>
-      <Component Id="f193" Directory="INSTALLFOLDER">
-        <File Source="$(var.PublishDir)\mscorlib.dll" />
-      </Component>
       <Component Id="f194" Directory="INSTALLFOLDER">
         <File Source="$(var.PublishDir)\mscorrc.dll" />
       </Component>
@@ -704,9 +689,6 @@
       </Component>
       <Component Id="f203" Directory="dir_ne_NP">
         <File Source="$(var.PublishDir)\ne-NP\Microsoft.UI.Xaml.Phone.dll.mui" />
-      </Component>
-      <Component Id="f204" Directory="INSTALLFOLDER">
-        <File Source="$(var.PublishDir)\netstandard.dll" />
       </Component>
       <Component Id="f205" Directory="dir_nl_NL">
         <File Source="$(var.PublishDir)\nl-NL\Microsoft.ui.xaml.dll.mui" />
@@ -819,12 +801,6 @@
       <Component Id="f241" Directory="dir_sv_SE">
         <File Source="$(var.PublishDir)\sv-SE\Microsoft.UI.Xaml.Phone.dll.mui" />
       </Component>
-      <Component Id="f242" Directory="INSTALLFOLDER">
-        <File Source="$(var.PublishDir)\System.AppContext.dll" />
-      </Component>
-      <Component Id="f243" Directory="INSTALLFOLDER">
-        <File Source="$(var.PublishDir)\System.Buffers.dll" />
-      </Component>
       <Component Id="f244" Directory="INSTALLFOLDER">
         <File Source="$(var.PublishDir)\System.Collections.Concurrent.dll" />
       </Component>
@@ -840,17 +816,8 @@
       <Component Id="f248" Directory="INSTALLFOLDER">
         <File Source="$(var.PublishDir)\System.Collections.Specialized.dll" />
       </Component>
-      <Component Id="f249" Directory="INSTALLFOLDER">
-        <File Source="$(var.PublishDir)\System.ComponentModel.Annotations.dll" />
-      </Component>
-      <Component Id="f250" Directory="INSTALLFOLDER">
-        <File Source="$(var.PublishDir)\System.ComponentModel.DataAnnotations.dll" />
-      </Component>
       <Component Id="f251" Directory="INSTALLFOLDER">
         <File Source="$(var.PublishDir)\System.ComponentModel.dll" />
-      </Component>
-      <Component Id="f252" Directory="INSTALLFOLDER">
-        <File Source="$(var.PublishDir)\System.ComponentModel.EventBasedAsync.dll" />
       </Component>
       <Component Id="f253" Directory="INSTALLFOLDER">
         <File Source="$(var.PublishDir)\System.ComponentModel.Primitives.dll" />
@@ -858,35 +825,8 @@
       <Component Id="f254" Directory="INSTALLFOLDER">
         <File Source="$(var.PublishDir)\System.ComponentModel.TypeConverter.dll" />
       </Component>
-      <Component Id="f255" Directory="INSTALLFOLDER">
-        <File Source="$(var.PublishDir)\System.Configuration.dll" />
-      </Component>
-      <Component Id="f256" Directory="INSTALLFOLDER">
-        <File Source="$(var.PublishDir)\System.Console.dll" />
-      </Component>
-      <Component Id="f257" Directory="INSTALLFOLDER">
-        <File Source="$(var.PublishDir)\System.Core.dll" />
-      </Component>
-      <Component Id="f258" Directory="INSTALLFOLDER">
-        <File Source="$(var.PublishDir)\System.Data.Common.dll" />
-      </Component>
-      <Component Id="f259" Directory="INSTALLFOLDER">
-        <File Source="$(var.PublishDir)\System.Data.DataSetExtensions.dll" />
-      </Component>
-      <Component Id="f260" Directory="INSTALLFOLDER">
-        <File Source="$(var.PublishDir)\System.Data.dll" />
-      </Component>
-      <Component Id="f261" Directory="INSTALLFOLDER">
-        <File Source="$(var.PublishDir)\System.Diagnostics.Contracts.dll" />
-      </Component>
-      <Component Id="f262" Directory="INSTALLFOLDER">
-        <File Source="$(var.PublishDir)\System.Diagnostics.Debug.dll" />
-      </Component>
       <Component Id="f263" Directory="INSTALLFOLDER">
         <File Source="$(var.PublishDir)\System.Diagnostics.DiagnosticSource.dll" />
-      </Component>
-      <Component Id="f264" Directory="INSTALLFOLDER">
-        <File Source="$(var.PublishDir)\System.Diagnostics.FileVersionInfo.dll" />
       </Component>
       <Component Id="f265" Directory="INSTALLFOLDER">
         <File Source="$(var.PublishDir)\System.Diagnostics.Process.dll" />
@@ -894,92 +834,23 @@
       <Component Id="f266" Directory="INSTALLFOLDER">
         <File Source="$(var.PublishDir)\System.Diagnostics.StackTrace.dll" />
       </Component>
-      <Component Id="f267" Directory="INSTALLFOLDER">
-        <File Source="$(var.PublishDir)\System.Diagnostics.TextWriterTraceListener.dll" />
-      </Component>
-      <Component Id="f268" Directory="INSTALLFOLDER">
-        <File Source="$(var.PublishDir)\System.Diagnostics.Tools.dll" />
-      </Component>
-      <Component Id="f269" Directory="INSTALLFOLDER">
-        <File Source="$(var.PublishDir)\System.Diagnostics.TraceSource.dll" />
-      </Component>
-      <Component Id="f270" Directory="INSTALLFOLDER">
-        <File Source="$(var.PublishDir)\System.Diagnostics.Tracing.dll" />
-      </Component>
       <Component Id="f271" Directory="INSTALLFOLDER">
         <File Source="$(var.PublishDir)\System.dll" />
-      </Component>
-      <Component Id="f272" Directory="INSTALLFOLDER">
-        <File Source="$(var.PublishDir)\System.Drawing.dll" />
-      </Component>
-      <Component Id="f273" Directory="INSTALLFOLDER">
-        <File Source="$(var.PublishDir)\System.Drawing.Primitives.dll" />
-      </Component>
-      <Component Id="f274" Directory="INSTALLFOLDER">
-        <File Source="$(var.PublishDir)\System.Dynamic.Runtime.dll" />
       </Component>
       <Component Id="f275" Directory="INSTALLFOLDER">
         <File Source="$(var.PublishDir)\System.Formats.Asn1.dll" />
       </Component>
-      <Component Id="f276" Directory="INSTALLFOLDER">
-        <File Source="$(var.PublishDir)\System.Formats.Tar.dll" />
-      </Component>
-      <Component Id="f277" Directory="INSTALLFOLDER">
-        <File Source="$(var.PublishDir)\System.Globalization.Calendars.dll" />
-      </Component>
-      <Component Id="f278" Directory="INSTALLFOLDER">
-        <File Source="$(var.PublishDir)\System.Globalization.dll" />
-      </Component>
-      <Component Id="f279" Directory="INSTALLFOLDER">
-        <File Source="$(var.PublishDir)\System.Globalization.Extensions.dll" />
-      </Component>
-      <Component Id="f280" Directory="INSTALLFOLDER">
-        <File Source="$(var.PublishDir)\System.IO.Compression.Brotli.dll" />
-      </Component>
       <Component Id="f281" Directory="INSTALLFOLDER">
         <File Source="$(var.PublishDir)\System.IO.Compression.dll" />
-      </Component>
-      <Component Id="f282" Directory="INSTALLFOLDER">
-        <File Source="$(var.PublishDir)\System.IO.Compression.FileSystem.dll" />
       </Component>
       <Component Id="f283" Directory="INSTALLFOLDER">
         <File Source="$(var.PublishDir)\System.IO.Compression.Native.dll" />
       </Component>
-      <Component Id="f284" Directory="INSTALLFOLDER">
-        <File Source="$(var.PublishDir)\System.IO.Compression.ZipFile.dll" />
-      </Component>
-      <Component Id="f285" Directory="INSTALLFOLDER">
-        <File Source="$(var.PublishDir)\System.IO.dll" />
-      </Component>
       <Component Id="f286" Directory="INSTALLFOLDER">
         <File Source="$(var.PublishDir)\System.IO.FileSystem.AccessControl.dll" />
       </Component>
-      <Component Id="f287" Directory="INSTALLFOLDER">
-        <File Source="$(var.PublishDir)\System.IO.FileSystem.dll" />
-      </Component>
-      <Component Id="f288" Directory="INSTALLFOLDER">
-        <File Source="$(var.PublishDir)\System.IO.FileSystem.DriveInfo.dll" />
-      </Component>
-      <Component Id="f289" Directory="INSTALLFOLDER">
-        <File Source="$(var.PublishDir)\System.IO.FileSystem.Primitives.dll" />
-      </Component>
-      <Component Id="f290" Directory="INSTALLFOLDER">
-        <File Source="$(var.PublishDir)\System.IO.FileSystem.Watcher.dll" />
-      </Component>
-      <Component Id="f291" Directory="INSTALLFOLDER">
-        <File Source="$(var.PublishDir)\System.IO.IsolatedStorage.dll" />
-      </Component>
       <Component Id="f292" Directory="INSTALLFOLDER">
         <File Source="$(var.PublishDir)\System.IO.MemoryMappedFiles.dll" />
-      </Component>
-      <Component Id="f293" Directory="INSTALLFOLDER">
-        <File Source="$(var.PublishDir)\System.IO.Pipes.AccessControl.dll" />
-      </Component>
-      <Component Id="f294" Directory="INSTALLFOLDER">
-        <File Source="$(var.PublishDir)\System.IO.Pipes.dll" />
-      </Component>
-      <Component Id="f295" Directory="INSTALLFOLDER">
-        <File Source="$(var.PublishDir)\System.IO.UnmanagedMemoryStream.dll" />
       </Component>
       <Component Id="f296" Directory="INSTALLFOLDER">
         <File Source="$(var.PublishDir)\System.Linq.dll" />
@@ -987,29 +858,11 @@
       <Component Id="f297" Directory="INSTALLFOLDER">
         <File Source="$(var.PublishDir)\System.Linq.Expressions.dll" />
       </Component>
-      <Component Id="f298" Directory="INSTALLFOLDER">
-        <File Source="$(var.PublishDir)\System.Linq.Parallel.dll" />
-      </Component>
-      <Component Id="f299" Directory="INSTALLFOLDER">
-        <File Source="$(var.PublishDir)\System.Linq.Queryable.dll" />
-      </Component>
       <Component Id="f300" Directory="INSTALLFOLDER">
         <File Source="$(var.PublishDir)\System.Memory.dll" />
       </Component>
-      <Component Id="f301" Directory="INSTALLFOLDER">
-        <File Source="$(var.PublishDir)\System.Net.dll" />
-      </Component>
       <Component Id="f302" Directory="INSTALLFOLDER">
         <File Source="$(var.PublishDir)\System.Net.Http.dll" />
-      </Component>
-      <Component Id="f303" Directory="INSTALLFOLDER">
-        <File Source="$(var.PublishDir)\System.Net.Http.Json.dll" />
-      </Component>
-      <Component Id="f304" Directory="INSTALLFOLDER">
-        <File Source="$(var.PublishDir)\System.Net.HttpListener.dll" />
-      </Component>
-      <Component Id="f305" Directory="INSTALLFOLDER">
-        <File Source="$(var.PublishDir)\System.Net.Mail.dll" />
       </Component>
       <Component Id="f306" Directory="INSTALLFOLDER">
         <File Source="$(var.PublishDir)\System.Net.NameResolution.dll" />
@@ -1017,47 +870,17 @@
       <Component Id="f307" Directory="INSTALLFOLDER">
         <File Source="$(var.PublishDir)\System.Net.NetworkInformation.dll" />
       </Component>
-      <Component Id="f308" Directory="INSTALLFOLDER">
-        <File Source="$(var.PublishDir)\System.Net.Ping.dll" />
-      </Component>
       <Component Id="f309" Directory="INSTALLFOLDER">
         <File Source="$(var.PublishDir)\System.Net.Primitives.dll" />
       </Component>
       <Component Id="f310" Directory="INSTALLFOLDER">
         <File Source="$(var.PublishDir)\System.Net.Quic.dll" />
       </Component>
-      <Component Id="f311" Directory="INSTALLFOLDER">
-        <File Source="$(var.PublishDir)\System.Net.Requests.dll" />
-      </Component>
       <Component Id="f312" Directory="INSTALLFOLDER">
         <File Source="$(var.PublishDir)\System.Net.Security.dll" />
       </Component>
-      <Component Id="f313" Directory="INSTALLFOLDER">
-        <File Source="$(var.PublishDir)\System.Net.ServicePoint.dll" />
-      </Component>
       <Component Id="f314" Directory="INSTALLFOLDER">
         <File Source="$(var.PublishDir)\System.Net.Sockets.dll" />
-      </Component>
-      <Component Id="f315" Directory="INSTALLFOLDER">
-        <File Source="$(var.PublishDir)\System.Net.WebClient.dll" />
-      </Component>
-      <Component Id="f316" Directory="INSTALLFOLDER">
-        <File Source="$(var.PublishDir)\System.Net.WebHeaderCollection.dll" />
-      </Component>
-      <Component Id="f317" Directory="INSTALLFOLDER">
-        <File Source="$(var.PublishDir)\System.Net.WebProxy.dll" />
-      </Component>
-      <Component Id="f318" Directory="INSTALLFOLDER">
-        <File Source="$(var.PublishDir)\System.Net.WebSockets.Client.dll" />
-      </Component>
-      <Component Id="f319" Directory="INSTALLFOLDER">
-        <File Source="$(var.PublishDir)\System.Net.WebSockets.dll" />
-      </Component>
-      <Component Id="f320" Directory="INSTALLFOLDER">
-        <File Source="$(var.PublishDir)\System.Numerics.dll" />
-      </Component>
-      <Component Id="f321" Directory="INSTALLFOLDER">
-        <File Source="$(var.PublishDir)\System.Numerics.Vectors.dll" />
       </Component>
       <Component Id="f322" Directory="INSTALLFOLDER">
         <File Source="$(var.PublishDir)\System.ObjectModel.dll" />
@@ -1065,101 +888,20 @@
       <Component Id="f323" Directory="INSTALLFOLDER">
         <File Source="$(var.PublishDir)\System.Private.CoreLib.dll" />
       </Component>
-      <Component Id="f324" Directory="INSTALLFOLDER">
-        <File Source="$(var.PublishDir)\System.Private.DataContractSerialization.dll" />
-      </Component>
       <Component Id="f325" Directory="INSTALLFOLDER">
         <File Source="$(var.PublishDir)\System.Private.Uri.dll" />
-      </Component>
-      <Component Id="f326" Directory="INSTALLFOLDER">
-        <File Source="$(var.PublishDir)\System.Private.Xml.dll" />
-      </Component>
-      <Component Id="f327" Directory="INSTALLFOLDER">
-        <File Source="$(var.PublishDir)\System.Private.Xml.Linq.dll" />
-      </Component>
-      <Component Id="f328" Directory="INSTALLFOLDER">
-        <File Source="$(var.PublishDir)\System.Reflection.DispatchProxy.dll" />
-      </Component>
-      <Component Id="f329" Directory="INSTALLFOLDER">
-        <File Source="$(var.PublishDir)\System.Reflection.dll" />
-      </Component>
-      <Component Id="f330" Directory="INSTALLFOLDER">
-        <File Source="$(var.PublishDir)\System.Reflection.Emit.dll" />
-      </Component>
-      <Component Id="f331" Directory="INSTALLFOLDER">
-        <File Source="$(var.PublishDir)\System.Reflection.Emit.ILGeneration.dll" />
-      </Component>
-      <Component Id="f332" Directory="INSTALLFOLDER">
-        <File Source="$(var.PublishDir)\System.Reflection.Emit.Lightweight.dll" />
-      </Component>
-      <Component Id="f333" Directory="INSTALLFOLDER">
-        <File Source="$(var.PublishDir)\System.Reflection.Extensions.dll" />
       </Component>
       <Component Id="f334" Directory="INSTALLFOLDER">
         <File Source="$(var.PublishDir)\System.Reflection.Metadata.dll" />
       </Component>
-      <Component Id="f335" Directory="INSTALLFOLDER">
-        <File Source="$(var.PublishDir)\System.Reflection.Primitives.dll" />
-      </Component>
-      <Component Id="f336" Directory="INSTALLFOLDER">
-        <File Source="$(var.PublishDir)\System.Reflection.TypeExtensions.dll" />
-      </Component>
-      <Component Id="f337" Directory="INSTALLFOLDER">
-        <File Source="$(var.PublishDir)\System.Resources.Reader.dll" />
-      </Component>
-      <Component Id="f338" Directory="INSTALLFOLDER">
-        <File Source="$(var.PublishDir)\System.Resources.ResourceManager.dll" />
-      </Component>
-      <Component Id="f339" Directory="INSTALLFOLDER">
-        <File Source="$(var.PublishDir)\System.Resources.Writer.dll" />
-      </Component>
-      <Component Id="f340" Directory="INSTALLFOLDER">
-        <File Source="$(var.PublishDir)\System.Runtime.CompilerServices.Unsafe.dll" />
-      </Component>
-      <Component Id="f341" Directory="INSTALLFOLDER">
-        <File Source="$(var.PublishDir)\System.Runtime.CompilerServices.VisualC.dll" />
-      </Component>
       <Component Id="f342" Directory="INSTALLFOLDER">
         <File Source="$(var.PublishDir)\System.Runtime.dll" />
-      </Component>
-      <Component Id="f343" Directory="INSTALLFOLDER">
-        <File Source="$(var.PublishDir)\System.Runtime.Extensions.dll" />
-      </Component>
-      <Component Id="f344" Directory="INSTALLFOLDER">
-        <File Source="$(var.PublishDir)\System.Runtime.Handles.dll" />
       </Component>
       <Component Id="f345" Directory="INSTALLFOLDER">
         <File Source="$(var.PublishDir)\System.Runtime.InteropServices.dll" />
       </Component>
-      <Component Id="f346" Directory="INSTALLFOLDER">
-        <File Source="$(var.PublishDir)\System.Runtime.InteropServices.JavaScript.dll" />
-      </Component>
-      <Component Id="f347" Directory="INSTALLFOLDER">
-        <File Source="$(var.PublishDir)\System.Runtime.InteropServices.RuntimeInformation.dll" />
-      </Component>
-      <Component Id="f348" Directory="INSTALLFOLDER">
-        <File Source="$(var.PublishDir)\System.Runtime.Intrinsics.dll" />
-      </Component>
-      <Component Id="f349" Directory="INSTALLFOLDER">
-        <File Source="$(var.PublishDir)\System.Runtime.Loader.dll" />
-      </Component>
       <Component Id="f350" Directory="INSTALLFOLDER">
         <File Source="$(var.PublishDir)\System.Runtime.Numerics.dll" />
-      </Component>
-      <Component Id="f351" Directory="INSTALLFOLDER">
-        <File Source="$(var.PublishDir)\System.Runtime.Serialization.dll" />
-      </Component>
-      <Component Id="f352" Directory="INSTALLFOLDER">
-        <File Source="$(var.PublishDir)\System.Runtime.Serialization.Formatters.dll" />
-      </Component>
-      <Component Id="f353" Directory="INSTALLFOLDER">
-        <File Source="$(var.PublishDir)\System.Runtime.Serialization.Json.dll" />
-      </Component>
-      <Component Id="f354" Directory="INSTALLFOLDER">
-        <File Source="$(var.PublishDir)\System.Runtime.Serialization.Primitives.dll" />
-      </Component>
-      <Component Id="f355" Directory="INSTALLFOLDER">
-        <File Source="$(var.PublishDir)\System.Runtime.Serialization.Xml.dll" />
       </Component>
       <Component Id="f356" Directory="INSTALLFOLDER">
         <File Source="$(var.PublishDir)\System.Security.AccessControl.dll" />
@@ -1167,56 +909,14 @@
       <Component Id="f357" Directory="INSTALLFOLDER">
         <File Source="$(var.PublishDir)\System.Security.Claims.dll" />
       </Component>
-      <Component Id="f358" Directory="INSTALLFOLDER">
-        <File Source="$(var.PublishDir)\System.Security.Cryptography.Algorithms.dll" />
-      </Component>
-      <Component Id="f359" Directory="INSTALLFOLDER">
-        <File Source="$(var.PublishDir)\System.Security.Cryptography.Cng.dll" />
-      </Component>
-      <Component Id="f360" Directory="INSTALLFOLDER">
-        <File Source="$(var.PublishDir)\System.Security.Cryptography.Csp.dll" />
-      </Component>
       <Component Id="f361" Directory="INSTALLFOLDER">
         <File Source="$(var.PublishDir)\System.Security.Cryptography.dll" />
-      </Component>
-      <Component Id="f362" Directory="INSTALLFOLDER">
-        <File Source="$(var.PublishDir)\System.Security.Cryptography.Encoding.dll" />
-      </Component>
-      <Component Id="f363" Directory="INSTALLFOLDER">
-        <File Source="$(var.PublishDir)\System.Security.Cryptography.OpenSsl.dll" />
-      </Component>
-      <Component Id="f364" Directory="INSTALLFOLDER">
-        <File Source="$(var.PublishDir)\System.Security.Cryptography.Primitives.dll" />
-      </Component>
-      <Component Id="f365" Directory="INSTALLFOLDER">
-        <File Source="$(var.PublishDir)\System.Security.Cryptography.X509Certificates.dll" />
       </Component>
       <Component Id="f365pd" Directory="INSTALLFOLDER">
         <File Source="$(var.PublishDir)\System.Security.Cryptography.ProtectedData.dll" />
       </Component>
-      <Component Id="f366" Directory="INSTALLFOLDER">
-        <File Source="$(var.PublishDir)\System.Security.dll" />
-      </Component>
-      <Component Id="f367" Directory="INSTALLFOLDER">
-        <File Source="$(var.PublishDir)\System.Security.Principal.dll" />
-      </Component>
       <Component Id="f368" Directory="INSTALLFOLDER">
         <File Source="$(var.PublishDir)\System.Security.Principal.Windows.dll" />
-      </Component>
-      <Component Id="f369" Directory="INSTALLFOLDER">
-        <File Source="$(var.PublishDir)\System.Security.SecureString.dll" />
-      </Component>
-      <Component Id="f370" Directory="INSTALLFOLDER">
-        <File Source="$(var.PublishDir)\System.ServiceModel.Web.dll" />
-      </Component>
-      <Component Id="f371" Directory="INSTALLFOLDER">
-        <File Source="$(var.PublishDir)\System.ServiceProcess.dll" />
-      </Component>
-      <Component Id="f372" Directory="INSTALLFOLDER">
-        <File Source="$(var.PublishDir)\System.Text.Encoding.CodePages.dll" />
-      </Component>
-      <Component Id="f373" Directory="INSTALLFOLDER">
-        <File Source="$(var.PublishDir)\System.Text.Encoding.dll" />
       </Component>
       <Component Id="f374" Directory="INSTALLFOLDER">
         <File Source="$(var.PublishDir)\System.Text.Encoding.Extensions.dll" />
@@ -1235,75 +935,6 @@
       </Component>
       <Component Id="f379" Directory="INSTALLFOLDER">
         <File Source="$(var.PublishDir)\System.Threading.dll" />
-      </Component>
-      <Component Id="f380" Directory="INSTALLFOLDER">
-        <File Source="$(var.PublishDir)\System.Threading.Overlapped.dll" />
-      </Component>
-      <Component Id="f381" Directory="INSTALLFOLDER">
-        <File Source="$(var.PublishDir)\System.Threading.Tasks.Dataflow.dll" />
-      </Component>
-      <Component Id="f382" Directory="INSTALLFOLDER">
-        <File Source="$(var.PublishDir)\System.Threading.Tasks.dll" />
-      </Component>
-      <Component Id="f383" Directory="INSTALLFOLDER">
-        <File Source="$(var.PublishDir)\System.Threading.Tasks.Extensions.dll" />
-      </Component>
-      <Component Id="f384" Directory="INSTALLFOLDER">
-        <File Source="$(var.PublishDir)\System.Threading.Tasks.Parallel.dll" />
-      </Component>
-      <Component Id="f385" Directory="INSTALLFOLDER">
-        <File Source="$(var.PublishDir)\System.Threading.Thread.dll" />
-      </Component>
-      <Component Id="f386" Directory="INSTALLFOLDER">
-        <File Source="$(var.PublishDir)\System.Threading.ThreadPool.dll" />
-      </Component>
-      <Component Id="f387" Directory="INSTALLFOLDER">
-        <File Source="$(var.PublishDir)\System.Threading.Timer.dll" />
-      </Component>
-      <Component Id="f388" Directory="INSTALLFOLDER">
-        <File Source="$(var.PublishDir)\System.Transactions.dll" />
-      </Component>
-      <Component Id="f389" Directory="INSTALLFOLDER">
-        <File Source="$(var.PublishDir)\System.Transactions.Local.dll" />
-      </Component>
-      <Component Id="f390" Directory="INSTALLFOLDER">
-        <File Source="$(var.PublishDir)\System.ValueTuple.dll" />
-      </Component>
-      <Component Id="f391" Directory="INSTALLFOLDER">
-        <File Source="$(var.PublishDir)\System.Web.dll" />
-      </Component>
-      <Component Id="f392" Directory="INSTALLFOLDER">
-        <File Source="$(var.PublishDir)\System.Web.HttpUtility.dll" />
-      </Component>
-      <Component Id="f393" Directory="INSTALLFOLDER">
-        <File Source="$(var.PublishDir)\System.Windows.dll" />
-      </Component>
-      <Component Id="f394" Directory="INSTALLFOLDER">
-        <File Source="$(var.PublishDir)\System.Xml.dll" />
-      </Component>
-      <Component Id="f395" Directory="INSTALLFOLDER">
-        <File Source="$(var.PublishDir)\System.Xml.Linq.dll" />
-      </Component>
-      <Component Id="f396" Directory="INSTALLFOLDER">
-        <File Source="$(var.PublishDir)\System.Xml.ReaderWriter.dll" />
-      </Component>
-      <Component Id="f397" Directory="INSTALLFOLDER">
-        <File Source="$(var.PublishDir)\System.Xml.Serialization.dll" />
-      </Component>
-      <Component Id="f398" Directory="INSTALLFOLDER">
-        <File Source="$(var.PublishDir)\System.Xml.XDocument.dll" />
-      </Component>
-      <Component Id="f399" Directory="INSTALLFOLDER">
-        <File Source="$(var.PublishDir)\System.Xml.XmlDocument.dll" />
-      </Component>
-      <Component Id="f400" Directory="INSTALLFOLDER">
-        <File Source="$(var.PublishDir)\System.Xml.XmlSerializer.dll" />
-      </Component>
-      <Component Id="f401" Directory="INSTALLFOLDER">
-        <File Source="$(var.PublishDir)\System.Xml.XPath.dll" />
-      </Component>
-      <Component Id="f402" Directory="INSTALLFOLDER">
-        <File Source="$(var.PublishDir)\System.Xml.XPath.XDocument.dll" />
       </Component>
       <Component Id="f403" Directory="dir_ta_IN">
         <File Source="$(var.PublishDir)\ta-IN\Microsoft.ui.xaml.dll.mui" />
@@ -1376,9 +1007,6 @@
       </Component>
       <Component Id="f426" Directory="INSTALLFOLDER">
         <File Source="$(var.PublishDir)\WindowsAppSdk.AppxDeploymentExtensions.Desktop-EventLog-Instrumentation.dll" />
-      </Component>
-      <Component Id="f427" Directory="INSTALLFOLDER">
-        <File Source="$(var.PublishDir)\WindowsBase.dll" />
       </Component>
       <Component Id="f428" Directory="INSTALLFOLDER">
         <File Source="$(var.PublishDir)\WinRT.Runtime.dll" />

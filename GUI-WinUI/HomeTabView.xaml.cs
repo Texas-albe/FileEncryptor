@@ -55,6 +55,7 @@ public sealed partial class HomeTabView : UserControl
     private void OnKeyfileChanged(object sender, TextChangedEventArgs e) => Host?.OnKeyfileChanged(sender, e);
     private void OnModeChanged(object sender, SelectionChangedEventArgs e) => Host?.OnModeChanged(sender, e);
     private void OnOptionChanged(object sender, RoutedEventArgs e) => Host?.OnOptionChanged(sender, e);
+    private void OnExcludeChanged(object sender, TextChangedEventArgs e) => Host?.OnExcludeChanged(sender, e);
     private void OnOutDirChanged(object sender, TextChangedEventArgs e) => Host?.OnOutDirChanged(sender, e);
     private void OnPreviewClicked(object sender, RoutedEventArgs e) => Host?.OnPreviewClicked(sender, e);
     private void OnRecipientChanged(object sender, TextChangedEventArgs e) => Host?.OnRecipientChanged(sender, e);

@@ -35,10 +35,10 @@
         </controls:Border>
 
         <controls:Border Grid.Row="1" Grid.Column="1" Style="{StaticResource AppCardBorderStyle}"
-                         Width="220" Margin="12,0,0,0">
-            <StackPanel Spacing="8">
-                <TextBlock Text="操作" Style="{StaticResource AppSectionHeaderTextStyle}" Margin="0,0,0,4" />
-                <ScrollViewer VerticalScrollBarVisibility="Auto" VerticalScrollMode="Auto">
+                         Width="220" Margin="12,0,0,0" Padding="12,12,12,8">
+            <Grid RowDefinitions="Auto,*">
+                <TextBlock Grid.Row="0" Text="操作" Style="{StaticResource AppSectionHeaderTextStyle}" Margin="0,0,0,4" />
+                <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" VerticalScrollMode="Auto">
                     <StackPanel Spacing="8">
                         <Button Content="刷新列表" Click="OnRefreshMounted" HorizontalAlignment="Stretch" />
                         <Button Content="加密盘管理..." Click="OnVaultManager" HorizontalAlignment="Stretch" />
@@ -48,6 +48,12 @@
                         <Button Content="修改加密盘密码..." Click="OnVaultRekey" HorizontalAlignment="Stretch" />
                         <Button Content="生成恢复码..." Click="OnVaultRecoveryCreate" HorizontalAlignment="Stretch" />
                         <Button Content="用恢复码找回密码..." Click="OnVaultRecoveryOpen" HorizontalAlignment="Stretch" />
+                        <Button Content="快照备份..." Click="OnVaultSnapshot" HorizontalAlignment="Stretch" />
+                        <Button Content="校验快照..." Click="OnVaultCheckSnapshot" HorizontalAlignment="Stretch" />
+                        <Button Content="从快照恢复..." Click="OnVaultRestoreSnapshot" HorizontalAlignment="Stretch" />
+                        <Button Content="分享库内文件..." Click="OnVaultShare" HorizontalAlignment="Stretch" />
+                        <Button Content="浏览云端目录..." Click="OnCloudBrowse" HorizontalAlignment="Stretch" />
+                        <Button Content="从云端拉取文件..." Click="OnCloudPull" HorizontalAlignment="Stretch" />
                         <Button Content="挂载为磁盘..." Click="OnVaultMount" HorizontalAlignment="Stretch" />
                         <Button Content="已挂载的加密盘..." Click="OnMountedVaults" HorizontalAlignment="Stretch" />
                         <Button Content="卸载磁盘..." Click="OnVaultUnmount" HorizontalAlignment="Stretch" />
@@ -57,7 +63,7 @@
                         <Button Content="解锁..." Click="OnVaultUnlock" HorizontalAlignment="Stretch" />
                     </StackPanel>
                 </ScrollViewer>
-            </StackPanel>
+            </Grid>
         </controls:Border>
     </Grid>
 </UserControl>

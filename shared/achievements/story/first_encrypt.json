@@ -1,0 +1,12 @@
+{
+  "parent": "fileencryptor:story/root",
+  "display": {
+    "icon": "lock",
+    "title": { "text": "第一步", "text_en": "First Step", "text_ru": "Первый шаг" },
+    "description": { "text": "完成一次加密", "text_en": "Encrypt something for the first time", "text_ru": "Выполните первое шифрование" },
+    "frame": "task"
+  },
+  "criteria": {
+    "encrypted": { "trigger": "fileencryptor:encrypt" }
+  }
+}

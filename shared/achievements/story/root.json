@@ -1,0 +1,13 @@
+{
+  "display": {
+    "icon": "vault",
+    "title": { "text": "FileEncryptor" },
+    "description": { "text": "加密世界的入口", "text_en": "The gateway of encryption", "text_ru": "Врата шифрования" },
+    "frame": "task",
+    "background": "stone",
+    "show_toast": false
+  },
+  "criteria": {
+    "opened": { "trigger": "fileencryptor:tick" }
+  }
+}

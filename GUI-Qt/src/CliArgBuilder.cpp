@@ -340,6 +340,16 @@ static QStringList buildArgumentsImpl(const ShellOptions& o, bool allowKeyFileWr
         args << QStringLiteral("--restore-name");
     }
 
+    // 批量过滤
+    if (isBatch) {
+        for (const QString& pat : o.excludePatterns) {
+            if (!pat.trimmed().isEmpty()) {
+                args << QStringLiteral("--exclude") << pat.trimmed();
+            }
+        }
+        if (o.skipHidden) args << QStringLiteral("--skip-hidden");
+    }
+
     if (o.writeSha256 && isEnc) {
         args << QStringLiteral("--sha256");
     }

@@ -1358,13 +1358,32 @@ std::string vault_recovery_gen_code() {
     return s;
 }
 
-static std::string recovery_path(const std::string& dir) {
+// 恢复文件默认与密文同目录
+static std::string recovery_path_legacy(const std::string& dir) {
     return normsep(dir) + "/.fevault";
+}
+
+// 首选路径：FE_RECOVERY_HOME 指向独立介质时，恢复文件外置与密文分离
+static std::string recovery_path(const std::string& dir) {
+    const char* home = std::getenv("FE_RECOVERY_HOME");
+    if(home && *home) {
+        unsigned char h[HASH_SIZE];
+        std::string key = normsep(dir);
+        crypto_generichash(h, sizeof(h),
+            reinterpret_cast<const unsigned char*>(key.data()), key.size(), nullptr, 0);
+        char hex[33]={0};
+        sodium_bin2hex(hex, sizeof(hex), h, 16);
+        return normsep(home) + "/fevault_" + hex;
+    }
+    return recovery_path_legacy(dir);
 }
 
 bool vault_recovery_exists(const std::string& dir) {
     std::ifstream f(recovery_path(dir), std::ios::binary);
-    return f.good();
+    if(f.good()) return true;
+    f.close();
+    std::ifstream fl(recovery_path_legacy(dir), std::ios::binary);
+    return fl.good();
 }
 
 bool vault_recovery_create(const std::string& dir, const SecureBuffer& passphrase,
@@ -1407,7 +1426,10 @@ bool vault_recovery_load(const std::string& dir, const std::string& code,
     std::string c = recovery_code_normalize(code);
     if (c.size() != 48) { err = "recovery code must be 48 decimal digits"; return false; }
     std::string blob;
-    if (!read_file(recovery_path(dir), blob)) { err = "no recovery file (.fevault)"; return false; }
+    if (!read_file(recovery_path(dir), blob) &&
+        !read_file(recovery_path_legacy(dir), blob)) {
+        err = "no recovery file (.fevault)"; return false;
+    }
     size_t need = 6 + kRecoverySaltBytes + crypto_secretbox_NONCEBYTES + crypto_secretbox_MACBYTES;
     if (blob.size() < need) { err = "corrupt recovery file"; return false; }
     if (memcmp(blob.data(), kRecoveryMagic, 6) != 0) { err = "bad recovery file magic"; return false; }
@@ -1437,10 +1459,23 @@ bool vault_recovery_load(const std::string& dir, const std::string& code,
 }
 
 bool vault_recovery_remove(const std::string& dir, std::string& err) {
+    bool removed = false;
     std::string p = recovery_path(dir);
     std::ifstream f(p, std::ios::binary);
-    if (!f.good()) { err = "no recovery file"; return false; }
-    f.close();
-    if (std::remove(p.c_str()) != 0) { err = "cannot remove recovery file"; return false; }
+    if (f.good()) {
+        f.close();
+        if (std::remove(p.c_str()) == 0) removed = true;
+    } else {
+        f.close();
+    }
+    std::string lp = recovery_path_legacy(dir);
+    std::ifstream fl(lp, std::ios::binary);
+    if (fl.good()) {
+        fl.close();
+        if (std::remove(lp.c_str()) == 0) removed = true;
+    } else {
+        fl.close();
+    }
+    if (!removed) { err = "no recovery file"; return false; }
     return true;
 }

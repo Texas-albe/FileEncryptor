@@ -161,6 +161,20 @@ public partial class ProgressPage : ContentView
     private static int s_fadeGen; // 浮层动效代次
     public static int Queued => Volatile.Read(ref s_queued);
 
+    // 排队反馈：浮层未起前先提示
+    private static void ShowQueuedToast(int ahead)
+    {
+        try
+        {
+            var t = global::Android.Widget.Toast.MakeText(
+                global::Android.App.Application.Context,
+                L10n.F("已加入队列，等待前 {0} 项完成", ahead),
+                global::Android.Widget.ToastLength.Short);
+            t?.Show();
+        }
+        catch { /* 提示失败不影响排队 */ }
+    }
+
     // 浮层展示期间执
     // after 用来展示本次结
     // 保证每次操作
@@ -168,6 +182,8 @@ public partial class ProgressPage : ContentView
         Func<BatchTracker, CancellationToken, Task<T>> work, Func<T, Task>? after = null)
     {
         Interlocked.Increment(ref s_queued);
+        int ahead = Volatile.Read(ref s_queued) - 1;
+        if (ahead > 0) ShowQueuedToast(ahead);
         try { await s_queue.WaitAsync().ConfigureAwait(true); }
         finally { Interlocked.Decrement(ref s_queued); }
 

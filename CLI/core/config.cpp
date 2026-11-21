@@ -16,6 +16,7 @@
 #include <ctime>
 
 #include <yaml-cpp/yaml.h>
+#include <sodium.h>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -713,6 +714,68 @@ void init_logger(const std::string& log_file, int level) {
     }
 }
 
+static bool log_path_key(unsigned char key[32]) {
+    static bool loaded = false;
+    static unsigned char cached[32] = {0};
+    static bool have = false;
+    if (!loaded) {
+        loaded = true;
+        const char* e = std::getenv("FE_LOG_KEY");
+        if (e && *e) {
+            std::string v(e);
+            if (v.size() >= 64) {
+                auto val = [](char c) -> int {
+                    if (c >= '0' && c <= '9') return c - '0';
+                    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+                    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+                    return -1;
+                };
+                bool ok = true;
+                for (int i = 0; i < 32; ++i) {
+                    int a = val(v[2 * i]), b = val(v[2 * i + 1]);
+                    if (a < 0 || b < 0) { ok = false; break; }
+                    cached[i] = static_cast<unsigned char>((a << 4) | b);
+                }
+                have = ok;
+            } else if (v.size() >= 32) {
+                std::memcpy(cached, v.data(), 32);
+                have = true;
+            }
+        }
+    }
+    if (have) std::memcpy(key, cached, 32);
+    return have;
+}
+
+static bool log_is_path_field(const std::string& name) {
+    return name == "path" || name == "file" || name == "dir" ||
+           name == "out" || name == "outputDir" || name == "intoVault" ||
+           name == "keyfile" || name == "identity";
+}
+
+static std::string log_basename(const std::string& v) {
+    size_t p = v.find_last_of("/\\");
+    return p == std::string::npos ? v : v.substr(p + 1);
+}
+
+static std::string log_field_value(const std::string& name, const std::string& value) {
+    if (!log_is_path_field(name)) return value;
+    unsigned char key[32] = {0};
+    if (!log_path_key(key)) return log_basename(value);
+    unsigned char h[16] = {0};
+    crypto_generichash(h, sizeof(h),
+        reinterpret_cast<const unsigned char*>(value.data()), value.size(), key, 32);
+    std::string out = "h:";
+    static const char hex[] = "0123456789abcdef";
+    for (size_t i = 0; i < sizeof(h); ++i) {
+        out.push_back(hex[h[i] >> 4]);
+        out.push_back(hex[h[i] & 15]);
+    }
+    sodium_memzero(key, 32);
+    sodium_memzero(h, sizeof(h));
+    return out;
+}
+
 static void write_log(int level, const std::string& msg,
                       const std::vector<std::pair<std::string, std::string>>* fields) {
     if (level > g_log_level) return;
@@ -737,7 +800,7 @@ static void write_log(int level, const std::string& msg,
         for (size_t i = 0; i < fields->size(); ++i) {
             if (i) line << ",";
             line << "\"" << json_escape((*fields)[i].first) << "\":\""
-                 << json_escape((*fields)[i].second) << "\"";
+                 << json_escape(log_field_value((*fields)[i].first,(*fields)[i].second)) << "\"";
         }
         line << "}";
     }

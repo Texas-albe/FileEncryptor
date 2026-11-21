@@ -1999,6 +1999,42 @@ public partial class VaultPage : ContentPage
         await DisplayAlertAsync(ok ? L10n.T("自检通过") : L10n.T("自检发现问题"), string.Join("\n", lines), L10n.T("确定"));
     }
 
+    // 格式化加密库
+    private async void OnFormatVault(object? sender, EventArgs e)
+    {
+        if (!VaultService.Exists(_vaultDir))
+        { await DisplayAlertAsync(L10n.T("提示"), L10n.T("请先创建加密库"), L10n.T("确定")); return; }
+        if (!_vault.IsUnlocked)
+        {
+            UnlockMsg.Text = L10n.T("请先解锁，再点「格式化加密库」。");
+            UnlockMsg.IsVisible = true;
+            UnlockPwd.Focus();
+            return;
+        }
+        bool yes = await DisplayAlertAsync(L10n.T("确认格式化加密库？"),
+            L10n.T("此操作会删除加密库内的全部文件和文件夹，且不可恢复。库密码、身份和加密设置保持不变。"),
+            L10n.T("格式化"), L10n.T("取消"));
+        if (!yes) return;
+        try
+        {
+            var rep = await ProgressPage.RunAsync(this, L10n.T("格式化加密库…"),
+                (tracker, ct) => Task.Run(() =>
+                {
+                    tracker.BeginCount(0);
+                    return _vault.FormatVault(
+                        (d, t) => tracker.SetCurrent((int)d, L10n.F("正在删除 {0} / {1}…", d, t)),
+                        () => ct.IsCancellationRequested);
+                }));
+            if (Handler is null) return;
+            RefreshState();
+            if (rep.Cancelled)
+                await DisplayAlertAsync(L10n.T("已取消"), L10n.T("格式化已取消。"), L10n.T("确定"));
+            else
+                await DisplayAlertAsync(L10n.T("完成"), L10n.T("加密库已格式化。"), L10n.T("确定"));
+        }
+        catch (Exception ex) { ShowError(L10n.T("格式化失败"), ex.Message); }
+    }
+
     // 局域网只读共享
     private async void OnLanShare(object? sender, EventArgs e)
     {

@@ -56,6 +56,9 @@ public class ShellOptions
     public string OutputDir { get; set; } = "";
     // 加密盘
     public string IntoVault { get; set; } = "";
+    // 批量过滤
+    public List<string> ExcludePatterns { get; set; } = new();
+    public bool SkipHidden { get; set; } = false;
     public SourceDisposition SourceDisposition { get; set; } = SourceDisposition.Keep;
     // 加密压缩包
     public bool Pack { get; set; } = false;

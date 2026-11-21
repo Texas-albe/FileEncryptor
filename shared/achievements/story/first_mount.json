@@ -1,0 +1,12 @@
+{
+  "parent": "fileencryptor:story/root",
+  "display": {
+    "icon": "drive",
+    "title": { "text": "搬家师傅", "text_en": "Mover", "text_ru": "Перевозчик" },
+    "description": { "text": "首次把加密盘挂载为磁盘", "text_en": "Mount a vault as a drive for the first time", "text_ru": "Впервые подключите хранилище как диск" },
+    "frame": "goal"
+  },
+  "criteria": {
+    "mounted": { "trigger": "fileencryptor:mount" }
+  }
+}

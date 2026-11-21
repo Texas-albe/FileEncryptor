@@ -130,4 +130,26 @@ internal static partial class FileCryptoNative
         byte* blob, UIntPtr blob_len, byte* priv, UIntPtr priv_len,
         byte* vault_salt, UIntPtr salt_len,
         byte* out_pass, UIntPtr cap, out UIntPtr out_pass_len);
+
+    // 水印签名加密
+    [LibraryImport(Lib, StringMarshalling = StringMarshalling.Utf8)]
+    internal static unsafe partial int fe_m_encrypt_fd_wm(
+        int in_fd, ulong in_size, int out_fd,
+        byte* password, UIntPtr pass_len,
+        int mode, int compress_level,
+        string wm_priv_pem, int wm_pqc,
+        delegate* unmanaged<ulong, ulong, IntPtr, void> progress, IntPtr user);
+
+    // 水印校验
+    [LibraryImport(Lib, StringMarshalling = StringMarshalling.Utf8)]
+    internal static unsafe partial int fe_m_wm_verify(
+        string ptdPath, string? pubPem, int pqc,
+        byte* outJson, UIntPtr cap);
+
+    // 生成水印签名密钥
+    [LibraryImport(Lib)]
+    internal static unsafe partial int fe_m_wm_generate_keypair(
+        int pqc,
+        byte* out_pub, UIntPtr cap_pub,
+        byte* out_priv, UIntPtr cap_priv);
 }

@@ -2,14 +2,19 @@
 #include "config.hpp"
 #include "asym_crypto.hpp"
 #include "keylib.hpp"
+#include "keyfile_crypt.hpp"
 #include "password_policy.hpp"
 #include "split_volumes.hpp"
 #include "archive.hpp"
 #include "keywrap.hpp"
 #include "kdf.hpp"
 #include "vault_index.hpp"
+#include "vault_snapshot.hpp"
+#include "vault_share.hpp"
 #include "progress_frame.hpp"
 #include "../core/saf/saf_batch.hpp"
+#include "../core/saf/saf_webdav.hpp"
+#include "audit_chain.hpp"
 #include "util/hex.hpp"
 #include <cstdio>
 #include <cstdlib>
@@ -301,33 +306,25 @@ static std::string fe_json_escape(const std::string& s) {
     return o;
 }
 
-// 审计 JSONL
+// 审计 JSONL（受保护模式走 HMAC 链）
 static void fe_audit_emit(const char* op, const std::string& key, int status,
                           uint64_t bytes, uint64_t elapsed_ms, int error_code) {
     if (g_contract.dry_run || g_contract.audit_path.empty()) return;
-    static bool perms_done = false;
-    std::ofstream f(g_contract.audit_path, std::ios::app);
-    if (!f) return;
-    f.close();
-    if (!perms_done) {
-        std::error_code ec;
-        std::filesystem::permissions(g_contract.audit_path,
-            std::filesystem::perms::owner_read | std::filesystem::perms::owner_write,
-            std::filesystem::perm_options::replace, ec);
-        perms_done = true;
+    fe::AuditEvent ev;
+    ev.op = op ? op : "";
+    ev.key = key;
+    ev.status = status;
+    ev.bytes = bytes;
+    ev.elapsed_ms = elapsed_ms;
+    ev.error_code = error_code;
+    ev.ts = (uint64_t)std::time(nullptr);
+    ev.device_id = g_contract.device_id;
+    std::string err;
+    if (!fe::audit_writer().append(ev, err)) {
+        std::cerr << "[audit] " << err << "\n";
+        return;
     }
-    std::ofstream o(g_contract.audit_path, std::ios::app);
-    if (!o) return;
-    o << "{\"schema\":1,\"ts\":" << (unsigned long long)std::time(nullptr)
-      << ",\"op\":\"" << fe_json_escape(op) << "\""
-      << ",\"key\":\"" << fe_json_escape(key) << "\""
-      << ",\"status\":" << status
-      << ",\"bytes\":" << bytes
-      << ",\"elapsed_ms\":" << elapsed_ms
-      << ",\"error_code\":" << error_code
-      << ",\"device_id\":\"" << fe_json_escape(g_contract.device_id) << "\""
-      << "}\n";
-    g_contract.audit_events++;
+    ++g_contract.audit_events;
 }
 
 // 只读枚举
@@ -343,8 +340,11 @@ static uint64_t fe_collect_plan(const std::vector<std::string>& inputs,
             std::filesystem::recursive_directory_iterator end;
             while (!ec && it != end) {
                 if (it->is_regular_file(ec)) {
-                    files.push_back(it->path().u8string());
-                    total += (uint64_t)it->file_size(ec);
+                    std::string p = it->path().u8string();
+                    if (fe_batch_filter_path(p)) {
+                        files.push_back(p);
+                        total += (uint64_t)it->file_size(ec);
+                    }
                     if (ec) ec.clear();
                 }
                 it.increment(ec);
@@ -387,6 +387,8 @@ static std::string fe_result_json(int rc) {
       << ",\"compress_level\":" << g_contract.compress_level
       << ",\"total_bytes\":" << g_contract.total_bytes
       << ",\"audit_events\":" << g_contract.audit_events
+      << ",\"audit_mode\":\"" << fe_json_escape(fe::audit_writer().mode()) << "\""
+      << ",\"audit_head\":" << fe::audit_writer().head_seq()
       << "}";
     return o.str();
 }
@@ -424,6 +426,14 @@ static void print_usage() {
         <<"  --json            One JSON object on stdout; business stdout suppressed\n"
         <<"  -n, --dry-run     Print the operation plan, write nothing\n"
         <<"  --progress-events Emit JSONL progress frames on stderr\n"
+        <<"  --audit-verify <f> Verify audit HMAC chain; first bad seq on failure\n"
+        <<"  --audit-key <f>    Audit key file (or env FE_AUDIT_KEY)\n"
+        <<"  --audit-keygen <f> Generate audit key (DPAPI blob on Windows)\n"
+        <<"  --audit-anchor <f> Read audit head of <f> and append an anchor\n"
+        <<"  --audit-anchor-to <f> Anchor file target (default: <log>.anchor.jsonl)\n"
+        <<"  --audit-verify-anchor <f> Also compare head with anchor during verify\n"
+        <<"  --audit-keep-path  Store encrypted path in audit log (default: hash only)\n"
+        <<"  --audit-decrypt    Restore paths from audit log during verify\n"
         <<"  Exit codes: 0 ok | 2 usage | 3 auth | 4 I/O | 5 partial | 6 cancelled\n\n"
         <<"Options:\n"
         <<"  -o <dir>          Output directory (optional, default: source file's directory)\n"
@@ -478,7 +488,10 @@ static void print_usage() {
         <<"Input:\n"
         <<"  For single mode: provide the file path as positional argument\n"
         <<"  For batch mode:  provide directory paths via -i (multiple allowed)\n"
-        <<"                   All files under directories will be processed recursively.\n\n"
+        <<"                   All files under directories will be processed recursively.\n"
+        <<"  Batch filters:   --exclude <pattern> (wildcard on file/dir name, repeatable),\n"
+        <<"                   --skip-hidden; source mtime is copied to the output file\n"
+        <<"                   unless --no-preserve-times is given.\n\n"
         <<"Usage:\n"
         <<"  File encryption / decryption:\n"
         <<"    FileEncryptor -e/-d <FileName> [-o <Path>] [-de] [-m xchacha20|aegis256|aes-gcm] [-y]\n"
@@ -506,7 +519,13 @@ static void print_usage() {
         <<"    FileEncryptor -L pub <name|keyfile>    (derive and cache the recipient key)\n"
         <<"    FileEncryptor -L export <name> [dest_dir]\n"
         <<"    FileEncryptor -e -m x25519 -K <name>[,<name>...] <File>\n"
-        <<"    FileEncryptor -d -k <identity file> <File.ptd>\n";
+        <<"    FileEncryptor -d -k <identity file> <File.ptd>\n"
+        <<"  Cloud (WebDAV, read-only):\n"
+        <<"    FileEncryptor --cloud webdav://user:pass@host:port/dav --cloud-ls [sub/path]\n"
+        <<"    FileEncryptor --cloud webdav://host/dav --cloud-get docs/a.ptd --cloud-to a.ptd\n"
+        <<"                      (--cloud-user/--cloud-pass override URI credentials;\n"
+        <<"                       --cloud-insecure skips TLS verification; download only,\n"
+        <<"                       decrypt the fetched .ptd with -d as usual)\n";
 }
 
 #ifdef _WIN32
@@ -1133,8 +1152,22 @@ static int run_unwrapkey(const std::string& in_path, const std::string& out_path
         priv_s = priv_path;
         std::vector<unsigned char> raw;
         if(keywrap_read_file(priv_path, raw)) {
-            while(!raw.empty() && (raw.back()=='\n'||raw.back()=='\r')) raw.pop_back();
-            if(!raw.empty()) priv_s.assign((const char*)raw.data(), raw.size());
+            // FEPK1 身份文件
+            if(raw.size()>=5 && std::memcmp(raw.data(),"FEPK1",5)==0) {
+                std::string plain; bool wp=false; std::string kerr;
+                if(!fe_keyfile::read_protected(priv_path,plain,fe_keyfile::PURPOSE_RAGE,wp,kerr)) {
+                    sodium_memzero(raw.data(),raw.size());
+                    std::cerr<<"Cannot decrypt the FEPK1 identity file: "<<kerr<<"\n";
+                    return 1;
+                }
+                while(!plain.empty()&&(plain.back()=='\n'||plain.back()=='\r')) plain.pop_back();
+                priv_s = plain;
+                sodium_memzero(plain.data(),plain.size());
+            } else {
+                while(!raw.empty() && (raw.back()=='\n'||raw.back()=='\r')) raw.pop_back();
+                if(!raw.empty()) priv_s.assign((const char*)raw.data(), raw.size());
+            }
+            sodium_memzero(raw.data(),raw.size());
         }
     }
 
@@ -1198,46 +1231,8 @@ static bool run_keygen(const std::string& output_dir,bool force_overwrite,uint8_
         return !bad;
     };
 
-    // H5c
-    // 即便 -y
-    // 不可解密
-    auto write_line_exclusive=[](const std::string& path,const std::string& content)->bool{
-#ifdef _WIN32
-        const std::wstring wp=utf8_to_wstring(path);
-        int fd=_wopen(wp.c_str(),_O_WRONLY|_O_CREAT|_O_EXCL|_O_BINARY,_S_IREAD|_S_IWRITE);
-        if(fd<0) {
-            std::cerr<<(errno==EEXIST
-                ? "Private key file already exists (delete it or choose another directory): "
-                : "Cannot create: ")<<path<<"\n";
-            return false;
-        }
-        FILE* fp=_fdopen(fd,"wb");
-        if(!fp) { _close(fd); _wunlink(wp.c_str()); std::cerr<<"Cannot write: "<<path<<"\n"; return false; }
-#else
-        int fd=::open(path.c_str(),O_WRONLY|O_CREAT|O_EXCL|O_NOFOLLOW,0600);
-        if(fd<0) {
-            std::cerr<<(errno==EEXIST
-                ? "Private key file already exists (delete it or choose another directory): "
-                : "Cannot create: ")<<path<<"\n";
-            return false;
-        }
-        FILE* fp=fdopen(fd,"wb");
-        if(!fp) { ::close(fd); ::unlink(path.c_str()); std::cerr<<"Cannot write: "<<path<<"\n"; return false; }
-#endif
-        const std::string line=content+"\n";
-        const size_t n=std::fwrite(line.data(),1,line.size(),fp);
-        bool ok=(n==line.size());
-        if(std::fclose(fp)!=0) ok=false;
-        if(!ok) {
-#ifdef _WIN32
-            _wunlink(wp.c_str());
-#else
-            ::unlink(path.c_str());
-#endif
-            std::cerr<<"Cannot write: "<<path<<"\n";
-        }
-        return ok;
-    };
+    // H5c 覆盖保护外层做
+    // 私钥本体 FEPK1 加密
 
     const std::string priv_path=dir+"rage_private.txt";
 
@@ -1250,11 +1245,15 @@ static bool run_keygen(const std::string& output_dir,bool force_overwrite,uint8_
         return false;
     }
 
-    if(!write_line_exclusive(priv_path,priv)) {
-        sodium_memzero(priv.data(),priv.size());
-        return false;
+    // FEPK1 全文加密写盘
+    {
+        std::string kerr;
+        if(!fe_keyfile::write_protected(priv_path,priv,fe_keyfile::PURPOSE_RAGE,kerr)) {
+            std::cerr<<"Cannot write the protected private key: "<<kerr<<"\n";
+            sodium_memzero(priv.data(),priv.size());
+            return false;
+        }
     }
-    tighten_file_permissions(priv_path);   // 收紧密钥文件权
 
     // 公钥
     const std::string pub_path=dir+"rage_public.txt";
@@ -1355,46 +1354,8 @@ static bool run_derive(const std::string& output_dir,
         of.close();
         return !bad;
     };
-    // H5c
-    // 即便 -y
-    // 不可解密
-    auto write_line_exclusive=[](const std::string& path,const std::string& content)->bool{
-#ifdef _WIN32
-        const std::wstring wp=utf8_to_wstring(path);
-        int fd=_wopen(wp.c_str(),_O_WRONLY|_O_CREAT|_O_EXCL|_O_BINARY,_S_IREAD|_S_IWRITE);
-        if(fd<0) {
-            std::cerr<<(errno==EEXIST
-                ? "Private key file already exists (delete it or choose another directory): "
-                : "Cannot create: ")<<path<<"\n";
-            return false;
-        }
-        FILE* fp=_fdopen(fd,"wb");
-        if(!fp) { _close(fd); _wunlink(wp.c_str()); std::cerr<<"Cannot write: "<<path<<"\n"; return false; }
-#else
-        int fd=::open(path.c_str(),O_WRONLY|O_CREAT|O_EXCL|O_NOFOLLOW,0600);
-        if(fd<0) {
-            std::cerr<<(errno==EEXIST
-                ? "Private key file already exists (delete it or choose another directory): "
-                : "Cannot create: ")<<path<<"\n";
-            return false;
-        }
-        FILE* fp=fdopen(fd,"wb");
-        if(!fp) { ::close(fd); ::unlink(path.c_str()); std::cerr<<"Cannot write: "<<path<<"\n"; return false; }
-#endif
-        const std::string line=content+"\n";
-        const size_t n=std::fwrite(line.data(),1,line.size(),fp);
-        bool ok=(n==line.size());
-        if(std::fclose(fp)!=0) ok=false;
-        if(!ok) {
-#ifdef _WIN32
-            _wunlink(wp.c_str());
-#else
-            ::unlink(path.c_str());
-#endif
-            std::cerr<<"Cannot write: "<<path<<"\n";
-        }
-        return ok;
-    };
+    // FEPK1 全文加密写盘
+    // 私钥本体不再明文落盘
 
     const std::string priv_path=dir+"rage_private.txt";
     const std::string salt_path=dir+"rage_derive_salt.txt";
@@ -1412,9 +1373,14 @@ static bool run_derive(const std::string& output_dir,
         return false;
     }
 
-    bool ok=write_line_exclusive(priv_path,priv);
+    // FEPK1 全文加密写盘
+    bool ok=false;
+    {
+        std::string kerr;
+        ok=fe_keyfile::write_protected(priv_path,priv,fe_keyfile::PURPOSE_RAGE,kerr);
+        if(!ok) std::cerr<<"Cannot write the protected private key: "<<kerr<<"\n";
+    }
     if(ok) ok=write_line(salt_path,std::string(salt_hex));
-    if(ok) tighten_file_permissions(priv_path);   // 收紧密钥文件权
 
     sodium_memzero(salt_hex,sizeof(salt_hex));
     sodium_memzero(salt.data(),salt.size());
@@ -1600,7 +1566,8 @@ static bool run_recover(const std::string& path, const SecureBuffer& pw, bool do
 static bool run_keylib(const std::vector<std::string>& words,
                        const std::string& as_name,
                        const std::string& alias,
-                       const std::string& notes) {
+                       const std::string& notes,
+                       bool plain_export) {
     if(words.empty()) {
         std::cerr<<"Missing -L subcommand (list|add|remove|show|pub|export).\n";
         return false;
@@ -1707,6 +1674,17 @@ static bool run_keylib(const std::vector<std::string>& words,
                 }
             }
             f.close();
+            // FEPK1 身份文件
+            if(buf.size()>=5 && std::memcmp(buf.data(),"FEPK1",5)==0) {
+                std::string plain; bool wp=false; std::string kerr;
+                if(!fe_keyfile::read_protected(path,plain,fe_keyfile::PURPOSE_RAGE,wp,kerr)) {
+                    sodium_memzero(buf.data(),buf.size());
+                    err="Cannot decrypt the FEPK1 key file: "+kerr;
+                    return false;
+                }
+                sodium_memzero(buf.data(),buf.size());
+                buf.swap(plain);
+            }
             size_t a=0,b=buf.size();
             while(a<b&&(unsigned char)buf[a]<=0x20) ++a;
             while(b>a&&(unsigned char)buf[b-1]<=0x20) --b;
@@ -1744,11 +1722,14 @@ static bool run_keylib(const std::vector<std::string>& words,
     }
 
     if(sub=="export") {
-        if(words.size()<2) { std::cerr<<"Usage: -L export <name> [dest_dir]\n"; return false; }
+        if(words.size()<2) { std::cerr<<"Usage: -L export <name> [dest_dir] (--key-export-plain)\n"; return false; }
         const std::string dest=(words.size()>=3)?words[2]:std::string(".");
         std::string err;
-        if(!keylib_export(words[1],dest,err)) { std::cerr<<err<<"\n"; return false; }
+        if(!keylib_export(words[1],dest,plain_export,err)) { std::cerr<<err<<"\n"; return false; }
         std::cout<<"Exported '"<<words[1]<<"' to "<<dest<<"\n";
+        if(!plain_export)
+            std::cerr<<"The exported key file is FEPK1-encrypted; pass --key-export-plain "
+                "to write plaintext for third-party tools.\n";
         return true;
     }
 
@@ -1867,7 +1848,9 @@ static int main_impl(int argc,char* argv[]) {
         ACTION_DERIVE,ACTION_PUBKEY,ACTION_INFO,ACTION_VERIFY,ACTION_RECOVER,
         ACTION_KEYLIB,ACTION_REWRAP,ACTION_WATERMARK,ACTION_WRAPKEY,ACTION_UNWRAPKEY,ACTION_RANDOM_READ,
         ACTION_VAULT_INIT,ACTION_VAULT_LIST,ACTION_VAULT_REINDEX,ACTION_VAULT_MOUNT,
-        ACTION_VAULT_RECOVERY,ACTION_VAULT_REKEY,ACTION_VAULT_RECRYPT,ACTION_VAULT_FORMAT
+        ACTION_VAULT_RECOVERY,ACTION_VAULT_REKEY,ACTION_VAULT_RECRYPT,ACTION_VAULT_FORMAT,
+        ACTION_VAULT_SNAPSHOT,ACTION_VAULT_CHECKSNAP,ACTION_VAULT_RESTORE,ACTION_VAULT_SHARE,
+        ACTION_CLOUD_LS,ACTION_CLOUD_GET
     } action=ACTION_NONE;
 
     std::vector<std::string> input_paths;
@@ -1887,6 +1870,7 @@ static int main_impl(int argc,char* argv[]) {
     bool restore_name=false;     // 还原文件名
     bool obfuscate_name=false;   // 混淆文件名
     std::string keyfile_path;   // 密钥文件
+    bool key_export_plain=false;  // 导出明文私钥
     bool asym_mode=false;       // 非对称
     bool x448_mode=false;        // X448曲线
     std::string recipient_spec; // 收件人公钥
@@ -1895,6 +1879,7 @@ static int main_impl(int argc,char* argv[]) {
     size_t preview_max=4096;    // 预览字节数
     std::string salt_spec;      // 派生盐
     bool force_sha256=false;    // 生成校验单
+    bool weak_ok=false;         // 显式放行弱口令
     bool recover_rename=false;  // 原地重命名
     bool pqc_on=true;           // 后量子
     WatermarkSpec wm_spec;      // 水印
@@ -1931,6 +1916,8 @@ static int main_impl(int argc,char* argv[]) {
     bool f_encrypt=false, f_decrypt=false, f_bencrypt=false, f_bdecrypt=false,
          f_keygen=false, f_derive=false, f_pubkey=false, f_info=false,
          f_verify=false, f_recover=false, f_keylib=false, f_rewrap=false, f_randomread=false;
+    std::vector<std::string> batch_exclude_opts;
+    bool f_skip_hidden=false, f_no_preserve_times=false;
     bool f_preview=false, f_pqc=false, f_nopqc=false, f_wm=false, f_nowm=false,
          f_compress=false, f_verbose=false, f_stdout=false;
     std::vector<std::string> mode_strs;
@@ -1944,12 +1931,23 @@ static int main_impl(int argc,char* argv[]) {
     std::string vault_recovery_dir, vault_recovery_arg;
     std::string vault_rekey_dir, vault_recrypt_dir;
     std::string vault_format_dir;
+    std::string vault_snapshot_dir, vault_snapshot_dest, vault_checksnap_dir;
+    std::string vault_restore_snap, vault_restore_to;
+    std::string vault_share_dir, vault_share_vpath, vault_share_out;
+    // cloud (webdav) options
+    std::string cloud_uri, cloud_ls_path, cloud_get_src, cloud_get_dst;
+    std::string cloud_user, cloud_pass;
+    bool cloud_insecure = false;
     std::string wm_extract_path;
     std::vector<std::string> explicit_inputs;
     bool src_del=false, src_wipe=false, src_recycle=false;
     bool features_mode=false;
     bool f_json=false, f_dry_run=false, f_progress_events=false;
     bool cl_given=false;
+    std::string audit_verify_path, audit_key_spec, audit_keygen_path;
+    std::string audit_anchor_path, audit_anchor_to, audit_verify_anchor;
+    bool audit_strict=false, audit_sync_each=false, audit_anchor_cloud=false;
+    bool audit_keep_path=false, audit_decrypt=false;
 
     // 动作
     app.add_flag("-e,--encrypt", f_encrypt);                    // 加密
@@ -1970,6 +1968,12 @@ static int main_impl(int argc,char* argv[]) {
         ->multi_option_policy(CLI::MultiOptionPolicy::TakeAll);
     app.add_flag("-X,--x448", x448_mode);                       // X448曲线
     app.add_option("-o,--output", output_dir, "output directory");  // 输出目录
+    app.add_option("--exclude", batch_exclude_opts,
+                   "batch: exclude wildcard name/dir pattern, repeatable")
+        ->multi_option_policy(CLI::MultiOptionPolicy::TakeAll);
+    app.add_flag("--skip-hidden", f_skip_hidden, "batch: skip hidden files and directories");
+    app.add_flag("--no-preserve-times", f_no_preserve_times,
+                 "do not copy source mtime to output file");
     app.add_flag("--de,--delete-source", src_del);              // 删除源文件
     app.add_flag("--ws,--wipe-source", src_wipe);               // 安全擦除源
     app.add_flag("--rs,--recycle-source", src_recycle);         // 源入回收站
@@ -1981,11 +1985,14 @@ static int main_impl(int argc,char* argv[]) {
     app.add_option("-K,--keylib-ref", keylib_refs, "-K <name>[,...]");  // 密钥库引用
     app.add_option("--st,--salt", salt_spec, "-G derive salt <hex|file>");  // 派生盐
     app.add_option("-k,--keyfile", keyfile_path, "key file -k <file>");  // 密钥文件
+    app.add_flag("--key-export-plain", key_export_plain,
+        "-L export: write the key file as plaintext for third-party tools");  // 明文导出
     app.add_option("-r,--recipient", recipient_spec, "recipient -r <pub|file>");  // 收件人公钥
     app.add_flag("--ks,--key-stdin", key_from_stdin);           // 密钥走输入
     app.add_flag("--rn,--restore-name", restore_name);          // 还原文件名
     app.add_flag("--on,--obfuscate-name", obfuscate_name);      // 混淆文件名
     app.add_flag("-q,--sha256", force_sha256);                  // 生成校验单
+    app.add_flag("--weak-ok", weak_ok);                         // 显式放行弱口令
     app.add_flag("--ren,--rename", recover_rename);             // 原地重命名
     app.add_flag("-z,--compress", f_compress);                  // 压缩
     app.add_flag("--zstd,--use-zstd", f_compress);              // zstd压缩
@@ -1999,6 +2006,17 @@ static int main_impl(int argc,char* argv[]) {
     app.add_flag("--json", f_json);                             // 机器可读输出
     app.add_flag("-n,--dry-run", f_dry_run);                    // 只出计划不写盘
     app.add_flag("--progress-events", f_progress_events);        // JSONL 进度旁路
+    app.add_option("--audit-verify", audit_verify_path);          // 审计链校验
+    app.add_option("--audit-key", audit_key_spec);                // 审计密钥
+    app.add_option("--audit-keygen", audit_keygen_path);          // 生成审计密钥
+    app.add_option("--audit-anchor", audit_anchor_path);          // 读取日志写锚点
+    app.add_option("--audit-anchor-to", audit_anchor_to);         // 锚点文件
+    app.add_option("--audit-verify-anchor", audit_verify_anchor); // 校验时比对锚点
+    app.add_flag("--audit-strict", audit_strict);                 // 拒绝明文降级
+    app.add_flag("--audit-sync-each", audit_sync_each);           // 每条 fsync
+    app.add_flag("--audit-anchor-cloud", audit_anchor_cloud);     // 锚点上传 WebDAV
+    app.add_flag("--audit-keep-path", audit_keep_path);           // 审计保留路径密文
+    app.add_flag("--audit-decrypt", audit_decrypt);               // 校验时解密路径
     app.add_flag("--pv,--preview", f_preview);                  // 预览明文
     app.add_flag("--so,--stdout", f_stdout);                    // 写标准输出
     app.add_option("--mb,--max-bytes", preview_max, "preview max bytes (default 4096)");  // 预览字节数
@@ -2044,6 +2062,22 @@ static int main_impl(int argc,char* argv[]) {
     app.add_option("--vrc,--vault-recrypt", vault_recrypt_dir, "re-encrypt vault contents to 64KB blocks (non-compressed), eliminating 1MiB legacy path");  // 盘内重加密
     // 格式化盘
     app.add_option("--vf,--vault-format", vault_format_dir, "format the vault at <dir>: wipe every stored file and reset the index (keeps vault.meta/password)");  // 格式化盘
+    app.add_option("--vs,--vault-snapshot", vault_snapshot_dir, "snapshot the vault at <dir> (pair with --snapshot-to)");  // 快照
+    app.add_option("--snapshot-to", vault_snapshot_dest, "destination directory for --vault-snapshot");  // 快照目标
+    app.add_option("--vck,--vault-check-snapshot", vault_checksnap_dir, "verify the snapshot manifest at <dir>");  // 校验快照
+    app.add_option("--vrs,--vault-restore-snapshot", vault_restore_snap, "restore the snapshot at <dir> to its recorded source vault");  // 恢复快照
+    app.add_option("--vault-restore-to", vault_restore_to, "override restore destination vault dir");  // 恢复目标
+    app.add_option("--vsh,--vault-share", vault_share_dir, "share a vault entry as .ptd (pair with --share-file/--share-to)");  // 分享副本
+    app.add_option("--share-file", vault_share_vpath, "vault-relative path to share");  // 分享条目
+    app.add_option("--share-to", vault_share_out, "output .ptd path for --vault-share");  // 分享输出
+    // cloud (webdav, read-only browsing + download)
+    app.add_option("--cloud", cloud_uri, "cloud root URI: webdav://[user:pass@]host[:port]/path");
+    app.add_option("--cloud-ls", cloud_ls_path, "list a cloud directory (pair with --cloud; value = sub path, empty = root)")->expected(0,1);
+    app.add_option("--cloud-get", cloud_get_src, "download a cloud file (pair with --cloud and --cloud-to)");
+    app.add_option("--cloud-to", cloud_get_dst, "local destination path for --cloud-get");
+    app.add_option("--cloud-user", cloud_user, "cloud auth user (overrides URI userinfo)");
+    app.add_option("--cloud-pass", cloud_pass, "cloud auth password (overrides URI userinfo)");
+    app.add_flag("--cloud-insecure", cloud_insecure, "skip TLS certificate verification for --cloud");
 
     try {
         app.parse(argc, argv);
@@ -2055,6 +2089,11 @@ static int main_impl(int argc,char* argv[]) {
     }
 
     for(auto& s: explicit_inputs) input_paths.push_back(s);
+
+    // batch filter options
+    batch_set_exclude_patterns(batch_exclude_opts);
+    batch_set_skip_hidden(f_skip_hidden);
+    batch_set_preserve_times(!f_no_preserve_times);
 
     // 机器可读契约初
     g_contract.json = f_json;
@@ -2071,12 +2110,88 @@ static int main_impl(int argc,char* argv[]) {
         setenv(FE_FRAME_ENV, "1", 1);
 #endif
     }
+    // 审计命令：校验 / 生成密钥 / 写锚点，均不进入业务动作
+    if (!audit_keygen_path.empty()) {
+        std::string err;
+        if (!fe::audit_keygen(audit_keygen_path, err)) {
+            std::cerr << "[audit] " << err << "\n";
+            return 4;
+        }
+        std::cout << "{\"ok\":true,\"key\":\"" << fe_json_escape(audit_keygen_path) << "\"}\n";
+        return 0;
+    }
+    if (!audit_verify_path.empty()) {
+        fe::AuditVerifyResult vr;
+        bool ok = fe::audit_verify(audit_verify_path, audit_key_spec, audit_verify_anchor,
+                                   vr, audit_decrypt);
+        std::cout << "{\"ok\":" << (ok ? "true" : "false")
+                  << ",\"checked\":" << vr.checked_lines
+                  << ",\"legacy\":" << vr.legacy_lines
+                  << ",\"schema3\":" << vr.schema3_lines
+                  << ",\"head_seq\":" << vr.head_seq
+                  << ",\"head_mac\":\"" << vr.head_mac << "\""
+                  << ",\"kid\":\"" << vr.kid << "\""
+                  << ",\"first_bad_seq\":" << vr.first_bad_seq
+                  << ",\"error\":\"" << fe_json_escape(vr.err) << "\"";
+        if (audit_decrypt && !vr.paths.empty()) {
+            std::cout << ",\"paths\":[";
+            for (size_t i = 0; i < vr.paths.size(); ++i) {
+                if (i) std::cout << ",";
+                std::cout << "\"" << fe_json_escape(vr.paths[i]) << "\"";
+            }
+            std::cout << "]";
+        }
+        std::cout << "}\n";
+        return ok ? 0 : 1;
+    }
+    if (!audit_anchor_path.empty()) {
+        std::string to = audit_anchor_to.empty() ? audit_anchor_path + ".anchor.jsonl" : audit_anchor_to;
+        std::string err;
+        bool ok = fe::audit_write_anchor(audit_anchor_path, audit_key_spec, to, err);
+        if (ok && audit_anchor_cloud && !cloud_uri.empty()) {
+            SafWebDavOptions copts;
+            std::string cerr;
+            if (saf_webdav_parse_uri(cloud_uri, copts, cerr)) {
+                if (!cloud_user.empty()) copts.user = cloud_user;
+                if (!cloud_pass.empty()) copts.pass = cloud_pass;
+                copts.verify_tls = !cloud_insecure;
+                std::ifstream af(to, std::ios::binary);
+                std::string all, line;
+                while (std::getline(af, line)) if (!line.empty()) all += line + "\n";
+                if (!saf_webdav_append_text(copts, "audit-anchor.jsonl", all, cerr)) {
+                    std::cerr << "[audit] cloud anchor failed: " << cerr << "\n";
+                    ok = false;
+                }
+            } else {
+                std::cerr << "[audit] " << cerr << "\n";
+                ok = false;
+            }
+        }
+        if (!ok) { std::cerr << "[audit] " << err << "\n"; return 4; }
+        std::cout << "{\"ok\":true,\"anchor\":\"" << fe_json_escape(to) << "\"}\n";
+        return 0;
+    }
+
     {
         const char* env_audit = std::getenv("FE_AUDIT_LOG");
         if (env_audit && *env_audit) g_contract.audit_path = env_audit;
         else if (!cfg.log_file.empty()) g_contract.audit_path = cfg.log_file + ".audit.jsonl";
         const char* did = std::getenv("FE_DEVICE_ID");
         g_contract.device_id = (did && *did) ? did : "local";
+        // 环境变量开启
+        if (!audit_strict) {
+            const char* es = std::getenv("FE_AUDIT_STRICT");
+            audit_strict = (es && std::strcmp(es, "1") == 0);
+        }
+        if (!g_contract.audit_path.empty()) {
+            std::string aerr;
+            if (!fe::audit_writer().init(g_contract.audit_path, audit_key_spec,
+                                         audit_strict, audit_sync_each,
+                                         audit_keep_path, aerr)) {
+                std::cerr << "[audit] init failed: " << aerr << "\n";
+                if (audit_strict) return 4;
+            }
+        }
         saf_set_audit_hook([](const SafAuditEvent& ev) {
             fe_audit_emit(ev.op.c_str(), ev.key, (int)ev.status,
                           ev.bytes, ev.elapsed_ms, ev.error_code);
@@ -2123,7 +2238,11 @@ static int main_impl(int argc,char* argv[]) {
             +(!vault_init_dir.empty()?1:0)+(!vault_list_dir.empty()?1:0)+(!vault_reindex_dir.empty()?1:0)
             +(!vault_mount_dir.empty()?1:0)+(!vault_recovery_dir.empty()?1:0)
             +(!vault_rekey_dir.empty()?1:0)+(!vault_recrypt_dir.empty()?1:0)
-            +(!vault_format_dir.empty()?1:0);
+            +(!vault_format_dir.empty()?1:0)
+            +(!vault_snapshot_dir.empty()?1:0)+(!vault_checksnap_dir.empty()?1:0)
+            +(!vault_restore_snap.empty()?1:0)
+            +(!vault_share_dir.empty()?1:0)
+            +(!cloud_uri.empty()?1:0);
         if(n_act>1) { std::cerr<<"Multiple modes specified.\n"; return 1; }
         if(f_encrypt) action=ACTION_ENCRYPT;
         else if(f_decrypt) action=ACTION_DECRYPT;
@@ -2146,6 +2265,11 @@ static int main_impl(int argc,char* argv[]) {
         else if(!vault_rekey_dir.empty()) action=ACTION_VAULT_REKEY;
         else if(!vault_recrypt_dir.empty()) action=ACTION_VAULT_RECRYPT;
         else if(!vault_format_dir.empty()) action=ACTION_VAULT_FORMAT;
+        else if(!vault_snapshot_dir.empty()) action=ACTION_VAULT_SNAPSHOT;
+        else if(!vault_checksnap_dir.empty()) action=ACTION_VAULT_CHECKSNAP;
+        else if(!vault_restore_snap.empty()) action=ACTION_VAULT_RESTORE;
+        else if(!vault_share_dir.empty()) action=ACTION_VAULT_SHARE;
+        else if(!cloud_uri.empty()) action = cloud_get_src.empty() ? ACTION_CLOUD_LS : ACTION_CLOUD_GET;
     }
 
 
@@ -2154,7 +2278,10 @@ static int main_impl(int argc,char* argv[]) {
             "none","encrypt","decrypt","batch-encrypt","batch-decrypt","keygen","derive",
             "pubkey","info","verify","recover","keylib","rewrap","watermark","wrap-key",
             "unwrap-key","random-read","vault-init","vault-list","vault-reindex","vault-mount",
-            "vault-recovery","vault-rekey","vault-recrypt","vault-format"
+            "vault-recovery","vault-rekey","vault-recrypt","vault-format",
+            "vault-snapshot","vault-check-snapshot","vault-restore-snapshot",
+            "vault-share",
+            "cloud-ls","cloud-get"
         };
         g_contract.action = kActNames[(int)action];
         g_contract.inputs = input_paths;
@@ -2343,7 +2470,7 @@ if(wrap_mode || unwrap_mode) {
 
     // 功能1
     if(action==ACTION_KEYLIB) {
-        return run_keylib(input_paths,keylib_as,keylib_alias,keylib_notes) ? 0 : 1;
+        return run_keylib(input_paths,keylib_as,keylib_alias,keylib_notes,key_export_plain) ? 0 : 1;
     }
 
     // 功能2
@@ -2368,7 +2495,10 @@ if(wrap_mode || unwrap_mode) {
        &&action!=ACTION_VAULT_INIT&&action!=ACTION_VAULT_LIST&&action!=ACTION_VAULT_REINDEX
        &&action!=ACTION_VAULT_MOUNT&&action!=ACTION_VAULT_RECOVERY
        &&action!=ACTION_VAULT_REKEY&&action!=ACTION_VAULT_RECRYPT
-       &&action!=ACTION_VAULT_FORMAT) {
+       &&action!=ACTION_VAULT_FORMAT
+       &&action!=ACTION_VAULT_SNAPSHOT&&action!=ACTION_VAULT_CHECKSNAP
+       &&action!=ACTION_VAULT_RESTORE&&action!=ACTION_VAULT_SHARE
+       &&action!=ACTION_CLOUD_LS&&action!=ACTION_CLOUD_GET) {
         std::cerr<<"No input paths specified.\n";
         print_usage();
         return 1;
@@ -2520,10 +2650,41 @@ if(wrap_mode || unwrap_mode) {
             std::cerr<<"Key file is empty: "<<keyfile_path<<"\n";
             return 1;
         }
-        password = SecureBuffer(kbuf.data(), kbuf.size());
-        sodium_memzero(kbuf.data(), kbuf.size()); kbuf.clear();
-        used_key_source=true;
-        log_event(LOG_INFO,"key_source",{{"type","keyfile"},{"path",keyfile_path}});
+        // FEPK1 私钥识别
+        if(kbuf.size()>=5 && std::memcmp(kbuf.data(),"FEPK1",5)==0) {
+            std::string plain; bool wp=false; std::string kerr;
+            if(!fe_keyfile::read_protected(keyfile_path,plain,fe_keyfile::PURPOSE_RAGE,wp,kerr)) {
+                sodium_memzero(kbuf.data(),kbuf.size());
+                std::cerr<<"Cannot decrypt the FEPK1 key file: "<<kerr<<"\n";
+                return 1;
+            }
+            while(!plain.empty() && (plain.back()=='\n'||plain.back()=='\r')) plain.pop_back();
+            if(plain.empty()) {
+                sodium_memzero(kbuf.data(),kbuf.size());
+                std::cerr<<"No key material in: "<<keyfile_path<<"\n";
+                return 1;
+            }
+            password = SecureBuffer(plain.data(), plain.size());
+            sodium_memzero(plain.data(), plain.size()); plain.clear();
+            sodium_memzero(kbuf.data(), kbuf.size()); kbuf.clear();
+            used_key_source=true;
+            log_event(LOG_INFO,"key_source",{{"type","keyfile-fepk1"},{"path",keyfile_path}});
+        } else {
+            // 明文私钥告警
+            const bool looks_priv =
+                (kbuf.size()>=15 && std::memcmp(kbuf.data(),"AGE-SECRET-KEY-",15)==0) ||
+                (kbuf.size()>=10 && std::memcmp(kbuf.data(),"MLKEM1SEC-",10)==0) ||
+                (kbuf.size()>= 8 && std::memcmp(kbuf.data(),"X448SEC-",8)==0) ||
+                (kbuf.size()>=27 && std::memcmp(kbuf.data(),"-----BEGIN OPENSSH PRIVATE",27)==0) ||
+                (kbuf.size()>=31 && std::memcmp(kbuf.data(),"-----BEGIN PRIVATE KEY-----",31)==0);
+            if(looks_priv)
+                std::cerr<<"Warning: "<<keyfile_path
+                    <<" is a plaintext private key on disk; consider re-saving it encrypted.\n";
+            password = SecureBuffer(kbuf.data(), kbuf.size());
+            sodium_memzero(kbuf.data(), kbuf.size()); kbuf.clear();
+            used_key_source=true;
+            log_event(LOG_INFO,"key_source",{{"type","keyfile"},{"path",keyfile_path}});
+        }
     }
     else if(key_from_stdin) {
         // 安全通道
@@ -3000,6 +3161,167 @@ if(wrap_mode || unwrap_mode) {
         return 0;
     }
 
+    // Vault snapshot / verify / restore (file-level backup, no password needed)
+    if(action==ACTION_VAULT_SNAPSHOT) {
+        if(vault_snapshot_dir.empty()||vault_snapshot_dest.empty()) {
+            std::cerr<<"--vault-snapshot requires <dir> and --snapshot-to <dest>.\n";
+            return 1;
+        }
+        std::string err;
+        if(!vault_snapshot(vault_snapshot_dir, vault_snapshot_dest, err)) {
+            std::cerr<<"vault-snapshot failed: "<<err<<"\n";
+            return 1;
+        }
+        return 0;
+    }
+    if(action==ACTION_VAULT_CHECKSNAP) {
+        if(vault_checksnap_dir.empty()) { std::cerr<<"--vault-check-snapshot requires <dir>.\n"; return 1; }
+        std::string err;
+        if(!vault_snapshot_verify(vault_checksnap_dir, err)) {
+            std::cerr<<"vault-check-snapshot failed: "<<err<<"\n";
+            return 1;
+        }
+        return 0;
+    }
+    if(action==ACTION_VAULT_RESTORE) {
+        if(vault_restore_snap.empty()) { std::cerr<<"--vault-restore-snapshot requires <dir>.\n"; return 1; }
+        std::string err;
+        if(!vault_snapshot_restore(vault_restore_snap, vault_restore_to, err)) {
+            std::cerr<<"vault-restore-snapshot failed: "<<err<<"\n";
+            return 1;
+        }
+        return 0;
+    }
+
+    // Share a vault entry as recipients-only .ptd (vault password unlocks, output has none)
+    if(action==ACTION_VAULT_SHARE) {
+        if(vault_share_dir.empty()||vault_share_vpath.empty()||vault_share_out.empty()) {
+            std::cerr<<"--vault-share requires <dir>, --share-file <vpath> and --share-to <out.ptd>.\n";
+            return 1;
+        }
+        std::vector<std::string> recips;
+        std::string rerr;
+        if(recipient_spec.empty()||!collect_recipients(recipient_spec,recips,rerr)||recips.empty()) {
+            std::cerr<<"vault-share requires recipients: -r <public key or public key file>.\n";
+            return 1;
+        }
+        std::string vp;
+        if(!used_key_source) {
+            std::cout<<"Enter vault password: ";
+            std::vector<char> p=get_password();
+            if(p.empty()) { std::cerr<<"No password provided.\n"; return 1; }
+            vp.assign(p.data(),p.data()+p.size());
+            sodium_memzero(p.data(),p.size()); p.clear();
+        } else {
+            vp.assign(reinterpret_cast<const char*>(password.data()), password.size());
+        }
+        std::string err;
+        bool ok=vault_share_file(vault_share_dir, vault_share_vpath, vault_share_out, vp, recips, err);
+        sodium_memzero(&vp[0],vp.size());
+        if(!ok) { std::cerr<<"vault-share failed: "<<err<<"\n"; return 1; }
+        return 0;
+    }
+
+    // Cloud (WebDAV) read-only: list directory / download file
+    if(action==ACTION_CLOUD_LS||action==ACTION_CLOUD_GET) {
+        SafWebDavOptions wopt;
+        wopt.timeout_sec = 15;
+        wopt.verify_tls = !cloud_insecure;
+        std::string werr;
+        if(!saf_webdav_parse_uri(cloud_uri, wopt, werr)) {
+            std::cerr<<"--cloud parse failed: "<<werr<<"\n";
+            return 1;
+        }
+        if(!cloud_user.empty()) wopt.user = cloud_user;
+        if(!cloud_pass.empty()) wopt.pass = cloud_pass;
+        auto be = saf_open_webdav(wopt);
+        if(!be) { std::cerr<<"cloud open failed: "<<saf_webdav_last_error()<<"\n"; return 1; }
+
+        if(action==ACTION_CLOUD_LS) {
+            std::vector<SafEntry> es;
+            SafStatus st = be->readdir(cloud_ls_path.empty()? std::string("/") : cloud_ls_path, es);
+            if(st!=SAF_OK) {
+                std::cerr<<"cloud-ls failed: "<<saf_strerror(st)
+                         <<" ("<<saf_webdav_last_error()<<")\n";
+                return 1;
+            }
+            for(const auto& e : es) {
+                if(e.is_dir) std::cout<<"d    "<<e.name<<"/\n";
+                else {
+                    char tb[24] = "                    -";
+                    if(e.mtime) {
+                        std::time_t tt=(std::time_t)e.mtime;
+                        std::tm tmv{};
+#ifdef _WIN32
+                        localtime_s(&tmv,&tt);
+#else
+                        localtime_r(&tt,&tmv);
+#endif
+                        std::strftime(tb,sizeof tb,"%Y-%m-%d %H:%M", &tmv);
+                    }
+                    std::cout<<"f    "<<e.name<<"  "<<format_size(e.size)<<"  "<<tb<<"\n";
+                }
+            }
+            std::cout<<es.size()<<" item(s)\n";
+            return 0;
+        }
+
+        // ACTION_CLOUD_GET
+        if(cloud_get_src.empty()||cloud_get_dst.empty()) {
+            std::cerr<<"--cloud-get requires <remote path> and --cloud-to <local path>.\n";
+            return 1;
+        }
+        uint64_t fsize=0, fmt=0; bool isdir=false;
+        SafStatus st = be->stat(cloud_get_src,&fsize,&fmt,&isdir);
+        if(st!=SAF_OK) {
+            std::cerr<<"cloud-get: cannot stat '"<<cloud_get_src<<"': "<<saf_strerror(st)
+                     <<" ("<<saf_webdav_last_error()<<")\n";
+            return 1;
+        }
+        if(isdir) { std::cerr<<"cloud-get: '"<<cloud_get_src<<"' is a directory.\n"; return 1; }
+        std::error_code lec;
+        if(std::filesystem::exists(cloud_get_dst,lec)) {
+            if(!force_overwrite) {
+                std::cerr<<"Output exists: "<<cloud_get_dst<<" (use -y to overwrite)\n";
+                return 1;
+            }
+            std::filesystem::remove(cloud_get_dst,lec);
+        }
+        std::shared_ptr<Stream> in, out;
+        st = be->open(cloud_get_src,'r',in);
+        if(st!=SAF_OK) {
+            std::cerr<<"cloud-get: open remote failed: "<<saf_strerror(st)
+                     <<" ("<<saf_webdav_last_error()<<")\n";
+            return 1;
+        }
+        st = saf_open_native_file(cloud_get_dst,'w',out);
+        if(st!=SAF_OK) {
+            std::cerr<<"cloud-get: cannot create '"<<cloud_get_dst<<"': "<<saf_strerror(st)<<"\n";
+            return 1;
+        }
+        SafPumpProgress prog;
+        auto t0 = std::chrono::steady_clock::now();
+        prog.on_bytes = [&](uint64_t done) {
+            double pct = fsize ? (100.0*(double)done/(double)fsize) : 100.0;
+            std::fprintf(stderr,"  %s / %s (%.1f%%)",
+                         format_size(done).c_str(), format_size(fsize).c_str(), pct);
+        };
+        uint64_t copied = 0;
+        st = saf_pump(*in,*out,0,prog,&copied);
+        out->close();
+        double secs = std::chrono::duration<double>(std::chrono::steady_clock::now()-t0).count();
+        if(st!=SAF_OK) {
+            std::fprintf(stderr,"\n");
+            std::cerr<<"cloud-get failed: "<<saf_strerror(st)
+                     <<" ("<<saf_webdav_last_error()<<")\n";
+            return 1;
+        }
+        std::fprintf(stderr,"  \n");
+        std::cout<<"downloaded "<<format_size(copied)<<" -> "<<cloud_get_dst
+                 <<" in "<<secs<<"s\n";
+        return 0;
+    }
+
     // 因此必须
     if(action==ACTION_DERIVE||action==ACTION_PUBKEY||
        action==ACTION_VERIFY||action==ACTION_RECOVER) {
@@ -3019,9 +3341,9 @@ if(wrap_mode || unwrap_mode) {
                 std::string preason;
                 const Config& cfg = global_config();
                 size_t min_len = (cfg.min_password_length > 0)
-                    ? (size_t)cfg.min_password_length : 8;
-                int min_classes = (cfg.min_password_classes > 0) ? cfg.min_password_classes : 2;
-                if(!fe::password_policy::meets_policy(password.cdata(), password.size(), min_len, min_classes, preason)) {
+                    ? (size_t)cfg.min_password_length : 12;
+                int min_classes = (cfg.min_password_classes > 0) ? cfg.min_password_classes : 3;
+                if(!weak_ok && !fe::password_policy::meets_policy(password.cdata(), password.size(), min_len, min_classes, preason)) {
                     std::cerr<<preason<<"\n";
                     return 1;
                 }
@@ -3058,9 +3380,9 @@ if(wrap_mode || unwrap_mode) {
             std::string preason;
             const Config& cfg = global_config();
             size_t min_len = (cfg.min_password_length > 0)
-                ? (size_t)cfg.min_password_length : 8;
-            int min_classes = (cfg.min_password_classes > 0) ? cfg.min_password_classes : 2;
-            if(!fe::password_policy::meets_policy(password.cdata(), password.size(), min_len, min_classes, preason)) {
+                ? (size_t)cfg.min_password_length : 12;
+            int min_classes = (cfg.min_password_classes > 0) ? cfg.min_password_classes : 3;
+            if(!weak_ok && !fe::password_policy::meets_policy(password.cdata(), password.size(), min_len, min_classes, preason)) {
                 std::cerr<<preason<<"\n";
                 return 1;
             }
@@ -3072,9 +3394,9 @@ if(wrap_mode || unwrap_mode) {
                 std::string preason;
                 const Config& cfg = global_config();
                 size_t min_len = (cfg.min_password_length > 0)
-                    ? (size_t)cfg.min_password_length : 8;
-                int min_classes = (cfg.min_password_classes > 0) ? cfg.min_password_classes : 2;
-                if(!fe::password_policy::meets_policy(pw1.data(), pw1.size(), min_len, min_classes, preason)) {
+                    ? (size_t)cfg.min_password_length : 12;
+                int min_classes = (cfg.min_password_classes > 0) ? cfg.min_password_classes : 3;
+                if(!weak_ok && !fe::password_policy::meets_policy(pw1.data(), pw1.size(), min_len, min_classes, preason)) {
                     std::cerr<<preason<<"\n";
                     sodium_memzero(pw1.data(),pw1.size()); pw1.clear();
                     return 1;

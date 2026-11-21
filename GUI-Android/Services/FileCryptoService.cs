@@ -1,6 +1,6 @@
 ﻿// 单文件加解密
 // native 侧为流式实现
-using System.Runtime.InteropServices;
+using System.Runtime.InteropServices;
 using FileEncryptorMobile.Services;
 namespace FileEncryptorMobile.Services;
 public sealed class FileCryptoException : Exception
@@ -356,6 +356,97 @@ public static unsafe class FileCryptoService
         }
         Check(rc);
         return pass[..(int)len];
+    }
+
+    // 水印签名
+    // 加密时附带签名水印
+    public static long EncryptWm(string inUriOrPath, string outPath,
+        byte[] password, FeMMode mode, int compressLevel,
+        string wmPrivPem, bool wmPqc, Action<ulong, ulong>? progress)
+    {
+        int inFd = -1, outFd = -1;
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        try
+        {
+            inFd = OpenRead(inUriOrPath);
+            outFd = OpenWrite(outPath);
+            var handle = GCHandle.Alloc(progress ?? ((d, t) => { }));
+            try
+            {
+                IntPtr fn = Marshal.GetFunctionPointerForDelegate(ProgressThunk);
+                IntPtr user = GCHandle.ToIntPtr(handle);
+                fixed (byte* pp = password)
+                {
+                    int rc = FileCryptoNative.fe_m_encrypt_fd_wm(
+                        inFd, 0, outFd, pp, (UIntPtr)password.Length,
+                        (int)mode, compressLevel,
+                        wmPrivPem, wmPqc ? 1 : 0,
+                        (delegate* unmanaged<ulong, ulong, IntPtr, void>)fn, user);
+                    Check(rc);
+                }
+            }
+            finally { handle.Free(); }
+            return sw.ElapsedMilliseconds;
+        }
+        finally { Close(inFd); Close(outFd); }
+    }
+
+    // 水印校验结果
+    public sealed record WatermarkInfo(
+        bool Found, bool HasSignature, bool VerifyAttempted, bool VerifyOk,
+        ulong Timestamp, int Flags, string MachineIdHex, string NonceHex, string Error);
+
+    // 校验密文水印
+    // pubPem 为 null 时只展示不验签
+    public static WatermarkInfo WmVerify(string ptdPath, string? pubPem, bool pqc)
+    {
+        byte[] buf = new byte[8192];
+        int rc;
+        unsafe
+        {
+            fixed (byte* o = buf)
+                rc = FileCryptoNative.fe_m_wm_verify(
+                    ptdPath, pubPem, pqc ? 1 : 0, o, (UIntPtr)buf.Length);
+        }
+        Check(rc);
+        string json = CStr(buf);
+        using var doc = System.Text.Json.JsonDocument.Parse(json);
+        var r = doc.RootElement;
+        bool found = r.GetProperty("found").GetBoolean();
+        if (!found) return new WatermarkInfo(false, false, false, false, 0, 0, "", "", "");
+        bool hasSig = TryBool(r, "has_signature");
+        bool attempt = TryBool(r, "verify_attempted");
+        bool ok = TryBool(r, "verify_ok");
+        ulong ts = TryULong(r, "timestamp");
+        int flags = TryInt(r, "flags");
+        string mid = TryStr(r, "machine_id_hex");
+        string nonce = TryStr(r, "nonce_hex");
+        string err = TryStr(r, "error");
+        return new WatermarkInfo(found, hasSig, attempt, ok, ts, flags, mid, nonce, err);
+    }
+
+    static bool TryBool(System.Text.Json.JsonElement r, string k)
+        => r.TryGetProperty(k, out var v) && v.ValueKind == System.Text.Json.JsonValueKind.True;
+    static ulong TryULong(System.Text.Json.JsonElement r, string k)
+        => r.TryGetProperty(k, out var v) && v.TryGetUInt64(out var x) ? x : 0;
+    static int TryInt(System.Text.Json.JsonElement r, string k)
+        => r.TryGetProperty(k, out var v) && v.TryGetInt32(out var x) ? x : 0;
+    static string TryStr(System.Text.Json.JsonElement r, string k)
+        => r.TryGetProperty(k, out var v) && v.ValueKind == System.Text.Json.JsonValueKind.String ? v.GetString() ?? "" : "";
+
+    // 生成水印签名密钥
+    public static (string Pub, string Priv) WmGenerateKeypair(bool pqc)
+    {
+        byte[] pub = new byte[16384], priv = new byte[16384];
+        int rc;
+        unsafe
+        {
+            fixed (byte* p = pub, q = priv)
+                rc = FileCryptoNative.fe_m_wm_generate_keypair(
+                    pqc ? 1 : 0, p, (UIntPtr)pub.Length, q, (UIntPtr)priv.Length);
+        }
+        Check(rc);
+        return (CStr(pub), CStr(priv));
     }
 
     static string CStr(byte[] b)

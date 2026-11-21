@@ -5,6 +5,7 @@
 #include "watermark.hpp"
 
 #include "FileEncryptor.hpp"
+#include "keyfile_crypt.hpp"
 
 #include <sodium.h>
 
@@ -17,7 +18,6 @@
 
 #include <cstdio>
 #include <cstring>
-#include <cerrno>
 
 #ifdef _WIN32
 #include <fcntl.h>
@@ -62,11 +62,22 @@ std::string to_hex(const unsigned char* p, size_t n) {
 }
 
 // 读私钥/公钥 PEM
+// 支持 FEPK1 加密私钥
 bool load_private_key(const std::string& path, bool pqc, EVP_PKEY*& pkey) {
-    FILE* fp = std::fopen(path.c_str(), "rb");
-    if (!fp) return false;
-    pkey = PEM_read_PrivateKey(fp, nullptr, nullptr, nullptr);
-    std::fclose(fp);
+    std::string pem;
+    bool was_plain = false;
+    std::string err;
+    if (!fe_keyfile::read_protected(path, pem, fe_keyfile::PURPOSE_WM, was_plain, err))
+        return false;
+    if (was_plain) {
+        std::fprintf(stderr,
+            "Warning: %s is a plaintext private key on disk; consider re-saving it encrypted.\n",
+            path.c_str());
+    }
+    BIO* bio = BIO_new_mem_buf(pem.data(), (int)pem.size());
+    pkey = bio ? PEM_read_bio_PrivateKey(bio, nullptr, nullptr, nullptr) : nullptr;
+    if (bio) BIO_free(bio);
+    sodium_memzero(pem.data(), pem.size());
     if (!pkey) return false;
     const bool type_ok = EVP_PKEY_is_a(pkey, pqc ? "ML-DSA-65" : "RSA");
     if (!type_ok) {
@@ -260,25 +271,6 @@ bool wm_parse_blob(const unsigned char* data, size_t len,
     return true;
 }
 
-// 私钥落盘用专属
-// 用 fopen
-static bool open_priv_pem_exclusive(const std::string& path, FILE** out_fp) {
-#ifdef _WIN32
-    const std::wstring wp=utf8_to_wstring(path);
-    int fd=_wopen(wp.c_str(), _O_WRONLY|_O_CREAT|_O_EXCL|_O_BINARY, _S_IREAD|_S_IWRITE);
-    if (fd < 0) return false;
-    FILE* fp=_fdopen(fd, "wb");
-    if (!fp) { _close(fd); _wunlink(wp.c_str()); return false; }
-#else
-    int fd=::open(path.c_str(), O_WRONLY|O_CREAT|O_EXCL|O_NOFOLLOW, 0600);
-    if (fd < 0) return false;
-    FILE* fp=fdopen(fd, "wb");
-    if (!fp) { ::close(fd); ::unlink(path.c_str()); return false; }
-#endif
-    *out_fp=fp;
-    return true;
-}
-
 // 生成签名密钥
 bool wm_generate_keypair(const std::string& priv_pem_path, bool pqc,
                          std::string& pub_pem, std::string& error) {
@@ -305,28 +297,48 @@ bool wm_generate_keypair(const std::string& priv_pem_path, bool pqc,
         EVP_PKEY_CTX_free(kctx);
     }
 
-    FILE* fp = nullptr;
-    if (!open_priv_pem_exclusive(priv_pem_path, &fp)) {
+    // 覆盖保护保持
+    if (std::FILE* probe = std::fopen(priv_pem_path.c_str(), "rb")) {
+        std::fclose(probe);
         EVP_PKEY_free(pkey);
         ERR_clear_error();
-        if (errno == EEXIST)
-            error = "watermark: private key file already exists (refusing to overwrite): "
-                    + priv_pem_path;
-        else
-            error = "watermark: cannot create private key PEM: " + priv_pem_path;
+        error = "watermark: private key file already exists (refusing to overwrite): "
+                + priv_pem_path;
         return false;
     }
-    if (PEM_write_PrivateKey(fp, pkey, nullptr, nullptr, 0, 0, nullptr) != 1) {
-        std::fclose(fp);
+
+    // PEM 编码进内存
+    BIO* pbio = BIO_new(BIO_s_mem());
+    if (!pbio || PEM_write_bio_PrivateKey(pbio, pkey, nullptr, nullptr, 0, nullptr, nullptr) != 1) {
+        if (pbio) BIO_free(pbio);
         EVP_PKEY_free(pkey);
         ERR_clear_error();
-        remove_file_utf8(priv_pem_path);
-        error = "watermark: cannot write private key PEM: " + priv_pem_path;
+        error = "watermark: cannot encode private key PEM";
         return false;
     }
-    std::fclose(fp);
-    // 私钥写完紧内容
-    tighten_file_permissions(priv_pem_path);
+    char* pmem = nullptr;
+    const long pn = BIO_get_mem_data(pbio, &pmem);
+    if (pn <= 0 || !pmem) {
+        BIO_free(pbio);
+        EVP_PKEY_free(pkey);
+        ERR_clear_error();
+        error = "watermark: cannot read private key PEM";
+        return false;
+    }
+    std::string priv_pem(pmem, (size_t)pn);
+    BIO_free(pbio);
+    ERR_clear_error();
+
+    // FEPK1 加密落盘
+    std::string werr;
+    const bool wok = fe_keyfile::write_protected(priv_pem_path, priv_pem,
+                                                 fe_keyfile::PURPOSE_WM, werr);
+    sodium_memzero(priv_pem.data(), priv_pem.size());
+    if (!wok) {
+        EVP_PKEY_free(pkey);
+        error = "watermark: " + werr;
+        return false;
+    }
 
     // 公钥走 BIO +
     // 返回 0

@@ -16,9 +16,9 @@
     <EnableMsixTooling>true</EnableMsixTooling>
     <!-- 程序集版本与对外版本一致；同版本覆盖安装由 installer 的
          AllowSameVersionUpgrades="yes" 保证先卸后装。 -->
-    <AssemblyVersion>3.1.1.0</AssemblyVersion>
-    <FileVersion>3.1.1.0</FileVersion>
-    <Version>3.1.1</Version>
+    <AssemblyVersion>3.2.0.0</AssemblyVersion>
+    <FileVersion>3.2.0.0</FileVersion>
+    <Version>3.2.0</Version>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <LangVersion>latest</LangVersion>
@@ -29,7 +29,20 @@
     <DebugType Condition=" '$(Configuration)' == 'Release' ">none</DebugType>
     <DebugSymbols Condition=" '$(Configuration)' == 'Release' ">false</DebugSymbols>
     <!-- 注：.NET 程序集的 CFG 由 CLR 侧提供，本工程无原生 .cpp，无需再加 /guard:cf -->
+    <!-- 包体压缩（Release publish）：partial 裁剪框架库与 Windows.SDK.NET 投影，
+         互操作层经 trimmer_roots.xml 保留。普通 Build 不裁（只 Publish 生效）。 -->
+    <PublishTrimmed Condition=" '$(Configuration)' == 'Release' ">true</PublishTrimmed>
+    <TrimMode Condition=" '$(Configuration)' == 'Release' ">partial</TrimMode>
+    <!-- 只保留英文卫星资源（异常消息等 .NET 资源），业务文案走自实现 L10n 不受影响 -->
+    <SatelliteResourceLanguages Condition=" '$(Configuration)' == 'Release' ">en</SatelliteResourceLanguages>
   </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="trimmer_roots.xml" />
+  </ItemGroup>
+  <ItemGroup Condition=" '$(Configuration)' == 'Release' ">
+    <TrimmerRootDescriptor Include="trimmer_roots.xml" />
+  </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="Microsoft.WindowsAppSDK" Version="1.5.240802000" />
@@ -41,6 +54,8 @@
   <!-- 共享资源：引用 GUI-Qt 中的图标，不重复存放 -->
   <ItemGroup>
     <None Include="..\GUI-Qt\logogui.ico" Link="Assets\app.ico" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\shared\pack.json" Link="pack.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\shared\achievements\**\*.json" Link="achievements\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <ItemGroup>

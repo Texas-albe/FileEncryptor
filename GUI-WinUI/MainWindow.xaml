@@ -7,7 +7,7 @@
     xmlns:local="using:FileEncryptorGUI"
     Title="FileEncryptorGUI">
 
-    <Grid x:Name="RootGrid" RowDefinitions="*,Auto,Auto">
+    <Grid x:Name="RootGrid" RowDefinitions="*,Auto">
 
         <!-- 标签页：Explorer 式标题栏。TabView 自己接管标题栏并预留系统按钮位；
              标签条右侧空白由代码用 SetDragRectangles 精确设为拖拽区，
@@ -34,30 +34,16 @@
 
         </controls:TabView>
 
-        <!-- 底部：命令预览。独立表面 + 顶部分割线，与页面内容分开 -->
-        <Border Grid.Row="1"
-                Background="{ThemeResource LayerFillColorDefaultBrush}"
-                BorderBrush="{ThemeResource DividerStrokeColorDefaultBrush}"
-                BorderThickness="0,1,0,0" Padding="12,8">
-            <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="8">
-                <TextBlock Grid.Column="0" Text="命令预览" Style="{StaticResource AppCaptionTextStyle}"
-                           VerticalAlignment="Center" />
-                <TextBox Grid.Column="1" IsReadOnly="True" TextWrapping="NoWrap"
-                         Text="{x:Bind ViewModel.CommandPreview, Mode=OneWay}"
-                         FontFamily="Consolas" Height="36" Padding="6,4,6,12"
-                         ScrollViewer.HorizontalScrollBarVisibility="Auto"
-                         ScrollViewer.VerticalScrollBarVisibility="Disabled" />
-                <Button Grid.Column="2" Content="任务历史..." Click="OnOpenTaskHistory"
-                        Height="32" Padding="10,0" VerticalAlignment="Center" />
-            </Grid>
-        </Border>
-
-        <!-- 状态栏：弱化的辅助文字，不抢内容区注意力 -->
-        <Grid Grid.Row="2" ColumnDefinitions="*,Auto" Padding="12,6">
-            <TextBlock x:Name="StatusLabel" Text="{x:Bind ViewModel.StatusText, Mode=OneWay}"
+        <!-- 状态栏：辅助文字 + 任务历史入口，不抢内容区注意力 -->
+        <Grid Grid.Row="1" ColumnDefinitions="*,Auto,Auto,Auto" Padding="12,6" ColumnSpacing="10">
+            <TextBlock x:Name="StatusLabel" Grid.Column="0" Text="{x:Bind ViewModel.StatusText, Mode=OneWay}"
                        Style="{StaticResource AppSecondaryTextStyle}" VerticalAlignment="Center" />
             <TextBlock Grid.Column="1" x:Name="ProgressLabel" Text="{x:Bind ViewModel.ProgressLabel, Mode=OneWay}"
                        Style="{StaticResource AppCaptionTextStyle}" VerticalAlignment="Center" />
+            <Button Grid.Column="2" Content="校验审计..." Click="OnAuditVerify"
+                    Height="30" Padding="10,0" VerticalAlignment="Center" />
+            <Button Grid.Column="3" Content="任务历史..." Click="OnOpenTaskHistory"
+                    Height="30" Padding="10,0" VerticalAlignment="Center" />
         </Grid>
     </Grid>
 </Window>

@@ -20,6 +20,61 @@ public class CliProcessService
 
     // 聚合输出
     public static event Action<string>? GlobalOutput;
+    // 批量进度帧（结构化，替换式显示）
+    public static event Action<string[]?, bool>? GlobalFrame;
+
+    // 日志聚合缓冲
+    // 高频逐行调度会拖死 UI
+    private static readonly object s_bufLock = new();
+    private static readonly List<string> s_pending = new();
+    private static Timer? s_flushTimer;
+
+    private static void EnqueueOutput(string line)
+    {
+        bool first;
+        lock (s_bufLock)
+        {
+            s_pending.Add(line);
+            first = s_flushTimer == null;
+            if (first) s_flushTimer = new Timer(FlushPending, null, 100, Timeout.Infinite);
+        }
+    }
+
+    private static void FlushPending(object? state)
+    {
+        string? batch;
+        lock (s_bufLock)
+        {
+            s_flushTimer?.Dispose();
+            s_flushTimer = null;
+            batch = s_pending.Count == 0 ? null : string.Join("\n", s_pending) + "\n";
+            s_pending.Clear();
+        }
+        if (batch != null) GlobalOutput?.Invoke(batch);
+    }
+
+    // 解析 stderr 的 progress_frame JSON 行
+    private static bool TryParseFrame(string data, out string[]? lines, out bool final)
+    {
+        lines = null; final = false;
+        if (!data.StartsWith("{\"type\":\"progress_frame\"", StringComparison.Ordinal)) return false;
+        try
+        {
+            using var doc = JsonDocument.Parse(data);
+            var root = doc.RootElement;
+            final = root.TryGetProperty("final", out var f) && f.ValueKind == JsonValueKind.True;
+            if (root.TryGetProperty("lines", out var arr) && arr.ValueKind == JsonValueKind.Array)
+            {
+                var list = new List<string>();
+                foreach (var it in arr.EnumerateArray())
+                    list.Add(it.GetString() ?? "");
+                lines = list.ToArray();
+                return true;
+            }
+        }
+        catch { }
+        return false;
+    }
 
     // 有 CLI
     // 用计数
@@ -48,6 +103,10 @@ public class CliProcessService
     // stderr 累积文本
     private readonly StringBuilder _stderr = new();
     private bool _raw;
+    // FEPRG 块状态机
+    // 兼容未开 EVENTS 的 CLI
+    private bool _inFrameBlock;
+    private readonly List<string> _frameLines = new();
 
     // 握手确认
     // 走文件
@@ -247,16 +306,50 @@ public class CliProcessService
             _process.OutputDataReceived += (_, e) =>
             {
                 if (e.Data == null) return;
+                // FEPRG 定界块转帧事件
+                // ESC 开头的定界行
+                if (e.Data.Contains("\x1b[FEPRG+") || e.Data.Contains("\x1b[FEPRG-"))
+                {
+                    if (e.Data.Contains("\x1b[FEPRG+"))
+                    {
+                        lock (_frameLines) { _frameLines.Clear(); _inFrameBlock = true; }
+                    }
+                    else
+                    {
+                        string[]? rows;
+                        lock (_frameLines)
+                        {
+                            rows = _frameLines.ToArray();
+                            _frameLines.Clear();
+                            _inFrameBlock = false;
+                        }
+                        GlobalFrame?.Invoke(rows, false);
+                    }
+                    return;
+                }
+                bool collecting;
+                lock (_frameLines) collecting = _inFrameBlock;
+                if (collecting)
+                {
+                    lock (_frameLines) _frameLines.Add(e.Data);
+                    return;
+                }
                 OutputLine?.Invoke(e.Data);
-                GlobalOutput?.Invoke(e.Data);
+                EnqueueOutput(e.Data);
             };
         }
         _process.ErrorDataReceived += (_, e) =>
         {
             if (e.Data == null) return;
+            // 批量帧 JSON 单独分流
+            if (TryParseFrame(e.Data, out var lines, out var final))
+            {
+                GlobalFrame?.Invoke(lines, final);
+                return;
+            }
             lock (_stderr) { _stderr.AppendLine(e.Data); }
             OutputLine?.Invoke(e.Data);
-            GlobalOutput?.Invoke(e.Data);
+            EnqueueOutput(e.Data);
         };
         _process.Exited += (_, _) => OnProcessExited();
 

@@ -1,10 +1,10 @@
 <Project Sdk="WixToolset.Sdk/4.0.5">
   <PropertyGroup>
-    <!-- 版本 3.1.1。覆盖安装的文件替换问题由 Product.wxs 的
+    <!-- 版本 3.2.0。覆盖安装的文件替换问题由 Product.wxs 的
          MajorUpgrade AllowSameVersionUpgrades="yes" 解决（相同版本也先卸后装），不靠版本号递增。 -->
-    <GuiVersion>3.1.1</GuiVersion>
+    <GuiVersion>3.2.0</GuiVersion>
     <!-- CLI 产物名由 CMake project(VERSION) 拼出，只支持数值版（无 -alpha.N），故独立定义 -->
-    <CliVersion>3.1.1</CliVersion>
+    <CliVersion>3.2.0</CliVersion>
     <OutputType>Package</OutputType>
     <OutputName>FileEncryptorGUI-$(GuiVersion)-WinUI-Windows</OutputName>
     <Platform>x64</Platform>

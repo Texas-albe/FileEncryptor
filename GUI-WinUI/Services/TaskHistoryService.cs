@@ -1,4 +1,5 @@
 ﻿using System.IO;
+using System.Security.Cryptography;
 using System.Security.AccessControl;
 using System.Security.Principal;
 using System.Text.Json;
@@ -31,22 +32,91 @@ public static class TaskHistoryService
     // 加密了哪些文件」
     // 文件类字段只留
     // 目录类字段直接
+    private static readonly byte[] PathEntropy =
+        System.Text.Encoding.ASCII.GetBytes("FE_TASK_PATH");
+
+    private static string EncryptPaths(TaskRecord r)
+    {
+        var payload = new
+        {
+            inputPaths = r.InputPaths,
+            outputDir = r.OutputDir,
+            intoVault = r.IntoVault,
+            keyfile = r.Keyfile,
+            identity = r.Identity,
+            wrapInput = r.WrapInput,
+            wrapOutput = r.WrapOutput,
+            watermarkKey = r.WatermarkKey,
+            recipient = r.Recipient
+        };
+        var json = System.Text.Encoding.UTF8.GetBytes(JsonSerializer.Serialize(payload));
+        var blob = ProtectedData.Protect(json, PathEntropy, DataProtectionScope.CurrentUser);
+        CryptographicOperations.ZeroMemory(json);
+        return Convert.ToBase64String(blob);
+    }
+
+    private static void RestorePaths(TaskRecord r)
+    {
+        if (string.IsNullOrEmpty(r.PathCt)) return;
+        try
+        {
+            var blob = Convert.FromBase64String(r.PathCt);
+            var json = ProtectedData.Unprotect(blob, PathEntropy, DataProtectionScope.CurrentUser);
+            using var doc = JsonDocument.Parse(json);
+            CryptographicOperations.ZeroMemory(json);
+            var root = doc.RootElement;
+            if (root.TryGetProperty("inputPaths", out var ip) && ip.ValueKind == JsonValueKind.Array)
+                r.InputPaths = ip.EnumerateArray().Select(x => x.GetString() ?? "").ToList();
+            string Get(string n) => root.TryGetProperty(n, out var v) && v.ValueKind == JsonValueKind.String
+                ? (v.GetString() ?? "") : "";
+            r.OutputDir = Get("outputDir");
+            r.IntoVault = Get("intoVault");
+            r.Keyfile = Get("keyfile");
+            r.Identity = Get("identity");
+            r.WrapInput = Get("wrapInput");
+            r.WrapOutput = Get("wrapOutput");
+            r.WatermarkKey = Get("watermarkKey");
+            r.Recipient = Get("recipient");
+            r.PathsStripped = false;
+        }
+        catch
+        {
+            // DPAPI 解不开时保留落盘内容，不判失败
+        }
+    }
+
     private static TaskRecord SanitizeForStorage(TaskRecord r)
     {
-        if (App.Settings.Current.HistoryStorePaths) return r;
-        // 借序列化做浅拷
         var copy = JsonSerializer.Deserialize<TaskRecord>(JsonSerializer.Serialize(r));
         if (copy == null) return r;
-        copy.InputPaths = r.InputPaths.Select(p => Path.GetFileName(p) ?? p).ToList();
-        copy.OutputDir = "";
-        copy.IntoVault = "";
-        copy.Keyfile = Path.GetFileName(r.Keyfile) ?? "";
-        copy.Identity = Path.GetFileName(r.Identity) ?? "";
-        copy.WrapInput = Path.GetFileName(r.WrapInput) ?? "";
-        copy.WrapOutput = Path.GetFileName(r.WrapOutput) ?? "";
-        copy.WatermarkKey = Path.GetFileName(r.WatermarkKey) ?? "";
-        copy.Recipient = Path.GetFileName(r.Recipient) ?? "";
-        copy.PathsStripped = true;
+        if (!App.Settings.Current.HistoryStorePaths)
+        {
+            copy.InputPaths = r.InputPaths.Select(p => Path.GetFileName(p) ?? p).ToList();
+            copy.OutputDir = "";
+            copy.IntoVault = "";
+            copy.Keyfile = Path.GetFileName(r.Keyfile) ?? "";
+            copy.Identity = Path.GetFileName(r.Identity) ?? "";
+            copy.WrapInput = Path.GetFileName(r.WrapInput) ?? "";
+            copy.WrapOutput = Path.GetFileName(r.WrapOutput) ?? "";
+            copy.WatermarkKey = Path.GetFileName(r.WatermarkKey) ?? "";
+            copy.Recipient = Path.GetFileName(r.Recipient) ?? "";
+            copy.PathsStripped = true;
+            copy.PathCt = "";
+        }
+        else
+        {
+            copy.PathCt = EncryptPaths(r);
+            copy.InputPaths = new List<string>();
+            copy.OutputDir = "";
+            copy.IntoVault = "";
+            copy.Keyfile = "";
+            copy.Identity = "";
+            copy.WrapInput = "";
+            copy.WrapOutput = "";
+            copy.WatermarkKey = "";
+            copy.Recipient = "";
+            copy.PathsStripped = false;
+        }
         return copy;
     }
 
@@ -88,7 +158,7 @@ public static class TaskHistoryService
                     try
                     {
                         var r = JsonSerializer.Deserialize<TaskRecord>(line);
-                        if (r != null) result.Add(r);
+                        if (r != null) { RestorePaths(r); result.Add(r); }
                     }
                     catch {  }
                 }

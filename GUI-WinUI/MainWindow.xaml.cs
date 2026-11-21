@@ -121,11 +121,14 @@ public sealed partial class MainWindow : Window
     private CheckBox ChkPqc => ActiveHome.ChkPqc;
     private CheckBox ChkX448 => ActiveHome.ChkX448;
     private CheckBox ChkWatermark => ActiveHome.ChkWatermark;
+    private CheckBox ChkSkipHidden => ActiveHome.ChkSkipHidden;
     private Grid SplitSizeRow => ActiveHome.SplitSizeRow;
     private NumberBox SplitSizeBox => ActiveHome.SplitSizeBox;
     private ComboBox SplitUnitCombo => ActiveHome.SplitUnitCombo;
     private Grid WatermarkKeyRow => ActiveHome.WatermarkKeyRow;
     private PasswordBox WatermarkKeyEdit => ActiveHome.WatermarkKeyEdit;
+    private Grid ExcludeRow => ActiveHome.ExcludeRow;
+    private TextBox ExcludeEdit => ActiveHome.ExcludeEdit;
     private Button BtnRewrap => ActiveHome.BtnRewrap;
     private Button BtnRun => ActiveHome.BtnRun;
     private Button BtnCancel => ActiveHome.BtnCancel;
@@ -204,6 +207,7 @@ public sealed partial class MainWindow : Window
         ApplySavedBackground();
         // 终端观察器
         CliProcessService.GlobalOutput += OnCliGlobalOutput;
+        CliProcessService.GlobalFrame += OnCliGlobalFrame;
         CliProcessService.RunStarted += OnCliRunStarted;
         CliProcessService.RunEnded += OnCliRunEnded;
         // 启动只登记主页
@@ -287,8 +291,10 @@ public sealed partial class MainWindow : Window
         this.Closed += (_, _) =>
         {
             CliProcessService.GlobalOutput -= OnCliGlobalOutput;
+            CliProcessService.GlobalFrame -= OnCliGlobalFrame;
             CliProcessService.RunStarted -= OnCliRunStarted;
             CliProcessService.RunEnded -= OnCliRunEnded;
+            AchievementToastManager.Instance.Clear();
             App.Settings.Save();
         };
     }
@@ -528,7 +534,19 @@ public sealed partial class MainWindow : Window
     {
         DispatcherQueue?.TryEnqueue(() =>
         {
-            foreach (var t in _terminalTabs) t.Append(text + "\n");
+            foreach (var t in _terminalTabs) t.Append(text);
+        });
+    }
+
+    // 批量进度帧
+    // 帧区整体替换 + 状态栏实时计数
+    private void OnCliGlobalFrame(string[]? lines, bool final)
+    {
+        if (lines == null || lines.Length == 0) return;
+        DispatcherQueue?.TryEnqueue(() =>
+        {
+            ViewModel.ApplyFrameStatus(lines[^1]);
+            foreach (var t in _terminalTabs) t.SetFrame(lines);
         });
     }
 
@@ -1003,6 +1021,18 @@ public sealed partial class MainWindow : Window
     {
         DispatcherQueue.TryEnqueue(() =>
         {
+            // 成就触发 仅加解密成功任务
+            if (summary.Success && summary.Done > 0)
+            {
+                string? ev = summary.ActionIndex switch
+                {
+                    0 or 2 => "fileencryptor:encrypt",
+                    1 or 3 => "fileencryptor:decrypt",
+                    _ => null
+                };
+                if (ev != null)
+                    AchievementService.Instance.Observe(ev, summary.Done);
+            }
             var dlg = new TaskSummaryDialog(summary.Title, summary.Duration, summary.AvgSpeed, summary.EncryptedSize, summary.Done, summary.Skip, summary.Fail)
             {
                 XamlRoot = Content.XamlRoot
@@ -1401,6 +1431,7 @@ public sealed partial class MainWindow : Window
             ViewModel.Pqc = ChkPqc.IsChecked == true;
             ViewModel.Watermark = ChkWatermark.IsChecked == true;
             ViewModel.WatermarkKey = WatermarkKeyEdit.Password;
+            ViewModel.SkipHidden = ChkSkipHidden.IsChecked == true;
             UpdateVisibility();
         }
         finally { _optionSyncing = false; }
@@ -1423,6 +1454,18 @@ public sealed partial class MainWindow : Window
     internal void OnCompressLevelChanged(NumberBox sender, NumberBoxValueChangedEventArgs args)
     {
         ViewModel.CompressLevel = (int)sender.Value;
+    }
+
+    // 批量排除模式输入（TextChanged 精确签名）
+    internal void OnExcludeChanged(object sender, TextChangedEventArgs e)
+    {
+        if (_optionSyncing) return;
+        _optionSyncing = true;
+        try
+        {
+            ViewModel.ExcludeText = ExcludeEdit.Text ?? "";
+        }
+        finally { _optionSyncing = false; }
     }
 
     internal void OnSplitSizeChanged(NumberBox sender, NumberBoxValueChangedEventArgs args)
@@ -1832,6 +1875,7 @@ public sealed partial class MainWindow : Window
         if (ok)
         {
             RecordMount(dir, point);
+            AchievementService.Instance.Observe("fileencryptor:mount");
             await ShowMessageAsync(L10n.T("挂载为磁盘"),
                 L10n.F("正在挂载，盘符由后台进程持有。稍后可在「此电脑」中看到：{0}", point));
         }
@@ -1919,6 +1963,161 @@ public sealed partial class MainWindow : Window
         await RunVaultCliAsync(L10n.T("格式化加密盘"),
             new List<string> { "--vault-format", dir, "--key-stdin" }, ToStdin(pw),
             L10n.T("加密盘已成功清空，可继续存入文件。"));
+    }
+
+    // 通用目录选择（FolderPicker，返回 null=取消）
+    private async Task<string?> PickFolderAsync(string title)
+    {
+        var box = new TextBox { Width = 360, PlaceholderText = L10n.T("文件夹路径") };
+        var browse = new Button { Content = L10n.T("浏览...") };
+        var panel = new StackPanel { Spacing = 10 };
+        panel.Children.Add(new TextBlock { Text = title, TextWrapping = TextWrapping.Wrap });
+        panel.Children.Add(box);
+        panel.Children.Add(browse);
+        var dlg = new ContentDialog
+        {
+            Title = title,
+            Content = panel,
+            XamlRoot = Content.XamlRoot,
+            RequestedTheme = CurrentTheme,
+            PrimaryButtonText = L10n.T("确定"),
+            CloseButtonText = L10n.T("取消"),
+            DefaultButton = ContentDialogButton.Primary,
+        };
+        browse.Click += async (_, _) =>
+        {
+            try
+            {
+                var picker = new FolderPicker();
+                WinRT.Interop.InitializeWithWindow.Initialize(picker, WinRT.Interop.WindowNative.GetWindowHandle(this));
+                picker.FileTypeFilter.Add("*");
+                var f = await picker.PickSingleFolderAsync();
+                if (f != null) box.Text = f.Path;
+            }
+            catch { }
+        };
+        if (await dlg.ShowAsync() != ContentDialogResult.Primary) return null;
+        var dir = box.Text.Trim();
+        if (dir.Length == 0) return null;
+        if (!Directory.Exists(dir))
+        {
+            await ShowMessageAsync(title, L10n.F("找不到这个文件夹：{0}", dir));
+            return null;
+        }
+        return dir;
+    }
+
+    // 通用文件选择（FileOpenPicker）
+    private async Task<string?> PickFileAsync(string title)
+    {
+        try
+        {
+            var picker = new FileOpenPicker();
+            WinRT.Interop.InitializeWithWindow.Initialize(picker, WinRT.Interop.WindowNative.GetWindowHandle(this));
+            picker.FileTypeFilter.Add("*");
+            var f = await picker.PickSingleFileAsync();
+            return f?.Path;
+        }
+        catch { return null; }
+    }
+
+    // 通用保存对话框（FileSavePicker）
+    private async Task<string?> PickSaveFileAsync(string title, string choiceLabel,
+                                                  string ext, string suggestedName)
+    {
+        try
+        {
+            var picker = new FileSavePicker();
+            WinRT.Interop.InitializeWithWindow.Initialize(picker, WinRT.Interop.WindowNative.GetWindowHandle(this));
+            picker.SuggestedFileName = suggestedName;
+            picker.FileTypeChoices.Add(choiceLabel, new List<string> { ext });
+            picker.DefaultFileExtension = ext;
+            var f = await picker.PickSaveFileAsync();
+            return f?.Path;
+        }
+        catch { return null; }
+    }
+
+    // 快照备份：库 -> 目标目录（无密码，文件级复制 + sha256 清单）
+    internal async void OnVaultSnapshot(object sender, RoutedEventArgs e)
+    {
+        if (!await EnsureVaultAvailableAsync()) return;
+        var dir = await PickVaultPathAsync(L10n.T("快照备份加密盘"), true);
+        if (dir == null) return;
+        var dest = await PickFolderAsync(L10n.T("选择快照保存目录"));
+        if (dest == null) return;
+        await RunVaultCliAsync(L10n.T("快照备份加密盘"),
+            new List<string> { "--vault-snapshot", dir, "--snapshot-to", dest }, null,
+            L10n.T("快照已生成，可用「校验快照」核对完整性。"));
+    }
+
+    internal async void OnVaultCheckSnapshot(object sender, RoutedEventArgs e)
+    {
+        if (!await EnsureVaultAvailableAsync()) return;
+        var dir = await PickVaultPathAsync(L10n.T("校验快照"), false);
+        if (dir == null) return;
+        await RunVaultCliAsync(L10n.T("校验快照"),
+            new List<string> { "--vault-check-snapshot", dir }, null, scrollable: true);
+    }
+
+    internal async void OnVaultRestoreSnapshot(object sender, RoutedEventArgs e)
+    {
+        if (!await EnsureVaultAvailableAsync()) return;
+        var dir = await PickVaultPathAsync(L10n.T("从快照恢复"), false);
+        if (dir == null) return;
+        var to = await PickFolderAsync(L10n.T("恢复到哪个文件夹（取消=恢复到快照记录的原盘）"));
+        var args = new List<string> { "--vault-restore-snapshot", dir };
+        if (to != null) args.AddRange(new[] { "--vault-restore-to", to });
+        await RunVaultCliAsync(L10n.T("从快照恢复"), args, null,
+            L10n.T("恢复完成后，若文件清单有出入请对目标盘执行「重建索引」。"), scrollable: true);
+    }
+
+    // 分享库内文件：库密码解锁 -> 收件人公钥封装出独立 .ptd
+    internal async void OnVaultShare(object sender, RoutedEventArgs e)
+    {
+        if (!await EnsureVaultAvailableAsync()) return;
+        var dir = await PickVaultPathAsync(L10n.T("分享库内文件"), true);
+        if (dir == null) return;
+        var vpath = await PromptTextAsync(L10n.T("分享库内文件"),
+            L10n.T("盘内路径（如 docs/report.pdf）："), L10n.T("盘内路径"));
+        if (vpath == null) return;
+        var pub = await PickFileAsync(L10n.T("选择收件人公钥文件"));
+        if (pub == null) return;
+        var outPtd = await PickSaveFileAsync(L10n.T("输出分享容器"),
+            L10n.T("加密容器"), ".ptd", Path.GetFileName(vpath) + ".ptd");
+        if (outPtd == null) return;
+        var pw = await AskPasswordAsync(L10n.T("加密盘密码"), false);
+        if (pw == null) return;
+        await RunVaultCliAsync(L10n.T("分享库内文件"),
+            new List<string> { "--vault-share", dir, "--share-file", vpath,
+                               "--share-to", outPtd, "-r", pub, "--key-stdin" }, ToStdin(pw),
+            L10n.T("分享容器已生成，对方用其私钥即可解密，无需知道加密盘密码。"));
+    }
+
+    // 云端（WebDAV 只读）：列目录
+    internal async void OnCloudBrowse(object sender, RoutedEventArgs e)
+    {
+        var uri = await PromptTextAsync(L10n.T("浏览云端目录"),
+            L10n.T("WebDAV 地址（可含子目录与账号密码，如 webdav://user:pass@host/dav）："), "webdav://");
+        if (uri == null) return;
+        await RunVaultCliAsync(L10n.T("浏览云端目录"),
+            new List<string> { "--cloud", uri, "--cloud-ls" }, null, scrollable: true);
+    }
+
+    internal async void OnCloudPull(object sender, RoutedEventArgs e)
+    {
+        var uri = await PromptTextAsync(L10n.T("从云端拉取文件"),
+            L10n.T("WebDAV 地址（如 webdav://user:pass@host/dav）："), "webdav://");
+        if (uri == null) return;
+        var remote = await PromptTextAsync(L10n.T("从云端拉取文件"),
+            L10n.T("远端文件路径（如 docs/report.ptd）："), L10n.T("远端路径"));
+        if (remote == null) return;
+        var local = await PickSaveFileAsync(L10n.T("保存到"),
+            L10n.T("所有文件"), "*", Path.GetFileName(remote));
+        if (local == null) return;
+        await RunVaultCliAsync(L10n.T("从云端拉取文件"),
+            new List<string> { "--cloud", uri, "--cloud-get", remote, "--cloud-to", local }, null,
+            L10n.T("下载完成。若是 .ptd 密文，用「解密」选择它即可解出明文。"));
     }
 
     internal async void OnVaultLock(object sender, RoutedEventArgs e)
@@ -2056,6 +2255,7 @@ public sealed partial class MainWindow : Window
         if (ok)
         {
             RecordMount(dir, point);
+            AchievementService.Instance.Observe("fileencryptor:mount");
             await ShowMessageAsync(L10n.T("挂载为磁盘"),
                 L10n.F("正在挂载，稍后可在「此电脑」中看到：{0}", point));
         }
@@ -2449,6 +2649,10 @@ public sealed partial class MainWindow : Window
         ChkWatermark.Visibility = encOptionVisible ? Visibility.Visible : Visibility.Collapsed;
         // 后量子开关同样
         ChkPqc.Visibility = encOptionVisible ? Visibility.Visible : Visibility.Collapsed;
+        // 批量过滤只在批量动作显示
+        bool isBatchAction = ViewModel.ActionIndex == 2 || ViewModel.ActionIndex == 3;
+        ChkSkipHidden.Visibility = isBatchAction ? Visibility.Visible : Visibility.Collapsed;
+        ExcludeRow.Visibility = isBatchAction ? Visibility.Visible : Visibility.Collapsed;
         // 公钥路线没有 KEK
         KeyfileEdit.Visibility = (!isAsym && !isKeyGen && !wrapPubkey) ? Visibility.Visible : Visibility.Collapsed;
         // 产物路径
@@ -2969,6 +3173,20 @@ public sealed partial class MainWindow : Window
 
         var dlg = new ContentDialog { Title = L10n.T("README 摘要"), Content = new ScrollViewer { Content = panel, MaxHeight = 480, VerticalScrollBarVisibility = ScrollBarVisibility.Hidden }, CloseButtonText = L10n.T("关闭"), XamlRoot = Content.XamlRoot, RequestedTheme = CurrentTheme };
         await dlg.ShowAsync();
+    }
+
+    internal async void OnAuditVerify(object sender, RoutedEventArgs e)
+    {
+        var log = await PickFileAsync(L10n.T("选择审计日志"));
+        if (string.IsNullOrEmpty(log)) return;
+        var key = await PickFileAsync(L10n.T("选择审计密钥（可取消）"));
+        var args = new List<string> { "--audit-verify", log };
+        if (!string.IsNullOrEmpty(key))
+        {
+            args.Add("--audit-key");
+            args.Add(key);
+        }
+        await RunVaultCliAsync(L10n.T("校验审计日志"), args, null, scrollable: true);
     }
 
     private async void OnOpenTaskHistory(object sender, RoutedEventArgs e)

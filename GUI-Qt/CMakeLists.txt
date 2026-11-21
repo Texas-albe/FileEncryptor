@@ -13,7 +13,7 @@ if(FE_CL_EXECUTABLE)
       CACHE FILEPATH "MSVC 链接器（不按 PATH 搜索）" FORCE)
 endif()
 
-project(FileEncryptorGUI VERSION 3.1.1 LANGUAGES CXX)
+project(FileEncryptorGUI VERSION 3.2.0 LANGUAGES CXX)
 
 # FileEncryptor GUI - Qt6 图形界面（Windows + Linux 双平台；Windows 另有 WinUI3 版本）
 
@@ -76,6 +76,8 @@ set(SHELL_SOURCES
     src/PreviewDialog.cpp
     src/CliNotFoundDialog.cpp
     src/TaskHistory.cpp
+    src/AchievementService.cpp
+    src/AchievementToast.cpp
     src/EtaEstimator.cpp
     src/BatchProgressPanel.cpp
     src/TaskHistoryDialog.cpp
@@ -103,6 +105,7 @@ set(SHELL_HEADERS
     src/BatchProgressPanel.h
     src/TaskHistoryDialog.h
     src/TaskSummaryDialog.h
+    src/AchievementToast.h
     src/I18n.h
     src/OsHarden.h)
 
@@ -127,7 +130,7 @@ target_link_libraries(FileEncryptorGUI PRIVATE Qt6::Widgets Qt6::Concurrent Qt6:
 # P0-1：OsHarden 用 SetEntriesInAclW / SetSecurityInfo（ACL API 在 advapi32）。
 # 虽通常属 MSVC 默认库，显式链接以免静态 Qt 场景下解析不到符号。
 if(WIN32)
-    target_link_libraries(FileEncryptorGUI PRIVATE advapi32)
+    target_link_libraries(FileEncryptorGUI PRIVATE advapi32 crypt32)
 endif()
 
 if(MSVC)
@@ -215,6 +218,17 @@ install(TARGETS FileEncryptorGUI RUNTIME DESTINATION bin
         PERMISSIONS OWNER_EXECUTE OWNER_READ
                     GROUP_EXECUTE GROUP_READ
                     WORLD_EXECUTE WORLD_READ)
+
+# 成就定义随包
+add_custom_command(TARGET FileEncryptorGUI POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${CMAKE_CURRENT_SOURCE_DIR}/../shared/pack.json
+        $<TARGET_FILE_DIR:FileEncryptorGUI>/pack.json
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        ${CMAKE_CURRENT_SOURCE_DIR}/../shared/achievements
+        $<TARGET_FILE_DIR:FileEncryptorGUI>/achievements)
+install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/../shared/pack.json DESTINATION bin)
+install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/../shared/achievements DESTINATION bin)
 
 # ---------- 安装与打包（DEB / RPM） ----------
 set(CPACK_PACKAGE_NAME "file-encryptor-gui-qt")

@@ -51,16 +51,16 @@ QString FileEncryptorLocator::locate() {
 
 // 配套 CLI 版本
 QString FileEncryptorLocator::version() {
-    return QStringLiteral("3.1.1");
+    return QStringLiteral("3.2.0");
 }
 
 // GUI 自身版本
 QString FileEncryptorLocator::guiVersion() {
-    return QStringLiteral("3.1.1");
+    return QStringLiteral("3.2.0");
 }
 
 QString FileEncryptorLocator::cliDownloadUrl() {
-    return QStringLiteral("https://github.com/Texas-albe/FileEncryptor/releases/tag/GUI3.1.1_CLI3.1.1");
+    return QStringLiteral("https://github.com/Texas-albe/FileEncryptor/releases/tag/GUI3.2.0_CLI3.2.0");
 }
 
 QStringList FileEncryptorLocator::getExpectedNames() {
@@ -70,7 +70,7 @@ QStringList FileEncryptorLocator::getExpectedNames() {
         QStringLiteral("FileEncryptorCLI-%1-cmd-Windows.exe").arg(ver),
         // 预发布后缀
         // 但 CLI 自报版本带
-        QStringLiteral("FileEncryptorCLI-3.1.1-cmd-Windows.exe"),
+        QStringLiteral("FileEncryptorCLI-3.2.0-cmd-Windows.exe"),
         QStringLiteral("FileEncryptorCLI.exe"),
         QStringLiteral("FileEncryptor.exe"),
         QStringLiteral("file-encryptor-cli.exe"),

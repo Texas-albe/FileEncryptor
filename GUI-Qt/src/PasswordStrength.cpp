@@ -95,7 +95,7 @@ bool PasswordStrength::meetsPolicy(const QString& password, QString& reason) {
     // 非 ASCII
     const int kinds = (lower ? 1 : 0) + (upper ? 1 : 0) +
                       (digit ? 1 : 0) + (symbol ? 1 : 0) + (non_ascii ? 1 : 0);
-    if (kinds >= 2 || len >= 16) {
+    if (kinds >= 3 || len >= 16) {
         bool allSame = true;
         for (const QChar& ch : password) {
             if (ch != password.at(0)) { allSame = false; break; }

@@ -2,8 +2,10 @@
 #include "saf.hpp"
 #include "saf_archive.hpp"
 #include "saf_vault.hpp"
+#include "saf_webdav.hpp"
 
 #include <cctype>
+#include <cstdlib>
 
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
@@ -77,6 +79,15 @@ SafStatus saf_open_backend(const std::string& uri, std::shared_ptr<StorageBacken
     }
     if (scheme == "archive") return saf_open_archive_file(rest, out);   // 阶段二
     if (scheme == "vault") return SAF_E_LOCKED;                         // 需密码
+    // WebDAV cloud: webdav(s)://[user:pass@]host[:port]/path
+    if (scheme == "webdav" || scheme == "dav" ||
+        scheme == "webdavs" || scheme == "davs") {
+        SafWebDavOptions wopt;
+        std::string werr;
+        if (!saf_webdav_parse_uri(uri, wopt, werr)) return SAF_E_BADARG;
+        out = saf_open_webdav(wopt);
+        return out ? SAF_OK : SAF_E_BADARG;
+    }
     return SAF_E_BADARG;
 }
 

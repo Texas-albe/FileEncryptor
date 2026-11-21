@@ -1082,6 +1082,10 @@ bool encrypt_file(const std::string& in_path,
     // 用调用方给
     const std::string& footer_src = footer_name ? *footer_name : in_path;
 
+    // 明文哈希密钥（keyed BLAKE2b）；提前声明供所有 goto 安全跨越
+    unsigned char plain_hash_key[HASH_SIZE] = {0};
+    bool enc_keyed = false;    // 本文件明文哈希是否 keyed
+
     // 非对称加密
     std::vector<unsigned char> recip_blob_out;
     if(asym_mode) resume=false;
@@ -1573,6 +1577,8 @@ bool encrypt_file(const std::string& in_path,
             }
             put_be32(reinterpret_cast<unsigned char*>(&header.key_version), 0);
             sodium_memzero(header.reserved + 4, sizeof(header.reserved) - 4);
+            // 标记明文哈希为 keyed（防离线探测）
+            header.reserved[V6_HASH_FLAG_OFF] = V6_HASH_FLAG_KEYED;
             memcpy(key.data(), dek, 32);          // 载荷密钥 = DEK
             sodium_memzero(dek, sizeof(dek));
         } else {
@@ -1588,8 +1594,11 @@ bool encrypt_file(const std::string& in_path,
         // 流输出
         // 故先对缓冲明文
         if(out_stream && !out_seekable) {
+            unsigned char phk[HASH_SIZE];
+            derive_plain_hash_key(key.data(),phk);
             crypto_generichash(header.plaintext_hash, HASH_SIZE,
-                reinterpret_cast<const unsigned char*>(mem_in.data()), mem_in.size(), nullptr, 0);
+                reinterpret_cast<const unsigned char*>(mem_in.data()), mem_in.size(), phk, HASH_SIZE);
+            sodium_memzero(phk,sizeof(phk));
         }
 
         // 文件头 HMAC 写头时即
@@ -1660,9 +1669,12 @@ bool encrypt_file(const std::string& in_path,
         }
     }
 
-    // 明文 Blake2b 流式哈希
+    // 明文 Blake2b 流式哈希：新文件 keyed，续传存量文件沿用其裸 hash
+    enc_keyed = (header.reserved[V6_HASH_FLAG_OFF]==V6_HASH_FLAG_KEYED);
+    if(enc_keyed) derive_plain_hash_key(key.data(),plain_hash_key);
     crypto_generichash_state hstate;
-    crypto_generichash_init(&hstate,nullptr,0,HASH_SIZE);
+    if(enc_keyed) crypto_generichash_init(&hstate,plain_hash_key,HASH_SIZE,HASH_SIZE);
+    else          crypto_generichash_init(&hstate,nullptr,0,HASH_SIZE);
     if(start_bytes>0) {
         inp->seekg(0,std::ios::beg);
         uint64_t remain=start_bytes;
@@ -1822,6 +1834,7 @@ bool encrypt_file(const std::string& in_path,
 cleanup:
     secure_clear(plaintext_chunk);
     secure_clear(ciphertext_chunk);
+    sodium_memzero(plain_hash_key,sizeof(plain_hash_key));
 
     fin.close();
     if(fout.is_open()) { outbuf.flush(); fout.close(); }
@@ -1925,7 +1938,9 @@ bool decrypt_file(const std::string& in_path,
     const unsigned char* salt_ptr=nullptr;
     const unsigned char* iv_ptr=nullptr;
     unsigned char stored_hash[HASH_SIZE]={0};
+    unsigned char plain_hash_key[HASH_SIZE]={0};  // 提前声明供 goto 安全跨越
     bool have_hash=false;
+    bool plain_hash_keyed=false;   // v6 keyed 明文哈希标志
     unsigned char hdr_hmac[HEADER_HMAC_SIZE]={0};
     bool is_v4=false;
     bool is_v5=false;          // v5 头部
@@ -2084,6 +2099,7 @@ bool decrypt_file(const std::string& in_path,
         comp_level_val=(int)(signed char)hv6.comp_level;
         v6_key_version=get_be32(reinterpret_cast<const unsigned char*>(&hv6.key_version));
         recip_len=get_recip_len(hv6.reserved);
+        plain_hash_keyed=(hv6.reserved[V6_HASH_FLAG_OFF]==V6_HASH_FLAG_KEYED);
     }
     else {
         if(!silent) fprintf(stderr,"Unsupported file version: %u\n",ver);
@@ -2478,9 +2494,16 @@ bool decrypt_file(const std::string& in_path,
         }
     }
 
-    // 明文 Blake2b 流式哈希
+    // 明文 Blake2b 流式哈希（v6 keyed 标志决定校验方式）
     crypto_generichash_state hstate;
-    if(have_hash || verify_only) crypto_generichash_init(&hstate,nullptr,0,HASH_SIZE);
+    if(have_hash || verify_only) {
+        if(plain_hash_keyed) {
+            derive_plain_hash_key(key.data(),plain_hash_key);
+            crypto_generichash_init(&hstate,plain_hash_key,HASH_SIZE,HASH_SIZE);
+        } else {
+            crypto_generichash_init(&hstate,nullptr,0,HASH_SIZE);
+        }
+    }
     if((have_hash || verify_only) && start_bytes>0) {
         std::ifstream pin;
         if(!open_stream(pin,part_path,std::ios::binary)) {
@@ -2660,6 +2683,7 @@ dec_cleanup:
     // 任何 return / goto 路径
     secure_clear(ciphertext_chunk);
     secure_clear(plaintext_chunk);
+    sodium_memzero(plain_hash_key,sizeof(plain_hash_key));
 
     if(!in_stream) fin.close();   // fd 输入流属调用方
     outbuf.flush();   // 把缓冲

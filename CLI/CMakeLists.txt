@@ -11,7 +11,7 @@ if(WIN32)
   endif()
 endif()
 
-project(FileEncryptorCLI VERSION 3.1.1 LANGUAGES CXX)
+project(FileEncryptorCLI VERSION 3.2.0 LANGUAGES CXX)
 
 # CLI 命令行加密工具（独立工程），静态链接零外部依赖，GUI 经 QProcess 调用。
 
@@ -328,6 +328,7 @@ set(SOURCES
   core/source_handling.cpp
   core/config.cpp
   core/keylib.cpp
+  core/keyfile_crypt.cpp
   core/progress_frame.cpp
   core/asym_crypto.cpp
   core/password_policy.cpp
@@ -344,6 +345,9 @@ set(SOURCES
   core/ptd_meta.cpp
   core/batch.cpp
   core/vault_index.cpp
+  core/vault_snapshot.cpp
+  core/vault_share.cpp
+  core/audit_chain.cpp
   cli/main.cpp)
 
 # Windows 图标资源（嵌入 exe；Linux/macOS 无 .rc）
@@ -367,6 +371,7 @@ target_sources(FileEncryptor PRIVATE
     ${FE_SAF_DIR}/saf_vdisk_host.cpp
     ${FE_SAF_DIR}/saf_batch.cpp
     ${FE_SAF_DIR}/saf_cloud.cpp
+    ${FE_SAF_DIR}/saf_webdav.cpp
     ${FE_SAF_DIR}/saf_mount.cpp
     ${FE_SAF_DIR}/saf_pipe.cpp
 )
@@ -496,6 +501,48 @@ if(YAMLCPP_IS_STATIC)
   target_compile_definitions(FileEncryptor PRIVATE YAML_CPP_STATIC_DEFINE)
 endif()
 target_link_libraries(FileEncryptor PRIVATE ${YAMLCPP_TARGET} Threads::Threads)
+# vault-share 拉式导出走 vdisk ABI（运行时需同目录 vdisk.dll）
+target_link_libraries(FileEncryptor PRIVATE FileEncryptor::vdisk)
+
+# ---- libcurl (WebDAV cloud backend) ----
+# Bundled source build copied from Updater/CMakeLists.txt (Schannel TLS on Windows).
+# Windows only for now: Linux packaging keeps zero-dep self-containment, Android skips it.
+# Placed after the vdisk target so LINK_LIBRARIES transfer does not pull curl into vdisk.
+option(FE_WITH_CURL "Enable WebDAV cloud backend (static libcurl)" ON)
+if(ANDROID OR NOT WIN32)
+  set(FE_WITH_CURL OFF)
+endif()
+if(FE_WITH_CURL)
+  enable_language(C)
+  set(BUILD_CURL_EXE OFF CACHE BOOL "" FORCE)
+  set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+  set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
+  set(CURL_USE_LIBPSL OFF CACHE BOOL "" FORCE)
+  set(CURL_USE_LIBSSH2 OFF CACHE BOOL "" FORCE)
+  set(CURL_ZLIB OFF CACHE BOOL "" FORCE)
+  set(CURL_BROTLI OFF CACHE BOOL "" FORCE)
+  set(CURL_ZSTD OFF CACHE BOOL "" FORCE)
+  set(CURL_USE_PKGCONFIG OFF CACHE BOOL "" FORCE)
+  set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+  set(CURL_USE_SCHANNEL ON CACHE BOOL "" FORCE)
+  set(CURL_USE_OPENSSL OFF CACHE BOOL "" FORCE)
+  set(CURL_WINDOWS_SSPI ON CACHE BOOL "" FORCE)
+  set(CURL_DISABLE_INSTALL ON CACHE BOOL "" FORCE)
+  # libcurl target is an ALIAS: static CRT goes through curl's own option
+  set(CURL_STATIC_CRT ON CACHE BOOL "" FORCE)
+  add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../Third Party/curl"
+                   ${CMAKE_CURRENT_BINARY_DIR}/curl-build)
+  get_target_property(_fe_curl_real libcurl ALIASED_TARGET)
+  if(_fe_curl_real)
+    set_target_properties(${_fe_curl_real} PROPERTIES FOLDER "Third Party/curl")
+  endif()
+  target_link_libraries(FileEncryptor PRIVATE libcurl)
+  target_compile_definitions(FileEncryptor PRIVATE CURL_STATICLIB FE_WITH_CURL)
+  # system libs required by Schannel-backed static libcurl
+  target_link_libraries(FileEncryptor PRIVATE
+      ws2_32 crypt32 advapi32 user32 bcrypt ncrypt iphlpapi)
+  message(STATUS "curl: bundled static build (Schannel) -> WebDAV cloud backend enabled")
+endif()
 
 # 平台相关的链接善后
 # std::filesystem：GCC 9 之前（Ubuntu 18.04 等）需显式链接 libstdc++fs，否则 undefined reference。
@@ -719,7 +766,7 @@ endif()
 # 用 get_target_property 转移 include / 定义 / 编译选项 / 链接库，零重复维护、随 exe 同步。
 set(VDISK_CORE_SOURCES
   core/FileEncryptor.cpp core/cipher.cpp core/ptd_format.cpp core/kdf.cpp
-  core/source_handling.cpp core/config.cpp core/keylib.cpp core/progress_frame.cpp
+  core/source_handling.cpp core/config.cpp core/keylib.cpp core/keyfile_crypt.cpp core/progress_frame.cpp
   core/asym_crypto.cpp core/password_policy.cpp
   core/machine_id.cpp core/watermark.cpp core/split_volumes.cpp core/archive.cpp
   core/keywrap.cpp core/vault_index.cpp core/vdisk_abi.cpp core/rate_limit.cpp core/fileio_util.cpp core/resume.cpp core/output_lock.cpp core/name_obfuscate.cpp   core/ptd_meta.cpp core/batch.cpp)
@@ -837,6 +884,7 @@ if(MSVC)
 endif()
 if(UNIX)
   target_link_libraries(FE-Mounter PRIVATE ${CMAKE_DL_LIBS})   # dlopen
+  target_link_options(FE-Mounter PRIVATE $<$<CONFIG:Release>:-s>)   # 发布件 strip
 endif()
 
 # fuse3（Linux 只读挂载，M2）
@@ -942,7 +990,12 @@ endif()
 set_target_properties(FileEncryptor PROPERTIES
   OUTPUT_NAME FileEncryptorCLI
   RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
-  INSTALL_RPATH_USE_LINK_PATH TRUE)
+  # Linux 经 cpack 打包时，DrvFS(/mnt/e) 下 file(RPATH_CHANGE) 写不进文件会失败；
+  # 运行时依赖 libz/libcrypto(/usr/lib/x86_64-linux-gnu)、libsodium(/usr/local/lib，Ubuntu 默认 ld.so 路径)
+  # 与 libvdisk.so(/usr/lib) 均属标准路径，无需 RPATH，故关闭以避免打包失败。
+  INSTALL_RPATH_USE_LINK_PATH FALSE
+  BUILD_WITH_INSTALL_RPATH TRUE
+  INSTALL_RPATH "")
 
 # PGO（MSVC 两阶段构建，在 LTO 基础上）
 # Phase 1 插桩: cmake -B build -DFE_PGO=INSTRUMENT && cmake --build build，运行训练负载生成 .pgc；
@@ -996,6 +1049,10 @@ set_target_properties(FileEncryptor PROPERTIES OUTPUT_NAME "${FE_RENAMED_EXE}")
 # 发布目录优先落到 Windows 可见位置：VS+WSL 且 E: 盘以 DrvFS 挂于 /mnt/e 时写 /mnt/e/...，
 # 否则回落源码树下同源目录。
 if(NOT WIN32)
+  # 发布件 strip：Release 链接即去局部符号表（CLI 实测省 1.0MB），deb/rpm 直接打构建树产物须在此生效
+  # FE-Mounter 的 strip 在其自身定义块与独立 CMakeLists 各有一份（默认 FE_BUILD_MOUNT=OFF 不在此树）
+  target_link_options(FileEncryptor PRIVATE $<$<CONFIG:Release>:-s>)
+  target_link_options(vdisk PRIVATE $<$<CONFIG:Release>:-s>)
   get_filename_component(FE_SRC_LEAF "${CMAKE_SOURCE_DIR}" NAME)
   if(EXISTS "/mnt/e/FileEncryptor/${FE_SRC_LEAF}/CMakeLists.txt")
     set(FE_STAGE_BASE "/mnt/e/FileEncryptor/${FE_SRC_LEAF}")

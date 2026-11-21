@@ -43,8 +43,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--apk", default=DEFAULT_APK)
     ap.add_argument("--native-so", default=DEFAULT_NATIVE)
-    ap.add_argument("--expect-version", default="1.0.0")
-    ap.add_argument("--expect-code", type=int, default=7)
+    ap.add_argument("--expect-version", default="1.1.0")
+    ap.add_argument("--expect-code", type=int, default=8)
     args = ap.parse_args()
 
     if not os.path.isfile(args.apk):

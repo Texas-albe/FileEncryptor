@@ -17,6 +17,7 @@
         <ToolbarItem Text="{local:Zh 完整性自检}" Order="Secondary" Clicked="OnIntegrityCheck" />
         <ToolbarItem Text="{local:Zh 局域网共享}" Order="Secondary" Clicked="OnLanShare" />
         <ToolbarItem Text="{local:Zh 重建索引}" Order="Secondary" Clicked="OnReindex" />
+        <ToolbarItem Text="{local:Zh 格式化加密库}" Order="Secondary" Clicked="OnFormatVault" />
         <ToolbarItem x:Name="BioItem" Text="{local:Zh 指纹或面容}" Order="Secondary" Clicked="OnBioManage" />
         <ToolbarItem x:Name="PqcItem" Text="{local:Zh 开启后量子保护}" Order="Secondary" Clicked="OnPqcManage" />
         <ToolbarItem Text="{local:Zh 库设置}" Clicked="OnVaultSettings" />

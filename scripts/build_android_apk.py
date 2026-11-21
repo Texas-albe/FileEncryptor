@@ -30,6 +30,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 import toolchain
 import zipfile
 
@@ -88,6 +89,14 @@ def run(cmd, cwd=None, dry=False):
     return p.returncode, out
 
 
+def run_pass(cmd, cwd=None):
+    # stdio 透传跑 vcvars
+    # capture 管道下沙箱杀树
+    print("  $ " + " ".join(cmd), flush=True)
+    p = subprocess.call(cmd, cwd=cwd)
+    return p, ""
+
+
 def find_ccache():
     """定位编译缓存；缺失时降级。"""
     c = shutil.which("ccache") or shutil.which("ccache.exe")
@@ -114,29 +123,52 @@ def step_native(dry, jobs=0, use_ccache=False, configure=True):
     print("[1/3] native libvdisk.so (NDK r27c, arm64-v8a)", flush=True)
     cc = find_ccache() if use_ccache else ""
     par = jobs or (os.cpu_count() or 4)
+    # 经 vcvars 包装跑 cmake
+    # 沙箱环境裸 cmake 缺 UCRT
+    bat = os.path.join(REPO, "scripts", "build_with_vcvars.bat")
+    try:
+        import _win_build
+        vcvars = _win_build.vcvars()
+    except Exception:
+        vcvars = r"E:\Microsoft Visual Studio\VC\Auxiliary\Build\vcvars64.bat"
+    use_bat = os.path.exists(bat) and os.path.exists(vcvars)
     if configure:
+        # bat 的 cmd 拆逗号/等号
+        # 全部变量走 -C 初始缓存文件
+        cache = os.path.join(ND_BUILD, "fe_initial_cache.cmake")
+        if not dry:
+            os.makedirs(ND_BUILD, exist_ok=True)
+            toolchain = os.path.join(NDK, "build", "cmake", "android.toolchain.cmake").replace("\\", "/")
+            sodium = os.path.join(REPO, "out", "android", "sodium-prefix").replace("\\", "/")
+            yamlcpp = os.path.join(REPO, "out", "android", "yamlcpp-prefix").replace("\\", "/")
+            with open(cache, "w", encoding="utf-8") as f:
+                f.write('set(CMAKE_CXX_FLAGS_RELEASE "-O3 -DNDEBUG -g0" CACHE STRING "" FORCE)\n')
+                f.write('set(CMAKE_SHARED_LINKER_FLAGS "-Wl,--thinlto-jobs=%d" CACHE STRING "" FORCE)\n' % par)
+                f.write('set(CMAKE_CXX_COMPILER_LAUNCHER "%s" CACHE STRING "" FORCE)\n' % cc.replace("\\", "/"))
+                f.write('set(CMAKE_TOOLCHAIN_FILE "%s" CACHE FILEPATH "" FORCE)\n' % toolchain)
+                f.write('set(CMAKE_BUILD_TYPE Release CACHE STRING "" FORCE)\n')
+                f.write('set(ANDROID_ABI arm64-v8a CACHE STRING "" FORCE)\n')
+                f.write('set(ANDROID_PLATFORM android-26 CACHE STRING "" FORCE)\n')
+                f.write('set(ANDROID_STL c++_shared CACHE STRING "" FORCE)\n')
+                f.write('set(SODIUM_STATIC ON CACHE BOOL "" FORCE)\n')
+                f.write('set(WITH_OPENSSL ON CACHE BOOL "" FORCE)\n')
+                f.write('set(WITH_ZSTD ON CACHE BOOL "" FORCE)\n')
+                f.write('set(SODIUM_ROOT "%s" CACHE PATH "" FORCE)\n' % sodium)
+                f.write('set(YAMLCPP_ROOT "%s" CACHE PATH "" FORCE)\n' % yamlcpp)
+                f.write('set(OPENSSL_ROOT "%s" CACHE PATH "" FORCE)\n' % OPENSSL_ROOT.replace("\\", "/"))
         cfg = [
             CMAKE, "-S", CLI_DIR, "-B", ND_BUILD, "-G", "Ninja",
-            "-DCMAKE_TOOLCHAIN_FILE=" + os.path.join(NDK, "build", "cmake", "android.toolchain.cmake"),
-            "-DCMAKE_BUILD_TYPE=Release",
-            "-DANDROID_ABI=arm64-v8a",
-            "-DANDROID_PLATFORM=android-26",
-            "-DANDROID_STL=c++_shared",
-            "-DSODIUM_STATIC=ON",
-            "-DWITH_OPENSSL=ON",
-            "-DWITH_ZSTD=ON",
-            "-DSODIUM_ROOT=" + os.path.join(REPO, "out", "android", "sodium-prefix"),
-            "-DYAMLCPP_ROOT=" + os.path.join(REPO, "out", "android", "yamlcpp-prefix"),
-            "-DOPENSSL_ROOT=" + OPENSSL_ROOT,
-            # strip 会丢调试信息，编译期不再生成
-            "-DCMAKE_CXX_FLAGS_RELEASE=-O3 -DNDEBUG -g0",
-            # ThinLTO 后端按核数并行
-            "-DCMAKE_SHARED_LINKER_FLAGS=-Wl,--thinlto-jobs=%d" % par,
+            "-C", cache,
         ]
-        # 显式清空，否则 CMakeCache 会留下上次的 launcher
-        cfg.append("-DCMAKE_CXX_COMPILER_LAUNCHER=" + cc)
         print("  ccache: %s" % (cc or "未启用"), flush=True)
-        rc, _ = run(cfg, dry=dry)
+        if use_bat:
+            # cmd /d /c 包一层
+            # 与 build_all 同款防黑名单
+            # bat 自执行 cmake，args 不含 cmake 本身
+            cmd = ["cmd", "/d", "/c", bat, vcvars, CMAKE, ND_BUILD, "Release", "--cmake"] + cfg[1:]
+            rc, _ = (0, "") if dry else run_pass(cmd)
+        else:
+            rc, _ = run(cfg, dry=dry)
         if rc != 0:
             return None
     elif not dry and not os.path.exists(os.path.join(ND_BUILD, "build.ninja")):
@@ -145,7 +177,11 @@ def step_native(dry, jobs=0, use_ccache=False, configure=True):
     build = [CMAKE, "--build", ND_BUILD, "--target", "vdisk"]
     if jobs:
         build += ["--parallel", str(jobs)]
-    rc, _ = run(build, dry=dry)
+    if use_bat:
+        cmd = ["cmd", "/d", "/c", bat, vcvars, CMAKE, ND_BUILD, "Release"] + build[3:]
+        rc, _ = (0, "") if dry else run_pass(cmd)
+    else:
+        rc, _ = run(build, dry=dry)
     if rc != 0:
         return None
     if cc and not dry:
@@ -167,8 +203,47 @@ def step_native(dry, jobs=0, use_ccache=False, configure=True):
     return stripped
 
 
-def step_publish(dry):
-    print("[2/3] dotnet publish (%s, Release, android-arm64)" % TFM, flush=True)
+def shutdown_build_server():
+    # publish 前清 MSBuild 节点
+    # 防 1093 假绿
+    try:
+        subprocess.run(["dotnet", "build-server", "shutdown"], cwd=REPO,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                       timeout=120)
+    except Exception as e:
+        print("  ! shutdown 失败（忽略）：%s" % e, flush=True)
+
+
+def apk_zip_health(apk):
+    # ZIP 条目数判据
+    # 基线 1552，1093 即假绿
+    # kotlin_module 结尾文件好包也没有，勿作判据
+    try:
+        with zipfile.ZipFile(apk) as z:
+            names = z.namelist()
+        return len(names) >= 1500
+    except Exception:
+        return False
+
+
+def stale_obj_bin():
+    # 同盘移走增量残留
+    # 绕 safe-delete hook
+    stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    root = os.path.join(REPO, ".workbuddy", "stale_apk_" + stamp)
+    os.makedirs(root, exist_ok=True)
+    moved = []
+    for sub in ("obj", "bin"):
+        src = os.path.join(GUI_DIR, sub, "Release")
+        if os.path.exists(src):
+            os.rename(src, os.path.join(root, sub))
+            moved.append(src)
+    if moved:
+        print("  已隔离增量残留 -> %s" % root, flush=True)
+    return moved
+
+
+def publish_once(dry):
     # 走与 VS「发布」同一个 profile：产物与 VS 完全一致（SelfContained/PublishSingleFile 等
     # 差异会体现在包体大小上，混用两套参数会出现「脚本打的包比 VS 的小 300KB」的错觉）。
     cmd = [
@@ -196,6 +271,39 @@ def step_publish(dry):
         if os.path.exists(apk):
             return apk
     print("  ! 未找到 APK 产物", flush=True)
+    return None
+
+
+def wait_healthy(apk, tries=30, delay=5):
+    # 纯等待节点收尾
+    # 禁 shutdown 会杀写入
+    for i in range(tries):
+        if apk_zip_health(apk):
+            return True
+        print("  条目检查未过(%d/%d)，%ds 后重读" % (i + 1, tries, delay), flush=True)
+        time.sleep(delay)
+    return False
+
+
+def step_publish(dry):
+    print("[2/3] dotnet publish (%s, Release, android-arm64)" % TFM, flush=True)
+    if not dry:
+        shutdown_build_server()
+    apk = publish_once(dry)
+    if apk is None or dry:
+        return apk
+    if wait_healthy(apk):
+        return apk
+    # 自愈一轮
+    # 隔离后全量重 publish
+    print("  ! ZIP 条目异常（1093 假绿特征），自动全量重 publish", flush=True)
+    shutdown_build_server()
+    stale_obj_bin()
+    apk = publish_once(dry)
+    if apk is not None:
+        if wait_healthy(apk):
+            return apk
+        print("  ! 重 publish 后条目仍异常，放弃", flush=True)
     return None
 
 

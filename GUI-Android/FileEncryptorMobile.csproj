@@ -20,8 +20,8 @@
 
 		<ApplicationTitle>FileEncryptor</ApplicationTitle>
 		<ApplicationId>com.yaoyingluo.fileencryptor</ApplicationId>
-		<ApplicationDisplayVersion>1.0.0</ApplicationDisplayVersion>
-		<ApplicationVersion>7</ApplicationVersion>
+		<ApplicationDisplayVersion>1.1.0</ApplicationDisplayVersion>
+		<ApplicationVersion>8</ApplicationVersion>
 
 		<!-- LibraryImport 源生成器需要不安全代码 -->
 		<AllowUnsafeBlocks>true</AllowUnsafeBlocks>
@@ -94,6 +94,8 @@
 	     目录为空时通配不到文件，播放器显示空态，不影响构建。 -->
 	<ItemGroup>
 		<AndroidAsset Include="Musics\**\*" />
+		<AndroidAsset Include="..\shared\pack.json" Link="pack.json" />
+		<AndroidAsset Include="..\shared\achievements\**\*.json" Link="achievements\%(RecursiveDir)%(Filename)%(Extension)" />
 	</ItemGroup>
 
 	<ItemGroup>

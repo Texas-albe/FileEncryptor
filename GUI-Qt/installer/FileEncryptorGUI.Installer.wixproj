@@ -1,9 +1,9 @@
 <Project Sdk="WixToolset.Sdk/4.0.5">
   <PropertyGroup>
     <!-- 版本唯一来源：Product.wxs 通过 $(var.Version) 消费，MSI 版本与输出文件名一起变 -->
-    <GuiVersion>3.1.1</GuiVersion>
+    <GuiVersion>3.2.0</GuiVersion>
     <!-- CLI 产物名由 CMake project(VERSION) 拼出，只支持数值版（无 -alpha.N），故独立定义 -->
-    <CliVersion>3.1.1</CliVersion>
+    <CliVersion>3.2.0</CliVersion>
     <OutputType>Package</OutputType>
     <OutputName>FileEncryptorGUI-$(GuiVersion)-Qt-Windows</OutputName>
     <Platform>x64</Platform>

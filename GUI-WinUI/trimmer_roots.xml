@@ -1,0 +1,19 @@
+<linker>
+  <!-- IL 裁剪保留名单（TrimMode=partial 下非名单程序集被裁）
+       保守策略：自家程序集与 WinUI/WinAppSDK 互操作层全保留，只裁框架库。
+       实测：Windows.SDK.NET 投影（24.9MB）裁到 0.3MB 后启动即 WinRT
+       stowed exception（0xC000027B），CsWinRT 投影运行期反射依赖未注解，
+       必须整保留。根元素必须是 linker（Project 根会被静默忽略，11-21）。 -->
+  <assembly fullname="FileEncryptorGUI.WinUI3" />
+  <assembly fullname="Microsoft.WinUI" />
+  <!-- 仅下列托管程序集真实存在（11-21 核对 publish 目录）；
+       ui.xaml/UI.Xaml.Controls/WindowsAppSDK 是原生或 winmd，
+       写进名单只会报 IL2007 假保护，勿再加。 -->
+  <assembly fullname="Microsoft.WindowsAppRuntime.Bootstrap.Net" />
+  <assembly fullname="Microsoft.Windows.SDK.NET" />
+  <!-- IL2026 点名：SettingsService/TaskHistoryService/VaultManagerDialog 用反射式
+       JsonSerializer。partial 会裁掉反射基础设施，任务历史写入路径启动时不触发、
+       冒烟测不到，root 兜底防患（11-21）。 -->
+  <assembly fullname="System.Text.Json" />
+  <assembly fullname="System.Text.RegularExpressions" />
+</linker>

@@ -380,7 +380,8 @@ std::vector<std::string> BatchProgress::build_lines(int width) {
 void BatchProgress::emit_frame(const std::vector<std::string>& lines, bool final_frame) {
     // 结构化进度旁路
     const char* events_env = std::getenv("FILEENCRYPTOR_PROGRESS_EVENTS");
-    if (events_env && *events_env && *events_env != '0') {
+    const bool events = events_env && *events_env && *events_env != '0';
+    if (events) {
         std::string line = "{\"type\":\"progress_frame\",\"final\":";
         line += final_frame ? "true" : "false";
         line += ",\"rows\":" + std::to_string(lines.size()) + ",\"lines\":[";
@@ -397,6 +398,9 @@ void BatchProgress::emit_frame(const std::vector<std::string>& lines, bool final
         line += "]}\n";
         std::fputs(line.c_str(), stderr);
         std::fflush(stderr);
+        // 消费者已拿结构化帧
+        // 非 tty 不再输出旧块
+        if (!m_tty) return;
     }
     if (m_tty) {
         // 用保存/恢复光标

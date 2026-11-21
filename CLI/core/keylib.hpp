@@ -54,4 +54,6 @@ bool keylib_recipients(const std::vector<std::string>& names,
                        std::vector<std::string>& pubs, std::string& err);
 
 // 导出密钥材料到 dest_dir
-bool keylib_export(const std::string& name, const std::string& dest_dir, std::string& err);
+// plain_out=false 走 FEPK1
+bool keylib_export(const std::string& name, const std::string& dest_dir,
+                   bool plain_out, std::string& err);

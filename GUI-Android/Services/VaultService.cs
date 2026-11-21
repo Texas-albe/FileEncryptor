@@ -909,6 +909,70 @@ public sealed unsafe class VaultService : IDisposable
         return (used, trash, total);
     }
 
+    // 格式化加密盘结果
+    public sealed record FormatReport(bool Cancelled, ulong Removed, ulong Total);
+
+    // 格式化加密盘
+    // 对齐桌面 --vault-format：删光盘内全部内容
+    // 保留 vault.meta / 盘身份 / 密码
+    // 递归删顶层条目（native 已按子树整删并落盘空索引）
+    // 故不调 ReindexEx，避免重新引入孤儿 .ptd
+    // 长任务：自带 Begin/EndLongOp 喂狗
+    public FormatReport FormatVault(Action<ulong, ulong>? progress = null, Func<bool>? cancel = null)
+    {
+        EnsureUnlocked();
+        BeginLongOp();
+        try
+        {
+            // 递归数全部文件，给进度分母
+            var allFiles = new List<string>();
+            CollectFiles("", allFiles);
+            ulong total = (ulong)allFiles.Count;
+            // 顶层条目（native 递归删各自子树）
+            var top = ListDir("");
+            ulong filesDone = 0;
+            bool cancelled = false;
+            foreach (var item in top)
+            {
+                if (cancel is not null && cancel())
+                {
+                    cancelled = true;
+                    break;
+                }
+                bool ok = DeleteEx(item.RelPath, null, cancel);
+                if (!ok)
+                {
+                    cancelled = true;
+                    break;
+                }
+                filesDone += CountFilesUnder(item.RelPath, allFiles);
+                progress?.Invoke(filesDone, total);
+            }
+            return new FormatReport(cancelled, filesDone, total);
+        }
+        finally { EndLongOp(); }
+    }
+
+    // 递归收集全部文件相对路径
+    private void CollectFiles(string vpath, List<string> outFiles)
+    {
+        foreach (var it in ListDir(vpath))
+        {
+            if (it.IsDir) CollectFiles(it.RelPath, outFiles);
+            else outFiles.Add(it.RelPath);
+        }
+    }
+
+    // 统计某顶层条目（含自身若是文件）覆盖的文件数
+    private ulong CountFilesUnder(string rel, List<string> allFiles)
+    {
+        ulong c = 0;
+        string pfx = rel + "/";
+        foreach (var f in allFiles)
+            if (f == rel || f.StartsWith(pfx, StringComparison.Ordinal)) c++;
+        return c;
+    }
+
     // 保留命名空间
     private static string? s_reservedName;
     public static string ReservedName

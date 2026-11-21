@@ -13,6 +13,9 @@
 #include <vector>
 #include <algorithm>
 #include <sstream>
+#include <fstream>
+#include <filesystem>
+#include <cstdio>
 
 #include <sodium.h>
 
@@ -758,5 +761,162 @@ int fe_m_pqc_open(const unsigned char* blob, size_t blob_len,
     }
     sodium_memzero(dek, sizeof(dek));
     *out_pass_len = (size_t)mlen;
+    return FE_M_OK;
+}
+
+// 水印：临时文件 + 拷出辅助
+namespace {
+
+std::string wm_tmp_path() {
+    unsigned char rnd[8];
+    randombytes_buf(rnd, sizeof(rnd));
+    char h[17];
+    for (int i = 0; i < 8; ++i) std::snprintf(h + i * 2, 3, "%02x", rnd[i]);
+    h[16] = '\0';
+    std::error_code ec;
+    std::filesystem::path p = std::filesystem::temp_directory_path(ec);
+    if (ec) p = std::filesystem::path("/data/local/tmp");
+    p /= (std::string("fe_wm_") + h + ".tmp");
+    return p.string();
+}
+
+int wm_copy_file_to_fd(const std::string& path, int out_fd) {
+    std::ifstream in(path, std::ios::binary);
+    if (!in) return FE_M_E_IO;
+    std::vector<unsigned char> buf(1024 * 1024);
+    while (true) {
+        in.read(reinterpret_cast<char*>(buf.data()), (std::streamsize)buf.size());
+        std::streamsize got = in.gcount();
+        if (got <= 0) break;
+        size_t off = 0;
+        while (off < (size_t)got) {
+            fe_m_ssize_t w = fe_m_write(out_fd, buf.data() + off, got - off);
+            if (w <= 0) return FE_M_E_IO;
+            off += (size_t)w;
+        }
+        if (in.eof()) break;
+    }
+    return FE_M_OK;
+}
+
+// 把内存 PEM 文本落临时文件
+// 水印签名/验签 API 只认文件路径
+// 返回空串表示失败
+std::string wm_write_pem_tmp(const std::string& pem) {
+    if (pem.empty()) return std::string();
+    std::string path = wm_tmp_path();
+    {
+        std::ofstream o(path, std::ios::out | std::ios::binary | std::ios::trunc);
+        if (!o) { std::error_code ec; std::filesystem::remove(path, ec); return std::string(); }
+        o.write(pem.data(), (std::streamsize)pem.size());
+        if (!o) { std::error_code ec; std::filesystem::remove(path, ec); return std::string(); }
+    }
+    return path;
+}
+
+void wm_drop(const std::string& path) {
+    if (path.empty()) return;
+    std::error_code ec; std::filesystem::remove(path, ec);
+}
+
+}  // namespace
+
+int fe_m_encrypt_fd_wm(int in_fd, uint64_t in_size, int out_fd,
+                       const char* password, size_t pass_len,
+                       int mode, int compress_level,
+                       const char* wm_priv_pem, int wm_pqc,
+                       fe_m_progress_fn progress, void* user) {
+    sodium_init();
+    if (in_fd < 0 || out_fd < 0 || !password || pass_len == 0) return FE_M_E_ARG;
+    if (mode != FE_M_MODE_XCHACHA20 && mode != FE_M_MODE_AEGIS256 &&
+        mode != FE_M_MODE_AES_GCM && mode != FE_M_MODE_SM4) return FE_M_E_ARG;
+    if (!fe_m_mode_supported(mode)) return FE_M_E_UNSUP;
+    if (!wm_priv_pem || wm_priv_pem[0] == '\0') return FE_M_E_ARG;
+
+    CryptoMode cm = (mode == FE_M_MODE_AEGIS256) ? CryptoMode::AEGIS256
+                 : (mode == FE_M_MODE_AES_GCM)   ? CryptoMode::AES_GCM
+                 : (mode == FE_M_MODE_SM4)       ? CryptoMode::SM4
+                                                 : CryptoMode::XCHACHA20;
+
+    FdInBuf in_buf(in_fd);
+    std::istream in(&in_buf);
+    if (fe_m_lseek(out_fd, 0, SEEK_SET) < 0) return FE_M_E_IO;
+    (void)in_size;
+
+    std::string tmp = wm_tmp_path();
+
+    SecureBuffer pw(pass_len);
+    std::memcpy(pw.data(), password, pass_len);
+
+    // 签名私钥是 PEM 文本，水印实现只认文件路径，先落临时文件
+    std::string priv_path = wm_write_pem_tmp(wm_priv_pem);
+    if (priv_path.empty()) return FE_M_E_IO;
+
+    WatermarkSpec wm;
+    wm.enabled = true;
+    wm.pqc = (wm_pqc != 0);
+    wm.sign_key = priv_path;
+
+    // 走文件模式：out_path 给临时文件，加密内部才会追加水印+名尾
+    bool ok = false;
+    try {
+        ok = encrypt_file(std::string(), tmp, pw, cm,
+                          wrap_progress(progress, user),
+                          /*resume=*/false, compress_level,
+                          /*asym_mode=*/false, nullptr, &wm,
+                          /*ext_salt=*/nullptr, /*ext_kek=*/nullptr, 0,
+                          &in, nullptr, /*footer_name=*/nullptr);
+    } catch (const std::exception&) { ok = false; }
+      catch (...) { ok = false; }
+    int rc = FE_M_OK;
+    if (!ok) { wm_drop(tmp); wm_drop(priv_path); return to_code(false); }
+    rc = wm_copy_file_to_fd(tmp, out_fd);
+    wm_drop(tmp);
+    wm_drop(priv_path);
+    return rc;
+}
+
+int fe_m_wm_verify(const char* ptd_path, const char* pub_pem, int pqc,
+                   char* out_json, size_t cap) {
+    sodium_init();
+    if (!ptd_path || !out_json || cap == 0) return FE_M_E_ARG;
+    WatermarkInfo info;
+    // 公钥是 PEM 文本，验签 API 只认文件路径，先落临时文件
+    std::string pub_path = (pub_pem && pub_pem[0] != '\0') ? wm_write_pem_tmp(pub_pem) : std::string();
+    bool found = false;
+    try { found = read_watermark(std::string(ptd_path), info, pub_path, pqc != 0); }
+    catch (...) { found = false; }
+    wm_drop(pub_path);
+    if (!found) {
+        std::string s = "{\"found\":false}";
+        return fe_m_copy_out(s, out_json, cap);
+    }
+    std::ostringstream o;
+    o << "{\"found\":true"
+      << ",\"timestamp\":" << (unsigned long long)info.timestamp
+      << ",\"flags\":" << (int)info.flags
+      << ",\"has_signature\":" << (info.has_signature ? "true" : "false")
+      << ",\"verify_attempted\":" << (info.verify_attempted ? "true" : "false")
+      << ",\"verify_ok\":" << (info.verify_ok ? "true" : "false")
+      << ",\"machine_id_hex\":\"" << info.machine_id_hex << "\""
+      << ",\"nonce_hex\":\"" << info.nonce_hex << "\""
+      << ",\"error\":\"" << info.error << "\"}";
+    return fe_m_copy_out(o.str(), out_json, cap);
+}
+
+int fe_m_wm_generate_keypair(int pqc, char* out_pub, size_t cap_pub,
+                             char* out_priv, size_t cap_priv) {
+    sodium_init();
+    if (!out_pub || !out_priv || cap_pub == 0 || cap_priv == 0) return FE_M_E_ARG;
+    std::string tmp = wm_tmp_path();
+    std::string pub, err;
+    bool ok = wm_generate_keypair(tmp, pqc != 0, pub, err);
+    if (!ok) { std::error_code ec; std::filesystem::remove(tmp, ec); return FE_M_E_INT; }
+    std::ifstream fin(tmp, std::ios::binary);
+    std::string priv((std::istreambuf_iterator<char>(fin)), std::istreambuf_iterator<char>());
+    std::error_code ec; std::filesystem::remove(tmp, ec);
+    if (pub.size() + 1 > cap_pub || priv.size() + 1 > cap_priv) return FE_M_E_MEM;
+    std::memcpy(out_pub, pub.data(), pub.size()); out_pub[pub.size()] = '\0';
+    std::memcpy(out_priv, priv.data(), priv.size()); out_priv[priv.size()] = '\0';
     return FE_M_OK;
 }

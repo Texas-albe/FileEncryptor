@@ -1,4 +1,4 @@
-﻿﻿# ChangeLog - FileEncryptor GUI (Qt6 / Linux)
+﻿# ChangeLog - FileEncryptor GUI (Qt6 / Linux)
 
 本文件记录 **FileEncryptor GUI (Qt6 / Linux)** 子项目的所有重要变更（图形界面 `FileEncryptorGUI(.exe)`）。
   
@@ -13,21 +13,23 @@
 > - GUI 仅描述本项目自身的实现变更（界面、主题、图标、构建、依赖查找等）。
 > - 加密核心 / 算法 / 磁盘格式 v4 / 续传 / YAML 配置 等行为变更请见 `../CLI/CHANGELOG.md`（CLI 是行为实现的承担者）。
 
-## [GUI-Qt 3.1.1] - 2026-10-23
+## [GUI-Qt 3.2.0] - 2026-11-15
 
-配套 CLI / FE-Mounter 3.1.1。
+### Security
+- 任务历史里的文件路径改为加密存储（Windows 用系统账户凭据，Linux 用系统密钥环，不可用时自动降级）；磁盘上不再有明文路径，旧记录兼容。
+- 「工具 → 校验审计日志...」：选择审计日志与密钥即可校验日志是否被改动。
 
-### Fixed
-- **普通加密只输一次密码**：此前 Qt 端加密 / 批加密一律弹出「密码 + 确认密码」两框。现与 WinUI 前端对齐：仅「入新加密盘」（勾选入盘且该盘尚未初始化、`vault.meta` 不存在）才要求二次确认——那是给新盘设密码，敲错不可挽回；普通加密 / 解密 / 解包均只输一次。
-- **Windows 静态 Qt（smelibs 6.10）下无法编译**：3.1.0 引入的三处代码从未对静态 Qt 编过（此前只编过动态 Qt 6.11 树），导致 Qt MSI 卡在「GUI 产物不存在」。① `OsHarden.cpp` 用 `#ifdef Q_OS_WIN` 判断平台，但本编译单元不包含 Qt 头、宏未定义，Windows 上误编 Linux 分支（`sys/resource.h` 不存在）；改为 `#if defined(_WIN32) || defined(Q_OS_WIN)`。② `CliNotFoundDialog.cpp` 调用并不存在的 `QNetworkRequest::setRedirectPolicy()` / `NoRedirectPolicy`（Qt 6.10/6.11 均无此 API），改设 `RedirectPolicyAttribute` 属性 + `ManualRedirectPolicy`——与既有的 `followRedirect` 逐跳白名单校验语义一致。③ `CliArgBuilder.cpp` 文件级静态函数内未限定调用静态成员 `isPrivateKeyMaterial`，补 `CliArgBuilder::` 限定。
+### Added
+- 加密盘菜单新增：快照备份 / 校验快照 / 从快照恢复 / 分享盘内单个文件。
+- 工具菜单新增云端（WebDAV）只读浏览与下载；密码不落盘。
+- 批量加密/解密支持「排除模式」与「跳过隐藏文件」。
 
 ### Changed
-- 版本号随 CLI 同步升至 3.1.1。
+- 口令最低要求提高到 12 位且含 3 类字符（与 CLI 对齐）。
 
-- **开始菜单卸载改走 Windows Installer**：Qt 安装包原先指向随包分发的独立 WPF 卸载器，工程删除后改为直接调 `msiexec /x [ProductCode]`。用户看到的仍是熟悉的维护与卸载界面，包里不再附带卸载器。
-- **依赖目录改名 `third_party` → `Third Party`**：随仓库分发的依赖源码树整体换了目录名，CMake preset、依赖查找、安装包路径、Linux 构建脚本和文档里的引用一并改过。新目录名带空格，CMake 的 `add_subdirectory` 与头文件路径、README 里的命令行示例都补了引号；上游源码与历史变更记录里的旧路径按原样保留。
-- **一键构建补齐并实跑**：Windows 侧从 CLI、FE-Mounter 到两套 MSI 的六步矩阵，现在可由 `scripts/build_all.py --win` 一次跑完并把产物收进发布目录。构建用的辅助脚本放在 `scripts/` 下，按仓库约定不入库，换机需自备。CMake 参数改走初始缓存文件，避免批处理把 `-DKEY=VAL` 的等号拆开；工具链自行补 Windows SDK 路径、规范化代理环境变量，不再依赖注册表查询。
-- 静态 Qt 的 `CMAKE_PREFIX_PATH` 示例、WinFSP 驱动与 MSI 路径都跟着新目录名走。
+### Fixed
+- 普通加密不再要求输两次密码（仅新建加密盘设密码时才二次确认）。
+- 开始菜单「卸载」改调 Windows Installer 标准界面，安装包不再附带独立卸载器。
 ## [GUI-Qt 3.0.1] - 2026-10-06
 
 ### Added

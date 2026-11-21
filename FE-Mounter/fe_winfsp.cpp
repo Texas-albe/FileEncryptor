@@ -37,7 +37,6 @@
 
 std::string g_svc_vault, g_svc_pass, g_svc_mp, g_svc_lib;
 bool g_svc_rw = false;            // M6 可写挂载开关
-uint32_t g_svc_idle = 0;          // M5 前台活动自动锁
 
 // 单调时钟毫秒
 static uint64_t wf_now_ms() {

@@ -224,6 +224,8 @@
                                               VerticalAlignment="Center" ToolTipService.ToolTip="勾选后非对称封装使用 X448，不勾选则使用 X25519" />
                                     <CheckBox x:Name="ChkWatermark" x:FieldModifier="public" Content="签名水印" Checked="OnOptionChanged" Unchecked="OnOptionChanged"
                                               VerticalAlignment="Center" ToolTipService.ToolTip="在密文尾部追加一条签名水印" />
+                                    <CheckBox x:Name="ChkSkipHidden" x:FieldModifier="public" Content="跳过隐藏文件" Checked="OnOptionChanged" Unchecked="OnOptionChanged"
+                                              VerticalAlignment="Center" ToolTipService.ToolTip="批量模式跳过以 . 开头或带隐藏属性的文件与目录" />
                                 </StackPanel>
                             </ScrollViewer>
                         </Grid>
@@ -241,6 +243,14 @@
                                     <controls:ComboBoxItem Content="TB" />
                                 </controls:ComboBox>
                             </StackPanel>
+                        </Grid>
+
+                        <!-- 批量过滤（仅批量模式显示） -->
+                        <Grid x:Name="ExcludeRow" x:FieldModifier="public" ColumnDefinitions="120,*" Visibility="Collapsed">
+                            <TextBlock Grid.Column="0" Text="排除" Style="{StaticResource AppFieldLabelTextStyle}" />
+                            <TextBox Grid.Column="1" x:Name="ExcludeEdit" x:FieldModifier="public"
+                                     TextChanged="OnExcludeChanged"
+                                     PlaceholderText="逗号分隔的通配模式（如 *.tmp,~$*,Thumbs.db）" />
                         </Grid>
 
                         <!-- 水印签名私钥 -->

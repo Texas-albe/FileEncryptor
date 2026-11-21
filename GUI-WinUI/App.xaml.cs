@@ -58,6 +58,13 @@ public partial class App : Application
             // 控件模板里
             // 放到 MainWindow 构造
             Services.NationalDayTheme.ApplyThemeOverrides();
+            // 成就加载与解锁弹窗
+            Services.AchievementService.Instance.Load();
+            Services.AchievementService.Instance.Unlocked += def =>
+            {
+                var lang = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName;
+                Services.AchievementToastManager.Instance.Show(def, lang);
+            };
             MainWindow = new FileEncryptorGUI.MainWindow();
             MainWindow.Activate();
             // SystemBackdrop 必须

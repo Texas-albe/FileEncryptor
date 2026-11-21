@@ -15,6 +15,8 @@
 #include "TaskHistoryDialog.h"
 #include "EtaEstimator.h"
 #include "I18n.h"
+#include "AchievementService.h"
+#include "AchievementToast.h"
 #include <vector>
 #include <cstring>
 
@@ -202,6 +204,11 @@ MainWindow::MainWindow(QWidget* parent): QMainWindow(parent) {
     connect(m_frameTimer,&QTimer::timeout,this,&MainWindow::flushPendingFrame);
 
     connectSignals();
+    // 成就加载与解锁弹窗
+    AchievementService::instance().load();
+    AchievementService::instance().onUnlocked = [](const AdvDef& d) {
+        AchievementToastManager::instance().show(d, I18n::instance().currentLanguage());
+    };
     probeZstdSupport();
     updateSm4Visibility();
     updateAsymVisibility();
@@ -271,6 +278,7 @@ void MainWindow::closeEvent(QCloseEvent* e) {
         m_executor->cancel();
     }
     cleanupTempFiles();
+    AchievementToastManager::instance().clear();
     QSettings(QStringLiteral("FileEncryptor"),QStringLiteral("FileEncryptorGUI"))
         .setValue(QStringLiteral("geometry"),saveGeometry());
     e->accept();
@@ -315,6 +323,9 @@ void MainWindow::buildMenu() {
     connect(actTaskHistory,&QAction::triggered,this,&MainWindow::onOpenTaskHistory);
     auto* actRetryCli=toolsMenu->addAction(tr("重新检测 CLI 程序"));
     connect(actRetryCli,&QAction::triggered,this,&MainWindow::onRetryCliDetection);
+    auto* actAuditVerify=toolsMenu->addAction(tr("校验审计日志..."));
+    actAuditVerify->setToolTip(tr("检查审计日志的哈希链、序号与外部锚点"));
+    connect(actAuditVerify,&QAction::triggered,this,&MainWindow::onAuditVerify);
     toolsMenu->addSeparator();
 
     // 加密盘
@@ -328,6 +339,11 @@ void MainWindow::buildMenu() {
     addVaultAct(tr("新建加密盘..."),tr("在选中的空文件夹里建一块加密盘"),&MainWindow::onVaultInit);
     addVaultAct(tr("查看盘内文件..."),tr("列出这块盘里已登记的文件"),&MainWindow::onVaultList);
     m_vaultMenu->addSeparator();
+    addVaultAct(tr("快照备份..."),tr("把整块盘复制到另一个文件夹，生成带校验和的清单"),&MainWindow::onVaultSnapshot);
+    addVaultAct(tr("校验快照..."),tr("逐个核对快照清单里的校验和，确认备份完好"),&MainWindow::onVaultCheckSnapshot);
+    addVaultAct(tr("从快照恢复..."),tr("把快照里的文件复制回原盘（可指定其他目标盘）"),&MainWindow::onVaultRestoreSnapshot);
+    addVaultAct(tr("分享库内文件..."),tr("用收件人公钥把盘内某个文件封装成独立 .ptd 交给对方"),&MainWindow::onVaultShare);
+    m_vaultMenu->addSeparator();
     addVaultAct(tr("修改加密盘密码..."),tr("把盘里所有文件和索引都换成新密码"),&MainWindow::onVaultRekey);
     addVaultAct(tr("生成恢复码..."),tr("生成 48 位恢复码，忘密码时能取回原密码"),&MainWindow::onVaultRecoveryCreate);
     addVaultAct(tr("用恢复码找回密码..."),tr("输入当初抄下的恢复码，取回这块盘的密码"),&MainWindow::onVaultRecoveryOpen);
@@ -338,6 +354,15 @@ void MainWindow::buildMenu() {
     addVaultAct(tr("格式化加密盘..."),tr("清空盘内全部文件，保留盘身份与密码；不可撤销"),&MainWindow::onVaultFormat);
     addVaultAct(tr("暂时锁定"),tr("立刻锁住已挂载的盘，清空内存里的密钥"),&MainWindow::onVaultLock);
     addVaultAct(tr("重新解锁..."),tr("用密码解锁已锁定的盘"),&MainWindow::onVaultUnlock);
+
+    // 云端（WebDAV 只读）
+    auto* cloudMenu=toolsMenu->addMenu(tr("云端"));
+    auto* actCloudBrowse=cloudMenu->addAction(tr("浏览云端目录..."));
+    actCloudBrowse->setToolTip(tr("列出 WebDAV 服务器上的目录（只读）"));
+    connect(actCloudBrowse,&QAction::triggered,this,&MainWindow::onCloudBrowse);
+    auto* actCloudPull=cloudMenu->addAction(tr("从云端拉取文件..."));
+    actCloudPull->setToolTip(tr("把 WebDAV 上的文件（如 .ptd）下载到本地"));
+    connect(actCloudPull,&QAction::triggered,this,&MainWindow::onCloudPull);
 
     auto* langMenu=toolsMenu->addMenu(tr("语言(&L)"));
     auto* langGroup=new QActionGroup(langMenu);
@@ -1386,6 +1411,9 @@ QWidget* MainWindow::buildCenterPanel() {
     m_chkSplit=new QCheckBox(tr("分卷输出"));
     m_chkSplit->setToolTip(tr("将密文切分为多个 .001/.002 分卷；解密时任选一卷即可自动合并"));
     optsRow->addWidget(m_chkSplit);
+    m_chkSkipHidden=new QCheckBox(tr("跳过隐藏文件"));
+    m_chkSkipHidden->setToolTip(tr("批量模式跳过以 . 开头或带隐藏属性的文件与目录"));
+    optsRow->addWidget(m_chkSkipHidden);
     optsRow->addStretch();
 
     // 入盘单独一行
@@ -1425,6 +1453,21 @@ QWidget* MainWindow::buildCenterPanel() {
     }
     m_splitRow->setVisible(false);
     lay->addWidget(m_splitRow,row,1);
+    row++;
+
+    // 批量过滤（排除模式，仅批量模式显示）
+    m_excludeRow=new QWidget;
+    m_excludeRow->setVisible(false);
+    {
+        auto* er=new QHBoxLayout(m_excludeRow);
+        er->setContentsMargins(0,0,0,0);
+        er->addWidget(new QLabel(tr("排除")));
+        m_excludeEdit=new QLineEdit;
+        m_excludeEdit->setPlaceholderText(tr("逗号分隔的通配模式（如 *.tmp,~$*,Thumbs.db）"));
+        m_excludeEdit->setToolTip(tr("按文件或目录名匹配，命中者不参与批量加解密；目录同样会被剪枝"));
+        er->addWidget(m_excludeEdit,1);
+    }
+    lay->addWidget(m_excludeRow,row,1);
     row++;
 
     // 勾选签名水印
@@ -1741,6 +1784,11 @@ void MainWindow::updateAsymVisibility() {
     if(m_chkWatermark) m_chkWatermark->setVisible(encFields);
     // PQC 只影响载荷封装
     if(m_chkPqc) m_chkPqc->setVisible(encFields);
+    // 批量过滤只在批量动作显示
+    const bool isBatch=(act==static_cast<int>(CryptoAction::BatchEncrypt))||
+                       (act==static_cast<int>(CryptoAction::BatchDecrypt));
+    if(m_chkSkipHidden) m_chkSkipHidden->setVisible(isBatch);
+    if(m_excludeRow) m_excludeRow->setVisible(isBatch);
 
     if(keygen) {
         const QString curve=m_chkX448&&m_chkX448->isChecked()
@@ -1943,6 +1991,15 @@ ShellOptions MainWindow::collectOptions() const {
     if(m_splitSize) o.splitSize=m_splitSize->value();
     if(m_splitUnit) o.splitUnit=m_splitUnit->currentIndex();
     o.writeSha256=m_chkSha256->isChecked();
+    // 批量过滤
+    if(m_excludeEdit) {
+        const QStringList parts=m_excludeEdit->text().split(QLatin1Char(','));
+        for(const QString& p : parts) {
+            const QString t=p.trimmed();
+            if(!t.isEmpty()) o.excludePatterns<<t;
+        }
+    }
+    if(m_chkSkipHidden) o.skipHidden=m_chkSkipHidden->isChecked();
     o.keyfilePath=m_keyfileEdit->text().trimmed();
     // CLI 无 zstd 时禁用勾选框
     o.compress=m_chkCompress->isChecked() && m_zstdAvailable;
@@ -2452,7 +2509,8 @@ void MainWindow::onRewrapClicked() {
 // head/tail 分开是因
 // requireVault=false 用于「新建
 void MainWindow::runVaultAction(const QString& title,const QStringList& head,
-                                const QStringList& tail,bool needPw,bool requireVault) {
+                                const QStringList& tail,bool needPw,bool requireVault,
+                                const QString& presetDir) {
     if(!checkCliExists(true)) return;
     if(m_fileEncryptorPath.isEmpty()) {
         m_fileEncryptorPath=FileEncryptorLocator::locate();
@@ -2462,32 +2520,44 @@ void MainWindow::runVaultAction(const QString& title,const QStringList& head,
         MsgBox::warn(this,tr("正在运行"),tr("请等待当前任务结束或先取消。"));
         return;
     }
-    const QString dir=pickVaultDir(title,requireVault);
+    const QString dir=presetDir.isEmpty()?pickVaultDir(title,requireVault):presetDir;
     if(dir.isEmpty()) return;
 
     QStringList a=head;
     a<<dir<<tail;
-    std::vector<unsigned char> pw;
+    QByteArray stdinData;
     if(needPw) {
         PasswordDialog dlg(this);
         dlg.setPurpose(tr("加密盘密码"));
         dlg.setRequireConfirm(false);
         if(dlg.exec()!=QDialog::Accepted) return;
-        pw=dlg.takePassword();
+        std::vector<unsigned char> pw=dlg.takePassword();
         if(pw.empty()) return;
         a<<QStringLiteral("--key-stdin");
-    }
-
-    CommandRequest req;
-    req.programPath=m_fileEncryptorPath;
-    req.arguments=a;
-    if(!pw.empty()) {
-        req.stdinData=QByteArray(reinterpret_cast<const char*>(pw.data()),(int)pw.size());
+        stdinData=QByteArray(reinterpret_cast<const char*>(pw.data()),(int)pw.size());
         secure_zero(pw.data(),pw.size()); pw.clear();
     }
+    launchCli(title,a,stdinData);
+}
 
+// 通用 CLI 子进程执行（免选目录的动作共用）
+void MainWindow::launchCli(const QString& title,const QStringList& args,
+                           const QByteArray& stdinData) {
+    if(!checkCliExists(true)) return;
+    if(m_fileEncryptorPath.isEmpty()) {
+        m_fileEncryptorPath=FileEncryptorLocator::locate();
+        if(m_fileEncryptorPath.isEmpty()) { showCliNotFoundError(title); return; }
+    }
+    if(m_executor&&m_executor->isRunning()) {
+        MsgBox::warn(this,tr("正在运行"),tr("请等待当前任务结束或先取消。"));
+        return;
+    }
+    CommandRequest req;
+    req.programPath=m_fileEncryptorPath;
+    req.arguments=args;
+    req.stdinData=stdinData;
     m_outputView->clear();
-    appendOutput(QStringLiteral(">>> %1 %2\n").arg(m_fileEncryptorPath,a.join(QLatin1Char(' '))),false);
+    appendOutput(QStringLiteral(">>> %1 %2\n").arg(m_fileEncryptorPath,args.join(QLatin1Char(' '))),false);
     appendOutput(title+QStringLiteral("\n"),false);
     m_btnRun->setEnabled(false);
     if(m_btnRewrap) m_btnRewrap->setEnabled(false);
@@ -2519,6 +2589,91 @@ void MainWindow::onVaultRecoveryOpen() {
                    {QStringLiteral("--recovery-arg"),QStringLiteral("open ")+code},false);
 }
 
+// 快照备份：库目录 -> 目标目录（无密码，文件级复制 + sha256 清单）
+void MainWindow::onVaultSnapshot() {
+    const QString dir=pickVaultDir(tr("快照备份加密盘"),true);
+    if(dir.isEmpty()) return;
+    const QString dest=QFileDialog::getExistingDirectory(this,tr("选择快照保存目录"));
+    if(dest.isEmpty()) return;
+    runVaultAction(tr("快照备份加密盘"),{QStringLiteral("--vault-snapshot")},
+                   {QStringLiteral("--snapshot-to"),dest},false,true,dir);
+}
+void MainWindow::onVaultCheckSnapshot() {
+    runVaultAction(tr("校验快照完整性"),{QStringLiteral("--vault-check-snapshot")},{},false,false);
+}
+void MainWindow::onVaultRestoreSnapshot() {
+    runVaultAction(tr("从快照恢复加密盘"),{QStringLiteral("--vault-restore-snapshot")},{},false,false);
+}
+
+// 分享库内文件：库密码解锁 -> 收件人公钥封装出独立 .ptd
+void MainWindow::onVaultShare() {
+    const QString dir=pickVaultDir(tr("分享库内文件"),true);
+    if(dir.isEmpty()) return;
+    bool ok=false;
+    const QString vpath=QInputDialog::getText(this,tr("分享库内文件"),
+        tr("盘内路径（如 docs/report.pdf）："),QLineEdit::Normal,QString(),&ok).trimmed();
+    if(!ok||vpath.isEmpty()) return;
+    const QString start=lastVaultDir();
+    const QString pub=QFileDialog::getOpenFileName(this,tr("选择收件人公钥文件"),
+        start.isEmpty()?QString():QDir(start).exists()?start:QString(),
+        tr("公钥/文本文件 (*.txt *.pub *.age);;所有文件 (*)"));
+    if(pub.isEmpty()) return;
+    const QString out=QFileDialog::getSaveFileName(this,tr("输出分享容器"),
+        QFileInfo(vpath).fileName()+QStringLiteral(".ptd"),
+        tr("加密容器 (*.ptd)"));
+    if(out.isEmpty()) return;
+    runVaultAction(tr("分享库内文件"),{QStringLiteral("--vault-share")},
+                   {QStringLiteral("--share-file"),vpath,
+                    QStringLiteral("--share-to"),out,
+                    QStringLiteral("-r"),pub},true,true,dir);
+}
+
+// 云端浏览：WebDAV 只读列目录
+void MainWindow::onAuditVerify() {
+    const QString log=QFileDialog::getOpenFileName(this,tr("选择审计日志"),QString(),
+        tr("审计日志 (*.jsonl *.log);;所有文件 (*)"));
+    if(log.isEmpty()) return;
+    const QString key=QFileDialog::getOpenFileName(this,tr("选择审计密钥（可取消）"),QString(),
+        tr("密钥文件 (*);;所有文件 (*)"));
+    QStringList a;
+    a<<QStringLiteral("--audit-verify")<<log;
+    if(!key.isEmpty()) a<<QStringLiteral("--audit-key")<<key;
+    launchCli(tr("校验审计日志"),a);
+}
+
+void MainWindow::onCloudBrowse() {
+    bool ok=false;
+    const QString uri=QInputDialog::getText(this,tr("浏览云端目录"),
+        tr("WebDAV 地址（可含账号密码，如 webdav://user:pass@host/dav）："),
+        QLineEdit::Normal,lastCloudUri(),&ok).trimmed();
+    if(!ok||uri.isEmpty()) return;
+    const QString sub=QInputDialog::getText(this,tr("浏览云端目录"),
+        tr("子目录（留空列出根目录）："),QLineEdit::Normal,QString(),&ok).trimmed();
+    if(!ok) return;
+    rememberCloudUri(uri);
+    QStringList a{QStringLiteral("--cloud"),uri,QStringLiteral("--cloud-ls")};
+    if(!sub.isEmpty()) a<<sub;
+    launchCli(tr("浏览云端目录"),a);
+}
+
+// 云端拉取：下载远端文件到本地
+void MainWindow::onCloudPull() {
+    bool ok=false;
+    const QString uri=QInputDialog::getText(this,tr("从云端拉取文件"),
+        tr("WebDAV 地址（可含账号密码，如 webdav://user:pass@host/dav）："),
+        QLineEdit::Normal,lastCloudUri(),&ok).trimmed();
+    if(!ok||uri.isEmpty()) return;
+    const QString remote=QInputDialog::getText(this,tr("从云端拉取文件"),
+        tr("远端文件路径（如 docs/report.ptd）："),QLineEdit::Normal,QString(),&ok).trimmed();
+    if(!ok||remote.isEmpty()) return;
+    const QString local=QFileDialog::getSaveFileName(this,tr("保存到"),
+        QFileInfo(remote).fileName());
+    if(local.isEmpty()) return;
+    rememberCloudUri(uri);
+    launchCli(tr("从云端拉取文件"),{QStringLiteral("--cloud"),uri,
+        QStringLiteral("--cloud-get"),remote,QStringLiteral("--cloud-to"),local});
+}
+
 // 目录/盘符记忆
 // 上次用
 // Linux 回落 ~/fe_vault
@@ -2540,6 +2695,23 @@ void MainWindow::rememberVault(const QString& dir,const QString& point) {
     QSettings s(QStringLiteral("FileEncryptor"),QStringLiteral("FileEncryptorGUI"));
     if(!dir.isEmpty()) s.setValue(QStringLiteral("vault/lastDir"),dir);
     if(!point.isEmpty()) s.setValue(QStringLiteral("vault/lastMountPoint"),point);
+}
+
+// 上次云端地址（不存密码：写回时剥掉 userinfo）
+QString MainWindow::lastCloudUri() const {
+    QSettings s(QStringLiteral("FileEncryptor"),QStringLiteral("FileEncryptorGUI"));
+    return s.value(QStringLiteral("cloud/lastUri")).toString().trimmed();
+}
+void MainWindow::rememberCloudUri(const QString& uri) {
+    QSettings s(QStringLiteral("FileEncryptor"),QStringLiteral("FileEncryptorGUI"));
+    // 剥掉 user:pass@ 凭据再落盘
+    QString safe=uri;
+    const int schemeEnd=safe.indexOf(QStringLiteral("://"));
+    if(schemeEnd>0) {
+        const int at=safe.lastIndexOf(QLatin1Char('@'));
+        if(at>schemeEnd+3) safe=safe.left(schemeEnd+3)+safe.mid(at+1);
+    }
+    s.setValue(QStringLiteral("cloud/lastUri"),safe);
 }
 
 // 选目录
@@ -2776,6 +2948,7 @@ void MainWindow::onVaultMount() {
     QByteArray passBytes(reinterpret_cast<const char*>(pw.data()),(int)pw.size());
     secure_zero(pw.data(),pw.size()); pw.clear();
     launchMounterDetached(args,passBytes);
+    AchievementService::instance().observe(QStringLiteral("fileencryptor:mount"));
     MsgBox::info(this,tr("挂载为磁盘"),
         tr("正在挂载，盘符由后台进程持有。稍等片刻，在「此电脑」里就能看到：%1\n1 分钟不操作会自动锁定。").arg(point));
 }
@@ -3066,6 +3239,8 @@ void MainWindow::onCommandFinished(const CommandResult& r) {
         m_recipientTempFile.clear();
     }
     if(m_framePending) flushPendingFrame();
+    // 成就动作 记录要早于清空
+    const QString achAction = m_currentTask.action;
     finishTaskRecord(r);   // 内部要读 m_statsFile
     if(!m_statsFile.isEmpty()) {
         QFile::remove(m_statsFile);
@@ -3087,6 +3262,16 @@ void MainWindow::onCommandFinished(const CommandResult& r) {
     else if(r.exitCode==0) {
         summary=tr("--- 执行成功（退出码 0） ---");
         setStatus(tr("完成"));
+        // 成就触发 仅加解密成功任务
+        if(!achAction.isEmpty() && m_doneFiles>0) {
+            QString ev;
+            if(achAction==QStringLiteral("encrypt")||achAction==QStringLiteral("batch-encrypt"))
+                ev=QStringLiteral("fileencryptor:encrypt");
+            else if(achAction==QStringLiteral("decrypt")||achAction==QStringLiteral("batch-decrypt"))
+                ev=QStringLiteral("fileencryptor:decrypt");
+            if(!ev.isEmpty())
+                AchievementService::instance().observe(ev,m_doneFiles);
+        }
     }
     else {
         summary=tr("--- 执行结束（退出码 %1） ---").arg(r.exitCode);

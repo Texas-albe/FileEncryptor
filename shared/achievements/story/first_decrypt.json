@@ -1,0 +1,12 @@
+{
+  "parent": "fileencryptor:story/root",
+  "display": {
+    "icon": "unlock",
+    "title": { "text": "解封者", "text_en": "Unsealer", "text_ru": "Сниматель печати" },
+    "description": { "text": "完成一次解密", "text_en": "Decrypt something for the first time", "text_ru": "Выполните первую расшифровку" },
+    "frame": "task"
+  },
+  "criteria": {
+    "decrypted": { "trigger": "fileencryptor:decrypt" }
+  }
+}

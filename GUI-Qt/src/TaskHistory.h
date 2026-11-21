@@ -44,6 +44,7 @@ struct TaskRecord {
     // 打包
     bool    pack=false;
     QString intoVault;
+    QString pathCt;
 };
 
 class TaskHistory {

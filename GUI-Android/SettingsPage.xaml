@@ -146,6 +146,9 @@
                     </Grid>
                     <Label Text="{local:Zh 日志只存本机，不含内容与密码；排查完请关闭。}"
                            Style="{StaticResource Caption}" />
+                    <Label Text="{local:Zh 审计日志校验}" FontSize="{StaticResource FontSizeBody}" />
+                    <Label Text="{local:Zh 桌面端审计日志使用哈希链与外部锚点；移动端不写审计日志，请在桌面端校验。}"
+                           Style="{StaticResource Caption}" />
                 </VerticalStackLayout>
             </Border>
 

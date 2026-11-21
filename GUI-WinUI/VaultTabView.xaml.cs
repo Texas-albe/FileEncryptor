@@ -57,4 +57,10 @@ public sealed partial class VaultTabView : UserControl
     private void OnVaultFormat(object sender, RoutedEventArgs e) => Host?.OnVaultFormat(sender, e);
     private void OnVaultLock(object sender, RoutedEventArgs e) => Host?.OnVaultLock(sender, e);
     private void OnVaultUnlock(object sender, RoutedEventArgs e) => Host?.OnVaultUnlock(sender, e);
+    private void OnVaultSnapshot(object sender, RoutedEventArgs e) => Host?.OnVaultSnapshot(sender, e);
+    private void OnVaultCheckSnapshot(object sender, RoutedEventArgs e) => Host?.OnVaultCheckSnapshot(sender, e);
+    private void OnVaultRestoreSnapshot(object sender, RoutedEventArgs e) => Host?.OnVaultRestoreSnapshot(sender, e);
+    private void OnVaultShare(object sender, RoutedEventArgs e) => Host?.OnVaultShare(sender, e);
+    private void OnCloudBrowse(object sender, RoutedEventArgs e) => Host?.OnCloudBrowse(sender, e);
+    private void OnCloudPull(object sender, RoutedEventArgs e) => Host?.OnCloudPull(sender, e);
 }

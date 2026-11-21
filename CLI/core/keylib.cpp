@@ -3,6 +3,7 @@
 #include "config.hpp"
 #include "FileEncryptor.hpp"
 #include "asym_crypto.hpp"
+#include "keyfile_crypt.hpp"
 
 #include <yaml-cpp/yaml.h>
 
@@ -75,27 +76,25 @@ std::string now_string() {
 
 // 读密钥材料
 // 返回 false 表示材料
-bool read_key_material(const std::string& path, std::string& content, std::string& kind, std::string& err) {
-    std::ifstream f;
-    if (!open_stream(f, path, std::ios::in | std::ios::binary)) {
-        err = "Cannot open key file: " + path;
+bool read_key_material(const std::string& path, std::string& content, std::string& kind, std::string& err,
+                       bool warn_plain = false) {
+    // FEPK1 自动解密
+    std::string buf;
+    bool was_plain = false;
+    std::string kerr;
+    if (!fe_keyfile::read_protected(path, buf, fe_keyfile::PURPOSE_KEYLIB, was_plain, kerr)) {
+        err = kerr;
         return false;
     }
-    // 流式分块读取
-    std::string buf;
-    char chunk[4096];
-    while (f.read(chunk, sizeof(chunk)) || f.gcount() > 0) {
-        std::streamsize got = f.gcount();
-        if (got > 0) {
-            buf.append(chunk, (size_t)got);
-            if (buf.size() > size_t(256 * 1024)) {
-                err = "Key file too large (>256 KB): " + path;
-                break;
-            }
-        }
+    if (was_plain && warn_plain) {
+        std::fprintf(stderr,
+            "Warning: %s is a plaintext private key on disk; consider re-saving it encrypted.\n",
+            path.c_str());
     }
-    f.close();
-    if (buf.size() > size_t(256 * 1024)) return false;
+    if (buf.size() > size_t(256 * 1024)) {
+        err = "Key file too large (>256 KB): " + path;
+        return false;
+    }
     // 修剪首尾空白
     size_t a = 0, b = buf.size();
     while (a < b && (unsigned char)buf[a] <= 0x20) ++a;
@@ -108,6 +107,11 @@ bool read_key_material(const std::string& path, std::string& content, std::strin
         return false;
     }
     if (content.rfind("AGE-SECRET-KEY-", 0) == 0) {
+        kind = "identity";
+        return true;
+    }
+    // 新私钥头
+    if (content.rfind("MLKEM1SEC-", 0) == 0 || content.rfind("X448SEC-", 0) == 0) {
         kind = "identity";
         return true;
     }
@@ -210,11 +214,15 @@ bool keylib_load(std::vector<KeyLibEntry>& out, std::string& err) {
             std::function<void(const YAML::Node&)> walk = [&](const YAML::Node& n) {
                 if (count > MAX_YAML_NODES) return;
                 ++count;
-                if (n.IsSequence() || n.IsMap()) {
+                if (n.IsMap()) {
                     for (const auto& child : n) {
-                        // Map 节点
-                        if (n.IsMap()) walk(child.first);
+                        walk(child.first);
                         walk(child.second);
+                        if (count > MAX_YAML_NODES) return;
+                    }
+                } else if (n.IsSequence()) {
+                    for (const auto& child : n) {
+                        walk(child);
                         if (count > MAX_YAML_NODES) return;
                     }
                 }
@@ -317,7 +325,6 @@ bool keylib_add(const std::string& key_path, const std::string& name,
 
     std::string material, kind;
     if (!read_key_material(key_path, material, kind, err)) return false;
-
     // identity
     // 注意
     std::string pub;
@@ -340,19 +347,14 @@ bool keylib_add(const std::string& key_path, const std::string& name,
     const std::string file_name = name + ".key";
     const std::string dst = keylib_file_path(file_name);
     if (file_exists(dst)) clear_readonly_attribute(dst);
-    std::ofstream f;
-    if (!open_stream(f, dst, std::ios::out | std::ios::binary | std::ios::trunc)) {
-        err = "Cannot write key file: " + dst;
+    // 私钥 FEPK1 加密落盘
+    std::string werr;
+    if (!fe_keyfile::write_protected(dst, material, fe_keyfile::PURPOSE_KEYLIB, werr)) {
         sodium_memzero(material.data(), material.size());
+        err = "Cannot write protected key file: " + werr;
         return false;
     }
-    f << material << "\n";
-    f.flush();
-    const bool ok = f.good();
-    f.close();
     sodium_memzero(material.data(), material.size());
-    if (!ok) { err = "Write failed: " + dst; remove_file_utf8(dst); return false; }
-    tighten_file_permissions(dst);
 
     KeyLibEntry e;
     e.name = name;
@@ -440,7 +442,7 @@ bool keylib_recipients(const std::vector<std::string>& names,
         } else {
             std::string path, material, kind;
             if (!keylib_key_path(name, path, err)) return false;
-            if (!read_key_material(path, material, kind, err)) return false;
+            if (!read_key_material(path, material, kind, err, true)) return false;
             if (kind != "recipient") {
                 err = "Key '" + name + "' is an identity, not a recipient public key.";
                 return false;
@@ -451,7 +453,8 @@ bool keylib_recipients(const std::vector<std::string>& names,
     return true;
 }
 
-bool keylib_export(const std::string& name, const std::string& dest_dir, std::string& err) {
+bool keylib_export(const std::string& name, const std::string& dest_dir,
+                   bool plain_out, std::string& err) {
     std::vector<KeyLibEntry> entries;
     if (!keylib_load(entries, err)) return false;
     KeyLibEntry e;
@@ -467,20 +470,34 @@ bool keylib_export(const std::string& name, const std::string& dest_dir, std::st
         return false;
     }
     const std::string src = keylib_file_path(e.file);
-    std::ifstream in;
-    if (!open_stream(in, src, std::ios::in | std::ios::binary)) {
-        err = "Key material file is missing: " + src;
+    // 读出并解密
+    std::string material;
+    bool was_plain = false;
+    if (!fe_keyfile::read_protected(src, material, fe_keyfile::PURPOSE_KEYLIB, was_plain, err)) {
+        err = "Cannot read key material: " + err;
         return false;
     }
-    std::ofstream out;
-    if (!open_stream(out, dest, std::ios::out | std::ios::binary | std::ios::trunc)) {
-        err = "Cannot write: " + dest;
-        return false;
+    bool ok = false;
+    if (plain_out) {
+        // 明文导出给第三方工具
+        std::string plain = material;
+        plain.push_back('\n');
+        std::ofstream out;
+        if (!open_stream(out, dest, std::ios::out | std::ios::binary | std::ios::trunc)) {
+            err = "Cannot write: " + dest;
+        } else {
+            out << plain;
+            out.flush();
+            ok = out.good();
+            out.close();
+            if (!ok) { err = "Write failed: " + dest; remove_file_utf8(dest); }
+            else tighten_file_permissions(dest);
+        }
+        sodium_memzero(plain.data(), plain.size());
+    } else {
+        // 默认 FEPK1 跨机可解
+        ok = fe_keyfile::write_protected(dest, material, fe_keyfile::PURPOSE_KEYLIB, err, true);
     }
-    out << in.rdbuf();
-    const bool ok = out.good();
-    in.close(); out.close();
-    if (!ok) { err = "Write failed: " + dest; remove_file_utf8(dest); return false; }
-    tighten_file_permissions(dest);
-    return true;
+    sodium_memzero(material.data(), material.size());
+    return ok;
 }

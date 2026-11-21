@@ -11,52 +11,202 @@
 #include <QJsonObject>
 #include <QTextStream>
 #include <QUuid>
+#include <QLibrary>
+#include <QByteArray>
 #include <algorithm>
+
+#ifdef Q_OS_WIN
+#include <windows.h>
+#include <wincrypt.h>
+#endif
 
 namespace {
 const char* kTimestampFormat="yyyy-MM-dd HH:mm:ss";
 
+// 路径载荷加密：Windows DPAPI / Linux libsecret
+static QJsonObject pathPayload(const TaskRecord& r) {
+    QJsonObject p;
+    p.insert(QStringLiteral("inputPaths"),QJsonArray::fromStringList(r.inputPaths));
+    p.insert(QStringLiteral("outputDir"),r.outputDir);
+    p.insert(QStringLiteral("intoVault"),r.intoVault);
+    p.insert(QStringLiteral("keyfile"),r.keyfile);
+    p.insert(QStringLiteral("identity"),r.identity);
+    p.insert(QStringLiteral("wrapInput"),r.wrapInput);
+    p.insert(QStringLiteral("wrapOutput"),r.wrapOutput);
+    p.insert(QStringLiteral("watermarkKey"),r.watermarkKey);
+    p.insert(QStringLiteral("recipient"),r.recipient);
+    return p;
+}
+
+static void applyPayload(TaskRecord& r,const QJsonObject& p) {
+    const QJsonArray ip=p.value(QStringLiteral("inputPaths")).toArray();
+    r.inputPaths.clear();
+    for(const QJsonValue& v:ip) r.inputPaths.append(v.toString());
+    auto get=[&](const char* n){ return p.value(QString::fromLatin1(n)).toString(); };
+    r.outputDir=get("outputDir");
+    r.intoVault=get("intoVault");
+    r.keyfile=get("keyfile");
+    r.identity=get("identity");
+    r.wrapInput=get("wrapInput");
+    r.wrapOutput=get("wrapOutput");
+    r.watermarkKey=get("watermarkKey");
+    r.recipient=get("recipient");
+}
+
+#ifdef Q_OS_WIN
+static QString encryptPaths(const TaskRecord& r) {
+    const QByteArray json=QJsonDocument(pathPayload(r)).toJson(QJsonDocument::Compact);
+    DATA_BLOB in;
+    in.cbData=static_cast<DWORD>(json.size());
+    in.pbData=reinterpret_cast<BYTE*>(const_cast<char*>(json.constData()));
+    DATA_BLOB out={0,nullptr};
+    if(!CryptProtectData(&in,nullptr,nullptr,nullptr,nullptr,0,&out)) return QString();
+    QByteArray blob(reinterpret_cast<const char*>(out.pbData),static_cast<int>(out.cbData));
+    if(out.pbData) LocalFree(out.pbData);
+    return QStringLiteral("dpapi1:")+QString::fromLatin1(blob.toBase64());
+}
+
+static bool decryptPaths(const QString& ct,TaskRecord& r) {
+    if(!ct.startsWith(QStringLiteral("dpapi1:"))) return false;
+    const QByteArray blob=QByteArray::fromBase64(
+        ct.mid(7).toLatin1());
+    DATA_BLOB in;
+    in.cbData=static_cast<DWORD>(blob.size());
+    in.pbData=reinterpret_cast<BYTE*>(const_cast<char*>(blob.constData()));
+    DATA_BLOB out={0,nullptr};
+    if(!CryptUnprotectData(&in,nullptr,nullptr,nullptr,nullptr,0,&out)) return false;
+    const QByteArray json(reinterpret_cast<const char*>(out.pbData),static_cast<int>(out.cbData));
+    if(out.pbData) LocalFree(out.pbData);
+    QJsonParseError pe;
+    const QJsonDocument doc=QJsonDocument::fromJson(json,&pe);
+    if(pe.error!=QJsonParseError::NoError||!doc.isObject()) return false;
+    applyPayload(r,doc.object());
+    return true;
+}
+#else
+struct SecretSchema {
+    const char* name;
+    int flags;
+    int count;
+    const char** names;
+    const int* types;
+};
+typedef int (*StoreFn)(const SecretSchema*,const char*,const char*,const char*,
+                       void*,void**,...);
+typedef char* (*LookupFn)(const SecretSchema*,void*,void**,...);
+typedef int (*ClearFn)(const SecretSchema*,void*,void**,...);
+typedef void (*FreeFn)(void*);
+
+static bool secretCall(const QString& id,const QString* payload,TaskRecord* out) {
+    QLibrary lib(QStringLiteral("libsecret-1.so.0"));
+    if(!lib.load()) return false;
+    auto store=reinterpret_cast<StoreFn>(lib.resolve("secret_password_store_sync"));
+    auto lookup=reinterpret_cast<LookupFn>(lib.resolve("secret_password_lookup_sync"));
+    auto clear=reinterpret_cast<ClearFn>(lib.resolve("secret_password_clear_sync"));
+    auto gfree=reinterpret_cast<FreeFn>(lib.resolve("g_free"));
+    if(payload) {
+        if(!store) return false;
+        static const char* names[]={"fe_task_id",nullptr};
+        static const int types[]={0};
+        SecretSchema schema={"com.yaoyingluo.fileencryptor.taskpath",0,1,names,types};
+        const QByteArray idb=id.toUtf8(),pb=payload->toUtf8();
+        int ok=store(&schema,"default","FileEncryptor task path",
+                     pb.constData(),nullptr,nullptr,"fe_task_id",idb.constData(),nullptr);
+        return ok!=0;
+    }
+    if(!lookup||!gfree||!clear) return false;
+    static const char* names[]={"fe_task_id",nullptr};
+    static const int types[]={0};
+    SecretSchema schema={"com.yaoyingluo.fileencryptor.taskpath",0,1,names,types};
+    const QByteArray idb=id.toUtf8();
+    char* pw=lookup(&schema,nullptr,nullptr,"fe_task_id",idb.constData(),nullptr);
+    if(!pw) return false;
+    const QByteArray json(pw);
+    gfree(pw);
+    QJsonParseError pe;
+    const QJsonDocument doc=QJsonDocument::fromJson(json,&pe);
+    if(pe.error!=QJsonParseError::NoError||!doc.isObject()) return false;
+    applyPayload(*out,doc.object());
+    clear(&schema,nullptr,nullptr,"fe_task_id",idb.constData(),nullptr);
+    return true;
+}
+
+static QString encryptPaths(const TaskRecord& r) {
+    const QString id=QUuid::createUuid().toString(QUuid::WithoutBraces);
+    const QString payload=QString::fromUtf8(
+        QJsonDocument(pathPayload(r)).toJson(QJsonDocument::Compact));
+    if(!secretCall(id,&payload,nullptr)) return QString();
+    return QStringLiteral("keyring:")+id;
+}
+
+static bool decryptPaths(const QString& ct,TaskRecord& r) {
+    if(!ct.startsWith(QStringLiteral("keyring:"))) return false;
+    QString id=ct.mid(8);
+    return secretCall(id,nullptr,&r);
+}
+#endif
+
+static bool stripPaths(TaskRecord& r,QString& ct) {
+    ct=encryptPaths(r);
+    if(ct.isEmpty()) return false;
+    r.inputPaths.clear();
+    r.outputDir.clear();
+    r.intoVault.clear();
+    r.keyfile.clear();
+    r.identity.clear();
+    r.wrapInput.clear();
+    r.wrapOutput.clear();
+    r.watermarkKey.clear();
+    r.recipient.clear();
+    return true;
+}
+
 // 记录 → JSON 对象
 QJsonObject toJson(const TaskRecord& r) {
+    TaskRecord stored=r;
+    QString ct;
+    if(stripPaths(stored,ct)) stored.pathCt=ct;
+    const TaskRecord& src=stored;
     QJsonObject o;
-    o.insert(QStringLiteral("v"),1);
-    o.insert(QStringLiteral("id"),r.id);
-    o.insert(QStringLiteral("startedAt"),r.startedAt);
-    o.insert(QStringLiteral("finishedAt"),r.finishedAt);
-    o.insert(QStringLiteral("durationMs"),r.durationMs);
-    o.insert(QStringLiteral("action"),r.action);
-    o.insert(QStringLiteral("actionLabel"),r.actionLabel);
-    o.insert(QStringLiteral("mode"),r.mode);
-    o.insert(QStringLiteral("inputCount"),r.inputCount);
-    if(!r.inputPaths.isEmpty())
-        o.insert(QStringLiteral("inputPaths"),QJsonArray::fromStringList(r.inputPaths));
-    o.insert(QStringLiteral("totalBytes"),r.totalBytes);
-    o.insert(QStringLiteral("filesDone"),r.filesDone);
-    o.insert(QStringLiteral("outputDir"),r.outputDir);
-    o.insert(QStringLiteral("exitCode"),r.exitCode);
-    o.insert(QStringLiteral("cancelled"),r.cancelled);
-    o.insert(QStringLiteral("error"),r.error);
-    o.insert(QStringLiteral("status"),r.status);
-    o.insert(QStringLiteral("filesSkip"),r.filesSkip);
-    o.insert(QStringLiteral("filesFail"),r.filesFail);
-    o.insert(QStringLiteral("sourceIndex"),r.sourceIndex);
-    o.insert(QStringLiteral("force"),r.force);
-    o.insert(QStringLiteral("sha256"),r.sha256);
-    o.insert(QStringLiteral("compress"),r.compress);
-    o.insert(QStringLiteral("compressionLevel"),r.compressionLevel);
-    if(!r.fileCipher.isEmpty()) o.insert(QStringLiteral("fileCipher"),r.fileCipher);
-    o.insert(QStringLiteral("pqc"),r.pqc);
-    o.insert(QStringLiteral("watermark"),r.watermark);
-    if(!r.watermarkKey.isEmpty()) o.insert(QStringLiteral("watermarkKey"),r.watermarkKey);
-    if(!r.keyfile.isEmpty()) o.insert(QStringLiteral("keyfile"),r.keyfile);
-    if(!r.recipient.isEmpty()) o.insert(QStringLiteral("recipient"),r.recipient);
-    if(!r.identity.isEmpty()) o.insert(QStringLiteral("identity"),r.identity);
-    if(!r.wrapInput.isEmpty()) o.insert(QStringLiteral("wrapInput"),r.wrapInput);
-    if(!r.wrapOutput.isEmpty()) o.insert(QStringLiteral("wrapOutput"),r.wrapOutput);
-    if(!r.wrapAlg.isEmpty()) o.insert(QStringLiteral("wrapAlg"),r.wrapAlg);
-    o.insert(QStringLiteral("restoreName"),r.restoreName);
-    o.insert(QStringLiteral("pack"),r.pack);
-    if(!r.intoVault.isEmpty()) o.insert(QStringLiteral("intoVault"),r.intoVault);
+    o.insert(QStringLiteral("v"),2);
+    if(!ct.isEmpty()) o.insert(QStringLiteral("pathCt"),ct);
+    o.insert(QStringLiteral("id"),src.id);
+    o.insert(QStringLiteral("startedAt"),src.startedAt);
+    o.insert(QStringLiteral("finishedAt"),src.finishedAt);
+    o.insert(QStringLiteral("durationMs"),src.durationMs);
+    o.insert(QStringLiteral("action"),src.action);
+    o.insert(QStringLiteral("actionLabel"),src.actionLabel);
+    o.insert(QStringLiteral("mode"),src.mode);
+    o.insert(QStringLiteral("inputCount"),src.inputCount);
+    if(!src.inputPaths.isEmpty())
+        o.insert(QStringLiteral("inputPaths"),QJsonArray::fromStringList(src.inputPaths));
+    o.insert(QStringLiteral("totalBytes"),src.totalBytes);
+    o.insert(QStringLiteral("filesDone"),src.filesDone);
+    o.insert(QStringLiteral("outputDir"),src.outputDir);
+    o.insert(QStringLiteral("exitCode"),src.exitCode);
+    o.insert(QStringLiteral("cancelled"),src.cancelled);
+    o.insert(QStringLiteral("error"),src.error);
+    o.insert(QStringLiteral("status"),src.status);
+    o.insert(QStringLiteral("filesSkip"),src.filesSkip);
+    o.insert(QStringLiteral("filesFail"),src.filesFail);
+    o.insert(QStringLiteral("sourceIndex"),src.sourceIndex);
+    o.insert(QStringLiteral("force"),src.force);
+    o.insert(QStringLiteral("sha256"),src.sha256);
+    o.insert(QStringLiteral("compress"),src.compress);
+    o.insert(QStringLiteral("compressionLevel"),src.compressionLevel);
+    if(!src.fileCipher.isEmpty()) o.insert(QStringLiteral("fileCipher"),src.fileCipher);
+    o.insert(QStringLiteral("pqc"),src.pqc);
+    o.insert(QStringLiteral("watermark"),src.watermark);
+    if(!src.watermarkKey.isEmpty()) o.insert(QStringLiteral("watermarkKey"),src.watermarkKey);
+    if(!src.keyfile.isEmpty()) o.insert(QStringLiteral("keyfile"),src.keyfile);
+    if(!src.recipient.isEmpty()) o.insert(QStringLiteral("recipient"),src.recipient);
+    if(!src.identity.isEmpty()) o.insert(QStringLiteral("identity"),src.identity);
+    if(!src.wrapInput.isEmpty()) o.insert(QStringLiteral("wrapInput"),src.wrapInput);
+    if(!src.wrapOutput.isEmpty()) o.insert(QStringLiteral("wrapOutput"),src.wrapOutput);
+    if(!src.wrapAlg.isEmpty()) o.insert(QStringLiteral("wrapAlg"),src.wrapAlg);
+    o.insert(QStringLiteral("restoreName"),src.restoreName);
+    o.insert(QStringLiteral("pack"),src.pack);
+    if(!src.intoVault.isEmpty()) o.insert(QStringLiteral("intoVault"),src.intoVault);
     return o;
 }
 
@@ -101,6 +251,8 @@ TaskRecord fromJson(const QJsonObject& o) {
     r.restoreName =o.value(QStringLiteral("restoreName")).toBool(false);
     r.pack        =o.value(QStringLiteral("pack")).toBool(false);
     r.intoVault   =o.value(QStringLiteral("intoVault")).toString();
+    r.pathCt      =o.value(QStringLiteral("pathCt")).toString();
+    if(!r.pathCt.isEmpty()) decryptPaths(r.pathCt,r);
     return r;
 }
 }

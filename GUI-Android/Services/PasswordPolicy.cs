@@ -5,7 +5,7 @@ namespace FileEncryptorMobile.Services;
 
 public static class PasswordPolicy
 {
-    private const int MinLen = 8;
+    private const int MinLen = 12;
 
     private static readonly HashSet<string> Common = new(StringComparer.OrdinalIgnoreCase)
     {
